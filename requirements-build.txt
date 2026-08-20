@@ -1,3 +1,6 @@
 # Additionally required to RUN scripts/build_seed_map.py (once, locally).
+# torch trains the frozen encoder; umap-learn draws the one reference layout.
+# Neither ships in the serving image.
 -r requirements.txt
+torch==2.7.1
 umap-learn==0.5.5

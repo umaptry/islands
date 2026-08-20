@@ -100,12 +100,12 @@ def load_artifacts():
 
 @asynccontextmanager
 async def lifespan(_app):
-    from sentence_transformers import SentenceTransformer
+    from core.embedder import load_embedder
 
     print("artifacts を読み込み中...", flush=True)
     state.update(load_artifacts())
-    print(f"埋め込みモデルを読み込み中: {MODEL_NAME}", flush=True)
-    state["model"] = SentenceTransformer(MODEL_NAME)
+    print(f"埋め込みモデルを読み込み中: {MODEL_NAME} (ONNX)", flush=True)
+    state["model"] = load_embedder()
     state["store"] = create_store()
     if state["store"].backend == "memory":
         # Easy to miss otherwise: the app works perfectly, and then a Space

@@ -1,34 +1,33 @@
-# Hugging Face Space (SDK: docker).
+# Hugging Face Space / Cloud Run / any Docker host.
 #
-# torch is unavoidable: sentence-transformers needs it to run the embedding
-# model. What we CAN avoid is the CUDA build, which a plain `pip install torch`
-# would pull in (~2.5GB of GPU libraries that a free CPU Space can never use).
-# Installing from PyTorch's CPU index first brings the image to roughly 1.9GB.
+# No torch. The embedding model runs through ONNX Runtime and the frozen UMAP
+# encoder runs in numpy, which takes the image from ~1.9GB to roughly 900MB and
+# resident memory from ~1,250MB to ~965MB.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
+    OMP_NUM_THREADS=1 \
     PORT=7860
 
 WORKDIR /app
 
-# A Space runs as uid 1000 and cannot write to root-owned paths.
+# Hugging Face Spaces runs as uid 1000 and cannot write to root-owned paths.
 RUN useradd -m -u 1000 user && mkdir -p /app/.cache && chown -R user /app
 USER user
 ENV PATH=/home/user/.local/bin:$PATH
 
-# CPU-only torch first, so the requirements.txt pin below is already satisfied
-# and pip never reaches for the CUDA wheel on PyPI.
-RUN pip install --no-cache-dir --user --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
-
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Bake the embedding model into the image so a cold start does not have to
-# download ~470MB before it can answer the first request.
-RUN python -c "from sentence_transformers import SentenceTransformer; \
-    SentenceTransformer('intfloat/multilingual-e5-small')"
+# Bake the ONNX model and tokenizer in, so a cold start answers immediately
+# instead of downloading 465MB first. Set KOTOBA_FETCH_MODEL_AT_START=1 at build
+# time to skip this and keep the image ~465MB smaller (see README).
+ARG KOTOBA_FETCH_MODEL_AT_START=0
+RUN if [ "$KOTOBA_FETCH_MODEL_AT_START" = "0" ]; then \
+      python -c "from huggingface_hub import hf_hub_download as d; r='intfloat/multilingual-e5-small'; d(r,'onnx/model.onnx'); d(r,'tokenizer.json')"; \
+    fi
 
 COPY --chown=user artifacts/ ./artifacts/
 COPY --chown=user core/ ./core/

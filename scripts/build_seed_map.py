@@ -111,7 +111,8 @@ def atomic_write(path, write_callback, mode="w"):
 def build(args):
     import train_parametric
     import umap
-    from sentence_transformers import SentenceTransformer
+
+    from core.embedder import load_embedder
 
     if not CORPUS_PATH.exists():
         print(f"[NG] シードコーパスがありません: {CORPUS_PATH}")
@@ -121,8 +122,8 @@ def build(args):
     texts, domains = load_corpus(CORPUS_PATH)
     print(f"[1/8] コーパス読み込み: {len(texts)} 件 / {len(set(domains))} ドメイン")
 
-    print(f"[2/8] 埋め込みモデル読み込み: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
+    print(f"[2/8] 埋め込みモデル読み込み: {MODEL_NAME} (ONNX)")
+    model = load_embedder()
 
     print("[3/8] 448次元ベクトルを構築中...")
     features, token_lists, zero_rows, sparse_artifacts = build_hybrid_features(
@@ -295,7 +296,7 @@ def relabel(_args):
     Labels do not feed the encoder, so this never moves a point. Use it to fix a
     bad island name without the 25-minute retrain that build() would cost.
     """
-    from sentence_transformers import SentenceTransformer
+    from core.embedder import load_embedder
 
     if not SEED_MAP_JSON.exists():
         print(f"[NG] {SEED_MAP_JSON.name} がありません。")
@@ -311,8 +312,8 @@ def relabel(_args):
     coords = np.array([[row[0], row[1]] for row in payload["seed"]], dtype=float)
     print(f"[1/3] 保存済み座標を読み込み: {len(coords)} 点（座標は一切変更しません）")
 
-    print(f"[2/3] 埋め込みモデル読み込み: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
+    print(f"[2/3] 埋め込みモデル読み込み: {MODEL_NAME} (ONNX)")
+    model = load_embedder()
 
     print("[3/3] 島を選び直し中...")
     label_tokens = [extract_label_terms(text) for text in texts]

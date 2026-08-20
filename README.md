@@ -25,7 +25,7 @@ URL を知っていれば誰でも参加できます（アカウント不要・�
 あなたの一文
   ├─ どの語を使ったか  Sudachiで分かち書き → 単語TF-IDF(1-2gram) ⊕ 文字TF-IDF(2-4gram)×0.25
   │                     → TruncatedSVD(64) → L2                              …… 64次元
-  └─ どんな意味か      multilingual-e5-small で
+  └─ どんな意味か      multilingual-e5-small (ONNX Runtime) で
                         「生の文」×0.35 + 「内容語だけの文」×0.65 → L2         …… 384次元
 
   → hstack([意味×0.65, 語×0.35]) → L2                                        …… 448次元
@@ -140,10 +140,11 @@ git push space main
 ## 構成
 
 ```
-app.py                  FastAPI（API + 静的配信）。実行時は torch を読み込まない
+app.py                  FastAPI（API + 静的配信）。torch を一切読み込まない
 core/
   config.py             全パラメータの単一の置き場
   features.py           テキスト → 448次元
+  embedder.py           multilingual-e5-small を ONNX Runtime で動かす層
   encoder.py            凍結エンコーダの numpy 実装 + .npz の読み書き
   clustering.py         島の選定と特徴語ペアの命名
   geometry.py           等方スケール / 完全重複の分離
@@ -160,9 +161,24 @@ artifacts/              seed_map.json / vectorizers.pkl / encoder.npz
 web/                    index.html / app.js / style.css / avatars.js / how.html
 ```
 
-`core/encoder.py` は凍結エンコーダの順伝播を numpy で実装しています。torch 自体は
-`sentence-transformers` が埋め込みモデルを動かすのに必要なので配信イメージにも入りますが、
-Dockerfile が **CPU版の torch** を先に入れるため CUDA 版（約2.5GB）は落ちてきません。
-イメージは約1.9GBです。numpy 実装の利点は、①学習用の `umap-learn` を配信イメージから外せること、
-②凍結重みを pickle した `nn.Module` ではなく素の `.npz` から読むため、将来 torch を上げても
-座標が黙って動かないこと、の2点です。両実装の出力一致はビルド時のゲートで検証しています。
+### 配信スタックに torch が入らない理由
+
+埋め込みは `core/embedder.py` が **ONNX Runtime** で、凍結エンコーダは `core/encoder.py` が
+**numpy** で動かします。結果、配信イメージに torch も umap-learn も入りません。
+
+| | メモリ | イメージ |
+|---|---|---|
+| sentence-transformers + torch | 約1,250MB | 約1.9GB |
+| **ONNX Runtime + numpy** | **約965MB** | **約900MB** |
+
+**なぜ int8 ではなく fp32 か。** `intfloat/multilingual-e5-small` は int8 量子化版
+（112.9MB / fp32 は 448.5MB）も配布しています。シード300件で実測したところ:
+
+| | torchとのコサイン | 近傍15件の一致率 | 最近傍が同一 |
+|---|---|---|---|
+| ONNX fp32 | 1.00000 | 1.0000 | 1.000 |
+| ONNX int8 | 0.99563 | 0.8138 | **0.713** |
+
+int8 はコサインだけ見ると無害に見えますが、**約3割の人で「一番近い人」が変わります**。
+このアプリが見せたい唯一のものが壊れるので不採用にしました。fp32 は torch と完全一致
+するため、**凍結マップを作り直さずにそのまま使えます**。
