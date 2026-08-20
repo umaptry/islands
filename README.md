@@ -111,29 +111,73 @@ python scripts/rotate_map.py                # 地図を90度回して縦長に�
 
 ---
 
-## デプロイ（Hugging Face Spaces + Supabase / どちらも無料枠）
+## デプロイ（Google Cloud Run + Supabase / どちらも無料枠）
 
-1. **Supabase** — プロジェクトを作り、SQL エディタで `supabase/schema.sql` を実行。
-   `Project Settings → API` から `URL` と `service_role` キーを控える。
-2. **Space** — huggingface.co/new-space で SDK に **Docker** を選ぶ。
-3. Space の `Settings → Variables and secrets` に **Secret** として登録:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_KEY`（service_role キー）
-4. push:
+> **Hugging Face Spaces は使えません。** 公式ドキュメントのとおり、無料で作れるのは
+> Static Space と ZeroGPU Gradio Space だけで、`sdk: docker` の Space は作成に PRO
+> （$9/月）が必要になりました。CPU Basic ハードウェア自体は $0/h ですが、作成権限が
+> 有料プランの裏にあります。冒頭の Space 用 front-matter は、PRO を取れば現行の
+> `Dockerfile` がそのまま動くので残してあります。
+
+常駐 965MB・fp32 ONNX 448MB という重さが配信先を決めます。512MB クラスの無料枠
+（Render Free / Streamlit Community / Vercel Functions）には入りません。入れるには
+int8 量子化が必要で、それは下表のとおり **3割の人の「一番近い人」を変えてしまう**ため
+採りません。Cloud Run は 2GiB を無料枠の範囲で使えるので、**モデルも座標も一切
+妥協せずに** 公開できます。
+
+### 1. Supabase
+
+プロジェクトを作り、SQL エディタで `supabase/schema.sql` を実行。
+`Project Settings → API` から `URL` と `service_role` キーを控えます。
+
+### 2. Cloud Run
 
 ```bash
-git remote add space https://huggingface.co/spaces/<user>/<space-name>
-git push space main
+gcloud run deploy kotoba-map \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 2Gi --cpu 1 \
+  --max-instances 1 --concurrency 40 \
+  --timeout 120 --cpu-boost \
+  --set-env-vars "SUPABASE_URL=https://xxxx.supabase.co,SUPABASE_SERVICE_KEY=eyJ..."
 ```
 
-`service_role` キーは RLS を迂回できる強い権限です。**サーバー側だけ** が保持し、ブラウザには
-一切渡しません（`profiles` は RLS 有効・ポリシー0件なので anon キーでは何も触れません）。
+`service_role` キーは RLS を迂回できる強い権限です。**サーバー側だけ** が保持し、
+ブラウザには一切渡しません（`profiles` は RLS 有効・ポリシー0件なので anon キーでは
+何も触れません）。
 
-### 運用上の注意（無料枠）
+### 3. 起こしておく
 
-- **Space は48時間アクセスがないとスリープ**します。復帰に30〜60秒かかるので、
-  デモの直前に一度 `https://<space>.hf.space/api/health` を開いて起こしてください。
-- **Supabase の無料DBは7日間アクセスがないと一時停止**します。ダッシュボードから即再開できます。
+`.github/workflows/keepalive.yml` が10分おきに `/api/health` を叩きます。GitHub の
+リポジトリ変数 `KOTOBA_MAP_URL` に Cloud Run の URL を設定してください。`/api/health`
+は Supabase の件数も引くので、この1本で Cloud Run のコールドスタートと Supabase の
+7日休止の両方を防げます。
+
+### なぜこの設定なのか（無料枠を1円も超えないための条件）
+
+| 設定 | 理由 |
+|---|---|
+| `--region us-central1` | 無料枠は Tier 1 リージョンのみ。日本からは +130ms 程度だが、本アプリは通信回数が少ないので体感差はほぼ無い |
+| `--memory 2Gi` | 常駐 965MB + 起動時に取得する ONNX 448MB がコンテナの書き込み層（＝メモリ計上）に載る。1GiB では OOM する |
+| `--max-instances 1` | 支出の上限を物理的に固定する。副次的に、`app.py` のプロセス内レートリミッタ（3 join / 300秒 / IP）が分散で骨抜きにならない |
+| モデルを焼き込まない | Artifact Registry の無料枠は 0.5GB/月。焼き込むと圧縮後 ~600MB で超過する。`Dockerfile` の `ARG KOTOBA_FETCH_MODEL_AT_START` は既定 `1`（起動時取得）。イメージは圧縮後 ~180MB に収まる |
+| gzip（`app.py`） | 下りの無料枠は北米 1GiB/月。実測で `app.js` 28.4KB→9.2KB、`/api/map` 20.1KB→8.8KB。初回訪問あたり約70KB→28KBになり、無料枠で捌ける来訪者が約2.5倍になる |
+
+無料枠の内訳（月あたり）: 200万リクエスト / 180,000 vCPU秒 / 360,000 GiB秒 / 下り 1GiB。
+2GiB 構成なら 360,000 ÷ 2 = **50時間ぶんのリクエスト処理時間**が無料です。アイドル中は
+課金対象時間が発生しません。念のため請求先アカウントに**予算アラートを ¥1 で設定**し、
+Artifact Registry には常に1イメージだけ残す運用にしてください。
+
+### カード登録なしで試したいとき
+
+ローカルの uvicorn に Cloudflare Quick Tunnel を被せると、アカウント不要・完全無料で
+HTTPS の公開 URL が出ます。PC を起動している間だけ生きる URL なので、面談や短時間の
+デモ向けです。
+
+```bash
+cloudflared tunnel --url http://localhost:7860
+```
 
 ---
 

@@ -1,0 +1,32 @@
+# Keeps the demo warm for its public run.
+#
+# Two things go cold on their own: a Cloud Run instance scales to zero and then
+# pays ~30-60s of cold start (fetching the 448MB ONNX, building the ORT session,
+# loading the Sudachi dictionary), and a Supabase free project suspends itself
+# after 7 idle days. /api/health touches both, so one ping covers both.
+#
+# Cost: a sub-second request every 10 minutes is ~4,300 GiB-seconds a month
+# against a 360,000 GiB-second free allowance.
+#
+# GitHub disables scheduled workflows on a repo with no commits for 60 days.
+# That is longer than this demo is meant to run.
+name: keepalive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/health
+        env:
+          URL: ${{ vars.KOTOBA_MAP_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "Set the repository variable KOTOBA_MAP_URL to the Cloud Run URL." >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --max-time 120 "$URL/api/health"

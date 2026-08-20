@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -131,6 +132,13 @@ async def lifespan(_app):
 
 app = FastAPI(title="ことばの地図", lifespan=lifespan, docs_url=None, redoc_url=None)
 
+# The free egress allowance on the deploy target is 1GiB/month, and the two
+# fattest responses are both highly compressible text: web/app.js 28.4KB -> 9.2KB
+# and /api/map 20.1KB -> 8.8KB, taking a first visit from ~70KB to ~28KB.
+# minimum_size skips the small JSON replies, where the header would cost more
+# than the compression saves.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 
 # --------------------------------------------------------------------------
 # helpers
@@ -227,11 +235,24 @@ def annotate(viewer_terms, entry):
 
 @app.get("/api/health")
 def health():
+    # count() is a HEAD against PostgREST, and it is here on purpose: the
+    # keep-alive ping hits this route, and a Supabase free project suspends
+    # itself after 7 idle days. Touching the database keeps both halves of the
+    # deployment awake with one request. A store that is down must not take
+    # health down with it - the answer is still useful without the count.
+    try:
+        users = state["store"].count()
+        store_ok = True
+    except StoreError:
+        users = None
+        store_ok = False
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
         "islands": len(state["islands"]),
         "store": state["store"].backend,
+        "store_ok": store_ok,
+        "users": users,
         "model_version": state["seed_map"]["meta"]["model_version"],
     }
 

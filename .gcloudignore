@@ -1,0 +1,17 @@
+# What `gcloud run deploy --source .` uploads to Cloud Build.
+#
+# Mirrors .dockerignore. artifacts/ is deliberately NOT excluded: the frozen
+# seed map, vectorizers and encoder weights are what the image is built around.
+.git/
+.gitignore
+.gcloudignore
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.claude/
+tests/
+scripts/
+README.md
+requirements-build.txt
+supabase/
