@@ -107,6 +107,20 @@ async def lifespan(_app):
     print(f"埋め込みモデルを読み込み中: {MODEL_NAME}", flush=True)
     state["model"] = SentenceTransformer(MODEL_NAME)
     state["store"] = create_store()
+    if state["store"].backend == "memory":
+        # Easy to miss otherwise: the app works perfectly, and then a Space
+        # restart silently erases everyone who joined.
+        rule = "!" * 70
+        for line in (
+            "",
+            rule,
+            "[警告] SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定です。",
+            "       プロフィールはメモリ上にのみ保存され、再起動で全て消えます。",
+            "       ローカル開発では正常です。公開環境なら Secret を設定してください。",
+            rule,
+            "",
+        ):
+            print(line, flush=True)
     print(
         f"準備完了: seed={len(state['seed_coords'])}点 / "
         f"islands={len(state['islands'])} / store={state['store'].backend}",
