@@ -1,4 +1,4 @@
-"""ことばの地図 - API and static host.
+"""かさなり - API and static host.
 
 Everything the server does at request time is a pure forward pass through
 frozen artifacts. Nothing here fits a vectorizer, retrains an encoder, or
@@ -130,7 +130,7 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="ことばの地図", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="かさなり", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 # The free egress allowance on the deploy target is 1GiB/month, and the two
 # fattest responses are both highly compressible text: web/app.js 28.4KB -> 9.2KB

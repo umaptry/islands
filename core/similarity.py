@@ -119,10 +119,10 @@ def describe_relation(similarity, shared):
     if shared:
         return None  # the chips speak for themselves
     if similarity >= 70:
-        return "共通の言葉はないけれど、話していることの意味が近い人です。"
+        return "同じ語は使っていませんが、意味は近いです。"
     if similarity >= 40:
-        return "少し離れた場所の住人。共通の言葉はまだ見つかっていません。"
-    return "地図の反対側にいる人。まったく別の話をしています。"
+        return "同じ語はまだありません。"
+    return "地図の反対側の人です。"
 
 
 def rank_neighbors(origin, others, quantiles, limit=3):

@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<title>ことばの地図 — 仕組み</title>
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fdfcfa">
+<title>かさなり — 仕組み</title>
 <style>
 :root {
-  --bg: #141018; --card: #1e1826; --fg: #efece4; --muted: #9b93a6;
-  --line: #332a3f; --accent: #fb923c; --accent2: #22d3ee; --chip: #2c2436;
+  --bg: #fdfcfa; --card: #ffffff; --fg: #1c1a1e; --muted: #6d6672;
+  --line: #e4ded6; --accent: #ea580c; --accent2: #0e7490; --chip: #f1ede8;
   --font: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
@@ -78,15 +79,15 @@ a { color: var(--accent); }
     <text x="170" y="34" text-anchor="middle" font-size="13" fill="currentColor">あなたの一文</text>
     <text x="170" y="50" text-anchor="middle" font-size="11" fill="currentColor" opacity=".55">30字以上</text>
 
-    <rect x="8" y="102" width="156" height="74" rx="9" fill="none" stroke="#22d3ee" stroke-opacity=".8"/>
-    <text x="86" y="126" text-anchor="middle" font-size="13" fill="#22d3ee">どの語を</text>
-    <text x="86" y="144" text-anchor="middle" font-size="13" fill="#22d3ee">使ったか</text>
-    <text x="86" y="164" text-anchor="middle" font-size="12" fill="#22d3ee" opacity=".7">64次元</text>
+    <rect x="8" y="102" width="156" height="74" rx="9" fill="none" stroke="#0e7490" stroke-opacity=".8"/>
+    <text x="86" y="126" text-anchor="middle" font-size="13" fill="#0e7490">どの語を</text>
+    <text x="86" y="144" text-anchor="middle" font-size="13" fill="#0e7490">使ったか</text>
+    <text x="86" y="164" text-anchor="middle" font-size="12" fill="#0e7490" opacity=".7">64次元</text>
 
-    <rect x="176" y="102" width="156" height="74" rx="9" fill="none" stroke="#fb923c" stroke-opacity=".8"/>
-    <text x="254" y="126" text-anchor="middle" font-size="13" fill="#fb923c">どんな</text>
-    <text x="254" y="144" text-anchor="middle" font-size="13" fill="#fb923c">意味か</text>
-    <text x="254" y="164" text-anchor="middle" font-size="12" fill="#fb923c" opacity=".7">384次元</text>
+    <rect x="176" y="102" width="156" height="74" rx="9" fill="none" stroke="#ea580c" stroke-opacity=".8"/>
+    <text x="254" y="126" text-anchor="middle" font-size="13" fill="#ea580c">どんな</text>
+    <text x="254" y="144" text-anchor="middle" font-size="13" fill="#ea580c">意味か</text>
+    <text x="254" y="164" text-anchor="middle" font-size="12" fill="#ea580c" opacity=".7">384次元</text>
 
     <rect x="66" y="230" width="208" height="58" rx="9" fill="none" stroke="currentColor" stroke-opacity=".45"/>
     <text x="170" y="253" text-anchor="middle" font-size="13" fill="currentColor">448次元</text>
@@ -113,31 +114,31 @@ a { color: var(--accent); }
 
 <div class="fig">
   <svg viewBox="0 0 340 320" role="img" aria-label="通常のUMAPと凍結エンコーダの比較">
-    <text x="10" y="18" font-size="13" fill="#f87171">ふつうのUMAP</text>
+    <text x="10" y="18" font-size="13" fill="#dc2626">ふつうのUMAP</text>
     <g transform="translate(10,28)">
-      <rect x="0" y="0" width="320" height="94" rx="9" fill="none" stroke="#f87171" stroke-opacity=".3"/>
-      <g fill="#f87171" opacity=".5">
+      <rect x="0" y="0" width="320" height="94" rx="9" fill="none" stroke="#dc2626" stroke-opacity=".3"/>
+      <g fill="#dc2626" opacity=".5">
         <circle cx="56" cy="34" r="7"/><circle cx="132" cy="22" r="7"/>
         <circle cx="208" cy="52" r="7"/><circle cx="80" cy="66" r="7"/>
       </g>
-      <g stroke="#f87171" stroke-width="1.6" opacity=".85">
+      <g stroke="#dc2626" stroke-width="1.6" opacity=".85">
         <path d="M56 34 L68 26"/><path d="M132 22 L120 32"/>
         <path d="M208 52 L196 44"/><path d="M80 66 L92 57"/>
       </g>
-      <circle cx="266" cy="40" r="8" fill="none" stroke="#f87171" stroke-width="2"/>
+      <circle cx="266" cy="40" r="8" fill="none" stroke="#dc2626" stroke-width="2"/>
     </g>
-    <text x="10" y="142" font-size="12" fill="#f87171">1人増えると、全員がずれる</text>
+    <text x="10" y="142" font-size="12" fill="#dc2626">1人増えると、全員がずれる</text>
 
-    <text x="10" y="188" font-size="13" fill="#4ade80">この地図（凍結した関数 f）</text>
+    <text x="10" y="188" font-size="13" fill="#15803d">この地図（凍結した関数 f）</text>
     <g transform="translate(10,198)">
-      <rect x="0" y="0" width="320" height="94" rx="9" fill="none" stroke="#4ade80" stroke-opacity=".3"/>
-      <g fill="#4ade80" opacity=".6">
+      <rect x="0" y="0" width="320" height="94" rx="9" fill="none" stroke="#15803d" stroke-opacity=".3"/>
+      <g fill="#15803d" opacity=".6">
         <circle cx="56" cy="34" r="7"/><circle cx="132" cy="22" r="7"/>
         <circle cx="208" cy="52" r="7"/><circle cx="80" cy="66" r="7"/>
       </g>
-      <circle cx="266" cy="40" r="8" fill="none" stroke="#4ade80" stroke-width="2"/>
+      <circle cx="266" cy="40" r="8" fill="none" stroke="#15803d" stroke-width="2"/>
     </g>
-    <text x="10" y="312" font-size="12" fill="#4ade80">既存の点は 0px も動かない</text>
+    <text x="10" y="312" font-size="12" fill="#15803d">既存の点は 0px も動かない</text>
   </svg>
   <div class="cap">図1: UMAPは「お手本を1枚描く先生」の役。実際に毎回座標を出すのは、そのお手本を再現するよう学習させて凍結したニューラルネット <code>f</code> です。</div>
 </div>

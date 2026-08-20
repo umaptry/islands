@@ -1,4 +1,4 @@
-// ことばの地図 — screens, canvas views, and the bottom sheet.
+// かさなり — screens, canvas views, and the bottom sheet.
 //
 // One rule the whole file obeys: coordinates that come from the server are
 // never recomputed here. The orbit view chooses a RADIUS for each person from
@@ -8,12 +8,27 @@
 import { EMOJI, avatarCss, drawAvatar, paintAvatar } from './avatars.js';
 
 const $ = (id) => document.getElementById(id);
-// Must stay in sync with ISLAND_COLORS in core/config.py.
+// Must stay in sync with ISLAND_COLORS in core/config.py and the --i0..--i9
+// tokens in web/style.css. Darker than a pastel set on purpose: these are drawn
+// on a white page and as thin text halos, where pastels disappear.
 const ISLAND_COLORS = [
-  '#f472b6', '#a78bfa', '#38bdf8', '#34d399', '#fbbf24',
-  '#fb7185', '#818cf8', '#4ade80', '#2dd4bf', '#c084fc',
+  '#db2777', '#7c3aed', '#0284c7', '#059669', '#b45309',
+  '#e11d48', '#4f46e5', '#15803d', '#0f766e', '#9333ea',
 ];
-const STORAGE_KEY = 'kotoba-map-me';
+// Ink drawn onto the canvas. Named here so the light palette lives in one place
+// instead of being sprinkled through the render functions as literals.
+const INK = {
+  ring: '#ded7cd',
+  faint: '#8c8593',
+  label: '#57515e',
+  mapLabel: '#4a4451',
+  halo: 'rgba(253, 252, 250, .95)',
+  self: 'rgba(234, 88, 12, .38)',
+  glow: 'rgba(234, 88, 12, .55)',
+  link: 'rgba(234, 88, 12, .5)',
+  linkFaint: 'rgba(109, 102, 114, .25)',
+};
+const STORAGE_KEY = 'kasanari-me';
 const MIN_TEXT = 30;
 const WORLD = 1000;
 
@@ -86,14 +101,31 @@ const distanceBetween = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // ---------------------------------------------------------------- welcome
 
-(function setupWelcome() {
-  const slides = $('slides');
+// Buttons are the only way through the intro. The previous version was a
+// scroll-snap track, which let a half-swipe settle between two slides with the
+// dots showing one thing and the screen another.
+(function setupIntro() {
+  const track = $('slideTrack');
   const dots = [...$('dots').children];
-  slides.addEventListener('scroll', () => {
-    const index = Math.round(slides.scrollLeft / slides.clientWidth);
+  const nextBtn = $('nextBtn');
+  const backBtn = $('backBtn');
+  const total = track.children.length;
+  let index = 0;
+
+  function paint() {
+    track.style.transform = `translateX(${-index * 100}%)`;
     dots.forEach((dot, i) => dot.classList.toggle('on', i === index));
-  }, { passive: true });
-  $('startBtn').addEventListener('click', () => showScreen('profile'));
+    backBtn.hidden = index === 0;
+    nextBtn.textContent = index === total - 1 ? 'はじめる' : '次へ';
+  }
+
+  nextBtn.addEventListener('click', () => {
+    if (index < total - 1) { index += 1; paint(); } else showScreen('profile');
+  });
+  backBtn.addEventListener('click', () => {
+    if (index > 0) { index -= 1; paint(); }
+  });
+  paint();
 })();
 
 // ---------------------------------------------------------------- profile
@@ -186,14 +218,13 @@ async function join() {
 // ---------------------------------------------------------------- reveal
 
 function showReveal(result) {
-  $('revealIsland').innerHTML = `<span>${result.island ? result.island.name : '—'}</span> の島`;
+  $('revealIsland').textContent = result.island ? result.island.name : '—';
 
   const container = $('revealNeighbors');
   container.innerHTML = '';
   if (!result.neighbors.length) {
     container.innerHTML =
-      '<p style="text-align:center;color:var(--muted);font-size:13px">' +
-      'まだあなたひとりです。<br>このURLを誰かに送ると、その人が地図に現れます。</p>';
+      '<p class="empty-note">まだあなただけです。URLを送ると相手も地図に出ます。</p>';
   } else {
     container.insertAdjacentHTML('beforeend', '<div class="section-label">あなたに近い人</div>');
     result.neighbors.forEach((person, index) => {
@@ -213,7 +244,7 @@ function neighborCard(person, delay) {
   card.style.animationDelay = `${delay}ms`;
   const shared = person.shared && person.shared.length
     ? person.shared.join('・')
-    : '共通の言葉はなし';
+    : '共通のことばなし';
 
   const avatar = document.createElement('div');
   avatar.className = 'card-avatar';
@@ -334,36 +365,17 @@ function orbitRadius(rank, size) {
   return inner + Math.max(0, outer - inner) * rank;
 }
 
-function renderOrbit() {
-  const time = (performance.now() - state.t0) / 1000;
-  const centerX = width / 2;
-  const centerY = height / 2;
+// relaxAngles is O(n^2 x 40). Running it inside the render loop cost roughly
+// 400k iterations per frame at the 100-person cap, which drops a phone to
+// single-figure fps. The layout only depends on who is on the map and how big
+// the canvas is, so compute it when that changes and reuse it every frame.
+let orbitCache = { key: '', placed: [], size: 0 };
 
-  if (!state.me) return;
-  const quantiles = state.map.quantiles;
-  const others = state.map.users.filter((user) => user.id !== state.me.id);
+function orbitLayout(others, quantiles) {
   const size = avatarSize(others.length);
+  const key = `${width}x${height}|${size}|${state.me.id}|${others.map((u) => u.id).join(',')}`;
+  if (orbitCache.key === key) return orbitCache;
 
-  // rings: these are real percentile boundaries, not decoration
-  ctx.save();
-  ctx.strokeStyle = '#332a3f';
-  ctx.setLineDash([3, 7]);
-  RING_RANKS.forEach((rank, index) => {
-    ctx.lineDashOffset = (index % 2 ? time * 9 : -time * 9);
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, orbitRadius(rank, size), 0, Math.PI * 2);
-    ctx.stroke();
-  });
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#6b6377';
-  ctx.font = '10px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  RING_RANKS.forEach((rank) => {
-    ctx.fillText(`近い順 ${rank * 100}%`, centerX, centerY - orbitRadius(rank, size) - 5);
-  });
-  ctx.restore();
-
-  // place everyone: angle is the true bearing, radius is the true percentile
   const placed = others.map((user) => {
     const distance = distanceBetween(state.me, user);
     const rank = Math.min(1, Math.max(0, percentileRank(distance, quantiles)));
@@ -376,13 +388,39 @@ function renderOrbit() {
     };
   });
   relaxAngles(placed);
+  orbitCache = { key, placed, size };
+  return orbitCache;
+}
+
+function renderOrbit() {
+  const time = (performance.now() - state.t0) / 1000;
+  const centerX = width / 2;
+  const centerY = height / 2;
+
+  if (!state.me) return;
+  const quantiles = state.map.quantiles;
+  const others = state.map.users.filter((user) => user.id !== state.me.id);
+  const { placed, size } = orbitLayout(others, quantiles);
+
+  // rings: these are real percentile boundaries, not decoration
+  ctx.save();
+  ctx.strokeStyle = INK.ring;
+  ctx.setLineDash([3, 7]);
+  RING_RANKS.forEach((rank, index) => {
+    ctx.lineDashOffset = (index % 2 ? time * 9 : -time * 9);
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, orbitRadius(rank, size), 0, Math.PI * 2);
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  ctx.restore();
 
   // connectors to the three closest
   const closest = [...placed].sort((a, b) => a.distance - b.distance).slice(0, 3);
   ctx.save();
   ctx.setLineDash([2, 5]);
   closest.forEach((item, index) => {
-    ctx.strokeStyle = index === 0 ? 'rgba(251,146,60,.45)' : 'rgba(155,147,166,.22)';
+    ctx.strokeStyle = index === 0 ? INK.link : INK.linkFaint;
     ctx.beginPath();
     ctx.moveTo(centerX, centerY);
     ctx.lineTo(centerX + Math.cos(item.angle) * item.radius, centerY + Math.sin(item.angle) * item.radius);
@@ -397,9 +435,9 @@ function renderOrbit() {
     const isNearest = closest[0] && closest[0].user.id === item.user.id;
     drawAvatar(ctx, item.user.icon_id, x, y, item.size, {
       ring: islandColor(item.user.cluster_id),
-      glow: isNearest ? 'rgba(251,146,60,.75)' : null,
+      glow: isNearest ? INK.glow : null,
     });
-    ctx.fillStyle = '#9b93a6';
+    ctx.fillStyle = INK.label;
     ctx.font = '10px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(clip(item.user.name, 6), x, y + item.size / 2 + 12);
@@ -409,20 +447,23 @@ function renderOrbit() {
   // you, last so you sit on top
   const pulse = 1 + Math.sin(time * 1.9) * 0.045;
   ctx.save();
-  ctx.strokeStyle = 'rgba(251,146,60,.3)';
+  ctx.strokeStyle = INK.self;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(centerX, centerY, (SELF_SIZE / 2 + 9) * pulse, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
-  drawAvatar(ctx, state.me.icon_id, centerX, centerY, SELF_SIZE, { glow: 'rgba(251,146,60,.5)' });
+  drawAvatar(ctx, state.me.icon_id, centerX, centerY, SELF_SIZE, { glow: INK.glow });
+  // Your own avatar was not a hit target, so tapping yourself - the most
+  // obvious thing to try in this view - did nothing at all.
+  state.hits.push({ x: centerX, y: centerY, r: SELF_SIZE / 2 + 10, user: state.me, distance: 0 });
 
   if (!others.length) {
-    ctx.fillStyle = '#6b6377';
+    ctx.fillStyle = INK.faint;
     ctx.font = '13px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('まだあなたひとりです', centerX, centerY + 96);
-    ctx.fillText('URLを誰かに送ってみてください', centerX, centerY + 116);
+    ctx.fillText('まだあなただけです', centerX, centerY + 96);
+    ctx.fillText('URLを送ると相手も出ます', centerX, centerY + 116);
   }
 }
 
@@ -444,7 +485,10 @@ function relaxAngles(placed) {
         const dx = Math.cos(a.angle) * a.radius - Math.cos(b.angle) * b.radius;
         const dy = Math.sin(a.angle) * a.radius - Math.sin(b.angle) * b.radius;
         const gap = Math.hypot(dx, dy);
-        const need = (a.size + b.size) / 2 + 8;
+        // +18, not +8: each avatar carries a name label underneath it, and a
+        // gap that only clears the discs leaves the names written on top of
+        // each other whenever a few people land in the same distance band.
+        const need = (a.size + b.size) / 2 + 18;
         if (gap >= need) continue;
 
         const overlap = need - gap;
@@ -525,7 +569,7 @@ function renderMap() {
     ctx.font = '700 12px system-ui, sans-serif';
     ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(13, 10, 17, .92)';
+    ctx.strokeStyle = INK.halo;
     state.map.islands.forEach((island) => {
       const point = toScreen(island.cx, island.cy);
       ctx.strokeText(island.name, point.x, point.y);
@@ -545,7 +589,7 @@ function renderMap() {
     if (isMe) {
       const pulse = 1 + Math.sin(time * 1.9) * 0.09;
       ctx.save();
-      ctx.strokeStyle = 'rgba(251,146,60,.4)';
+      ctx.strokeStyle = INK.self;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(point.x, point.y, (size / 2 + 8) * pulse, 0, Math.PI * 2);
@@ -554,7 +598,7 @@ function renderMap() {
     }
     drawAvatar(ctx, user.icon_id, point.x, point.y, size, {
       ring: islandColor(user.cluster_id),
-      glow: isMe ? 'rgba(251,146,60,.5)' : null,
+      glow: isMe ? INK.glow : null,
     });
     if (scale > 0.32 || isMe) {
       ctx.save();
@@ -562,9 +606,9 @@ function renderMap() {
       ctx.textAlign = 'center';
       ctx.lineWidth = 3;
       ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(13, 10, 17, .9)';
+      ctx.strokeStyle = INK.halo;
       ctx.strokeText(clip(user.name, 6), point.x, point.y + size / 2 + 12);
-      ctx.fillStyle = '#cfc8d8';
+      ctx.fillStyle = INK.mapLabel;
       ctx.fillText(clip(user.name, 6), point.x, point.y + size / 2 + 12);
       ctx.restore();
     }
@@ -596,6 +640,12 @@ const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : te
     if (!previous) return;
     const next = { x: event.clientX, y: event.clientY };
     pointers.set(event.pointerId, next);
+    // Measure movement before the view check: the orbit view does not pan, but
+    // it still has to know a swipe was a swipe, or the finger lifting after a
+    // drag opens whichever avatar happened to be underneath it.
+    const dx = next.x - previous.x;
+    const dy = next.y - previous.y;
+    if (Math.abs(dx) + Math.abs(dy) > 2) dragged = true;
     if (state.view !== 'map') return;
 
     if (pointers.size === 2 && pinchStart) {
@@ -606,9 +656,6 @@ const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : te
       zoomAt(midX, midY, (pinchStart.scale * distance) / pinchStart.distance);
       dragged = true;
     } else if (pointers.size === 1) {
-      const dx = next.x - previous.x;
-      const dy = next.y - previous.y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) dragged = true;
       state.camera.x += dx;
       state.camera.y += dy;
     }
@@ -704,7 +751,7 @@ function renderSheet(person, isSelf) {
     sim.className = 'sim';
     sim.innerHTML =
       `<span class="sim-value num">${person.similarity}%</span>` +
-      `<span class="sim-label">似てる度 ・ 地図上で ${Math.round(person.distance || 0)}px 離れています</span>`;
+      '<span class="sim-label">似てる度</span>';
     const bar = document.createElement('div');
     bar.className = 'sim-bar';
     bar.innerHTML = '<div class="sim-fill" style="width:0"></div>';
@@ -751,7 +798,9 @@ function renderSheet(person, isSelf) {
     share.textContent = 'URLをコピー';
     share.addEventListener('click', shareUrl);
     const leave = document.createElement('button');
-    leave.className = 'btn btn-ghost';
+    // Destructive and irreversible, so it does not get to look like the
+    // neutral secondary action sitting next to "copy the URL".
+    leave.className = 'btn btn-danger';
     leave.textContent = '地図から消す';
     leave.addEventListener('click', leaveMap);
     actions.append(share, leave);
@@ -774,11 +823,12 @@ function closeSheet() {
 // and close the sheet again immediately. pointerdown already fired before the
 // backdrop existed, so only a genuinely new tap closes it.
 $('sheetBackdrop').addEventListener('pointerdown', closeSheet);
+$('sheetClose').addEventListener('click', closeSheet);
 
 async function shareUrl() {
   const url = location.origin;
   try {
-    if (navigator.share) await navigator.share({ title: 'ことばの地図', url });
+    if (navigator.share) await navigator.share({ title: 'かさなり', url });
     else { await navigator.clipboard.writeText(url); toast('URLをコピーしました'); }
   } catch { /* the user dismissed the share sheet */ }
 }
@@ -801,15 +851,29 @@ async function leaveMap() {
 
 // ---------------------------------------------------------------- boot
 
-(async function boot() {
-  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-  if (!saved) return; // first visit: welcome screen is already showing
+// index.html opens on #booting rather than on the intro, so a returning
+// visitor does not watch slide 1 flash past before their map loads. Whichever
+// branch wins here picks the first screen the user actually sees.
+(function boot() {
+  let saved = null;
   try {
-    const me = await api(`/api/user/${saved.id}`);
-    state.me = { ...me, edit_token: saved.edit_token };
-    await enterMain();
+    saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
   } catch {
-    // The row is gone (a rebuild, or they left). Start over.
-    localStorage.removeItem(STORAGE_KEY);
+    saved = null;
   }
+  if (!saved || !saved.id) {
+    showScreen('intro');
+    return;
+  }
+  (async () => {
+    try {
+      const me = await api(`/api/user/${saved.id}`);
+      state.me = { ...me, edit_token: saved.edit_token };
+      await enterMain();
+    } catch {
+      // The row is gone (a rebuild, or they left). Start over.
+      localStorage.removeItem(STORAGE_KEY);
+      showScreen('intro');
+    }
+  })();
 })();

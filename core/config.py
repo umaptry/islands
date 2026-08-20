@@ -85,7 +85,7 @@ MAX_USERS = 100
 # Hue separation matters most on avatar rings and island labels; the terrain
 # dots are drawn at 0.12 alpha where hue barely reads, so ten is workable.
 ISLAND_COLORS = [
-    "#f472b6", "#a78bfa", "#38bdf8", "#34d399", "#fbbf24",
-    "#fb7185", "#818cf8", "#4ade80", "#2dd4bf", "#c084fc",
+    "#db2777", "#7c3aed", "#0284c7", "#059669", "#b45309",
+    "#e11d48", "#4f46e5", "#15803d", "#0f766e", "#9333ea",
 ]
 assert max(CLUSTER_CANDIDATES) <= len(ISLAND_COLORS), "島の数が色数を超えています"

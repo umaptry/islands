@@ -1,6 +1,6 @@
 ---
-title: ことばの地図
-emoji: 🗺️
+title: かさなり
+emoji: 🔗
 colorFrom: purple
 colorTo: pink
 sdk: docker
@@ -8,7 +8,7 @@ app_port: 7860
 pinned: false
 ---
 
-# ことばの地図
+# かさなり
 
 一言の自己紹介だけで、自分の居場所が地図の上にできる。近い人＝似た話をしている人で、
 タップすると二人が共有していることばが見える。

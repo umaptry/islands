@@ -1,30 +1,33 @@
-/* ことばの地図 — dark-first, mobile-first.
-   Token structure follows the pokeDB explainer: everything is a CSS variable,
-   accent = meaning/self, accent2 = words/shared. */
+/* かさなり — light, mobile-first.
+   Everything is a CSS variable: accent = you, accent2 = the words you share. */
 
 :root {
-  --bg: #141018;
-  --bg-deep: #0d0a11;
-  --card: #1e1826;
-  --card-2: #271f31;
-  --fg: #efece4;
-  --muted: #9b93a6;
-  --line: #332a3f;
-  --accent: #fb923c;
-  --accent2: #22d3ee;
-  --good: #4ade80;
-  --bad: #f87171;
-  --chip: #2c2436;
+  --bg: #fdfcfa;
+  --bg-deep: #f3f0ec;
+  --card: #ffffff;
+  --card-2: #f1ede8;
+  --fg: #1c1a1e;
+  --muted: #6d6672;
+  --line: #e4ded6;
+  --line-strong: #cec6bb;
+  --accent: #ea580c;
+  --accent-soft: #fff1e7;
+  --accent2: #0e7490;
+  --good: #15803d;
+  --bad: #dc2626;
+  --chip: #eefafd;
 
-  --i0: #f472b6; --i1: #a78bfa; --i2: #38bdf8; --i3: #34d399; --i4: #fbbf24;
-  --i5: #fb7185; --i6: #818cf8; --i7: #4ade80; --i8: #2dd4bf; --i9: #c084fc;
+  /* Island hues. Must stay in sync with ISLAND_COLORS in core/config.py and
+     in web/app.js. Chosen to clear 4.5:1 against the white page. */
+  --i0: #db2777; --i1: #7c3aed; --i2: #0284c7; --i3: #059669; --i4: #b45309;
+  --i5: #e11d48; --i6: #4f46e5; --i7: #15803d; --i8: #0f766e; --i9: #9333ea;
 
   --radius: 16px;
-  --tap: 44px;
+  --tap: 48px;
   --ease: cubic-bezier(.22, 1, .36, 1);
+  --shadow: 0 1px 2px rgba(28, 26, 30, .05), 0 8px 24px rgba(28, 26, 30, .06);
 
   --font: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
-  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -49,134 +52,185 @@ button { border: 0; background: none; cursor: pointer; }
 
 .num { font-variant-numeric: tabular-nums; }
 
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---------- screen system ---------- */
 
 .screen {
   position: fixed;
   inset: 0;
+  /* dvh tracks the iOS URL bar; the fixed fallback above covers older Safari. */
+  height: 100dvh;
   display: none;
   flex-direction: column;
-  padding: max(20px, env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom));
+  padding: max(16px, env(safe-area-inset-top)) 20px calc(16px + env(safe-area-inset-bottom));
 }
 .screen.active { display: flex; }
-.screen.fade-in { animation: fade-in .45s var(--ease) both; }
+.screen.fade-in { animation: fade-in .4s var(--ease) both; }
 
-@keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-/* ---------- welcome ---------- */
+/* ---------- intro ---------- */
 
-#welcome { justify-content: space-between; }
+#intro { justify-content: space-between; gap: 12px; }
 
-.slides {
-  flex: 1;
+/* Buttons are the only way forward, so the track is transform-driven and
+   scrolling is off: a half-swipe can no longer leave the dots disagreeing with
+   what is on screen. */
+.slides { flex: 1; overflow: hidden; margin: 0 -20px; }
+.slide-track {
   display: flex;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  margin: 0 -20px;
+  height: 100%;
+  transition: transform .38s var(--ease);
 }
-.slides::-webkit-scrollbar { display: none; }
-
 .slide {
   min-width: 100%;
-  scroll-snap-align: center;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
   text-align: center;
   padding: 0 26px;
-  gap: 20px;
+  gap: 18px;
 }
 .slide h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: 20px;
   line-height: 1.6;
   letter-spacing: .01em;
   /* Japanese has no spaces, so let the browser balance the ragged edge
      instead of leaving a single orphaned kana on the last line. */
   text-wrap: balance;
 }
-.slide p { margin: 0; color: var(--muted); font-size: 14px; }
-.slide-art { width: 200px; height: 200px; }
+.slide p { margin: 0; color: var(--muted); font-size: 14px; text-wrap: balance; }
+.slide-art { width: min(200px, 46vh); height: min(200px, 46vh); }
 
-.dots { display: flex; gap: 8px; justify-content: center; padding: 18px 0 6px; }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); transition: all .3s var(--ease); }
-.dot.on { background: var(--accent); width: 20px; border-radius: 4px; }
+.brand { text-align: center; font-size: 13px; color: var(--muted); letter-spacing: .18em; }
+
+.dots { display: flex; gap: 8px; justify-content: center; padding: 4px 0; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); transition: all .3s var(--ease); }
+.dot.on { background: var(--accent); width: 22px; border-radius: 4px; }
+
+.nav-row { display: flex; gap: 10px; align-items: center; }
+.nav-row .btn { flex: 1; }
 
 /* ---------- buttons ---------- */
 
 .btn {
   min-height: var(--tap);
   border-radius: 999px;
-  padding: 13px 28px;
+  padding: 13px 26px;
   font-weight: 700;
   font-size: 15px;
-  background: linear-gradient(135deg, var(--accent), #f97316);
-  color: #1a1014;
-  transition: transform .18s var(--ease), opacity .18s;
+  background: var(--accent);
+  color: #fff;
+  transition: transform .16s var(--ease), background .16s, opacity .16s;
 }
-.btn:active { transform: scale(.96); }
-.btn:disabled { background: var(--card-2); color: var(--muted); cursor: default; }
+.btn:active { transform: scale(.97); }
+.btn:disabled { background: var(--card-2); color: #9b94a1; cursor: default; }
 .btn-block { width: 100%; }
-.btn-ghost { background: none; color: var(--muted); font-weight: 500; }
+
+.btn-quiet {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line-strong);
+  font-weight: 600;
+}
+.btn-quiet:active { background: var(--card-2); }
+
+.btn-ghost { background: none; color: var(--muted); font-weight: 600; }
+.btn-ghost:active { background: var(--card-2); }
+
+.btn-danger { background: none; color: var(--bad); font-weight: 600; border: 1px solid #f3d0d0; }
 
 /* ---------- profile form ---------- */
 
-#profile { overflow-y: auto; gap: 8px; }
+#profile { gap: 4px; }
 
-.field { margin-top: 20px; }
-.label { font-size: 13px; color: var(--muted); margin-bottom: 9px; display: flex; justify-content: space-between; align-items: center; }
+/* The fields scroll inside their own box and the action button is a flex
+   sibling below it. The previous version scrolled the whole screen and pinned
+   the button with position:sticky, which meant the button sat ON TOP of the
+   textarea whenever the content was taller than the viewport - exactly when
+   someone was typing into it. */
+.scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Room to scroll the last field clear of the footer's shadow line. */
+  padding-bottom: 8px;
+}
+
+.screen-title { margin: 2px 0 0; font-size: 20px; font-weight: 800; }
+
+.field { margin-top: 18px; }
+.label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  margin-bottom: 9px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.label .hint-text { font-weight: 500; color: var(--muted); font-size: 12px; }
 
 .icon-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 9px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
 }
 .icon-cell {
   aspect-ratio: 1;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 21px;
+  /* Scales with the cell so the face fills the disc on every screen width. */
+  font-size: clamp(24px, 8vw, 34px);
   line-height: 1;
-  border: 2px solid transparent;
-  transition: transform .2s var(--ease), border-color .2s;
+  overflow: hidden;
+  border: 3px solid transparent;
+  box-shadow: var(--shadow);
+  transition: transform .18s var(--ease), border-color .18s;
 }
-.icon-cell.on { border-color: var(--fg); transform: scale(1.12); }
-.icon-cell:active { transform: scale(.9); }
+.icon-cell.on { border-color: var(--fg); transform: scale(1.08); }
+.icon-cell:active { transform: scale(.92); }
 
 .input, .textarea {
   width: 100%;
   background: var(--card);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 12px;
   padding: 13px 15px;
   outline: none;
-  transition: border-color .2s;
+  /* 16px stops iOS Safari from zooming the page when the field takes focus. */
+  font-size: 16px;
+  transition: border-color .2s, box-shadow .2s;
 }
-.input:focus, .textarea:focus { border-color: var(--accent); }
-.textarea { min-height: 132px; resize: vertical; line-height: 1.75; }
-.input::placeholder, .textarea::placeholder { color: #6b6377; }
+.input:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.textarea { min-height: 128px; resize: vertical; line-height: 1.75; }
+.input::placeholder, .textarea::placeholder { color: #a09aa8; }
 
 .counter { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .ring { width: 20px; height: 20px; transform: rotate(-90deg); }
 .ring circle { fill: none; stroke-width: 3; }
-.ring .track { stroke: var(--line); }
+.ring .track { stroke: var(--line-strong); }
 .ring .value { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .3s var(--ease), stroke .3s; }
 .counter.done .ring .value { stroke: var(--good); }
 .counter.done { color: var(--good); }
 
-.form-footer { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+.form-footer { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
 
-/* The profile screen scrolls on small phones, so pin the action to the bottom
-   rather than making people hunt for it below the fold. */
-#profile .form-footer {
-  position: sticky;
-  bottom: 0;
-  margin-top: auto;
-  padding: 14px 0 calc(6px + env(safe-area-inset-bottom));
-  background: linear-gradient(transparent, var(--bg) 26%);
+#profile .form-footer,
+#reveal .form-footer {
+  flex: none;
+  margin-top: 0;
+  padding: 12px 0 calc(4px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  /* A hairline instead of a fade: the fade implied content continued under the
+     button, which is no longer true now that the scroller ends above it. */
+  box-shadow: 0 -1px 0 var(--line);
 }
 .error { color: var(--bad); font-size: 13px; }
 
@@ -195,10 +249,10 @@ button { border: 0; background: none; cursor: pointer; }
 
 #computing { justify-content: center; align-items: center; gap: 40px; }
 .steps { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 300px; }
-.step { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 14px; opacity: .35; transition: opacity .4s var(--ease), color .4s; }
+.step { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 14px; opacity: .4; transition: opacity .4s var(--ease), color .4s; }
 .step.on { opacity: 1; color: var(--fg); }
-.step-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; transition: all .4s var(--ease); }
-.step.on .step-dot { background: var(--accent); box-shadow: 0 0 0 5px rgba(251, 146, 60, .16); }
+.step-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); flex: none; transition: all .4s var(--ease); }
+.step.on .step-dot { background: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); }
 .step.done .step-dot { background: var(--good); box-shadow: none; }
 
 /* ---------- main ---------- */
@@ -211,34 +265,42 @@ button { border: 0; background: none; cursor: pointer; }
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: max(12px, env(safe-area-inset-top)) 14px 12px;
-  background: linear-gradient(var(--bg) 55%, transparent);
+  gap: 8px;
+  padding: max(10px, env(safe-area-inset-top)) 12px 14px;
+  background: linear-gradient(var(--bg) 58%, transparent);
   pointer-events: none;
 }
 .topbar > * { pointer-events: auto; }
 
-.tabs { display: flex; background: var(--card); border-radius: 999px; padding: 3px; gap: 2px; }
+.tabs { display: flex; background: var(--card-2); border-radius: 999px; padding: 3px; gap: 2px; }
 .tab {
-  padding: 8px 17px;
+  min-height: 38px;
+  padding: 8px 15px;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
   color: var(--muted);
-  transition: background .25s var(--ease), color .25s;
+  transition: background .22s var(--ease), color .22s;
 }
-.tab.on { background: var(--card-2); color: var(--fg); }
+.tab.on { background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
 
 .spacer { flex: 1; }
 
 .icon-btn {
-  width: var(--tap); height: var(--tap);
-  border-radius: 50%;
-  display: grid; place-items: center;
+  min-width: var(--tap); height: var(--tap);
+  padding: 0 12px;
+  border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: var(--card);
-  color: var(--muted);
-  font-size: 17px;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: var(--shadow);
+  text-decoration: none;
 }
+.icon-btn:active { background: var(--card-2); }
+.icon-btn .glyph { font-size: 16px; line-height: 1; }
 
 /* <canvas> is a replaced element: with width:auto it keeps its intrinsic
    600x300 and the right/bottom insets are ignored, so inset:0 alone leaves it
@@ -256,7 +318,7 @@ button { border: 0; background: none; cursor: pointer; }
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(22px + env(safe-area-inset-bottom));
+  bottom: calc(20px + env(safe-area-inset-bottom));
   z-index: 6;
   background: var(--card);
   border: 1px solid var(--line);
@@ -269,6 +331,7 @@ button { border: 0; background: none; cursor: pointer; }
   white-space: nowrap;
   max-width: calc(100vw - 40px);
   overflow: hidden;
+  box-shadow: var(--shadow);
 }
 /* display:flex beats the user-agent [hidden] rule, so state it explicitly. */
 .island-badge[hidden] { display: none; }
@@ -279,7 +342,7 @@ button { border: 0; background: none; cursor: pointer; }
 
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 20;
-  background: rgba(8, 5, 12, .6);
+  background: rgba(28, 26, 30, .34);
   opacity: 0; pointer-events: none;
   transition: opacity .3s var(--ease);
 }
@@ -292,18 +355,34 @@ button { border: 0; background: none; cursor: pointer; }
   background: var(--card);
   border-radius: 22px 22px 0 0;
   border-top: 1px solid var(--line);
-  padding: 10px 22px calc(26px + env(safe-area-inset-bottom));
+  padding: 8px 20px calc(20px + env(safe-area-inset-bottom));
   transform: translateY(101%);
-  transition: transform .36s var(--ease);
-  max-height: 82vh;
+  transition: transform .34s var(--ease);
+  max-height: 86dvh;
   overflow-y: auto;
+  box-shadow: 0 -8px 40px rgba(28, 26, 30, .14);
 }
 .sheet.on { transform: none; }
-.sheet-grip { width: 38px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 18px; }
+.sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line-strong); margin: 4px auto 10px; }
 
-.sheet-head { display: flex; align-items: center; gap: 14px; }
-.sheet-avatar { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; flex: none; }
-.sheet-name { font-size: 17px; font-weight: 700; }
+/* An explicit close target: reaching the backdrop above a tall sheet needs a
+   stretch on a phone, and swiping the sheet down is not discoverable. */
+.sheet-close {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--card-2);
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+}
+.sheet-close:active { background: var(--line); }
+
+.sheet-head { display: flex; align-items: center; gap: 14px; padding-right: 44px; }
+.sheet-avatar { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; font-size: 40px; flex: none; overflow: hidden; }
+.sheet-name { font-size: 17px; font-weight: 800; }
 .sheet-sub { font-size: 12px; color: var(--muted); }
 
 .sim {
@@ -312,13 +391,13 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .sim-value { font-size: 34px; font-weight: 800; color: var(--accent2); line-height: 1; }
 .sim-label { font-size: 13px; color: var(--muted); }
-.sim-bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; margin-bottom: 18px; }
+.sim-bar { height: 6px; border-radius: 3px; background: var(--card-2); overflow: hidden; margin-bottom: 18px; }
 .sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .7s var(--ease); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
 .chip {
   background: var(--chip);
-  border: 1px solid var(--line);
+  border: 1px solid #bfe5ef;
   border-radius: 999px;
   padding: 6px 13px;
   font-size: 13px;
@@ -333,15 +412,18 @@ button { border: 0; background: none; cursor: pointer; }
   font-size: 14px;
   line-height: 1.85;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .sheet-note { color: var(--muted); font-size: 13px; margin-top: 12px; }
 .sheet-actions { display: flex; gap: 10px; margin-top: 20px; }
+.sheet-actions .btn { flex: 1; }
 
 /* ---------- reveal ---------- */
 
-#reveal { justify-content: center; gap: 6px; overflow-y: auto; }
-.reveal-title { text-align: center; font-size: 14px; color: var(--muted); }
-.reveal-island { text-align: center; font-size: 24px; font-weight: 800; margin: 4px 0 22px; }
+#reveal { gap: 4px; }
+.reveal-head { flex: none; text-align: center; padding-top: 8px; }
+.reveal-title { font-size: 13px; color: var(--muted); }
+.reveal-island { font-size: 25px; font-weight: 800; margin: 2px 0 20px; }
 .reveal-island span { color: var(--accent); }
 
 .card {
@@ -349,13 +431,16 @@ button { border: 0; background: none; cursor: pointer; }
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 13px 15px;
+  padding: 12px 14px;
   margin-bottom: 10px;
   width: 100%;
+  min-height: var(--tap);
   text-align: left;
-  animation: fade-in .5s var(--ease) both;
+  box-shadow: var(--shadow);
+  animation: fade-in .45s var(--ease) both;
 }
-.card-avatar { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; flex: none; }
+.card:active { background: var(--card-2); }
+.card-avatar { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 32px; flex: none; overflow: hidden; }
 .card-body { flex: 1; min-width: 0; }
 .card-name { font-size: 14px; font-weight: 700; }
 .card-shared { font-size: 12px; color: var(--accent2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -363,7 +448,9 @@ button { border: 0; background: none; cursor: pointer; }
 .card-sim { font-size: 19px; font-weight: 800; color: var(--accent2); }
 .card-sim small { font-size: 11px; font-weight: 500; }
 
-.section-label { font-size: 12px; color: var(--muted); margin: 16px 0 8px; }
+.section-label { font-size: 12px; font-weight: 700; color: var(--muted); margin: 16px 0 8px; }
+
+.empty-note { text-align: center; color: var(--muted); font-size: 13px; }
 
 /* ---------- misc ---------- */
 
@@ -372,8 +459,8 @@ button { border: 0; background: none; cursor: pointer; }
   left: 50%; bottom: calc(90px + env(safe-area-inset-bottom));
   transform: translate(-50%, 14px);
   z-index: 40;
-  background: var(--card-2);
-  border: 1px solid var(--line);
+  background: var(--fg);
+  color: #fff;
   border-radius: 999px;
   padding: 10px 20px;
   font-size: 13px;
@@ -383,15 +470,21 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 
-.hint {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: 50%;
-  text-align: center;
-  color: var(--muted);
-  font-size: 13px;
-  pointer-events: none;
+#booting { justify-content: center; align-items: center; }
+.spinner {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (min-width: 640px) {
+  .screen { padding-left: max(20px, calc(50vw - 260px)); padding-right: max(20px, calc(50vw - 260px)); }
+  #main { padding: 0; }
+  .sheet { left: 50%; transform: translate(-50%, 101%); width: min(560px, 100%); border-radius: 22px 22px 0 0; }
+  .sheet.on { transform: translate(-50%, 0); }
 }
 
 @media (prefers-reduced-motion: reduce) {

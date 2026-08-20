@@ -1,20 +1,30 @@
-// Avatars: one emoji on a pastel gradient disc.
+// Avatars: one face on a coloured disc.
+//
 // Fully offline — no image requests, no external avatar service, and each
-// avatar stays legible at the ~18px the map view draws it at.
+// avatar stays legible at the ~26px the map view draws it at.
+//
+// Faces only, and single-codepoint only. Multi-codepoint emoji (ZWJ sequences
+// like 🧑‍🦰, or skin-tone modifiers) fall back to two separate glyphs on the
+// fonts that lack them, which looks broken inside a circle. Every entry below
+// is one codepoint that ships in Apple Color Emoji, Segoe UI Emoji and Noto
+// Color Emoji, and every one is a head-on face rather than a whole body.
 
 export const EMOJI = [
-  '🐱', '🐶', '🦊', '🐻', '🐼', '🐨',
-  '🦁', '🐯', '🐸', '🐧', '🦉', '🦖',
-  '🐙', '🦀', '🐝', '🦋', '🌵', '🍄',
-  '🌻', '🍊', '🍜', '☕', '🎧', '🎸',
-  '📷', '🚲', '⚽', '🎲', '🔭', '🧵',
+  '🐶', '🐱', '🐭', '🐹', '🐰',
+  '🦊', '🐻', '🐼', '🐨', '🐯',
+  '🦁', '🐮', '🐷', '🐸', '🐵',
+  '🐴', '🐺', '🐗', '🦄', '🐲',
+  '🐔', '🐧', '🐤', '🦉', '🦝',
+  '🧑', '🧒', '🧓', '👶', '😎',
 ];
 
+// Deeper than pastels: these sit behind a face on a white page, so they need
+// enough weight to read as a disc rather than a smudge.
 const GRADIENTS = [
-  ['#fda4af', '#fb7185'], ['#c4b5fd', '#a78bfa'], ['#7dd3fc', '#38bdf8'],
-  ['#6ee7b7', '#34d399'], ['#fcd34d', '#fbbf24'], ['#f9a8d4', '#f472b6'],
-  ['#a5b4fc', '#818cf8'], ['#86efac', '#4ade80'], ['#fdba74', '#fb923c'],
-  ['#67e8f9', '#22d3ee'],
+  ['#fb7185', '#e11d48'], ['#a78bfa', '#7c3aed'], ['#38bdf8', '#0284c7'],
+  ['#34d399', '#059669'], ['#fbbf24', '#d97706'], ['#f472b6', '#db2777'],
+  ['#818cf8', '#4f46e5'], ['#4ade80', '#16a34a'], ['#fb923c', '#ea580c'],
+  ['#2dd4bf', '#0d9488'],
 ];
 
 /** Stable id -> {emoji, from, to}. Ids look like "12" (index into EMOJI). */
@@ -71,10 +81,17 @@ export function drawAvatar(ctx, iconId, x, y, size, options = {}) {
     ctx.stroke();
   }
 
-  ctx.font = `${Math.round(size * 0.56)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+  // Clip to the disc before drawing the face. Emoji glyphs carry a lot of
+  // internal padding, so 0.74 of the diameter reads as a close-up rather than a
+  // small badge, and the clip keeps the silhouette round on the fonts that draw
+  // the glyph wider than its em box.
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.font = `${Math.round(size * 0.74)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   // Emoji glyphs sit slightly high in their em box on most platforms.
-  ctx.fillText(emoji, 0, size * 0.04);
+  ctx.fillText(emoji, 0, size * 0.03);
   ctx.restore();
 }
