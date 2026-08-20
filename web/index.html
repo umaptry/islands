@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#141018">
+<title>ことばの地図</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🗺️</text></svg>">
+</head>
+<body>
+
+<!-- ============ 1. welcome ============ -->
+<section id="welcome" class="screen active">
+  <div class="slides" id="slides">
+    <div class="slide">
+      <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="中心の点のまわりを他の点が囲む図">
+        <g fill="none" stroke="#332a3f" stroke-dasharray="3 5">
+          <circle cx="100" cy="100" r="42"/><circle cx="100" cy="100" r="66"/><circle cx="100" cy="100" r="90"/>
+        </g>
+        <circle cx="100" cy="100" r="17" fill="#fb923c"/>
+        <circle cx="138" cy="82" r="9" fill="#22d3ee"/>
+        <circle cx="72" cy="140" r="9" fill="#a78bfa"/>
+        <circle cx="46" cy="72" r="8" fill="#34d399"/>
+        <circle cx="160" cy="140" r="7" fill="#f472b6"/>
+        <circle cx="100" cy="18" r="6" fill="#fbbf24"/>
+      </svg>
+      <h2>一言書くだけで、<br>地図の上に自分の居場所ができます</h2>
+      <p>書いた文章そのものが、あなたの座標になります。</p>
+    </div>
+    <div class="slide">
+      <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="2つの点の間に共通の言葉が並ぶ図">
+        <circle cx="46" cy="100" r="24" fill="#fb923c"/>
+        <circle cx="154" cy="100" r="24" fill="#a78bfa"/>
+        <path d="M74 100 H126" stroke="#22d3ee" stroke-width="2" stroke-dasharray="4 4"/>
+        <rect x="58" y="36" width="84" height="24" rx="12" fill="#2c2436" stroke="#332a3f"/>
+        <text x="100" y="52" fill="#22d3ee" font-size="12" text-anchor="middle" font-family="sans-serif">キャンプ</text>
+        <rect x="52" y="142" width="96" height="24" rx="12" fill="#2c2436" stroke="#332a3f"/>
+        <text x="100" y="158" fill="#22d3ee" font-size="12" text-anchor="middle" font-family="sans-serif">電子工作</text>
+      </svg>
+      <h2>近い人＝似た話をしている人</h2>
+      <p>タップすると、二人が共有している言葉が出てきます。<br>遠い人は、まったく別の世界の住人です。</p>
+    </div>
+    <div class="slide">
+      <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="文章から座標が決まる図">
+        <rect x="24" y="52" width="152" height="44" rx="10" fill="#1e1826" stroke="#332a3f"/>
+        <path d="M40 68 H150 M40 80 H120" stroke="#9b93a6" stroke-width="3" stroke-linecap="round"/>
+        <path d="M100 100 V126" stroke="#fb923c" stroke-width="2"/>
+        <path d="M94 118 L100 128 L106 118 Z" fill="#fb923c"/>
+        <circle cx="100" cy="150" r="18" fill="#fb923c"/>
+      </svg>
+      <h2>名前は本名じゃなくてOK</h2>
+      <p>年齢も性別も居場所も聞きません。<br>位置を決めるのは、書いた文章だけです。</p>
+    </div>
+  </div>
+  <div class="dots" id="dots"><i class="dot on"></i><i class="dot"></i><i class="dot"></i></div>
+  <button class="btn btn-block" id="startBtn">はじめる</button>
+</section>
+
+<!-- ============ 2. profile ============ -->
+<section id="profile" class="screen">
+  <h2 style="margin:6px 0 0;font-size:20px">プロフィールを作る</h2>
+  <p style="margin:6px 0 0;color:var(--muted);font-size:13px">この3つだけです。</p>
+
+  <div class="field">
+    <div class="label">アイコン</div>
+    <div class="icon-grid" id="iconGrid"></div>
+  </div>
+
+  <div class="field">
+    <div class="label">ユーザー名</div>
+    <input class="input" id="nameInput" maxlength="16" placeholder="ニックネームでOK" autocomplete="off">
+  </div>
+
+  <div class="field">
+    <div class="label">
+      <span>昔やってたこと・今やってること・やってみたいこと</span>
+    </div>
+    <textarea class="textarea" id="textInput"
+      placeholder="例）昔は吹奏楽でトランペット、今は在宅で経理をしています。いつか小さなパン屋をやってみたい。"></textarea>
+  </div>
+
+  <div class="form-footer">
+    <div class="footer-row">
+      <div class="counter" id="counter">
+        <svg class="ring" viewBox="0 0 24 24">
+          <circle class="track" cx="12" cy="12" r="9"/>
+          <circle class="value" cx="12" cy="12" r="9" stroke-dasharray="56.5" stroke-dashoffset="56.5"/>
+        </svg>
+        <span id="counterText">あと30字</span>
+      </div>
+      <div class="error" id="formError"></div>
+    </div>
+    <button class="btn btn-block" id="submitBtn" disabled>地図にのせる</button>
+  </div>
+</section>
+
+<!-- ============ 3. computing ============ -->
+<section id="computing" class="screen">
+  <div class="steps">
+    <div class="step" data-step="0"><i class="step-dot"></i><span>ことばを切り出しています</span></div>
+    <div class="step" data-step="1"><i class="step-dot"></i><span>意味を448の数字にしています</span></div>
+    <div class="step" data-step="2"><i class="step-dot"></i><span>地図の上に置いています</span></div>
+  </div>
+</section>
+
+<!-- ============ 4. reveal ============ -->
+<section id="reveal" class="screen">
+  <div class="reveal-title">あなたが住むのは</div>
+  <div class="reveal-island" id="revealIsland">—</div>
+  <div id="revealNeighbors"></div>
+  <div class="form-footer">
+    <button class="btn btn-block" id="toMapBtn">地図を見る</button>
+  </div>
+</section>
+
+<!-- ============ 5. main ============ -->
+<section id="main" class="screen">
+  <canvas id="stage"></canvas>
+  <div class="topbar">
+    <div class="tabs">
+      <button class="tab on" data-view="orbit">まわりの人</button>
+      <button class="tab" data-view="map">全体マップ</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="meBtn" title="自分のプロフィール">👤</button>
+    <a class="icon-btn" href="/how" title="仕組み" style="text-decoration:none">?</a>
+  </div>
+  <div class="island-badge" id="islandBadge" hidden>
+    <i class="island-swatch" id="islandSwatch"></i><span id="islandText"></span>
+  </div>
+</section>
+
+<!-- ============ shared ============ -->
+<div class="sheet-backdrop" id="sheetBackdrop"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-grip"></div>
+  <div id="sheetBody"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>ことばの地図 — 仕組み</title>
+<style>
+:root {
+  --bg: #141018; --card: #1e1826; --fg: #efece4; --muted: #9b93a6;
+  --line: #332a3f; --accent: #fb923c; --accent2: #22d3ee; --chip: #2c2436;
+  --font: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--font); font-size: 15px; line-height: 1.85;
+  padding: 24px 20px calc(60px + env(safe-area-inset-bottom));
+}
+main { max-width: 720px; margin: 0 auto; }
+h1 { font-size: 22px; line-height: 1.5; margin: 0 0 6px; letter-spacing: .01em; }
+.lead { color: var(--muted); font-size: 14px; margin: 0 0 8px; }
+h2 {
+  font-size: 17px; margin: 40px 0 4px; padding-top: 18px;
+  border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px;
+}
+.num {
+  display: inline-grid; place-items: center; width: 24px; height: 24px;
+  background: var(--fg); color: var(--bg); border-radius: 6px;
+  font-size: 12px; font-weight: 700; flex: none;
+}
+p { margin: 10px 0; }
+.fig {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px; margin: 16px 0;
+}
+.fig svg { display: block; width: 100%; height: auto; overflow: visible; color: var(--fg); }
+.cap { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.keypoint {
+  border-left: 3px solid var(--accent); background: var(--card);
+  padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 18px 0; font-size: 14px;
+}
+.keypoint b { color: var(--accent); }
+code {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 13px;
+  background: var(--chip); padding: 1px 6px; border-radius: 4px;
+}
+a { color: var(--accent); }
+.back { display: inline-block; margin-bottom: 18px; font-size: 14px; text-decoration: none; }
+.sparse { color: var(--accent2); }
+.dense { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<a class="back" href="/">← 地図にもどる</a>
+
+<h1>この地図は、どうやって位置を決めているのか</h1>
+<p class="lead">あなたが書いた一文 → 数値 → 座標。途中で何が起きているかを最後まで追いかけます。</p>
+
+<h2><span class="num">0</span>全体の流れ</h2>
+<div class="fig">
+  <svg viewBox="0 0 340 400" role="img" aria-label="文章が2つの経路を通って448次元になり、座標になるまでの流れ">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+        <path d="M0,0 L7,3.2 L0,6.4 z" fill="currentColor" opacity=".55"/>
+      </marker>
+    </defs>
+    <g stroke="currentColor" stroke-opacity=".35" fill="none" marker-end="url(#ar)">
+      <path d="M140 58 C100 78 92 84 88 100"/>
+      <path d="M200 58 C240 78 248 84 252 100"/>
+      <path d="M88 178 C92 202 100 208 140 226"/>
+      <path d="M252 178 C248 202 240 208 200 226"/>
+      <path d="M170 288 L170 320"/>
+    </g>
+
+    <rect x="86" y="14" width="168" height="44" rx="9" fill="none" stroke="currentColor" stroke-opacity=".45"/>
+    <text x="170" y="34" text-anchor="middle" font-size="13" fill="currentColor">あなたの一文</text>
+    <text x="170" y="50" text-anchor="middle" font-size="11" fill="currentColor" opacity=".55">30字以上</text>
+
+    <rect x="8" y="102" width="156" height="74" rx="9" fill="none" stroke="#22d3ee" stroke-opacity=".8"/>
+    <text x="86" y="126" text-anchor="middle" font-size="13" fill="#22d3ee">どの語を</text>
+    <text x="86" y="144" text-anchor="middle" font-size="13" fill="#22d3ee">使ったか</text>
+    <text x="86" y="164" text-anchor="middle" font-size="12" fill="#22d3ee" opacity=".7">64次元</text>
+
+    <rect x="176" y="102" width="156" height="74" rx="9" fill="none" stroke="#fb923c" stroke-opacity=".8"/>
+    <text x="254" y="126" text-anchor="middle" font-size="13" fill="#fb923c">どんな</text>
+    <text x="254" y="144" text-anchor="middle" font-size="13" fill="#fb923c">意味か</text>
+    <text x="254" y="164" text-anchor="middle" font-size="12" fill="#fb923c" opacity=".7">384次元</text>
+
+    <rect x="66" y="230" width="208" height="58" rx="9" fill="none" stroke="currentColor" stroke-opacity=".45"/>
+    <text x="170" y="253" text-anchor="middle" font-size="13" fill="currentColor">448次元</text>
+    <text x="170" y="273" text-anchor="middle" font-size="12" fill="currentColor" opacity=".55">意味 0.65 : 語 0.35</text>
+
+    <rect x="66" y="324" width="208" height="52" rx="9" fill="none" stroke="currentColor" stroke-width="2"/>
+    <text x="170" y="345" text-anchor="middle" font-size="13" fill="currentColor">地図の座標</text>
+    <text x="170" y="364" text-anchor="middle" font-size="12" fill="currentColor" opacity=".55">(x, y)</text>
+  </svg>
+  <div class="cap">図0: 一方通行です。「他の人を見て調整する」工程はありません。年齢・性別・住んでいる場所は、どの段階でも登場しません。</div>
+</div>
+
+<h2><span class="num">1</span>ことばを、2つの見方で数値にする</h2>
+<p><b class="sparse">どの語を使ったか</b>（64次元）— 文章を日本語解析器で単語に分け、珍しい語ほど重く数えます。「キャンプ」のように誰でも使う語より、「ブッシュクラフト」のような語のほうが強く効きます。</p>
+<p><b class="dense">どんな意味か</b>（384次元）— 言い回しが違っても意味が近ければ同じ方向を向くように、AIの埋め込みモデルが文章全体を数値にします。「焚き火を眺める」と「薪をくべて火を見る」は、共通の単語がなくても近づきます。</p>
+
+<div class="keypoint">
+  <b>なぜ2つ必要か。</b>意味だけを見ると、自己紹介は「〜が好きです」「〜をやっています」といった<b>言い回しが似ているだけ</b>の文どうしが引き寄せ合ってしまいます。そこで、内容語だけを抜き出した「単語だけの文」も別に数値化し、生の文章と <code>0.35 : 0.65</code> で混ぜて、内容のほうに重心を置いています。
+</div>
+
+<h2><span class="num">2</span>位置が動かない理由</h2>
+<p>ふつうの次元圧縮（UMAP）は、点の位置そのものを直接調整します。だから<b>誰か一人が増えるだけで、全員の位置がずれます</b>。それでは「昨日いた場所」と「今日いる場所」が違ってしまい、地図として信用できません。</p>
+<p>そこでこの地図では、448次元から座標を出す<b>関数</b>を一度だけ学習して、そのまま凍結しています。</p>
+
+<div class="fig">
+  <svg viewBox="0 0 340 320" role="img" aria-label="通常のUMAPと凍結エンコーダの比較">
+    <text x="10" y="18" font-size="13" fill="#f87171">ふつうのUMAP</text>
+    <g transform="translate(10,28)">
+      <rect x="0" y="0" width="320" height="94" rx="9" fill="none" stroke="#f87171" stroke-opacity=".3"/>
+      <g fill="#f87171" opacity=".5">
+        <circle cx="56" cy="34" r="7"/><circle cx="132" cy="22" r="7"/>
+        <circle cx="208" cy="52" r="7"/><circle cx="80" cy="66" r="7"/>
+      </g>
+      <g stroke="#f87171" stroke-width="1.6" opacity=".85">
+        <path d="M56 34 L68 26"/><path d="M132 22 L120 32"/>
+        <path d="M208 52 L196 44"/><path d="M80 66 L92 57"/>
+      </g>
+      <circle cx="266" cy="40" r="8" fill="none" stroke="#f87171" stroke-width="2"/>
+    </g>
+    <text x="10" y="142" font-size="12" fill="#f87171">1人増えると、全員がずれる</text>
+
+    <text x="10" y="188" font-size="13" fill="#4ade80">この地図（凍結した関数 f）</text>
+    <g transform="translate(10,198)">
+      <rect x="0" y="0" width="320" height="94" rx="9" fill="none" stroke="#4ade80" stroke-opacity=".3"/>
+      <g fill="#4ade80" opacity=".6">
+        <circle cx="56" cy="34" r="7"/><circle cx="132" cy="22" r="7"/>
+        <circle cx="208" cy="52" r="7"/><circle cx="80" cy="66" r="7"/>
+      </g>
+      <circle cx="266" cy="40" r="8" fill="none" stroke="#4ade80" stroke-width="2"/>
+    </g>
+    <text x="10" y="312" font-size="12" fill="#4ade80">既存の点は 0px も動かない</text>
+  </svg>
+  <div class="cap">図1: UMAPは「お手本を1枚描く先生」の役。実際に毎回座標を出すのは、そのお手本を再現するよう学習させて凍結したニューラルネット <code>f</code> です。</div>
+</div>
+
+<div class="keypoint">
+  同じ文章を何度送っても、<b>小数点の桁まで完全に同じ座標</b>になります。あなたが増えても、先にいた人は1ピクセルも動きません。
+</div>
+
+<h2><span class="num">3</span>距離が「似ている度」になる</h2>
+<p>地図上の距離をそのままピクセル数で見せても、100pxが近いのか遠いのか分かりません。そこで、土台になっている1,000件の文章どうしの距離をすべて測って分布を作り、<b>「あなたたち2人は、その分布の中でどのくらい近いほうか」</b>をパーセントにしています。</p>
+<p>「まわりの人」画面の同心円も同じ考え方です。円は飾りではなく、内側から<code>近い順25%</code> <code>50%</code> <code>75%</code> の境界を表しています。角度のほうは、全体マップ上であなたから見た<b>実際の方角</b>です。</p>
+
+<h2><span class="num">4</span>共通していることば</h2>
+<p>2人の文章から取り出した内容語の重なりを、<b>珍しい語から順に</b>並べています。だから「音楽」より「電子工作」が先に出ます。珍しい語で一致しているほうが、偶然ではない共通点だからです。</p>
+<p>共通の語が1つもないのに距離が近いことがあります。それは違う言葉で同じような話をしている、ということです。</p>
+
+<h2><span class="num">5</span>大事な注意 — 地図が見ているのは「文章」です</h2>
+<p>この地図は<b>あなた自身</b>を見ているのではなく、あなたが書いた<b>1つの文章</b>だけを見ています。同じ人でも、書く内容を変えれば別の場所に立ちます。</p>
+<p>だから、まったく違う趣味の人が隣どうしになることがあります。たとえば「道具を自分で直す」という話をしていれば、自転車の人と革細工の人は近づきます。これは不具合ではなく、<b>「何について語っているか」で並んでいる</b>ということです。</p>
+
+<div class="keypoint">
+  この地図が答えているのは「<b>誰と誰が似た話をしているか</b>」であって、「誰と誰が似た人間か」ではありません。1人1文という条件のもとでは、それが読み取れる情報の上限です。
+</div>
+
+<p style="margin-top:36px"><a href="/">← 地図にもどる</a></p>
+</main>
+</body>
+</html>

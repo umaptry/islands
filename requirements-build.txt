@@ -1,0 +1,3 @@
+# Additionally required to RUN scripts/build_seed_map.py (once, locally).
+-r requirements.txt
+umap-learn==0.5.5

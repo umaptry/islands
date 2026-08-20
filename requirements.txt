@@ -1,0 +1,22 @@
+# Serving dependencies.
+#
+# torch is here because sentence-transformers requires it (torch>=1.11.0) to run
+# multilingual-e5-small. The Dockerfile installs it from PyTorch's CPU index, so
+# we get the ~200MB CPU wheel rather than the ~2.5GB CUDA one. Keeping the same
+# torch version as the build machine also keeps the embeddings numerically
+# identical to the ones the frozen map was built from.
+#
+# What core/encoder.py's numpy implementation buys is narrower but still real:
+# umap-learn never ships, and the frozen weights load from a plain .npz instead
+# of a pickled nn.Module, so a future torch upgrade cannot silently move points.
+torch==2.7.1
+fastapi==0.111.1
+uvicorn[standard]==0.30.6
+pydantic==2.8.2
+httpx==0.27.2
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.4.1.post1
+sentence-transformers==5.6.1
+SudachiPy==0.6.11
+sudachidict_core==20260723

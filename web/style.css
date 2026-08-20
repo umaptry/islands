@@ -1,0 +1,399 @@
+/* ことばの地図 — dark-first, mobile-first.
+   Token structure follows the pokeDB explainer: everything is a CSS variable,
+   accent = meaning/self, accent2 = words/shared. */
+
+:root {
+  --bg: #141018;
+  --bg-deep: #0d0a11;
+  --card: #1e1826;
+  --card-2: #271f31;
+  --fg: #efece4;
+  --muted: #9b93a6;
+  --line: #332a3f;
+  --accent: #fb923c;
+  --accent2: #22d3ee;
+  --good: #4ade80;
+  --bad: #f87171;
+  --chip: #2c2436;
+
+  --i0: #f472b6; --i1: #a78bfa; --i2: #38bdf8; --i3: #34d399; --i4: #fbbf24;
+  --i5: #fb7185; --i6: #818cf8; --i7: #4ade80; --i8: #2dd4bf; --i9: #c084fc;
+
+  --radius: 16px;
+  --tap: 44px;
+  --ease: cubic-bezier(.22, 1, .36, 1);
+
+  --font: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.7;
+  overflow: hidden;
+}
+
+button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; }
+
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- screen system ---------- */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  padding: max(20px, env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom));
+}
+.screen.active { display: flex; }
+.screen.fade-in { animation: fade-in .45s var(--ease) both; }
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* ---------- welcome ---------- */
+
+#welcome { justify-content: space-between; }
+
+.slides {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  margin: 0 -20px;
+}
+.slides::-webkit-scrollbar { display: none; }
+
+.slide {
+  min-width: 100%;
+  scroll-snap-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 0 26px;
+  gap: 20px;
+}
+.slide h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.6;
+  letter-spacing: .01em;
+  /* Japanese has no spaces, so let the browser balance the ragged edge
+     instead of leaving a single orphaned kana on the last line. */
+  text-wrap: balance;
+}
+.slide p { margin: 0; color: var(--muted); font-size: 14px; }
+.slide-art { width: 200px; height: 200px; }
+
+.dots { display: flex; gap: 8px; justify-content: center; padding: 18px 0 6px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); transition: all .3s var(--ease); }
+.dot.on { background: var(--accent); width: 20px; border-radius: 4px; }
+
+/* ---------- buttons ---------- */
+
+.btn {
+  min-height: var(--tap);
+  border-radius: 999px;
+  padding: 13px 28px;
+  font-weight: 700;
+  font-size: 15px;
+  background: linear-gradient(135deg, var(--accent), #f97316);
+  color: #1a1014;
+  transition: transform .18s var(--ease), opacity .18s;
+}
+.btn:active { transform: scale(.96); }
+.btn:disabled { background: var(--card-2); color: var(--muted); cursor: default; }
+.btn-block { width: 100%; }
+.btn-ghost { background: none; color: var(--muted); font-weight: 500; }
+
+/* ---------- profile form ---------- */
+
+#profile { overflow-y: auto; gap: 8px; }
+
+.field { margin-top: 20px; }
+.label { font-size: 13px; color: var(--muted); margin-bottom: 9px; display: flex; justify-content: space-between; align-items: center; }
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 9px;
+}
+.icon-cell {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 21px;
+  line-height: 1;
+  border: 2px solid transparent;
+  transition: transform .2s var(--ease), border-color .2s;
+}
+.icon-cell.on { border-color: var(--fg); transform: scale(1.12); }
+.icon-cell:active { transform: scale(.9); }
+
+.input, .textarea {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 15px;
+  outline: none;
+  transition: border-color .2s;
+}
+.input:focus, .textarea:focus { border-color: var(--accent); }
+.textarea { min-height: 132px; resize: vertical; line-height: 1.75; }
+.input::placeholder, .textarea::placeholder { color: #6b6377; }
+
+.counter { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.ring { width: 20px; height: 20px; transform: rotate(-90deg); }
+.ring circle { fill: none; stroke-width: 3; }
+.ring .track { stroke: var(--line); }
+.ring .value { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .3s var(--ease), stroke .3s; }
+.counter.done .ring .value { stroke: var(--good); }
+.counter.done { color: var(--good); }
+
+.form-footer { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+
+/* The profile screen scrolls on small phones, so pin the action to the bottom
+   rather than making people hunt for it below the fold. */
+#profile .form-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding: 14px 0 calc(6px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--bg) 26%);
+}
+.error { color: var(--bad); font-size: 13px; }
+
+/* The counter lives in the sticky footer, not under the textarea: the footer
+   would otherwise cover it exactly when the user needs it most. */
+.footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 20px;
+}
+.footer-row .error { text-align: right; }
+
+/* ---------- computing ---------- */
+
+#computing { justify-content: center; align-items: center; gap: 40px; }
+.steps { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 300px; }
+.step { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 14px; opacity: .35; transition: opacity .4s var(--ease), color .4s; }
+.step.on { opacity: 1; color: var(--fg); }
+.step-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; transition: all .4s var(--ease); }
+.step.on .step-dot { background: var(--accent); box-shadow: 0 0 0 5px rgba(251, 146, 60, .16); }
+.step.done .step-dot { background: var(--good); box-shadow: none; }
+
+/* ---------- main ---------- */
+
+#main { padding: 0; }
+
+.topbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: max(12px, env(safe-area-inset-top)) 14px 12px;
+  background: linear-gradient(var(--bg) 55%, transparent);
+  pointer-events: none;
+}
+.topbar > * { pointer-events: auto; }
+
+.tabs { display: flex; background: var(--card); border-radius: 999px; padding: 3px; gap: 2px; }
+.tab {
+  padding: 8px 17px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  transition: background .25s var(--ease), color .25s;
+}
+.tab.on { background: var(--card-2); color: var(--fg); }
+
+.spacer { flex: 1; }
+
+.icon-btn {
+  width: var(--tap); height: var(--tap);
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 17px;
+}
+
+/* <canvas> is a replaced element: with width:auto it keeps its intrinsic
+   600x300 and the right/bottom insets are ignored, so inset:0 alone leaves it
+   the wrong size. The explicit 100% is required. */
+#stage {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.island-badge {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(22px + env(safe-area-inset-bottom));
+  z-index: 6;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
+  max-width: calc(100vw - 40px);
+  overflow: hidden;
+}
+/* display:flex beats the user-agent [hidden] rule, so state it explicitly. */
+.island-badge[hidden] { display: none; }
+.island-badge b { color: var(--fg); }
+.island-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
+/* ---------- bottom sheet ---------- */
+
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 20;
+  background: rgba(8, 5, 12, .6);
+  opacity: 0; pointer-events: none;
+  transition: opacity .3s var(--ease);
+}
+.sheet-backdrop.on { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 21;
+  background: var(--card);
+  border-radius: 22px 22px 0 0;
+  border-top: 1px solid var(--line);
+  padding: 10px 22px calc(26px + env(safe-area-inset-bottom));
+  transform: translateY(101%);
+  transition: transform .36s var(--ease);
+  max-height: 82vh;
+  overflow-y: auto;
+}
+.sheet.on { transform: none; }
+.sheet-grip { width: 38px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 18px; }
+
+.sheet-head { display: flex; align-items: center; gap: 14px; }
+.sheet-avatar { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; flex: none; }
+.sheet-name { font-size: 17px; font-weight: 700; }
+.sheet-sub { font-size: 12px; color: var(--muted); }
+
+.sim {
+  margin: 20px 0 6px;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.sim-value { font-size: 34px; font-weight: 800; color: var(--accent2); line-height: 1; }
+.sim-label { font-size: 13px; color: var(--muted); }
+.sim-bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; margin-bottom: 18px; }
+.sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .7s var(--ease); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.chip {
+  background: var(--chip);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent2);
+}
+.sheet-text {
+  margin-top: 16px;
+  padding: 15px 17px;
+  background: var(--bg-deep);
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+}
+.sheet-note { color: var(--muted); font-size: 13px; margin-top: 12px; }
+.sheet-actions { display: flex; gap: 10px; margin-top: 20px; }
+
+/* ---------- reveal ---------- */
+
+#reveal { justify-content: center; gap: 6px; overflow-y: auto; }
+.reveal-title { text-align: center; font-size: 14px; color: var(--muted); }
+.reveal-island { text-align: center; font-size: 24px; font-weight: 800; margin: 4px 0 22px; }
+.reveal-island span { color: var(--accent); }
+
+.card {
+  display: flex; align-items: center; gap: 13px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 13px 15px;
+  margin-bottom: 10px;
+  width: 100%;
+  text-align: left;
+  animation: fade-in .5s var(--ease) both;
+}
+.card-avatar { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; flex: none; }
+.card-body { flex: 1; min-width: 0; }
+.card-name { font-size: 14px; font-weight: 700; }
+.card-shared { font-size: 12px; color: var(--accent2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-shared.none { color: var(--muted); }
+.card-sim { font-size: 19px; font-weight: 800; color: var(--accent2); }
+.card-sim small { font-size: 11px; font-weight: 500; }
+
+.section-label { font-size: 12px; color: var(--muted); margin: 16px 0 8px; }
+
+/* ---------- misc ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%; bottom: calc(90px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 14px);
+  z-index: 40;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .3s var(--ease), transform .3s var(--ease);
+}
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+.hint {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 50%;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
