@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#6d97dd">
-<title>かさなり</title>
+<title>islands デモ版</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%236d97dd'/><ellipse cx='12' cy='19' rx='8' ry='5' fill='%237cc47c'/><ellipse cx='22' cy='12' rx='6' ry='4' fill='%237cc47c'/></svg>">
 </head>
@@ -48,7 +48,6 @@
           <text x="100" y="159" fill="#1f2c3b" font-size="12" text-anchor="middle" font-family="sans-serif">電子工作</text>
         </svg>
         <h2>近くにいる人ほど、<br>似た話をしている</h2>
-        <p>タップすると、共通していることばが出ます。</p>
       </div>
       <div class="slide">
         <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="いくつかの島の中に自分の島が立つ図">
@@ -62,7 +61,6 @@
           <circle cx="100" cy="57" r="5" fill="#fff"/>
         </svg>
         <h2>あなたの島をつくる。<br>似た島をさがす。</h2>
-        <p>一言書けば島ができます。近くの島には、近い話をしている人がいます。</p>
       </div>
     </div>
   </div>
@@ -108,7 +106,10 @@
       </div>
       <div class="error" id="formError" role="alert"></div>
     </div>
-    <button class="btn btn-block" id="submitBtn" disabled>地図にのせる</button>
+    <div class="nav-row">
+      <button class="btn btn-quiet" id="cancelBtn" hidden>やめる</button>
+      <button class="btn" id="submitBtn" disabled>地図にのせる</button>
+    </div>
   </div>
 </section>
 
@@ -142,7 +143,8 @@
       <button class="tab" data-view="map" role="tab">全体マップ</button>
     </div>
     <div class="spacer"></div>
-    <button class="icon-btn" id="meBtn"><span class="glyph">👤</span>自分</button>
+    <button class="icon-btn" id="addBtn" aria-label="投稿する"><span class="glyph">＋</span><span class="text">投稿</span></button>
+    <button class="icon-btn" id="meBtn" aria-label="自分の投稿"><span class="glyph">👤</span><span class="text">自分</span></button>
   </div>
   <div class="island-badge" id="islandBadge" hidden>
     <i class="island-swatch" id="islandSwatch"></i><span id="islandText"></span>

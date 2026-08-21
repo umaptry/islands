@@ -18,9 +18,12 @@ const ISLAND_COLORS = [
 // Ink drawn onto the canvas. Named here so the light palette lives in one place
 // instead of being sprinkled through the render functions as literals.
 const INK = {
-  // The map is a sea. Terrain is land, drawn green and nearly opaque so a
-  // cluster of seed points reads as an island rather than as scattered dots.
-  land: '#7cc47c',
+  // The map is a sea. The seed corpus is the shallows - pale, so it reads as
+  // the shape of the water rather than competing with the posts. Every post is
+  // drawn as its own island on top, which is the thing worth looking at.
+  shallows: '#a9dcae',
+  land: '#59b463',
+  landRim: '#3f9a4c',
   ring: 'rgba(255, 255, 255, .40)',
   faint: 'rgba(255, 255, 255, .78)',
   label: 'rgba(255, 255, 255, .92)',
@@ -36,13 +39,24 @@ const STORAGE_KEY = 'kasanari-me';
 // localStorage rather than returning null. An exception here used to escape
 // join()'s try block and send someone back to the form with an error message
 // AFTER their profile had already been saved on the server.
+//
+// One person can hold several posts, so what is stored is a LIST plus which one
+// is currently being looked at. The single-object shape from the first version
+// is migrated on read: someone who joined this morning must not be logged out
+// by an afternoon deploy.
 const storage = {
   read() {
+    let raw = null;
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+      raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
     } catch {
-      return null;
+      return { posts: [], active: null };
     }
+    if (!raw) return { posts: [], active: null };
+    if (Array.isArray(raw.posts)) {
+      return { posts: raw.posts.filter((post) => post && post.id), active: raw.active || null };
+    }
+    return raw.id ? { posts: [raw], active: raw.id } : { posts: [], active: null };
   },
   write(value) {
     try {
@@ -51,6 +65,20 @@ const storage = {
     } catch {
       return false;
     }
+  },
+  addPost(entry) {
+    const saved = storage.read();
+    const posts = saved.posts.filter((post) => post.id !== entry.id).concat(entry);
+    return storage.write({ posts, active: entry.id });
+  },
+  setActive(id) {
+    const saved = storage.read();
+    storage.write({ posts: saved.posts, active: id });
+  },
+  removePost(id) {
+    const saved = storage.read();
+    const posts = saved.posts.filter((post) => post.id !== id);
+    storage.write({ posts, active: posts.length ? posts[posts.length - 1].id : null });
   },
   clear() {
     try {
@@ -72,6 +100,8 @@ const state = {
   liked: new Set(),
   notified: new Set(),
   inboxReady: false,
+  // Every post this browser owns. state.me is whichever of them is active.
+  myPosts: [],
   view: 'orbit',
   selected: null,
   camera: { scale: 1, x: 0, y: 0 },
@@ -136,6 +166,9 @@ function similarityPercent(distance, quantiles) {
 
 const distanceBetween = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
+/** Is this id one of my own posts? Not the same question as "is it active". */
+const mine = (id) => state.myPosts.some((post) => post.id === id);
+
 // ---------------------------------------------------------------- welcome
 
 // Buttons are the only way through the intro. The previous version was a
@@ -168,6 +201,11 @@ const distanceBetween = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 // ---------------------------------------------------------------- profile
 
 let chosenIcon = String(Math.floor(Math.random() * EMOJI.length));
+
+// Assigned by setupProfile, which owns the field references. Declared here
+// because the IIFE below runs during module evaluation: a `let` placed after it
+// would still be in its temporal dead zone at the moment of assignment.
+let resetProfileForm = () => {};
 
 (function setupProfile() {
   const grid = $('iconGrid');
@@ -207,7 +245,31 @@ let chosenIcon = String(Math.floor(Math.random() * EMOJI.length));
   refresh();
 
   $('submitBtn').addEventListener('click', join);
+
+  // Writing a second post must start from a blank sheet, not from whatever the
+  // last one said.
+  resetProfileForm = () => {
+    nameInput.value = state.myPosts.length ? (state.myPosts[state.myPosts.length - 1].name || '') : '';
+    textInput.value = '';
+    $('formError').textContent = '';
+    chosenIcon = String(Math.floor(Math.random() * EMOJI.length));
+    [...grid.children].forEach((child, index) => {
+      child.classList.toggle('on', String(index) === chosenIcon);
+    });
+    $('cancelBtn').hidden = state.myPosts.length === 0;
+    refresh();
+  };
 })();
+
+function openProfileForm() {
+  resetProfileForm();
+  showScreen('profile');
+}
+
+$('addBtn').addEventListener('click', openProfileForm);
+$('cancelBtn').addEventListener('click', () => {
+  if (state.me) showScreen('main'); else showScreen('intro');
+});
 
 // ---------------------------------------------------------------- join
 
@@ -249,9 +311,12 @@ async function join() {
     steps.forEach((step) => { step.classList.remove('on'); step.classList.add('done'); });
 
     state.me = result;
-    const saved = storage.write({
+    const entry = {
       id: result.id, edit_token: result.edit_token, icon_id: result.icon_id, name: result.name,
-    });
+    };
+    state.myPosts = state.myPosts.filter((post) => post.id !== entry.id).concat(entry);
+    const saved = storage.addPost(entry);
+    orbitCache = { key: '', placed: [], size: 0 };
     showReveal(result);
     if (!saved) {
       toast('この端末では次回の自動復帰ができません');
@@ -684,12 +749,11 @@ function renderMap() {
   // Terrain: the seed corpus, unnamed. It exists to show the shape of the land,
   // so it has to be visible as texture without competing with the avatars.
   ctx.save();
-  // Bigger and nearly opaque: at 0.3 alpha on a blue sea the seed points read
-  // as haze. Overlapping green discs merge into landmasses, which is the whole
-  // point of drawing the corpus at all.
-  const dotRadius = Math.max(3.6, 7.2 * scale);
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = INK.land;
+  // Pale on purpose. The corpus is context: it shows where the land COULD be,
+  // and the posts drawn on top of it are the land that actually exists.
+  const dotRadius = Math.max(3.4, 6.8 * scale);
+  ctx.globalAlpha = 0.42;
+  ctx.fillStyle = INK.shallows;
   state.map.seed.forEach(([x, y]) => {
     const point = toScreen(x, y);
     if (point.x < -20 || point.x > width + 20 || point.y < -20 || point.y > height + 20) return;
@@ -698,6 +762,25 @@ function renderMap() {
     ctx.fill();
   });
   ctx.restore();
+
+  const meId = state.me && state.me.id;
+
+  // Islands first, all of them, then the avatars. Drawing each island directly
+  // before its own avatar would let a later island's fill cover an earlier
+  // avatar wherever two posts land close together.
+  const visible = [];
+  state.map.users.forEach((user) => {
+    const point = toScreen(user.x, user.y);
+    if (point.x < -60 || point.x > width + 60 || point.y < -60 || point.y > height + 60) return;
+    visible.push({ user, point, isMe: user.id === meId });
+  });
+  visible.forEach(({ user, point, isMe }) => {
+    // The land has to be the thing you see, with the face sitting on it. Too
+    // close to the avatar's own radius and an island reads as a coloured ring
+    // around a face rather than as a place.
+    drawIsland(ctx, point.x, point.y, Math.max(34, 58 * scale) * (isMe ? 1.2 : 1),
+      user.id, islandColor(user.cluster_id));
+  });
 
   // Island names, only when zoomed out enough for them not to collide.
   // Drawn with a halo because they sit directly on top of the terrain dots.
@@ -718,12 +801,9 @@ function renderMap() {
     ctx.restore();
   }
 
-  const meId = state.me && state.me.id;
-  state.map.users.forEach((user, index) => {
-    const point = toScreen(user.x, user.y);
-    if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) return;
-    const isMe = user.id === meId;
-    const size = isMe ? 40 : 30;
+
+  visible.forEach(({ user, point, isMe }, index) => {
+    const size = isMe ? 34 : 24;
 
     if (isMe) {
       const pulse = 1 + Math.sin(time * 1.9) * 0.09;
@@ -736,7 +816,7 @@ function renderMap() {
       ctx.restore();
     }
     drawAvatar(ctx, user.icon_id, point.x, point.y, size, {
-      ring: islandColor(user.cluster_id),
+      ring: mine(user.id) ? '#ffffff' : islandColor(user.cluster_id),
       glow: isMe ? INK.glow : null,
     });
     if (scale > 0.32 || isMe) {
@@ -756,6 +836,68 @@ function renderMap() {
 }
 
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/** FNV-1a over the id. Same person, same island shape, on every device. */
+function hashId(id) {
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/** Deterministic 0..1 from a seed and an index. */
+function noise(seed, index) {
+  const value = Math.sin(seed * 0.0001 + index * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+/** A rounded, irregular blob: one post drawn as one island.
+ *
+ * Points on a wobbled ellipse, joined through their midpoints with quadratic
+ * curves so the outline is smooth rather than a visible polygon. The wobble
+ * comes from the id, so an island keeps its shape as the map is panned and
+ * across everybody's screen - the same promise the coordinates make.
+ */
+function islandPath(ctx, x, y, radius, seed) {
+  const COUNT = 11;
+  const points = [];
+  for (let i = 0; i < COUNT; i += 1) {
+    const angle = (i / COUNT) * Math.PI * 2;
+    const wobble = 0.74 + noise(seed, i) * 0.46;
+    points.push([
+      x + Math.cos(angle) * radius * wobble,
+      y + Math.sin(angle) * radius * wobble * 0.8,
+    ]);
+  }
+  ctx.beginPath();
+  const midpoint = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  let start = midpoint(points[COUNT - 1], points[0]);
+  ctx.moveTo(start[0], start[1]);
+  for (let i = 0; i < COUNT; i += 1) {
+    const control = points[i];
+    const end = midpoint(points[i], points[(i + 1) % COUNT]);
+    ctx.quadraticCurveTo(control[0], control[1], end[0], end[1]);
+  }
+  ctx.closePath();
+}
+
+function drawIsland(ctx, x, y, radius, id, accent) {
+  const seed = hashId(id);
+  ctx.save();
+  islandPath(ctx, x, y, radius, seed);
+  ctx.fillStyle = INK.land;
+  ctx.fill();
+  // A thin rim in the island's own hue: enough to tell two neighbouring posts
+  // apart without turning the archipelago into a colour chart. Keep it quiet -
+  // at full strength the rim reads as a ring and the green stops reading as land.
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1, radius * 0.055);
+  ctx.globalAlpha = 0.55;
+  ctx.stroke();
+  ctx.restore();
+}
 
 // ---- gestures --------------------------------------------------------------
 
@@ -826,6 +968,10 @@ const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : te
   }
 })();
 
+function isOwn(person) {
+  return Boolean(person.self) || mine(person.id);
+}
+
 function handleTap(event) {
   const rect = canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
@@ -865,7 +1011,7 @@ async function openSheet(person) {
       return;
     }
   }
-  renderSheet(detail, Boolean(person.self));
+  renderSheet(detail, isOwn(person));
 }
 
 function renderSheet(person, isSelf) {
@@ -944,14 +1090,62 @@ function renderSheet(person, isSelf) {
   close.addEventListener('click', closeSheet);
 
   if (isSelf) {
-    // Your own card is read-only now: no sharing, no leaving, no liking
-    // yourself. Closing is the only thing left to do.
+    // Your own card is read-only: no sharing, no leaving, no liking yourself.
     close.classList.add('btn-block');
     actions.append(close);
   } else {
     actions.append(close, likeButton(person));
   }
   body.append(actions);
+
+  if (isSelf && state.myPosts.length > 1) body.append(postSwitcher());
+}
+
+/** The other posts this browser owns, with a tap to switch to one. */
+function postSwitcher() {
+  const wrap = document.createElement('div');
+  const label = document.createElement('div');
+  label.className = 'section-label';
+  label.textContent = 'あなたの投稿';
+  wrap.append(label);
+
+  state.myPosts.forEach((post) => {
+    const row = document.createElement('button');
+    row.className = 'card';
+    const avatar = document.createElement('div');
+    avatar.className = 'card-avatar';
+    paintAvatar(avatar, post.icon_id);
+    const bodyText = document.createElement('div');
+    bodyText.className = 'card-body';
+    bodyText.innerHTML = '<div class="card-name"></div><div class="card-shared none"></div>';
+    bodyText.querySelector('.card-name').textContent = post.name;
+    const active = state.me && post.id === state.me.id;
+    bodyText.querySelector('.card-shared').textContent = active ? '表示中' : 'この投稿に切り替える';
+    row.append(avatar, bodyText);
+    if (!active) row.addEventListener('click', () => switchTo(post.id));
+    wrap.append(row);
+  });
+  return wrap;
+}
+
+async function switchTo(id) {
+  const post = state.myPosts.find((entry) => entry.id === id);
+  if (!post) return;
+  try {
+    const profile = await api(`/api/user/${id}`);
+    state.me = { ...profile, edit_token: post.edit_token };
+  } catch {
+    toast('切り替えられませんでした。');
+    return;
+  }
+  storage.setActive(id);
+  orbitCache = { key: '', placed: [], size: 0 };
+  state.inboxReady = false;
+  state.notified = new Set();
+  closeSheet();
+  updateIslandBadge();
+  await refreshInbox();
+  toast(`${post.name} の投稿に切り替えました`);
 }
 
 function likeCountFor(id) {
@@ -964,7 +1158,7 @@ function likeButton(person) {
   const paint = () => {
     const liked = state.liked.has(person.id);
     button.dataset.liked = liked ? '1' : '0';
-    button.textContent = liked ? 'いいね済み' : 'いいね';
+    button.textContent = liked ? 'いいね済' : 'いいねをおくる';
     button.disabled = liked;
   };
   paint();
@@ -1011,26 +1205,43 @@ $('sheetClose').addEventListener('click', closeSheet);
 // branch wins here picks the first screen the user actually sees.
 (function boot() {
   const saved = storage.read();
-  if (!saved || !saved.id) {
+  state.myPosts = saved.posts;
+  if (!saved.posts.length) {
     showScreen('intro');
     return;
   }
+
+  // Try the active post, then fall back through the rest. One deleted post
+  // should not strand somebody who still has others on the map.
+  const order = [
+    ...saved.posts.filter((post) => post.id === saved.active),
+    ...saved.posts.filter((post) => post.id !== saved.active),
+  ];
+
   (async () => {
-    try {
-      const me = await api(`/api/user/${saved.id}`);
-      state.me = { ...me, edit_token: saved.edit_token };
-      await enterMain();
-    } catch (error) {
-      // A 404 means the row is gone (they left, or the table was cleared) and
-      // starting over is right. A 503 or a dropped connection means the server
-      // is briefly unhappy, and throwing away their identity over that would
-      // lose them their place on the map for good.
-      if (/\b404\b/.test(error.message) || /見つかりません/.test(error.message)) {
-        storage.clear();
-      } else {
-        toast('接続できませんでした。ページを再読み込みしてください。');
+    let networkTrouble = false;
+    for (const post of order) {
+      try {
+        const profile = await api(`/api/user/${post.id}`);
+        state.me = { ...profile, edit_token: post.edit_token };
+        storage.setActive(post.id);
+        await enterMain();
+        return;
+      } catch (error) {
+        // A 404 means that row is gone (it was removed, or the table was
+        // cleared). A 503 or a dropped connection means the server is briefly
+        // unhappy, and discarding the identity over that would cost somebody
+        // their place on the map for good.
+        if (/\b404\b/.test(error.message) || /見つかりません/.test(error.message)) {
+          state.myPosts = state.myPosts.filter((entry) => entry.id !== post.id);
+          storage.removePost(post.id);
+        } else {
+          networkTrouble = true;
+          break;
+        }
       }
-      showScreen('intro');
     }
+    if (networkTrouble) toast('接続できませんでした。ページを再読み込みしてください。');
+    showScreen('intro');
   })();
 })();

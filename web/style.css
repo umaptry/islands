@@ -309,7 +309,8 @@ button { border: 0; background: none; cursor: pointer; }
 .tabs { display: flex; background: rgba(255, 255, 255, .22); border-radius: 999px; padding: 3px; gap: 2px; }
 .tab {
   min-height: 38px;
-  padding: 8px 15px;
+  padding: 8px 14px;
+  white-space: nowrap;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
@@ -333,6 +334,15 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .icon-btn:active { background: rgba(255, 255, 255, .34); }
 .icon-btn .glyph { font-size: 16px; line-height: 1; }
+.icon-btn .text { white-space: nowrap; }
+
+/* Four controls in the bar now. On a narrow phone the two view tabs need the
+   room more than these labels do, and + / 👤 carry their own meaning - the
+   aria-labels keep them named for anyone who cannot see the glyph. */
+@media (max-width: 430px) {
+  .icon-btn { padding: 0; min-width: 44px; }
+  .icon-btn .text { display: none; }
+}
 
 /* <canvas> is a replaced element: with width:auto it keeps its intrinsic
    600x300 and the right/bottom insets are ignored, so inset:0 alone leaves it
