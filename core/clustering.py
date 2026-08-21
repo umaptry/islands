@@ -22,9 +22,14 @@ from sklearn.metrics import silhouette_score
 
 from core.config import CLUSTER_CANDIDATES, CLUSTER_VOTE_K, cluster_size_bounds
 from core.features import _SPLIT_MODE, display_term, get_tokenizer, make_label_candidates
-from core.stopwords import GENERAL_STOP_WORDS, LABEL_ONLY_STOP_WORDS
+from core.stopwords import DISPLAY_STOP_WORDS, GENERAL_STOP_WORDS, LABEL_ONLY_STOP_WORDS
 
 MAX_RANKED_TERMS = 20
+# Serving-time naming. Deliberately NOT rank_cluster_keywords: that one embeds
+# every candidate term to score the pair semantically, which is right for a
+# once-per-build pass over 1,000 documents and far too slow to run while
+# somebody waits for their join to come back.
+LIVE_LABEL_TERMS = 2
 PAIR_SEMANTIC_FLOOR = 0.28
 TRIPLE_SEMANTIC_FLOOR = 0.32
 TRIPLE_MARGIN = 0.015
@@ -40,6 +45,64 @@ def _near_duplicate(left, right):
     if reading_a and reading_a == reading_b:
         return True
     return SequenceMatcher(None, a, b).ratio() >= 0.82
+
+
+def name_group(term_lists, idf, taken=()):
+    """Name an island from the words the people on it actually used.
+
+    Scored as (how many of them said it) x (how rare it is in the corpus).
+    Frequency alone crowns whatever word is commonest everywhere; rarity alone
+    crowns a single person's one-off. The product is the usual balance, and it
+    reuses the same idf table and the same noun-only `terms` that the shared-word
+    chips are built from - so an island is named in the vocabulary a reader has
+    already seen elsewhere in the UI.
+
+    `taken` are names already used by other islands: two islands called the same
+    thing would be worse than one of them being named less well.
+
+    Returns "A / B", or "A", or "" when there is nothing worth saying.
+    """
+    lists = [list(terms or []) for terms in term_lists]
+    if not lists:
+        return ""
+
+    document_frequency = Counter()
+    for terms in lists:
+        for term in set(terms):
+            if term and term not in DISPLAY_STOP_WORDS:
+                document_frequency[term] += 1
+    if not document_frequency:
+        return ""
+
+    # A word only one person used is fine when the island IS one or two people,
+    # and noise once it is a crowd.
+    minimum_support = 1 if len(lists) < 4 else 2
+    default_idf = max(idf.values()) if idf else 1.0
+    scored = [
+        (count * float(idf.get(term, default_idf)), term)
+        for term, count in document_frequency.items()
+        if count >= minimum_support
+    ]
+    if not scored:
+        return ""
+    # Sort by score, then by term, so the same island never renames itself
+    # between two requests that saw the same people.
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+
+    blocked = set()
+    for name in taken:
+        blocked.update(part.strip() for part in str(name).split("/"))
+
+    chosen = []
+    for _score, term in scored:
+        if term in blocked:
+            continue
+        if any(_near_duplicate(term, picked) for picked in chosen):
+            continue
+        chosen.append(term)
+        if len(chosen) == LIVE_LABEL_TERMS:
+            break
+    return " / ".join(display_term(term) for term in chosen)
 
 
 def _positive_npmi(left, right, document_sets, global_df):

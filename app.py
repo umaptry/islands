@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core.clustering import assign_cluster
+from core.clustering import assign_cluster, name_group
 from core.config import (
     MAX_NAME_LENGTH,
     MAX_TEXT_LENGTH,
@@ -74,6 +74,12 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 state = {}
 _rate_log = defaultdict(deque)
 _rate_lock = threading.Lock()
+# Island names are derived from the posts that are on the map right now, so they
+# change whenever the map changes and stay put whenever it does not. The cache
+# key is the set of posts; recomputing costs one extra query, so it happens on a
+# join or a leave rather than on every poll.
+_islands_cache = {"key": None, "value": []}
+_islands_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -145,7 +151,7 @@ async def lifespan(_app):
     limit = "無効" if RATE_LIMIT_OFF else f"{RATE_LIMIT_MAX}回/{RATE_LIMIT_WINDOW}秒"
     print(
         f"準備完了: seed={len(state['seed_coords'])}点 / "
-        f"islands={len(state['islands'])} / store={state['store'].backend} / "
+        f"領域={len(state['islands'])} / store={state['store'].backend} / "
         f"定員={MAX_USERS}人 / 参加制限={limit}",
         flush=True,
     )
@@ -214,8 +220,87 @@ def sanitize(text):
     return _EMAIL.sub("[メール]", text)
 
 
+def _island_signature(users):
+    """Cheap fingerprint of who is on the map, from data /api/map already has."""
+    return (len(users), max((user["created_at"] for user in users), default=""))
+
+
+def live_islands(users):
+    """Islands named by the people standing on them.
+
+    The regions themselves are still the frozen ones - which region a post
+    belongs to is decided by assign_cluster against the seed layout, and none of
+    that moves. What is generated here is the NAME, from the words of the posts
+    in each region, and the position, from where those posts actually are. A
+    region nobody has posted in has no name and is not sent: the map starts empty
+    and grows names as people arrive, rather than presenting a set of genres that
+    nobody has written anything for.
+    """
+    if not users:
+        return []
+
+    key = _island_signature(users)
+    with _islands_lock:
+        if _islands_cache["key"] == key:
+            return _islands_cache["value"]
+
+    try:
+        rows = state["store"].list_terms()
+    except StoreError:
+        # Keep whatever was last computed rather than blanking the map.
+        with _islands_lock:
+            return _islands_cache["value"]
+
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[int(row["cluster_id"])].append(row)
+
+    # Name the biggest island first: when two islands would pick the same word,
+    # the one with more people behind it has the better claim to it.
+    islands = []
+    taken = []
+    for cluster_id, members in sorted(
+        grouped.items(), key=lambda item: (-len(item[1]), item[0])
+    ):
+        name = name_group([row.get("terms") for row in members], state["idf"], taken)
+        if not name:
+            continue
+        taken.append(name)
+        islands.append({
+            "id": cluster_id,
+            "name": name,
+            "cx": round(sum(float(row["x"]) for row in members) / len(members), 2),
+            "cy": round(sum(float(row["y"]) for row in members) / len(members), 2),
+            "size": len(members),
+        })
+
+    islands.sort(key=lambda island: island["id"])
+    with _islands_lock:
+        _islands_cache["key"] = key
+        _islands_cache["value"] = islands
+    return islands
+
+
+def invalidate_islands():
+    with _islands_lock:
+        _islands_cache["key"] = None
+
+
 def island_of(cluster_id):
-    for island in state["islands"]:
+    """The island a post belongs to, as it is named right now.
+
+    Reads the cache directly when it is warm. Going through live_islands() would
+    mean a list_public() on every profile the sheet opens, purely to compute a
+    cache key that has not changed.
+    """
+    with _islands_lock:
+        islands = _islands_cache["value"] if _islands_cache["key"] is not None else None
+    if islands is None:
+        try:
+            islands = live_islands(state["store"].list_public())
+        except StoreError:
+            islands = []
+    for island in islands:
         if island["id"] == cluster_id:
             return island
     return None
@@ -308,7 +393,7 @@ def get_map():
         counts = {}
     return {
         "seed_bounds": state["seed_bounds"],
-        "islands": state["islands"],
+        "islands": live_islands(users),
         "users": users,
         "like_counts": counts,
         "quantiles": state["quantiles"],
@@ -349,6 +434,7 @@ def join(payload: JoinRequest, request: Request):
             "terms": terms,
             "vec": [round(float(value), 6) for value in vector],
         })
+        invalidate_islands()
         others = [entry for entry in store.list_full() if entry["id"] != row["id"]]
     except StoreError:
         raise HTTPException(
@@ -465,6 +551,7 @@ def leave(payload: LeaveRequest):
         raise HTTPException(status_code=503, detail="削除に失敗しました。もう一度お試しください。")
     if not removed:
         raise HTTPException(status_code=403, detail="削除できませんでした。")
+    invalidate_islands()
     return {"ok": True}
 
 

@@ -434,6 +434,7 @@ function startMapPolling() {
     if (document.hidden || document.querySelector('.screen.active').id !== 'main') return;
     const before = state.map ? state.map.users.length : -1;
     const ok = await refreshMap();
+    if (ok) syncMyIsland();
     if (ok && state.map.users.length !== before) updateIslandBadge();
     // Awaited, not fired alongside: a like almost always arrives from somebody
     // who just joined, and the inbox can only name them once the map holds them.
@@ -490,6 +491,17 @@ async function senderName(id) {
     return person.name;
   } catch {
     return 'だれか';
+  }
+}
+
+/** Island names are rebuilt from the posts on them, so the name attached to me
+ *  at join time goes stale as soon as somebody else lands in my region. */
+function syncMyIsland() {
+  if (!state.me || !state.map) return;
+  const current = (state.map.islands || []).find((island) => island.id === state.me.cluster_id);
+  if (current && (!state.me.island || state.me.island.name !== current.name)) {
+    state.me.island = current;
+    updateIslandBadge();
   }
 }
 
@@ -790,24 +802,6 @@ function renderMap() {
       user.id, islandColor(user.cluster_id));
   });
 
-  // Island names, only when zoomed out enough for them not to collide.
-  // Drawn with a halo because they sit directly on top of the terrain dots.
-  if (scale < 0.55) {
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '700 12px system-ui, sans-serif';
-    ctx.lineWidth = 4;
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = INK.halo;
-    ctx.fillStyle = INK.mapLabel;
-    state.map.islands.forEach((island) => {
-      const point = toScreen(island.cx, island.cy);
-      ctx.strokeText(island.name, point.x, point.y);
-      ctx.fillText(island.name, point.x, point.y);
-    });
-    ctx.restore();
-  }
 
 
   visible.forEach(({ user, point, isMe }, index) => {
@@ -842,6 +836,26 @@ function renderMap() {
     }
     state.hits.push({ x: point.x, y: point.y, r: Math.max(18, radius + 6), user });
   });
+
+  // Island names last, so nothing can bury them. They are the headline now -
+  // each one is built from the posts underneath it - and there is one per
+  // populated region rather than ten fixed ones, so they do not crowd. Lifted
+  // in screen pixels, so the gap does not change with zoom.
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 12px system-ui, sans-serif';
+  ctx.lineWidth = 4;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = INK.halo;
+  ctx.fillStyle = INK.mapLabel;
+  const labelLift = islandRadius(scale) + 22;
+  (state.map.islands || []).forEach((island) => {
+    const point = toScreen(island.cx, island.cy);
+    ctx.strokeText(island.name, point.x, point.y - labelLift);
+    ctx.fillText(island.name, point.x, point.y - labelLift);
+  });
+  ctx.restore();
 }
 
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);

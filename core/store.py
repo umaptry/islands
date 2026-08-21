@@ -37,6 +37,9 @@ RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 # / edit_token: the map shows where people are, not what they wrote.
 PUBLIC_COLUMNS = "id,icon_id,name,x,y,cluster_id,created_at"
 FULL_COLUMNS = PUBLIC_COLUMNS + ",text,terms"
+# Just enough to name the islands. Naming needs the words, not the essays,
+# and certainly not the 448-float vectors that list_full drags along.
+TERM_COLUMNS = "id,cluster_id,x,y,terms"
 
 
 def _now():
@@ -81,6 +84,11 @@ class MemoryStore:
         with self._lock:
             rows = sorted(self._rows.values(), key=lambda row: row["created_at"])
         return [dict(row) for row in rows]
+
+    def list_terms(self):
+        with self._lock:
+            rows = sorted(self._rows.values(), key=lambda row: row["created_at"])
+        return [{key: row.get(key) for key in TERM_COLUMNS.split(",")} for row in rows]
 
     def get(self, profile_id):
         with self._lock:
@@ -283,6 +291,9 @@ class SupabaseStore:
 
     def list_full(self):
         return self._get({"select": FULL_COLUMNS + ",vec", "order": "created_at.asc"})
+
+    def list_terms(self):
+        return self._get({"select": TERM_COLUMNS, "order": "created_at.asc"})
 
     def get(self, profile_id):
         rows = self._get({"select": FULL_COLUMNS, "id": f"eq.{profile_id}", "limit": "1"})
