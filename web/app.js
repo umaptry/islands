@@ -776,6 +776,162 @@ const toScreen = (x, y) => ({
   y: y * state.camera.scale + state.camera.y,
 });
 
+// ---- boats -----------------------------------------------------------------
+//
+// Traffic on the sea, and nothing more. The boats carry no data: they are not
+// people, not posts, not clusters. They exist because a map of islands with
+// nothing moving on it reads as a diagram rather than a place. Everything here
+// is decoration - it never touches the camera, the coordinates, or state.hits,
+// so no boat can move an island or swallow a tap.
+
+const BOAT_COUNT = 6;
+// Screen pixels at every zoom, like islandRadius. A boat that grew with the
+// map would start competing with the islands; the point is that it stays tiny.
+const BOAT_LENGTH = 7;
+const REDUCED_MOTION = !!(window.matchMedia
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+/** The water the boats stay inside: the seed bounds, widened a little.
+ *
+ * The same bounds fitCamera frames, so the traffic is where the sea is rather
+ * than wandering off into empty world space. Cached against the map payload -
+ * it only changes when a new one arrives.
+ */
+let seaCache = null;
+function seaBounds() {
+  if (seaCache && seaCache.map === state.map) return seaCache.box;
+  let bounds = state.map && state.map.seed_bounds;
+  if (!bounds || bounds.length !== 4 || bounds.some((value) => !Number.isFinite(value))) {
+    bounds = [0, 0, WORLD, WORLD];
+  }
+  const [minX, minY, maxX, maxY] = bounds;
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  const box = {
+    x: minX - spanX * 0.075,
+    y: minY - spanY * 0.075,
+    w: spanX * 1.15,
+    h: spanY * 1.15,
+  };
+  seaCache = { map: state.map, box };
+  return box;
+}
+
+/** Every boat, positioned from the clock alone.
+ *
+ * Position is a pure function of `time`, not an accumulated velocity: a
+ * backgrounded tab, a resize, or a dropped frame cannot drift the fleet or
+ * leave it somewhere it should not be.
+ *
+ * Each boat works a fixed chord between two points inside the sea box and
+ * eases back and forth along it. A wrap-around course would teleport a boat
+ * across the screen in full view; easing means it slows, turns, and comes
+ * back, which is what a small boat looks like anyway.
+ */
+function drawBoats(ctx, time) {
+  if (REDUCED_MOTION) return;
+  const sea = seaBounds();
+  // World units per second, tuned so one crossing takes the better part of a
+  // minute. Slow enough that the map still reads as a still map.
+  const speed = Math.max(sea.w, sea.h) / 55;
+  const midX = sea.x + sea.w / 2;
+  const midY = sea.y + sea.h / 2;
+  for (let i = 0; i < BOAT_COUNT; i += 1) {
+    const seed = 7919 * (i + 1);
+    // The chord is built as a pair of points either side of the middle rather
+    // than as two free points: two free points can land close together, and a
+    // boat on a short leg turns around every few seconds, which reads as
+    // fidgeting rather than as a crossing. `reach` + `shift` stay under half
+    // the box on both axes, so the whole run is inside the water.
+    const angle = noise(seed, 1) * Math.PI * 2;
+    const reach = 0.28 + noise(seed, 2) * 0.12;
+    const shift = (noise(seed, 3) - 0.5) * 0.18;
+    const armX = Math.cos(angle) * sea.w * reach;
+    const armY = Math.sin(angle) * sea.h * reach;
+    const offX = -Math.sin(angle) * sea.w * shift;
+    const offY = Math.cos(angle) * sea.h * shift;
+    const ax = midX + offX - armX;
+    const ay = midY + offY - armY;
+    const bx = midX + offX + armX;
+    const by = midY + offY + armY;
+    const span = Math.hypot(bx - ax, by - ay);
+    if (span < 1) continue;
+    const period = (2 * span) / speed;
+    const cycle = (time / period + noise(seed, 5)) * Math.PI * 2;
+    const travel = 0.5 - Math.cos(cycle) * 0.5;
+    const point = toScreen(ax + (bx - ax) * travel, ay + (by - ay) * travel);
+    if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
+    // A hair of bob, well under the height of the hull. Any more and six of
+    // them moving together turns into a wobble across the whole screen.
+    const bob = Math.sin(time * 1.1 + noise(seed, 6) * Math.PI * 2) * 0.6;
+    const outbound = Math.sin(cycle) >= 0;
+    drawBoat(ctx, point.x, point.y + bob, (bx >= ax) === outbound ? 1 : -1);
+  }
+}
+
+/** One boat, in screen pixels: hull, sail, and a wake that fades out astern. */
+function drawBoat(ctx, x, y, facing) {
+  const unit = BOAT_LENGTH;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(facing, 1);
+
+  const wake = ctx.createLinearGradient(-unit * 2.6, 0, -unit * 0.4, 0);
+  wake.addColorStop(0, 'rgba(255, 255, 255, 0)');
+  wake.addColorStop(1, INK.linkFaint);
+  ctx.strokeStyle = wake;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-unit * 2.6, unit * 0.26);
+  ctx.lineTo(-unit * 0.4, unit * 0.26);
+  ctx.stroke();
+
+  ctx.fillStyle = INK.label;
+  ctx.beginPath();
+  ctx.moveTo(-unit * 0.5, -unit * 0.1);
+  ctx.lineTo(unit * 0.5, -unit * 0.1);
+  ctx.lineTo(unit * 0.24, unit * 0.32);
+  ctx.lineTo(-unit * 0.34, unit * 0.32);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(-unit * 0.06, -unit * 0.16);
+  ctx.lineTo(-unit * 0.06, -unit * 0.95);
+  ctx.lineTo(unit * 0.4, -unit * 0.16);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/** Screen-space de-clutter for map labels.
+ *
+ * Names used to be hidden below a zoom threshold, so zooming out dropped every
+ * one of them at once - the map looked like it had lost the information. They
+ * are drawn at every zoom now, and crowding is handled where crowding actually
+ * happens, in screen pixels: a label is skipped only when it would land on top
+ * of one already placed. Space is claimed in priority order - island names,
+ * then you, then everybody else - so the headline never loses to a passer-by.
+ */
+function makeLabelSpace() {
+  const taken = [];
+  return function claim(x, y, textWidth, textHeight) {
+    const left = x - textWidth / 2 - 2;
+    const right = x + textWidth / 2 + 2;
+    const top = y - textHeight / 2 - 1;
+    const bottom = y + textHeight / 2 + 1;
+    for (let i = 0; i < taken.length; i += 1) {
+      const box = taken[i];
+      if (left < box.right && right > box.left && top < box.bottom && bottom > box.top) {
+        return false;
+      }
+    }
+    taken.push({ left, right, top, bottom });
+    return true;
+  };
+}
+
 function renderMap() {
   const time = (performance.now() - state.t0) / 1000;
   const { scale } = state.camera;
@@ -797,12 +953,41 @@ function renderMap() {
     if (point.x < -60 || point.x > width + 60 || point.y < -60 || point.y > height + 60) return;
     visible.push({ user, point, isMe: user.id === meId });
   });
+  // Before the land, so a boat passes behind an island rather than over it.
+  drawBoats(ctx, time);
+
   visible.forEach(({ user, point, isMe }) => {
     drawIsland(ctx, point.x, point.y, islandRadius(scale) * (isMe ? 1.25 : 1),
       user.id, islandColor(user.cluster_id));
   });
 
+  // Island names are painted last, so nothing can bury them - but they claim
+  // their space first, so nothing can crowd them out either.
+  const claim = makeLabelSpace();
+  const labelLift = islandRadius(scale) + 22;
+  const islandLabels = [];
+  ctx.save();
+  ctx.font = '700 12px system-ui, sans-serif';
+  (state.map.islands || []).forEach((island) => {
+    const spot = toScreen(island.cx, island.cy);
+    const y = spot.y - labelLift;
+    // The claim is a reservation, never a filter: an island name always draws.
+    // Two regions can drift close enough to overlap each other, and a region
+    // losing its name as posts arrive is the bug this view already had once.
+    claim(spot.x, y, ctx.measureText(island.name).width, 14);
+    islandLabels.push({ name: island.name, x: spot.x, y });
+  });
+  ctx.restore();
 
+  // You come next: your own name is never the one that gives way.
+  const mine = visible.find((entry) => entry.isMe);
+  if (mine) {
+    ctx.save();
+    ctx.font = '10px system-ui, sans-serif';
+    const below = mine.point.y + islandRadius(scale) * 1.25 + 11;
+    claim(mine.point.x, below - 4, ctx.measureText(clip(mine.user.name, 6)).width, 12);
+    ctx.restore();
+  }
 
   visible.forEach(({ user, point, isMe }, index) => {
     const radius = islandRadius(scale) * (isMe ? 1.25 : 1);
@@ -821,26 +1006,29 @@ function renderMap() {
       ctx.restore();
     }
     drawFace(ctx, user.icon_id, point.x, point.y, size, islandColor(user.cluster_id));
-    if (scale > 0.32 || isMe) {
-      ctx.save();
-      ctx.font = '10px system-ui, sans-serif';
+    ctx.save();
+    ctx.font = '10px system-ui, sans-serif';
+    const label = clip(user.name, 6);
+    const below = point.y + radius + 11;
+    // isMe already reserved its box above, so it always draws.
+    if (isMe || claim(point.x, below - 4, ctx.measureText(label).width, 12)) {
       ctx.textAlign = 'center';
       ctx.lineWidth = 3;
       ctx.lineJoin = 'round';
       ctx.strokeStyle = INK.halo;
-      const below = point.y + radius + 11;
-      ctx.strokeText(clip(user.name, 6), point.x, below);
+      ctx.strokeText(label, point.x, below);
       ctx.fillStyle = INK.mapLabel;
-      ctx.fillText(clip(user.name, 6), point.x, below);
-      ctx.restore();
+      ctx.fillText(label, point.x, below);
     }
+    ctx.restore();
     state.hits.push({ x: point.x, y: point.y, r: Math.max(18, radius + 6), user });
   });
 
   // Island names last, so nothing can bury them. They are the headline now -
   // each one is built from the posts underneath it - and there is one per
   // populated region rather than ten fixed ones, so they do not crowd. Lifted
-  // in screen pixels, so the gap does not change with zoom.
+  // in screen pixels, so the gap does not change with zoom. The positions were
+  // resolved above, before anything else could take the space.
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -849,11 +1037,9 @@ function renderMap() {
   ctx.lineJoin = 'round';
   ctx.strokeStyle = INK.halo;
   ctx.fillStyle = INK.mapLabel;
-  const labelLift = islandRadius(scale) + 22;
-  (state.map.islands || []).forEach((island) => {
-    const point = toScreen(island.cx, island.cy);
-    ctx.strokeText(island.name, point.x, point.y - labelLift);
-    ctx.fillText(island.name, point.x, point.y - labelLift);
+  islandLabels.forEach((label) => {
+    ctx.strokeText(label.name, label.x, label.y);
+    ctx.fillText(label.name, label.x, label.y);
   });
   ctx.restore();
 }
