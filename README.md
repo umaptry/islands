@@ -169,6 +169,50 @@ gcloud run deploy kotoba-map \
 課金対象時間が発生しません。念のため請求先アカウントに**予算アラートを ¥1 で設定**し、
 Artifact Registry には常に1イメージだけ残す運用にしてください。
 
+### デモ当日の運用
+
+公開URL: https://kotoba-map-315170697037.us-central1.run.app
+
+**現在の設定（デモ用に絞ってある）**
+
+| 設定 | 値 | 理由 |
+|---|---|---|
+| `--min-instances` | **1** | コールドスタート（起動時のONNX取得で30〜60秒）を誰にも見せないため。**これだけは一時設定** — 下記参照 |
+| `--max-instances` | 4 | 人が一斉に来たときの詰まり対策。支出の上限も兼ねる |
+| `--concurrency` | 8 | 1 vCPU で ONNX 推論を40本同時に捌けないため。8×4=32並列まで |
+| `KOTOBA_RATE_LIMIT_MAX` | 50 / 300秒 | 会場のwifiは全員が同じグローバルIPになる。既定の3回だと5分間に4人目が弾かれる |
+| `MAX_USERS` | 100 | `core/config.py`。101人目は409で断る |
+
+**デモが終わったら必ずこれを実行してください。**
+
+```bash
+gcloud run services update kotoba-map --region us-central1 --min-instances 0
+```
+
+`min-instances 1` はインスタンスを24時間起こしたままにします。2GiB×86,400秒＝
+1日あたり172,800 GiB秒で、無料枠は月360,000 GiB秒。**1日なら収まりますが、
+2日を超えると課金が始まります。** 戻したあとは Cloud Scheduler の
+`kotoba-map-warm`（3分おきに `/api/health` を叩く）が代わりに温め続けるので、
+コールドスタートはほぼ起きません。
+
+**困ったときの確認手順**
+
+```bash
+curl -s https://kotoba-map-315170697037.us-central1.run.app/api/health
+```
+
+`store` が `supabase`、`store_ok` が `true`、`users` が人数。`memory` に
+なっていたら Supabase の環境変数が外れています。ログは:
+
+```bash
+gcloud run services logs read kotoba-map --region us-central1 --limit 50
+```
+
+Supabase 無料プロジェクトは7日アクセスがないと一時停止しますが、上の warm
+ジョブが `/api/health` 経由で件数を引くので、放っておいても止まりません。
+
+---
+
 ### カード登録なしで試したいとき
 
 ローカルの uvicorn に Cloudflare Quick Tunnel を被せると、アカウント不要・完全無料で
