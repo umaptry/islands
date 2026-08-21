@@ -207,6 +207,19 @@ Artifact Registry には常に1イメージだけ残す運用にしてくださ�
 ことがあります。2台目が温まれば以降は1秒前後です。避けたい場合は
 `--min-instances 2` にすると2台とも常時温まりますが、無料枠の消費も倍になります。
 
+**デプロイのたびに古いイメージを消してください。**
+
+```bash
+gcloud artifacts docker images list us-central1-docker.pkg.dev/kotoba-map-demo/cloud-run-source-deploy --include-tags
+gcloud artifacts docker images delete "us-central1-docker.pkg.dev/kotoba-map-demo/cloud-run-source-deploy/kotoba-map@sha256:<latestが付いていない方>" --quiet
+```
+
+Artifact Registry の無料枠は 0.5GB/月、イメージ1つで約470MB です。**1つ残す
+ぶんにはぎりぎり無料枠に収まりますが、2つ目からは即座に超えます。** 実際に
+デプロイを重ねて 1,969MB まで膨らみ、月 $0.15 ほどの課金が始まる手前でした。
+`latest` が付いているものが稼働中なので、それ以外を消します。容量の表示は
+集計が遅れるので、消した直後は数字が変わりません。
+
 **デモが終わったら必ずこれを実行してください。**
 
 ```bash
