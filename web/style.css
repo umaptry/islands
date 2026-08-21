@@ -1,31 +1,53 @@
-/* かさなり — light, mobile-first.
-   Everything is a CSS variable: accent = you, accent2 = the words you share. */
+/* islands — 青い海に緑の島。mobile-first.
+ *
+ * Two grounds, and every rule below picks one of them deliberately:
+ *
+ *   the sea    - the page itself. Blue, with white type on it.
+ *   the panel  - anything you read or type into: inputs, the bottom sheet,
+ *                neighbour cards. Near-white, with dark type on it.
+ *
+ * White-on-blue is right for headings and chrome and wrong for a paragraph of
+ * somebody's self-introduction, which is why the sheet is a panel and not a
+ * translucent overlay.
+ */
 
 :root {
-  --bg: #fdfcfa;
-  --bg-deep: #f3f0ec;
-  --card: #ffffff;
-  --card-2: #f1ede8;
-  --fg: #1c1a1e;
-  --muted: #6d6672;
-  --line: #e4ded6;
-  --line-strong: #cec6bb;
-  --accent: #ea580c;
-  --accent-soft: #fff1e7;
-  --accent2: #0e7490;
-  --good: #15803d;
-  --bad: #dc2626;
-  --chip: #eefafd;
+  --sea: #6d97dd;
+  --sea-deep: #5c86cd;
+  --sea-line: rgba(255, 255, 255, .34);
+  --sea-line-strong: rgba(255, 255, 255, .62);
 
-  /* Island hues. Must stay in sync with ISLAND_COLORS in core/config.py and
-     in web/app.js. Chosen to clear 4.5:1 against the white page. */
-  --i0: #db2777; --i1: #7c3aed; --i2: #0284c7; --i3: #059669; --i4: #b45309;
-  --i5: #e11d48; --i6: #4f46e5; --i7: #15803d; --i8: #0f766e; --i9: #9333ea;
+  --panel: #eef3fb;
+  --panel-2: #dde6f4;
+  --panel-fg: #1f2c3b;
+  --panel-muted: #5d6b7d;
+  --panel-line: #c6d3e6;
+
+  --fg: #ffffff;
+  --muted: #d6e3f8;
+
+  /* The slate button of the reference design. Dark enough that bold white
+     type on it clears 4.5:1, which #9aabc0 did not. */
+  --btn: #6d859f;
+  --btn-press: #5d7690;
+
+  --like: #ff6f59;
+  --good: #2f9e5f;
+  --bad: #ffd0c6;
+
+  --land: #7cc47c;
+  --land-deep: #55a95c;
+
+  /* Which island a person belongs to. Read on the blue sea and on the green
+     land, so these stay saturated rather than pastel. Must stay in sync with
+     ISLAND_COLORS in core/config.py and in web/app.js. */
+  --i0: #ff5d8f; --i1: #b085ff; --i2: #35c2f5; --i3: #17c08a; --i4: #ffb020;
+  --i5: #ff7a59; --i6: #7b8cff; --i7: #4cd07a; --i8: #23c9c0; --i9: #d07dff;
 
   --radius: 16px;
   --tap: 48px;
   --ease: cubic-bezier(.22, 1, .36, 1);
-  --shadow: 0 1px 2px rgba(28, 26, 30, .05), 0 8px 24px rgba(28, 26, 30, .06);
+  --shadow: 0 2px 6px rgba(20, 38, 66, .12), 0 12px 30px rgba(20, 38, 66, .16);
 
   --font: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
 }
@@ -39,7 +61,7 @@ html, body {
 }
 
 body {
-  background: var(--bg);
+  background: var(--sea);
   color: var(--fg);
   font-family: var(--font);
   font-size: 15px;
@@ -52,7 +74,7 @@ button { border: 0; background: none; cursor: pointer; }
 
 .num { font-variant-numeric: tabular-nums; }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 /* ---------- screen system ---------- */
 
@@ -95,7 +117,7 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .slide h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 21px;
   line-height: 1.6;
   letter-spacing: .01em;
   /* Japanese has no spaces, so let the browser balance the ragged edge
@@ -103,13 +125,19 @@ button { border: 0; background: none; cursor: pointer; }
   text-wrap: balance;
 }
 .slide p { margin: 0; color: var(--muted); font-size: 14px; text-wrap: balance; }
-.slide-art { width: min(200px, 46vh); height: min(200px, 46vh); }
+.slide-art { width: min(210px, 44vh); height: min(210px, 44vh); }
 
-.brand { text-align: center; font-size: 13px; color: var(--muted); letter-spacing: .18em; }
+.brand {
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: .08em;
+}
 
 .dots { display: flex; gap: 8px; justify-content: center; padding: 4px 0; }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); transition: all .3s var(--ease); }
-.dot.on { background: var(--accent); width: 22px; border-radius: 4px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sea-line); transition: all .3s var(--ease); }
+.dot.on { background: #fff; width: 22px; border-radius: 4px; }
 
 .nav-row { display: flex; gap: 10px; align-items: center; }
 .nav-row .btn { flex: 1; }
@@ -122,26 +150,36 @@ button { border: 0; background: none; cursor: pointer; }
   padding: 13px 26px;
   font-weight: 700;
   font-size: 15px;
-  background: var(--accent);
+  background: var(--btn);
   color: #fff;
   transition: transform .16s var(--ease), background .16s, opacity .16s;
 }
-.btn:active { transform: scale(.97); }
-.btn:disabled { background: var(--card-2); color: #9b94a1; cursor: default; }
+.btn:active { transform: scale(.97); background: var(--btn-press); }
+.btn:disabled { background: rgba(255, 255, 255, .22); color: rgba(255, 255, 255, .6); cursor: default; }
 .btn-block { width: 100%; }
 
 .btn-quiet {
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: #fff;
+  border: 1.5px solid var(--sea-line-strong);
   font-weight: 600;
 }
-.btn-quiet:active { background: var(--card-2); }
+.btn-quiet:active { background: rgba(255, 255, 255, .16); }
 
-.btn-ghost { background: none; color: var(--muted); font-weight: 600; }
-.btn-ghost:active { background: var(--card-2); }
+/* Inside the panel-coloured sheet, a transparent button needs panel ink. */
+.sheet .btn-quiet { color: var(--panel-fg); border-color: var(--panel-line); }
+.sheet .btn-quiet:active { background: var(--panel-2); }
 
-.btn-danger { background: none; color: var(--bad); font-weight: 600; border: 1px solid #f3d0d0; }
+.btn-like {
+  background: var(--like);
+  color: #fff;
+}
+.btn-like:active { background: #ea5c47; }
+.btn-like[data-liked="1"] {
+  background: transparent;
+  color: var(--like);
+  border: 1.5px solid var(--like);
+}
 
 /* ---------- profile form ---------- */
 
@@ -157,11 +195,10 @@ button { border: 0; background: none; cursor: pointer; }
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  /* Room to scroll the last field clear of the footer's shadow line. */
   padding-bottom: 8px;
 }
 
-.screen-title { margin: 2px 0 0; font-size: 20px; font-weight: 800; }
+.screen-title { margin: 2px 0 0; font-size: 21px; font-weight: 800; }
 
 .field { margin-top: 18px; }
 .label {
@@ -194,13 +231,14 @@ button { border: 0; background: none; cursor: pointer; }
   box-shadow: var(--shadow);
   transition: transform .18s var(--ease), border-color .18s;
 }
-.icon-cell.on { border-color: var(--fg); transform: scale(1.08); }
+.icon-cell.on { border-color: #fff; transform: scale(1.08); }
 .icon-cell:active { transform: scale(.92); }
 
 .input, .textarea {
   width: 100%;
-  background: var(--card);
-  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--panel-fg);
+  border: 1px solid var(--panel-line);
   border-radius: 12px;
   padding: 13px 15px;
   outline: none;
@@ -208,17 +246,17 @@ button { border: 0; background: none; cursor: pointer; }
   font-size: 16px;
   transition: border-color .2s, box-shadow .2s;
 }
-.input:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:focus, .textarea:focus { border-color: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .35); }
 .textarea { min-height: 128px; resize: vertical; line-height: 1.75; }
-.input::placeholder, .textarea::placeholder { color: #a09aa8; }
+.input::placeholder, .textarea::placeholder { color: #8b98a8; }
 
 .counter { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .ring { width: 20px; height: 20px; transform: rotate(-90deg); }
 .ring circle { fill: none; stroke-width: 3; }
-.ring .track { stroke: var(--line-strong); }
-.ring .value { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .3s var(--ease), stroke .3s; }
-.counter.done .ring .value { stroke: var(--good); }
-.counter.done { color: var(--good); }
+.ring .track { stroke: var(--sea-line); }
+.ring .value { stroke: #fff; stroke-linecap: round; transition: stroke-dashoffset .3s var(--ease), stroke .3s; }
+.counter.done .ring .value { stroke: #c9f7d8; }
+.counter.done { color: #c9f7d8; }
 
 .form-footer { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
 
@@ -227,15 +265,11 @@ button { border: 0; background: none; cursor: pointer; }
   flex: none;
   margin-top: 0;
   padding: 12px 0 calc(4px + env(safe-area-inset-bottom));
-  background: var(--bg);
-  /* A hairline instead of a fade: the fade implied content continued under the
-     button, which is no longer true now that the scroller ends above it. */
-  box-shadow: 0 -1px 0 var(--line);
+  background: var(--sea);
+  box-shadow: 0 -1px 0 var(--sea-line);
 }
-.error { color: var(--bad); font-size: 13px; }
+.error { color: var(--bad); font-size: 13px; font-weight: 700; }
 
-/* The counter lives in the sticky footer, not under the textarea: the footer
-   would otherwise cover it exactly when the user needs it most. */
 .footer-row {
   display: flex;
   align-items: center;
@@ -249,11 +283,11 @@ button { border: 0; background: none; cursor: pointer; }
 
 #computing { justify-content: center; align-items: center; gap: 40px; }
 .steps { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 300px; }
-.step { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 14px; opacity: .4; transition: opacity .4s var(--ease), color .4s; }
-.step.on { opacity: 1; color: var(--fg); }
-.step-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); flex: none; transition: all .4s var(--ease); }
-.step.on .step-dot { background: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); }
-.step.done .step-dot { background: var(--good); box-shadow: none; }
+.step { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 14px; opacity: .45; transition: opacity .4s var(--ease), color .4s; }
+.step.on { opacity: 1; color: #fff; }
+.step-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--sea-line); flex: none; transition: all .4s var(--ease); }
+.step.on .step-dot { background: #fff; box-shadow: 0 0 0 5px rgba(255, 255, 255, .25); }
+.step.done .step-dot { background: #c9f7d8; box-shadow: none; }
 
 /* ---------- main ---------- */
 
@@ -267,39 +301,37 @@ button { border: 0; background: none; cursor: pointer; }
   align-items: center;
   gap: 8px;
   padding: max(10px, env(safe-area-inset-top)) 12px 14px;
-  background: linear-gradient(var(--bg) 58%, transparent);
+  background: linear-gradient(var(--sea) 58%, transparent);
   pointer-events: none;
 }
 .topbar > * { pointer-events: auto; }
 
-.tabs { display: flex; background: var(--card-2); border-radius: 999px; padding: 3px; gap: 2px; }
+.tabs { display: flex; background: rgba(255, 255, 255, .22); border-radius: 999px; padding: 3px; gap: 2px; }
 .tab {
   min-height: 38px;
   padding: 8px 15px;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
-  color: var(--muted);
+  color: rgba(255, 255, 255, .85);
   transition: background .22s var(--ease), color .22s;
 }
-.tab.on { background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
+.tab.on { background: #fff; color: var(--panel-fg); }
 
 .spacer { flex: 1; }
 
 .icon-btn {
   min-width: var(--tap); height: var(--tap);
-  padding: 0 12px;
+  padding: 0 14px;
   border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  color: var(--fg);
+  background: rgba(255, 255, 255, .22);
+  color: #fff;
   font-size: 13px;
   font-weight: 700;
-  box-shadow: var(--shadow);
   text-decoration: none;
 }
-.icon-btn:active { background: var(--card-2); }
+.icon-btn:active { background: rgba(255, 255, 255, .34); }
 .icon-btn .glyph { font-size: 16px; line-height: 1; }
 
 /* <canvas> is a replaced element: with width:auto it keeps its intrinsic
@@ -320,8 +352,8 @@ button { border: 0; background: none; cursor: pointer; }
   transform: translateX(-50%);
   bottom: calc(20px + env(safe-area-inset-bottom));
   z-index: 6;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--panel-fg);
   border-radius: 999px;
   padding: 9px 18px;
   font-size: 13px;
@@ -335,14 +367,14 @@ button { border: 0; background: none; cursor: pointer; }
 }
 /* display:flex beats the user-agent [hidden] rule, so state it explicitly. */
 .island-badge[hidden] { display: none; }
-.island-badge b { color: var(--fg); }
+.island-badge b { color: var(--panel-fg); }
 .island-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 
 /* ---------- bottom sheet ---------- */
 
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 20;
-  background: rgba(28, 26, 30, .34);
+  background: rgba(18, 36, 64, .42);
   opacity: 0; pointer-events: none;
   transition: opacity .3s var(--ease);
 }
@@ -352,18 +384,18 @@ button { border: 0; background: none; cursor: pointer; }
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 21;
-  background: var(--card);
+  background: var(--panel);
+  color: var(--panel-fg);
   border-radius: 22px 22px 0 0;
-  border-top: 1px solid var(--line);
   padding: 8px 20px calc(20px + env(safe-area-inset-bottom));
   transform: translateY(101%);
   transition: transform .34s var(--ease);
   max-height: 86dvh;
   overflow-y: auto;
-  box-shadow: 0 -8px 40px rgba(28, 26, 30, .14);
+  box-shadow: 0 -8px 40px rgba(18, 36, 64, .28);
 }
 .sheet.on { transform: none; }
-.sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line-strong); margin: 4px auto 10px; }
+.sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--panel-line); margin: 4px auto 10px; }
 
 /* An explicit close target: reaching the backdrop above a tall sheet needs a
    stretch on a phone, and swiping the sheet down is not discoverable. */
@@ -373,63 +405,64 @@ button { border: 0; background: none; cursor: pointer; }
   width: 40px; height: 40px;
   border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--card-2);
-  color: var(--muted);
+  background: var(--panel-2);
+  color: var(--panel-muted);
   font-size: 17px;
   line-height: 1;
 }
-.sheet-close:active { background: var(--line); }
+.sheet-close:active { background: var(--panel-line); }
 
 .sheet-head { display: flex; align-items: center; gap: 14px; padding-right: 44px; }
 .sheet-avatar { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; font-size: 40px; flex: none; overflow: hidden; }
 .sheet-name { font-size: 17px; font-weight: 800; }
-.sheet-sub { font-size: 12px; color: var(--muted); }
+.sheet-sub { font-size: 12px; color: var(--panel-muted); }
 
 .sim {
   margin: 20px 0 6px;
   display: flex; align-items: baseline; gap: 8px;
 }
-.sim-value { font-size: 34px; font-weight: 800; color: var(--accent2); line-height: 1; }
-.sim-label { font-size: 13px; color: var(--muted); }
-.sim-bar { height: 6px; border-radius: 3px; background: var(--card-2); overflow: hidden; margin-bottom: 18px; }
-.sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .7s var(--ease); }
+.sim-value { font-size: 34px; font-weight: 800; color: var(--sea-deep); line-height: 1; }
+.sim-label { font-size: 13px; color: var(--panel-muted); }
+.sim-bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; margin-bottom: 18px; }
+.sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--sea), var(--like)); transition: width .7s var(--ease); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
 .chip {
-  background: var(--chip);
-  border: 1px solid #bfe5ef;
+  background: #fff;
+  border: 1px solid var(--panel-line);
   border-radius: 999px;
   padding: 6px 13px;
   font-size: 13px;
   font-weight: 700;
-  color: var(--accent2);
+  color: var(--sea-deep);
 }
 .sheet-text {
   margin-top: 16px;
   padding: 15px 17px;
-  background: var(--bg-deep);
+  background: #fff;
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.85;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.sheet-note { color: var(--muted); font-size: 13px; margin-top: 12px; }
+.sheet-note { color: var(--panel-muted); font-size: 13px; margin-top: 12px; }
 .sheet-actions { display: flex; gap: 10px; margin-top: 20px; }
 .sheet-actions .btn { flex: 1; }
+.like-count { font-size: 13px; color: var(--panel-muted); margin-top: 14px; }
+.like-count b { color: var(--like); font-size: 15px; }
 
 /* ---------- reveal ---------- */
 
 #reveal { gap: 4px; }
 .reveal-head { flex: none; text-align: center; padding-top: 8px; }
 .reveal-title { font-size: 13px; color: var(--muted); }
-.reveal-island { font-size: 25px; font-weight: 800; margin: 2px 0 20px; }
-.reveal-island span { color: var(--accent); }
+.reveal-island { font-size: 26px; font-weight: 800; margin: 2px 0 20px; }
 
 .card {
   display: flex; align-items: center; gap: 13px;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--panel-fg);
   border-radius: var(--radius);
   padding: 12px 14px;
   margin-bottom: 10px;
@@ -439,16 +472,19 @@ button { border: 0; background: none; cursor: pointer; }
   box-shadow: var(--shadow);
   animation: fade-in .45s var(--ease) both;
 }
-.card:active { background: var(--card-2); }
+.card:active { background: var(--panel-2); }
 .card-avatar { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 32px; flex: none; overflow: hidden; }
 .card-body { flex: 1; min-width: 0; }
 .card-name { font-size: 14px; font-weight: 700; }
-.card-shared { font-size: 12px; color: var(--accent2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-shared.none { color: var(--muted); }
-.card-sim { font-size: 19px; font-weight: 800; color: var(--accent2); }
+.card-shared { font-size: 12px; color: var(--sea-deep); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-shared.none { color: var(--panel-muted); }
+.card-sim { font-size: 19px; font-weight: 800; color: var(--sea-deep); }
 .card-sim small { font-size: 11px; font-weight: 500; }
 
 .section-label { font-size: 12px; font-weight: 700; color: var(--muted); margin: 16px 0 8px; }
+/* --muted is tuned for white type on the blue sea. Inside the sheet it sits on
+   a near-white panel, where it all but disappears. */
+.sheet .section-label { color: var(--panel-muted); }
 
 .empty-note { text-align: center; color: var(--muted); font-size: 13px; }
 
@@ -459,14 +495,17 @@ button { border: 0; background: none; cursor: pointer; }
   left: 50%; bottom: calc(90px + env(safe-area-inset-bottom));
   transform: translate(-50%, 14px);
   z-index: 40;
-  background: var(--fg);
-  color: #fff;
+  background: #fff;
+  color: var(--panel-fg);
   border-radius: 999px;
-  padding: 10px 20px;
+  padding: 11px 20px;
   font-size: 13px;
+  font-weight: 700;
+  box-shadow: var(--shadow);
   opacity: 0;
   pointer-events: none;
   transition: opacity .3s var(--ease), transform .3s var(--ease);
+  max-width: calc(100vw - 32px);
 }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 
@@ -474,8 +513,8 @@ button { border: 0; background: none; cursor: pointer; }
 .spinner {
   width: 30px; height: 30px;
   border-radius: 50%;
-  border: 3px solid var(--line);
-  border-top-color: var(--accent);
+  border: 3px solid rgba(255, 255, 255, .35);
+  border-top-color: #fff;
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -483,7 +522,7 @@ button { border: 0; background: none; cursor: pointer; }
 @media (min-width: 640px) {
   .screen { padding-left: max(20px, calc(50vw - 260px)); padding-right: max(20px, calc(50vw - 260px)); }
   #main { padding: 0; }
-  .sheet { left: 50%; transform: translate(-50%, 101%); width: min(560px, 100%); border-radius: 22px 22px 0 0; }
+  .sheet { left: 50%; transform: translate(-50%, 101%); width: min(560px, 100%); }
   .sheet.on { transform: translate(-50%, 0); }
 }
 

@@ -168,6 +168,17 @@ class LeaveRequest(BaseModel):
     edit_token: str
 
 
+class LikeRequest(BaseModel):
+    id: str
+    edit_token: str
+    to_id: str
+
+
+class InboxRequest(BaseModel):
+    id: str
+    edit_token: str
+
+
 def client_key(request: Request):
     forwarded = request.headers.get("x-forwarded-for", "")
     address = forwarded.split(",")[0].strip() or (request.client.host if request.client else "?")
@@ -282,10 +293,15 @@ def get_map():
         raise HTTPException(
             status_code=503, detail="地図の読み込みに失敗しました。少し待ってからもう一度お試しください。"
         )
+    try:
+        counts = state["store"].like_counts()
+    except StoreError:
+        counts = {}
     return {
         "seed": state["seed_map"]["seed"],
         "islands": state["islands"],
         "users": users,
+        "like_counts": counts,
         "quantiles": state["quantiles"],
         "meta": {
             "seed_count": state["seed_map"]["meta"]["seed_count"],
@@ -388,6 +404,48 @@ def get_user(profile_id: str, viewer: str = ""):
                 "note": describe_relation(similarity, shared),
             })
     return result
+
+
+@app.post("/api/like")
+def like(payload: LikeRequest):
+    """Send a like. Idempotent: liking twice is the same as liking once.
+
+    edit_token proves the sender is who they say they are. Without it anyone
+    could post likes as anybody else, and the notification names a person.
+    """
+    store = state["store"]
+    if payload.id == payload.to_id:
+        raise HTTPException(status_code=422, detail="自分にはいいねできません。")
+    try:
+        if not store.verify(payload.id, payload.edit_token):
+            raise HTTPException(status_code=403, detail="本人確認ができませんでした。")
+        created = store.add_like(payload.id, payload.to_id)
+        counts = store.like_counts()
+    except StoreError:
+        raise HTTPException(status_code=503, detail="いいねを送れませんでした。もう一度お試しください。")
+    return {"ok": True, "created": created, "total": counts.get(payload.to_id, 0)}
+
+
+@app.post("/api/inbox")
+def inbox(payload: InboxRequest):
+    """Likes this person has received, and the ids they have already liked.
+
+    A POST rather than a GET because edit_token would otherwise sit in a query
+    string, which lands in access logs and browser history.
+
+    Only ids come back. The client already holds every name from /api/map, so
+    resolving them here would mean a join for no benefit.
+    """
+    store = state["store"]
+    try:
+        if not store.verify(payload.id, payload.edit_token):
+            raise HTTPException(status_code=403, detail="本人確認ができませんでした。")
+        received = store.likes_received(payload.id)
+        given = store.likes_given(payload.id)
+        counts = store.like_counts()
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    return {"received": received, "given": given, "counts": counts}
 
 
 @app.post("/api/leave")

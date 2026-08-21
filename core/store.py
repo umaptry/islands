@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 import httpx
 
 TABLE = "profiles"
+LIKES_TABLE = "likes"
 REQUEST_TIMEOUT = 10.0
 
 # A dropped connection or a 502 from the PostgREST front end is routine and
@@ -53,6 +54,9 @@ class MemoryStore:
 
     def __init__(self):
         self._rows = {}
+        # (from_id, to_id) -> created_at. The pair is the key, so liking the
+        # same person twice is a no-op rather than a second notification.
+        self._likes = {}
         self._lock = threading.Lock()
 
     def count(self):
@@ -83,6 +87,44 @@ class MemoryStore:
             row = self._rows.get(profile_id)
         return dict(row) if row else None
 
+    def verify(self, profile_id, edit_token):
+        with self._lock:
+            row = self._rows.get(profile_id)
+        return bool(row and row["edit_token"] == edit_token)
+
+    def add_like(self, from_id, to_id):
+        """True if this is a new like, False if it already existed."""
+        with self._lock:
+            if to_id not in self._rows:
+                return False
+            key = (from_id, to_id)
+            if key in self._likes:
+                return False
+            self._likes[key] = _now()
+        return True
+
+    def likes_received(self, to_id):
+        with self._lock:
+            rows = [
+                {"from_id": sender, "created_at": when}
+                for (sender, target), when in self._likes.items()
+                if target == to_id
+            ]
+        return sorted(rows, key=lambda row: row["created_at"])
+
+    def likes_given(self, from_id):
+        with self._lock:
+            return sorted(
+                target for (sender, target) in self._likes if sender == from_id
+            )
+
+    def like_counts(self):
+        counts = {}
+        with self._lock:
+            for _sender, target in self._likes:
+                counts[target] = counts.get(target, 0) + 1
+        return counts
+
     def delete(self, profile_id, edit_token):
         with self._lock:
             row = self._rows.get(profile_id)
@@ -98,7 +140,9 @@ class SupabaseStore:
     backend = "supabase"
 
     def __init__(self, url, service_key):
-        self._base = f"{url.rstrip('/')}/rest/v1/{TABLE}"
+        root = f"{url.rstrip('/')}/rest/v1"
+        self._base = f"{root}/{TABLE}"
+        self._likes = f"{root}/{LIKES_TABLE}"
         self._headers = {
             "apikey": service_key,
             "Authorization": f"Bearer {service_key}",
@@ -106,7 +150,7 @@ class SupabaseStore:
         }
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT)
 
-    def _send(self, method, *, label, headers=None, params=None, json=None):
+    def _send(self, method, *, label, url=None, headers=None, params=None, json=None):
         """One request, retried while the failure still looks transient.
 
         Every call into PostgREST goes through here so the retry policy is
@@ -124,7 +168,7 @@ class SupabaseStore:
         for attempt in range(1, RETRY_ATTEMPTS + 1):
             try:
                 response = self._client.request(
-                    method, self._base, headers=merged, params=params, json=json
+                    method, url or self._base, headers=merged, params=params, json=json
                 )
             except httpx.HTTPError as error:  # timeout, DNS, connection reset
                 last = f"{type(error).__name__}: {error}"
@@ -162,6 +206,66 @@ class SupabaseStore:
             "POST", label="保存", headers={"Prefer": "return=representation"}, json=record
         )
         return response.json()[0]
+
+    def verify(self, profile_id, edit_token):
+        rows = self._get(
+            {
+                "select": "id",
+                "id": f"eq.{profile_id}",
+                "edit_token": f"eq.{edit_token}",
+                "limit": "1",
+            }
+        )
+        return bool(rows)
+
+    def add_like(self, from_id, to_id):
+        """True if this is a new like, False if the pair was already there.
+
+        The unique constraint on (from_id, to_id) is what makes this safe: two
+        taps racing each other both reach PostgREST, and the loser is turned
+        into a 409 that we read as "already liked" rather than an error. Doing
+        the check with a SELECT first would still let the pair through twice.
+        """
+        response = self._send(
+            "POST",
+            label="いいねの保存",
+            url=self._likes,
+            headers={"Prefer": "return=representation,resolution=ignore-duplicates"},
+            json={"from_id": from_id, "to_id": to_id},
+        )
+        # ignore-duplicates returns an empty body when the row already existed.
+        body = response.json() if response.content else []
+        return bool(body)
+
+    def likes_received(self, to_id):
+        return self._send(
+            "GET",
+            label="いいねの読み込み",
+            url=self._likes,
+            params={
+                "select": "from_id,created_at",
+                "to_id": f"eq.{to_id}",
+                "order": "created_at.asc",
+            },
+        ).json()
+
+    def likes_given(self, from_id):
+        rows = self._send(
+            "GET",
+            label="いいねの読み込み",
+            url=self._likes,
+            params={"select": "to_id", "from_id": f"eq.{from_id}"},
+        ).json()
+        return sorted(row["to_id"] for row in rows)
+
+    def like_counts(self):
+        rows = self._send(
+            "GET", label="いいねの集計", url=self._likes, params={"select": "to_id"}
+        ).json()
+        counts = {}
+        for row in rows:
+            counts[row["to_id"]] = counts.get(row["to_id"], 0) + 1
+        return counts
 
     def list_public(self):
         return self._get({"select": PUBLIC_COLUMNS, "order": "created_at.asc"})

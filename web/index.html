@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
-<meta name="theme-color" content="#fdfcfa">
+<meta name="theme-color" content="#6d97dd">
 <title>かさなり</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='13' cy='16' r='8' fill='%23ea580c' opacity='.75'/><circle cx='19' cy='16' r='8' fill='%230e7490' opacity='.75'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%236d97dd'/><ellipse cx='12' cy='19' rx='8' ry='5' fill='%237cc47c'/><ellipse cx='22' cy='12' rx='6' ry='4' fill='%237cc47c'/></svg>">
 </head>
 <body>
 
@@ -20,47 +20,49 @@
 
 <!-- ============ 1. intro ============ -->
 <section id="intro" class="screen">
-  <div class="brand">かさなり</div>
+  <div class="brand">islands デモ版</div>
   <div class="slides">
     <div class="slide-track" id="slideTrack">
       <div class="slide">
         <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="中心の点のまわりを他の点が囲む図">
-          <g fill="none" stroke="#ded7cd" stroke-dasharray="3 5">
+          <g fill="none" stroke="rgba(255,255,255,.45)" stroke-dasharray="3 5">
             <circle cx="100" cy="100" r="42"/><circle cx="100" cy="100" r="66"/><circle cx="100" cy="100" r="90"/>
           </g>
-          <circle cx="100" cy="100" r="17" fill="#ea580c"/>
-          <circle cx="138" cy="82" r="9" fill="#0284c7"/>
-          <circle cx="72" cy="140" r="9" fill="#7c3aed"/>
-          <circle cx="46" cy="72" r="8" fill="#059669"/>
-          <circle cx="160" cy="140" r="7" fill="#db2777"/>
-          <circle cx="100" cy="18" r="6" fill="#b45309"/>
+          <ellipse cx="100" cy="100" rx="24" ry="17" fill="#7cc47c"/>
+          <ellipse cx="141" cy="80" rx="13" ry="9" fill="#7cc47c"/>
+          <ellipse cx="68" cy="142" rx="14" ry="10" fill="#7cc47c"/>
+          <ellipse cx="44" cy="70" rx="11" ry="8" fill="#7cc47c"/>
+          <ellipse cx="160" cy="142" rx="10" ry="7" fill="#7cc47c"/>
+          <ellipse cx="100" cy="18" rx="9" ry="6" fill="#7cc47c"/>
         </svg>
-        <h2>書いた一言で、<br>地図の上に居場所ができる</h2>
-        <p>年齢も性別も居場所も使いません。</p>
+        <h2>あなたが書いた一言で、<br>地図の上に島ができる</h2>
       </div>
       <div class="slide">
         <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="2つの点の間に共通の言葉が並ぶ図">
-          <circle cx="46" cy="100" r="26" fill="#ea580c"/>
-          <circle cx="154" cy="100" r="26" fill="#7c3aed"/>
-          <path d="M76 100 H124" stroke="#0e7490" stroke-width="2" stroke-dasharray="4 4"/>
-          <rect x="56" y="34" width="88" height="26" rx="13" fill="#eefafd" stroke="#bfe5ef"/>
-          <text x="100" y="51" fill="#0e7490" font-size="12" text-anchor="middle" font-family="sans-serif">キャンプ</text>
-          <rect x="50" y="140" width="100" height="26" rx="13" fill="#eefafd" stroke="#bfe5ef"/>
-          <text x="100" y="157" fill="#0e7490" font-size="12" text-anchor="middle" font-family="sans-serif">電子工作</text>
+          <ellipse cx="46" cy="100" rx="34" ry="24" fill="#7cc47c"/>
+          <ellipse cx="154" cy="100" rx="34" ry="24" fill="#7cc47c"/>
+          <path d="M84 100 H116" stroke="#fff" stroke-width="2" stroke-dasharray="4 4"/>
+          <rect x="56" y="32" width="88" height="27" rx="13.5" fill="#fff"/>
+          <text x="100" y="50" fill="#1f2c3b" font-size="12" text-anchor="middle" font-family="sans-serif">キャンプ</text>
+          <rect x="50" y="141" width="100" height="27" rx="13.5" fill="#fff"/>
+          <text x="100" y="159" fill="#1f2c3b" font-size="12" text-anchor="middle" font-family="sans-serif">電子工作</text>
         </svg>
         <h2>近くにいる人ほど、<br>似た話をしている</h2>
         <p>タップすると、共通していることばが出ます。</p>
       </div>
       <div class="slide">
-        <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="文章から座標が決まる図">
-          <rect x="24" y="50" width="152" height="46" rx="11" fill="#ffffff" stroke="#ded7cd"/>
-          <path d="M40 68 H150 M40 81 H120" stroke="#c3bcb2" stroke-width="4" stroke-linecap="round"/>
-          <path d="M100 102 V128" stroke="#ea580c" stroke-width="2"/>
-          <path d="M94 120 L100 130 L106 120 Z" fill="#ea580c"/>
-          <circle cx="100" cy="152" r="19" fill="#ea580c"/>
+        <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="いくつかの島の中に自分の島が立つ図">
+          <ellipse cx="52" cy="52" rx="30" ry="20" fill="#7cc47c" opacity=".75"/>
+          <ellipse cx="150" cy="44" rx="24" ry="16" fill="#7cc47c" opacity=".75"/>
+          <ellipse cx="40" cy="150" rx="26" ry="17" fill="#7cc47c" opacity=".75"/>
+          <ellipse cx="156" cy="152" rx="30" ry="20" fill="#7cc47c" opacity=".75"/>
+          <ellipse cx="100" cy="108" rx="42" ry="27" fill="#7cc47c"/>
+          <ellipse cx="100" cy="102" rx="27" ry="15" fill="#55a95c" opacity=".55"/>
+          <path d="M100 44 a13 13 0 0 1 13 13 c0 10 -13 24 -13 24 s-13 -14 -13 -24 a13 13 0 0 1 13 -13 z" fill="#ff6f59"/>
+          <circle cx="100" cy="57" r="5" fill="#fff"/>
         </svg>
-        <h2>名前はニックネームでいい</h2>
-        <p>書くのは、やってきたこと・やってみたいこと。</p>
+        <h2>あなたの島をつくる。<br>似た島をさがす。</h2>
+        <p>一言書けば島ができます。近くの島には、近い話をしている人がいます。</p>
       </div>
     </div>
   </div>
@@ -141,7 +143,6 @@
     </div>
     <div class="spacer"></div>
     <button class="icon-btn" id="meBtn"><span class="glyph">👤</span>自分</button>
-    <a class="icon-btn" href="/how"><span class="glyph">?</span></a>
   </div>
   <div class="island-badge" id="islandBadge" hidden>
     <i class="island-swatch" id="islandSwatch"></i><span id="islandText"></span>

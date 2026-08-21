@@ -12,21 +12,24 @@ const $ = (id) => document.getElementById(id);
 // tokens in web/style.css. Darker than a pastel set on purpose: these are drawn
 // on a white page and as thin text halos, where pastels disappear.
 const ISLAND_COLORS = [
-  '#db2777', '#7c3aed', '#0284c7', '#059669', '#b45309',
-  '#e11d48', '#4f46e5', '#15803d', '#0f766e', '#9333ea',
+  '#ff5d8f', '#b085ff', '#35c2f5', '#17c08a', '#ffb020',
+  '#ff7a59', '#7b8cff', '#4cd07a', '#23c9c0', '#d07dff',
 ];
 // Ink drawn onto the canvas. Named here so the light palette lives in one place
 // instead of being sprinkled through the render functions as literals.
 const INK = {
-  ring: '#ded7cd',
-  faint: '#8c8593',
-  label: '#57515e',
-  mapLabel: '#4a4451',
-  halo: 'rgba(253, 252, 250, .95)',
-  self: 'rgba(234, 88, 12, .38)',
-  glow: 'rgba(234, 88, 12, .55)',
-  link: 'rgba(234, 88, 12, .5)',
-  linkFaint: 'rgba(109, 102, 114, .25)',
+  // The map is a sea. Terrain is land, drawn green and nearly opaque so a
+  // cluster of seed points reads as an island rather than as scattered dots.
+  land: '#7cc47c',
+  ring: 'rgba(255, 255, 255, .40)',
+  faint: 'rgba(255, 255, 255, .78)',
+  label: 'rgba(255, 255, 255, .92)',
+  mapLabel: '#ffffff',
+  halo: 'rgba(31, 44, 59, .55)',
+  self: 'rgba(255, 255, 255, .75)',
+  glow: 'rgba(255, 255, 255, .65)',
+  link: 'rgba(255, 255, 255, .75)',
+  linkFaint: 'rgba(255, 255, 255, .3)',
 };
 const STORAGE_KEY = 'kasanari-me';
 // Safari in private mode, and any browser with site data blocked, throws from
@@ -63,6 +66,12 @@ const WORLD = 1000;
 const state = {
   me: null,
   map: null,
+  // ids this person has already liked, and the senders we have already told
+  // them about. `notified` is seeded from the first inbox response so opening
+  // the page does not replay every like as a fresh notification.
+  liked: new Set(),
+  notified: new Set(),
+  inboxReady: false,
   view: 'orbit',
   selected: null,
   camera: { scale: 1, x: 0, y: 0 },
@@ -325,6 +334,7 @@ async function enterMain() {
   startLoop();
   updateIslandBadge();
   startMapPolling();
+  refreshInbox();
 }
 
 /** Returns true on success. Keeps the previous map on failure. */
@@ -351,11 +361,62 @@ function startMapPolling() {
     const before = state.map ? state.map.users.length : -1;
     const ok = await refreshMap();
     if (ok && state.map.users.length !== before) updateIslandBadge();
+    // Awaited, not fired alongside: a like almost always arrives from somebody
+    // who just joined, and the inbox can only name them once the map holds them.
+    await refreshInbox();
   }, MAP_POLL_MS);
 
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && document.querySelector('.screen.active').id === 'main') refreshMap();
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden || document.querySelector('.screen.active').id !== 'main') return;
+    await refreshMap();
+    await refreshInbox();
   });
+}
+
+/** Who liked me, and who have I liked. Notifies about arrivals, not history. */
+async function refreshInbox() {
+  if (!state.me || !state.me.edit_token) return;
+  let inbox;
+  try {
+    inbox = await api('/api/inbox', {
+      method: 'POST',
+      body: JSON.stringify({ id: state.me.id, edit_token: state.me.edit_token }),
+    });
+  } catch {
+    return; // a missed poll is not worth telling anyone about
+  }
+
+  state.liked = new Set(inbox.given);
+  if (state.map) state.map.like_counts = inbox.counts;
+
+  const fresh = inbox.received.filter((entry) => !state.notified.has(entry.from_id));
+  inbox.received.forEach((entry) => state.notified.add(entry.from_id));
+  // The first response is history, not news: seed the seen set and say nothing.
+  if (!state.inboxReady) {
+    state.inboxReady = true;
+    return;
+  }
+  const names = await Promise.all(fresh.map((entry) => senderName(entry.from_id)));
+  names.forEach((who, index) => {
+    setTimeout(() => toast(`${who}さんからいいねが届きました`), index * 2800);
+  });
+}
+
+/** Name for an id, from the cached map if possible and the server if not.
+ *
+ * The map is refreshed before the inbox for exactly this reason, but a person
+ * can still join and like within the same poll window, and a notification that
+ * says "だれかさん" is worse than one extra request.
+ */
+async function senderName(id) {
+  const known = (state.map ? state.map.users : []).find((user) => user.id === id);
+  if (known) return known.name;
+  try {
+    const person = await api(`/api/user/${id}`);
+    return person.name;
+  } catch {
+    return 'だれか';
+  }
 }
 
 function updateIslandBadge() {
@@ -623,12 +684,15 @@ function renderMap() {
   // Terrain: the seed corpus, unnamed. It exists to show the shape of the land,
   // so it has to be visible as texture without competing with the avatars.
   ctx.save();
-  const dotRadius = Math.max(1.5, 3.2 * scale);
-  ctx.globalAlpha = 0.3;
-  state.map.seed.forEach(([x, y, clusterId]) => {
+  // Bigger and nearly opaque: at 0.3 alpha on a blue sea the seed points read
+  // as haze. Overlapping green discs merge into landmasses, which is the whole
+  // point of drawing the corpus at all.
+  const dotRadius = Math.max(3.6, 7.2 * scale);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = INK.land;
+  state.map.seed.forEach(([x, y]) => {
     const point = toScreen(x, y);
     if (point.x < -20 || point.x > width + 20 || point.y < -20 || point.y > height + 20) return;
-    ctx.fillStyle = islandColor(clusterId);
     ctx.beginPath();
     ctx.arc(point.x, point.y, dotRadius, 0, Math.PI * 2);
     ctx.fill();
@@ -645,10 +709,10 @@ function renderMap() {
     ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
     ctx.strokeStyle = INK.halo;
+    ctx.fillStyle = INK.mapLabel;
     state.map.islands.forEach((island) => {
       const point = toScreen(island.cx, island.cy);
       ctx.strokeText(island.name, point.x, point.y);
-      ctx.fillStyle = islandColor(island.id);
       ctx.fillText(island.name, point.x, point.y);
     });
     ctx.restore();
@@ -864,29 +928,69 @@ function renderSheet(person, isSelf) {
   text.textContent = person.text || '';
   body.append(text);
 
+  const received = likeCountFor(person.id);
+  if (received) {
+    const tally = document.createElement('div');
+    tally.className = 'like-count';
+    tally.innerHTML = `いいね <b class="num">${received}</b>`;
+    body.append(tally);
+  }
+
   const actions = document.createElement('div');
   actions.className = 'sheet-actions';
+  const close = document.createElement('button');
+  close.className = 'btn btn-quiet';
+  close.textContent = '閉じる';
+  close.addEventListener('click', closeSheet);
+
   if (isSelf) {
-    const share = document.createElement('button');
-    share.className = 'btn';
-    share.style.flex = '1';
-    share.textContent = 'URLをコピー';
-    share.addEventListener('click', shareUrl);
-    const leave = document.createElement('button');
-    // Destructive and irreversible, so it does not get to look like the
-    // neutral secondary action sitting next to "copy the URL".
-    leave.className = 'btn btn-danger';
-    leave.textContent = '地図から消す';
-    leave.addEventListener('click', leaveMap);
-    actions.append(share, leave);
-  } else {
-    const close = document.createElement('button');
-    close.className = 'btn btn-ghost btn-block';
-    close.textContent = '閉じる';
-    close.addEventListener('click', closeSheet);
+    // Your own card is read-only now: no sharing, no leaving, no liking
+    // yourself. Closing is the only thing left to do.
+    close.classList.add('btn-block');
     actions.append(close);
+  } else {
+    actions.append(close, likeButton(person));
   }
   body.append(actions);
+}
+
+function likeCountFor(id) {
+  return (state.map && state.map.like_counts && state.map.like_counts[id]) || 0;
+}
+
+function likeButton(person) {
+  const button = document.createElement('button');
+  button.className = 'btn btn-like';
+  const paint = () => {
+    const liked = state.liked.has(person.id);
+    button.dataset.liked = liked ? '1' : '0';
+    button.textContent = liked ? 'いいね済み' : 'いいね';
+    button.disabled = liked;
+  };
+  paint();
+
+  button.addEventListener('click', async () => {
+    if (state.liked.has(person.id) || !state.me) return;
+    // Optimistic: the tap should feel done immediately, and a failure puts the
+    // button back rather than leaving it lying about what happened.
+    state.liked.add(person.id);
+    paint();
+    try {
+      await api('/api/like', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: state.me.id, edit_token: state.me.edit_token, to_id: person.id,
+        }),
+      });
+      toast(`${person.name}さんにいいねを送りました`);
+      refreshMap();
+    } catch (error) {
+      state.liked.delete(person.id);
+      paint();
+      toast(error.message);
+    }
+  });
+  return button;
 }
 
 function closeSheet() {
@@ -899,30 +1003,6 @@ function closeSheet() {
 // backdrop existed, so only a genuinely new tap closes it.
 $('sheetBackdrop').addEventListener('pointerdown', closeSheet);
 $('sheetClose').addEventListener('click', closeSheet);
-
-async function shareUrl() {
-  const url = location.origin;
-  try {
-    if (navigator.share) await navigator.share({ title: 'かさなり', url });
-    else { await navigator.clipboard.writeText(url); toast('URLをコピーしました'); }
-  } catch { /* the user dismissed the share sheet */ }
-}
-
-async function leaveMap() {
-  const saved = storage.read();
-  if (!saved) return;
-  if (!confirm('地図から自分を消しますか？')) return;
-  try {
-    await api('/api/leave', {
-      method: 'POST',
-      body: JSON.stringify({ id: saved.id, edit_token: saved.edit_token }),
-    });
-    storage.clear();
-    location.reload();
-  } catch (error) {
-    toast(error.message);
-  }
-}
 
 // ---------------------------------------------------------------- boot
 
