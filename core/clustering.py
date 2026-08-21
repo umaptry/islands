@@ -75,20 +75,31 @@ def name_group(term_lists, idf, taken=()):
         return ""
 
     # A word only one person used is fine when the island IS one or two people,
-    # and noise once it is a crowd.
-    minimum_support = 1 if len(lists) < 4 else 2
+    # and noise once it is a crowd - so ask for two speakers on a crowded island.
+    # But fall back rather than give up: four people who happen to share no
+    # vocabulary would otherwise leave a populated region unnamed, and a name
+    # taken from one of them still describes the place better than nothing. This
+    # is not hypothetical - a region lost its label when its fourth post arrived,
+    # so a viewer watched a name disappear as the map filled up.
     default_idf = max(idf.values()) if idf else 1.0
-    scored = [
-        (count * float(idf.get(term, default_idf)), term)
-        for term, count in document_frequency.items()
-        if count >= minimum_support
-    ]
+
+    def by_support(minimum):
+        return sorted(
+            (
+                (count * float(idf.get(term, default_idf)), term)
+                for term, count in document_frequency.items()
+                if count >= minimum
+            ),
+            # Score first, then the term itself, so the same island never renames
+            # itself between two requests that saw the same people.
+            key=lambda pair: (-pair[0], pair[1]),
+        )
+
+    scored = by_support(2) if len(lists) >= 4 else []
+    if not scored:
+        scored = by_support(1)
     if not scored:
         return ""
-    # Sort by score, then by term, so the same island never renames itself
-    # between two requests that saw the same people.
-    scored.sort(key=lambda pair: (-pair[0], pair[1]))
-
     blocked = set()
     for name in taken:
         blocked.update(part.strip() for part in str(name).split("/"))

@@ -74,4 +74,8 @@ LABEL_ONLY_STOP_WORDS = {
 DISPLAY_STOP_WORDS = LABEL_ONLY_STOP_WORDS | {
     "なし", "そのまま", "一度", "旧", "会", "朝", "夜", "毎朝", "毎晩",
     "自宅", "部分", "以外", "程度", "本当", "自体",
+    # Counters and time-filler. These started showing up as island headings
+    # once names were built from live posts: 「何個 / 湯飲み」 says nothing
+    # about the place that 「湯飲み」 alone does not.
+    "何個", "何本", "何度", "一日", "休み", "時間",
 }

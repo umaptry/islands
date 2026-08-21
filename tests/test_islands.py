@@ -171,3 +171,23 @@ def test_leaving_removes_the_genre_that_only_that_post_supported(client):
     assert not any(island["id"] == joined["cluster_id"] for island in after), (
         "a region nobody is standing in must lose its name again"
     )
+
+
+def test_a_populated_region_never_loses_its_name_as_it_grows():
+    """Four people who share no vocabulary must still get a heading.
+
+    The strict pass wants a word two of them used. When there is no such word
+    the relaxed pass has to take over, or a region that already had a name goes
+    unnamed the moment its fourth post arrives - a viewer sees a label vanish
+    while the map is filling up, which is exactly backwards.
+    """
+    disjoint = [["低山"], ["基板"], ["台所"], ["ピアノ"]]
+    idf = {"低山": 4.0, "基板": 4.1, "台所": 3.9, "ピアノ": 4.2}
+    assert name_group(disjoint, idf) != ""
+
+
+def test_a_shared_word_still_wins_once_the_region_is_crowded():
+    """The fallback must not undo the rule it falls back from."""
+    lists = [["登山", "低山"], ["登山", "基板"], ["登山", "台所"], ["ピアノ"]]
+    idf = {"登山": 2.0, "低山": 4.0, "基板": 4.0, "台所": 4.0, "ピアノ": 4.0}
+    assert name_group(lists, idf).split(" / ")[0] == "登山"
