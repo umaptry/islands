@@ -33,6 +33,11 @@ const INK = {
   glow: 'rgba(255, 255, 255, .65)',
   link: 'rgba(255, 255, 255, .75)',
   linkFaint: 'rgba(255, 255, 255, .3)',
+  // The sea's own furniture. Faint on purpose: chart texture is something you
+  // notice after the islands, never instead of them.
+  seaMark: 'rgba(255, 255, 255, .17)',
+  surf: 'rgba(255, 255, 255, .55)',
+  bird: 'rgba(255, 255, 255, .62)',
 };
 const STORAGE_KEY = 'kasanari-me';
 // Safari in private mode, and any browser with site data blocked, throws from
@@ -869,6 +874,136 @@ function drawBoats(ctx, time) {
   }
 }
 
+/** Chart hatching: the little wave marks a paper sea chart is covered in.
+ *
+ * Fixed world positions rather than a grid sized off the zoom. A grid has to
+ * change spacing as you zoom or it turns to noise at the far end, and every
+ * change of spacing pops. Forty-odd marks scattered once across the sea are
+ * sparse when you are close and read as texture when you are far out, and they
+ * never move relative to the islands - which is the whole point of a chart.
+ */
+const SEA_MARK_COUNT = 44;
+
+function drawSeaMarks(ctx, time) {
+  const sea = seaBounds();
+  ctx.save();
+  ctx.strokeStyle = INK.seaMark;
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < SEA_MARK_COUNT; i += 1) {
+    const seed = 104729 * (i + 1);
+    const spot = toScreen(sea.x + noise(seed, 1) * sea.w, sea.y + noise(seed, 2) * sea.h);
+    if (spot.x < -20 || spot.x > width + 20 || spot.y < -20 || spot.y > height + 20) continue;
+    const sway = REDUCED_MOTION ? 0 : Math.sin(time * 0.6 + noise(seed, 3) * Math.PI * 2) * 1.3;
+    const unit = 3.2;
+    ctx.beginPath();
+    for (let row = 0; row < 2; row += 1) {
+      const y = spot.y + row * 2.6;
+      const x = spot.x + sway + row * 1.4;
+      ctx.moveTo(x - unit, y);
+      ctx.quadraticCurveTo(x - unit * 0.5, y - 1.5, x, y);
+      ctx.quadraticCurveTo(x + unit * 0.5, y + 1.5, x + unit, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Surf around one island, breathing slowly.
+ *
+ * Drawn under the land fill and a shade wider, so only the outer half of the
+ * stroke survives - a shoreline rather than a ring around a token. It reuses
+ * islandPath with the island's own seed, so the surf follows the same wobbled
+ * outline the land has and not a circle.
+ *
+ * This is the one moving thing on the map that belongs to a post rather than
+ * to the decoration: the land somebody wrote is standing in water.
+ */
+function drawSurf(ctx, x, y, radius, id, time) {
+  const seed = hashId(id);
+  const swell = REDUCED_MOTION
+    ? 1.06
+    : 1.06 + Math.sin(time * 0.8 + noise(seed, 9) * Math.PI * 2) * 0.035;
+  ctx.save();
+  islandPath(ctx, x, y, radius * swell, seed);
+  ctx.strokeStyle = INK.surf;
+  ctx.lineWidth = Math.max(1.4, radius * 0.11);
+  ctx.globalAlpha = 0.38;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Two skeins of three birds, crossing well above the boats.
+ *
+ * Same eased chord the boats use, at roughly two and a half times the speed -
+ * far enough apart that a bird never reads as another boat. Drawn after the
+ * land and before the faces: birds pass over an island, not through a person.
+ */
+const BIRD_SKEINS = 2;
+const BIRD_SIZE = 2.6;
+
+function drawBirds(ctx, time) {
+  if (REDUCED_MOTION) return;
+  const sea = seaBounds();
+  const midX = sea.x + sea.w / 2;
+  const midY = sea.y + sea.h / 2;
+  const speed = Math.max(sea.w, sea.h) / 22;
+  ctx.save();
+  ctx.strokeStyle = INK.bird;
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'round';
+  for (let flight = 0; flight < BIRD_SKEINS; flight += 1) {
+    const seed = 15485863 * (flight + 1);
+    const angle = noise(seed, 1) * Math.PI * 2;
+    const reach = 0.30 + noise(seed, 2) * 0.10;
+    const shift = (noise(seed, 3) - 0.5) * 0.18;
+    const armX = Math.cos(angle) * sea.w * reach;
+    const armY = Math.sin(angle) * sea.h * reach;
+    const offX = -Math.sin(angle) * sea.w * shift;
+    const offY = Math.cos(angle) * sea.h * shift;
+    const ax = midX + offX - armX;
+    const ay = midY + offY - armY;
+    const span = Math.hypot(armX, armY) * 2;
+    if (span < 1) continue;
+    const period = (2 * span) / speed;
+    const cycle = (time / period + noise(seed, 5)) * Math.PI * 2;
+    const travel = 0.5 - Math.cos(cycle) * 0.5;
+    const lead = toScreen(ax + armX * 2 * travel, ay + armY * 2 * travel);
+    if (lead.x < -60 || lead.x > width + 60 || lead.y < -60 || lead.y > height + 60) continue;
+    // Heading in screen space. toScreen is a uniform scale plus a translation,
+    // so the world direction and the screen direction are the same direction.
+    const sign = Math.sin(cycle) >= 0 ? 1 : -1;
+    const unitX = (armX * 2 * sign) / span;
+    const unitY = (armY * 2 * sign) / span;
+    for (let bird = 0; bird < 3; bird += 1) {
+      // A loose V: one in front, two trailing off either wing.
+      const back = bird * 7;
+      const side = bird === 1 ? -5 : (bird === 2 ? 5 : 0);
+      const flap = Math.sin(time * 5.5 + bird * 0.7 + flight) * 0.7;
+      drawBird(
+        ctx,
+        lead.x - unitX * back - unitY * side,
+        lead.y - unitY * back + unitX * side,
+        flap,
+      );
+    }
+  }
+  ctx.restore();
+}
+
+function drawBird(ctx, x, y, flap) {
+  const unit = BIRD_SIZE;
+  // Wingtips above the body, dipping through the middle: the gull mark. Pull
+  // the control points the other way and the same three points draw a dome,
+  // which at this size reads as a hill rather than a bird.
+  const tip = y - unit * 0.5 - flap;
+  ctx.beginPath();
+  ctx.moveTo(x - unit, tip);
+  ctx.quadraticCurveTo(x - unit * 0.5, y + unit * 0.16, x, y);
+  ctx.quadraticCurveTo(x + unit * 0.5, y + unit * 0.16, x + unit, tip);
+  ctx.stroke();
+}
+
 /** One boat, in screen pixels: hull, sail, and a wake that fades out astern. */
 function drawBoat(ctx, x, y, facing) {
   const unit = BOAT_LENGTH;
@@ -953,13 +1088,18 @@ function renderMap() {
     if (point.x < -60 || point.x > width + 60 || point.y < -60 || point.y > height + 60) return;
     visible.push({ user, point, isMe: user.id === meId });
   });
-  // Before the land, so a boat passes behind an island rather than over it.
+  // The sea, then what is on it, then the land, then what flies over it. Each
+  // pass is behind the next, so nothing decorative can sit on top of a person.
+  drawSeaMarks(ctx, time);
   drawBoats(ctx, time);
-
+  visible.forEach(({ user, point, isMe }) => {
+    drawSurf(ctx, point.x, point.y, islandRadius(scale) * (isMe ? 1.25 : 1), user.id, time);
+  });
   visible.forEach(({ user, point, isMe }) => {
     drawIsland(ctx, point.x, point.y, islandRadius(scale) * (isMe ? 1.25 : 1),
       user.id, islandColor(user.cluster_id));
   });
+  drawBirds(ctx, time);
 
   // Island names are painted last, so nothing can bury them - but they claim
   // their space first, so nothing can crowd them out either.
