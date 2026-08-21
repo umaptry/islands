@@ -387,3 +387,62 @@ def test_map_similarity_matches_the_profile_sheet(client):
     assert "similarity" not in client.get("/api/map").json()
     for user in payload["users"]:
         assert "vec" not in user
+
+
+# --------------------------------------------------------------------------
+# concurrency: everybody submits at once
+# --------------------------------------------------------------------------
+
+def test_tokenizer_survives_concurrent_use():
+    """SudachiPy's Tokenizer is a Rust RefCell - sharing one across threads
+    raises `RuntimeError: Already borrowed`.
+
+    This is not hypothetical. FastAPI runs sync endpoints in a threadpool and
+    Cloud Run gives one process a concurrency of 12, so with a shared singleton
+    a room full of people submitting together lost half their joins to 500s
+    (measured: 6 of 12). get_tokenizer() hands out one instance per thread.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from core.features import extract_content_terms, extract_label_terms
+
+    texts = [CAMPING_A, CAMPING_B, CAMPING_C, BOOKKEEPING, CAMERA_A, COOK_A] * 6
+
+    def tokenize(text):
+        return extract_content_terms(text), extract_label_terms(text)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        results = list(pool.map(tokenize, texts))
+
+    assert len(results) == len(texts)
+    assert all(content for content, _label in results)
+    # Same text must tokenize identically no matter which thread got it.
+    single = tokenize(CAMPING_A)
+    assert all(results[i] == single for i, text in enumerate(texts) if text == CAMPING_A)
+
+
+def test_concurrent_joins_all_succeed(client):
+    """Twelve people pressing the button at the same moment."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    people = [
+        (f"同時{index}", f"{index % 30}", text)
+        for index, text in enumerate([CAMERA_A, CAMERA_B, COOK_A, COOK_B] * 3)
+    ]
+
+    def join(person):
+        name, icon, text = person
+        return client.post("/api/join", json={"icon_id": icon, "name": name, "text": text})
+
+    with ThreadPoolExecutor(max_workers=len(people)) as pool:
+        responses = list(pool.map(join, people))
+
+    failed = [(r.status_code, r.text[:120]) for r in responses if r.status_code != 200]
+    assert not failed, f"{len(failed)}/{len(people)} joins failed: {failed[:3]}"
+
+    bodies = [r.json() for r in responses]
+    assert all(body["island"] for body in bodies), "island naming also tokenizes"
+    assert len({body["id"] for body in bodies}) == len(people)
+    for body in bodies:
+        for neighbour in body["neighbors"]:
+            assert 0 <= neighbour["similarity"] <= 100

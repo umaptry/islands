@@ -16,6 +16,7 @@ views of the same sentence are fused:
 """
 
 import re
+import threading
 
 import numpy as np
 import scipy.sparse as sp
@@ -37,7 +38,18 @@ from core.stopwords import GENERAL_STOP_WORDS, LABEL_ONLY_STOP_WORDS
 ALLOWED_POS = {"名詞", "動詞", "形容詞"}
 EXCLUDED_SUBPOS = {"代名詞", "数詞", "助数詞可能", "接尾辞", "形式名詞"}
 
-_TOKENIZER = None
+# SudachiPy's Tokenizer is a Rust object with RefCell semantics: two threads
+# calling tokenize() on the same instance raise `RuntimeError: Already
+# borrowed`. FastAPI runs every sync endpoint in a threadpool and Cloud Run
+# gives one process a concurrency of 12, so a shared singleton turned
+# simultaneous joins into 500s - measured at 6 failures out of 12 people
+# submitting at once, and again inside island naming via _near_duplicate.
+#
+# The dictionary is the expensive half (the lexicon) and stays shared; create()
+# off it is cheap, so every thread gets its own tokenizer.
+_DICTIONARY = None
+_DICTIONARY_LOCK = threading.Lock()
+_LOCAL = threading.local()
 _SPLIT_MODE = tokenizer.Tokenizer.SplitMode.C
 
 _EDGE_PUNCT = re.compile(r"^[\W_]+|[\W_]+$", flags=re.UNICODE)
@@ -47,10 +59,15 @@ _WHITESPACE = re.compile(r"\s+")
 
 
 def get_tokenizer():
-    global _TOKENIZER
-    if _TOKENIZER is None:
-        _TOKENIZER = dictionary.Dictionary().create()
-    return _TOKENIZER
+    """The tokenizer for THIS thread. Never share one across threads."""
+    instance = getattr(_LOCAL, "tokenizer", None)
+    if instance is None:
+        global _DICTIONARY
+        with _DICTIONARY_LOCK:
+            if _DICTIONARY is None:
+                _DICTIONARY = dictionary.Dictionary()
+        instance = _LOCAL.tokenizer = _DICTIONARY.create()
+    return instance
 
 
 def normalize_text(text):
