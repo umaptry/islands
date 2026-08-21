@@ -29,6 +29,34 @@ const INK = {
   linkFaint: 'rgba(109, 102, 114, .25)',
 };
 const STORAGE_KEY = 'kasanari-me';
+// Safari in private mode, and any browser with site data blocked, throws from
+// localStorage rather than returning null. An exception here used to escape
+// join()'s try block and send someone back to the form with an error message
+// AFTER their profile had already been saved on the server.
+const storage = {
+  read() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    } catch {
+      return null;
+    }
+  },
+  write(value) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  clear() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* nothing we can do, and nothing that should stop the app */
+    }
+  },
+};
 const MIN_TEXT = 30;
 const WORLD = 1000;
 
@@ -174,7 +202,15 @@ let chosenIcon = String(Math.floor(Math.random() * EMOJI.length));
 
 // ---------------------------------------------------------------- join
 
+let joining = false;
+
 async function join() {
+  // A double tap on a phone fired this twice and put two of the same person on
+  // the map, each with its own id.
+  if (joining) return;
+  joining = true;
+  $('submitBtn').disabled = true;
+
   const name = $('nameInput').value.trim();
   const text = $('textInput').value.trim();
   $('formError').textContent = '';
@@ -204,14 +240,20 @@ async function join() {
     steps.forEach((step) => { step.classList.remove('on'); step.classList.add('done'); });
 
     state.me = result;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    const saved = storage.write({
       id: result.id, edit_token: result.edit_token, icon_id: result.icon_id, name: result.name,
-    }));
+    });
     showReveal(result);
+    if (!saved) {
+      toast('この端末では次回の自動復帰ができません');
+    }
   } catch (error) {
     clearInterval(ticker);
     showScreen('profile');
     $('formError').textContent = error.message;
+  } finally {
+    joining = false;
+    $('submitBtn').disabled = false;
   }
 }
 
@@ -273,14 +315,47 @@ $('toMapBtn').addEventListener('click', enterMain);
 
 async function enterMain() {
   showScreen('main');
-  await refreshMap();
+  const ok = await refreshMap();
+  if (!ok && !state.map) {
+    // Nothing to draw and nothing cached. Say so and keep retrying rather than
+    // leaving someone staring at a blank screen.
+    toast('地図を読み込めませんでした。再試行しています…');
+  }
   resizeCanvas();
   startLoop();
   updateIslandBadge();
+  startMapPolling();
 }
 
+/** Returns true on success. Keeps the previous map on failure. */
 async function refreshMap() {
-  state.map = await api('/api/map');
+  try {
+    state.map = await api('/api/map');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// People join while others are already looking at the map. Without this the
+// only way to see somebody arrive was to reload the page, which is not
+// something a room full of people is going to think of doing.
+const MAP_POLL_MS = 15000;
+let pollTimer = 0;
+
+function startMapPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    // A backgrounded tab should not keep polling; it wakes up on visibility.
+    if (document.hidden || document.querySelector('.screen.active').id !== 'main') return;
+    const before = state.map ? state.map.users.length : -1;
+    const ok = await refreshMap();
+    if (ok && state.map.users.length !== before) updateIslandBadge();
+  }, MAP_POLL_MS);
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && document.querySelector('.screen.active').id === 'main') refreshMap();
+  });
 }
 
 function updateIslandBadge() {
@@ -834,7 +909,7 @@ async function shareUrl() {
 }
 
 async function leaveMap() {
-  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+  const saved = storage.read();
   if (!saved) return;
   if (!confirm('地図から自分を消しますか？')) return;
   try {
@@ -842,7 +917,7 @@ async function leaveMap() {
       method: 'POST',
       body: JSON.stringify({ id: saved.id, edit_token: saved.edit_token }),
     });
-    localStorage.removeItem(STORAGE_KEY);
+    storage.clear();
     location.reload();
   } catch (error) {
     toast(error.message);
@@ -855,12 +930,7 @@ async function leaveMap() {
 // visitor does not watch slide 1 flash past before their map loads. Whichever
 // branch wins here picks the first screen the user actually sees.
 (function boot() {
-  let saved = null;
-  try {
-    saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-  } catch {
-    saved = null;
-  }
+  const saved = storage.read();
   if (!saved || !saved.id) {
     showScreen('intro');
     return;
@@ -870,9 +940,16 @@ async function leaveMap() {
       const me = await api(`/api/user/${saved.id}`);
       state.me = { ...me, edit_token: saved.edit_token };
       await enterMain();
-    } catch {
-      // The row is gone (a rebuild, or they left). Start over.
-      localStorage.removeItem(STORAGE_KEY);
+    } catch (error) {
+      // A 404 means the row is gone (they left, or the table was cleared) and
+      // starting over is right. A 503 or a dropped connection means the server
+      // is briefly unhappy, and throwing away their identity over that would
+      // lose them their place on the map for good.
+      if (/\b404\b/.test(error.message) || /見つかりません/.test(error.message)) {
+        storage.clear();
+      } else {
+        toast('接続できませんでした。ページを再読み込みしてください。');
+      }
       showScreen('intro');
     }
   })();

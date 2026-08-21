@@ -180,3 +180,98 @@ def test_matches_the_memory_backend_contract(store):
         assert {"id", "edit_token", "created_at"} <= set(created)
         assert backend.get(created["id"])["name"] == "契約"
         assert backend.delete(created["id"], created["edit_token"]) is True
+
+
+# ---------------------------------------------------------------- retries
+#
+# The store retries transient failures because a demo cannot afford to turn a
+# dropped connection into a failed join. These pin down which failures count as
+# transient, and - just as important - which do not.
+
+class FlakyPostgrest(BaseHTTPRequestHandler):
+    """Fails the first `fail_times` requests with `fail_status`, then succeeds."""
+
+    fail_times = 0
+    fail_status = 503
+    seen = 0
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        type(self).seen += 1
+        if type(self).seen <= type(self).fail_times:
+            self.send_response(type(self).fail_status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = json.dumps([]).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture
+def flaky():
+    server = HTTPServer(("127.0.0.1", 0), FlakyPostgrest)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    FlakyPostgrest.seen = 0
+    yield FlakyPostgrest, SupabaseStore(f"http://{host}:{port}", SERVICE_KEY)
+    server.shutdown()
+
+
+def test_transient_failure_is_retried_until_it_succeeds(flaky, monkeypatch):
+    import core.store as store_module
+
+    monkeypatch.setattr(store_module, "RETRY_BACKOFF", 0.01)
+    handler, store = flaky
+    handler.fail_times = 2
+    handler.fail_status = 503
+
+    assert store.list_public() == []
+    assert handler.seen == 3  # two failures, then the real answer
+
+
+def test_retries_give_up_and_raise(flaky, monkeypatch):
+    import core.store as store_module
+
+    monkeypatch.setattr(store_module, "RETRY_BACKOFF", 0.01)
+    handler, store = flaky
+    handler.fail_times = 99
+    handler.fail_status = 503
+
+    with pytest.raises(store_module.StoreError):
+        store.list_public()
+    assert handler.seen == store_module.RETRY_ATTEMPTS
+
+
+def test_a_client_error_is_not_retried(flaky, monkeypatch):
+    """A 400 is our own bug. Repeating it only makes the visitor wait longer."""
+    import core.store as store_module
+
+    monkeypatch.setattr(store_module, "RETRY_BACKOFF", 0.01)
+    handler, store = flaky
+    handler.fail_times = 99
+    handler.fail_status = 400
+
+    with pytest.raises(store_module.StoreError):
+        store.list_public()
+    assert handler.seen == 1
+
+
+def test_error_message_does_not_leak_the_response_body(flaky, monkeypatch):
+    """StoreError text is rendered into the browser, so it stays generic."""
+    import core.store as store_module
+
+    monkeypatch.setattr(store_module, "RETRY_BACKOFF", 0.01)
+    handler, store = flaky
+    handler.fail_times = 99
+    handler.fail_status = 503
+
+    with pytest.raises(store_module.StoreError) as caught:
+        store.list_public()
+    assert "503" not in str(caught.value)

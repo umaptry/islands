@@ -50,8 +50,19 @@ ROOT = Path(__file__).resolve().parent
 ARTIFACTS = ROOT / "artifacts"
 WEB = ROOT / "web"
 
-RATE_LIMIT_WINDOW = 300  # seconds
-RATE_LIMIT_MAX = 3
+def _int_env(name, default):
+    try:
+        return max(1, int(os.environ.get(name, "").strip() or default))
+    except ValueError:
+        return default
+
+
+# The defaults suit a link shared on the open internet. A room full of people on
+# one office or venue wifi shares a single public address, so the per-IP cap has
+# to be raised for a live demo or the fourth person to sign up is turned away.
+# MAX_USERS is the real ceiling on how much anyone can fill the map.
+RATE_LIMIT_WINDOW = _int_env("KOTOBA_RATE_LIMIT_WINDOW", 300)  # seconds
+RATE_LIMIT_MAX = _int_env("KOTOBA_RATE_LIMIT_MAX", 3)
 # Local development and tests populate many profiles from one address.
 RATE_LIMIT_OFF = os.environ.get("KOTOBA_DISABLE_RATE_LIMIT") == "1"
 NEIGHBOR_COUNT = 3
@@ -122,9 +133,11 @@ async def lifespan(_app):
             "",
         ):
             print(line, flush=True)
+    limit = "無効" if RATE_LIMIT_OFF else f"{RATE_LIMIT_MAX}回/{RATE_LIMIT_WINDOW}秒"
     print(
         f"準備完了: seed={len(state['seed_coords'])}点 / "
-        f"islands={len(state['islands'])} / store={state['store'].backend}",
+        f"islands={len(state['islands'])} / store={state['store'].backend} / "
+        f"定員={MAX_USERS}人 / 参加制限={limit}",
         flush=True,
     )
     yield
@@ -260,10 +273,19 @@ def health():
 @app.get("/api/map")
 def get_map():
     """Terrain + islands + everyone currently on the map. No profile text."""
+    # The store has already retried by the time it raises. Turning that into a
+    # 503 with a sentence a visitor can act on beats a bare 500, and the client
+    # retries this call on its own.
+    try:
+        users = state["store"].list_public()
+    except StoreError:
+        raise HTTPException(
+            status_code=503, detail="地図の読み込みに失敗しました。少し待ってからもう一度お試しください。"
+        )
     return {
         "seed": state["seed_map"]["seed"],
         "islands": state["islands"],
-        "users": state["store"].list_public(),
+        "users": users,
         "quantiles": state["quantiles"],
         "meta": {
             "seed_count": state["seed_map"]["meta"]["seed_count"],
@@ -303,8 +325,10 @@ def join(payload: JoinRequest, request: Request):
             "vec": [round(float(value), 6) for value in vector],
         })
         others = [entry for entry in store.list_full() if entry["id"] != row["id"]]
-    except StoreError as error:
-        raise HTTPException(status_code=503, detail=f"保存に失敗しました: {error}")
+    except StoreError:
+        raise HTTPException(
+            status_code=503, detail="保存に失敗しました。もう一度「地図にのせる」を押してください。"
+        )
 
     origin = {"x": x, "y": y}
     neighbors = rank_neighbors(origin, others, state["quantiles"], limit=NEIGHBOR_COUNT)
@@ -332,8 +356,8 @@ def get_user(profile_id: str, viewer: str = ""):
     store = state["store"]
     try:
         target = store.get(profile_id)
-    except StoreError as error:
-        raise HTTPException(status_code=503, detail=str(error))
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。もう一度お試しください。")
     if not target:
         raise HTTPException(status_code=404, detail="見つかりませんでした。")
 
@@ -370,8 +394,8 @@ def get_user(profile_id: str, viewer: str = ""):
 def leave(payload: LeaveRequest):
     try:
         removed = state["store"].delete(payload.id, payload.edit_token)
-    except StoreError as error:
-        raise HTTPException(status_code=503, detail=str(error))
+    except StoreError:
+        raise HTTPException(status_code=503, detail="削除に失敗しました。もう一度お試しください。")
     if not removed:
         raise HTTPException(status_code=403, detail="削除できませんでした。")
     return {"ok": True}

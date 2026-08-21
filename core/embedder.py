@@ -19,6 +19,8 @@ The `encode` signature deliberately mirrors SentenceTransformer.encode so
 core/features.py does not care which backend it is talking to.
 """
 
+import time
+
 import numpy as np
 import onnxruntime as ort
 from huggingface_hub import hf_hub_download
@@ -33,12 +35,37 @@ PAD_ID = 1
 PAD_TOKEN = "<pad>"
 DEFAULT_BATCH = 16
 
+# The serving image does not carry the 448MB fp32 weights - they are fetched on
+# first start, which keeps the image inside the registry's free tier. That makes
+# start-up depend on huggingface.co being reachable for those few seconds, and a
+# raised exception here is a container that never becomes healthy. Retry before
+# giving up: a blip during a deploy should cost twenty seconds, not the demo.
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_BACKOFF = 2.0  # seconds, doubled each attempt
+
+
+def _fetch(repo_id, filename):
+    delay = DOWNLOAD_BACKOFF
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return hf_hub_download(repo_id, filename)
+        except Exception as error:  # noqa: BLE001 - network, disk, auth all retryable here
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise
+            print(
+                f"[embedder] {filename} の取得に失敗 ({attempt}/{DOWNLOAD_ATTEMPTS}): "
+                f"{type(error).__name__}: {error}. {delay:.0f}秒後に再試行します。",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay *= 2
+
 
 class OnnxEmbedder:
     """Deterministic sentence embeddings. Thread count is pinned on purpose."""
 
     def __init__(self, repo_id=MODEL_NAME, threads=1, batch_size=DEFAULT_BATCH):
-        tokenizer_path = hf_hub_download(repo_id, TOKENIZER_FILE)
+        tokenizer_path = _fetch(repo_id, TOKENIZER_FILE)
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.tokenizer.enable_padding(pad_id=PAD_ID, pad_token=PAD_TOKEN)
         self.tokenizer.enable_truncation(max_length=MAX_LENGTH)
@@ -50,7 +77,7 @@ class OnnxEmbedder:
         options.intra_op_num_threads = threads
         options.inter_op_num_threads = threads
         self.session = ort.InferenceSession(
-            hf_hub_download(repo_id, ONNX_FILE),
+            _fetch(repo_id, ONNX_FILE),
             options,
             providers=["CPUExecutionProvider"],
         )
