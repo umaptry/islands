@@ -79,7 +79,7 @@ OVERLAP_EPSILON = 0.5
 MIN_TEXT_LENGTH = 30
 MAX_TEXT_LENGTH = 2000
 MAX_NAME_LENGTH = 16
-MAX_USERS = 100
+MAX_USERS = 200
 
 # One colour per island, so this list also caps CLUSTER_CANDIDATES.
 # Hue separation matters most on avatar rings and island labels; the terrain

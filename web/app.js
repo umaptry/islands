@@ -5,7 +5,7 @@
 // their real distance and an ANGLE from their real bearing; the map view is a
 // plain pan/zoom of the server's x/y. Nothing is re-projected client-side.
 
-import { EMOJI, avatarCss, drawAvatar, paintAvatar } from './avatars.js';
+import { EMOJI, avatarCss, drawFace, paintAvatar } from './avatars.js';
 
 const $ = (id) => document.getElementById(id);
 // Must stay in sync with ISLAND_COLORS in core/config.py and the --i0..--i9
@@ -249,13 +249,22 @@ let resetProfileForm = () => {};
   // Writing a second post must start from a blank sheet, not from whatever the
   // last one said.
   resetProfileForm = () => {
-    nameInput.value = state.myPosts.length ? (state.myPosts[state.myPosts.length - 1].name || '') : '';
+    // One person, one face. The icon and the name are chosen on the first post
+    // and reused after that: a second post is another thing THIS person wrote,
+    // and re-picking an avatar each time would make it read as somebody else.
+    const first = state.myPosts[0];
+    nameInput.value = first ? (first.name || '') : '';
     textInput.value = '';
     $('formError').textContent = '';
-    chosenIcon = String(Math.floor(Math.random() * EMOJI.length));
+    if (first) {
+      chosenIcon = String(first.icon_id);
+    } else {
+      chosenIcon = String(Math.floor(Math.random() * EMOJI.length));
+    }
     [...grid.children].forEach((child, index) => {
       child.classList.toggle('on', String(index) === chosenIcon);
     });
+    $('iconField').hidden = Boolean(first);
     $('cancelBtn').hidden = state.myPosts.length === 0;
     refresh();
   };
@@ -634,10 +643,10 @@ function renderOrbit() {
     const x = centerX + Math.cos(item.angle) * item.radius;
     const y = centerY + Math.sin(item.angle) * item.radius + float;
     const isNearest = closest[0] && closest[0].user.id === item.user.id;
-    drawAvatar(ctx, item.user.icon_id, x, y, item.size, {
-      ring: islandColor(item.user.cluster_id),
-      glow: isNearest ? INK.glow : null,
-    });
+    // Same vocabulary as the map: a post is an island with a face on it.
+    drawIsland(ctx, x, y, item.size * 0.68, item.user.id, islandColor(item.user.cluster_id));
+    drawFace(ctx, item.user.icon_id, x, y, item.size * 0.7,
+      isNearest ? '#ffffff' : islandColor(item.user.cluster_id));
     ctx.fillStyle = INK.label;
     ctx.font = '10px system-ui, sans-serif';
     ctx.textAlign = 'center';
@@ -654,7 +663,9 @@ function renderOrbit() {
   ctx.arc(centerX, centerY, (SELF_SIZE / 2 + 9) * pulse, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
-  drawAvatar(ctx, state.me.icon_id, centerX, centerY, SELF_SIZE, { glow: INK.glow });
+  drawIsland(ctx, centerX, centerY, SELF_SIZE * 0.54, state.me.id,
+    islandColor(state.me.cluster_id));
+  drawFace(ctx, state.me.icon_id, centerX, centerY, SELF_SIZE * 0.56, '#ffffff');
   // Your own avatar was not a hit target, so tapping yourself - the most
   // obvious thing to try in this view - did nothing at all.
   state.hits.push({ x: centerX, y: centerY, r: SELF_SIZE / 2 + 10, user: state.me, distance: 0 });
@@ -717,14 +728,25 @@ function relaxAngles(placed) {
  * screen with terrain instead of margin.
  */
 function fitCamera() {
-  if (!state.map || !state.map.seed.length) return;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  state.map.seed.forEach(([x, y]) => {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  });
+  if (!state.map) return;
+  // seed_bounds is what the server sends now. The other two branches are there
+  // so a client and a server from different deploys still frame something
+  // sensible instead of leaving the map unusable.
+  let bounds = state.map.seed_bounds;
+  if (!bounds && Array.isArray(state.map.seed) && state.map.seed.length) {
+    let lowX = Infinity, lowY = Infinity, highX = -Infinity, highY = -Infinity;
+    state.map.seed.forEach(([x, y]) => {
+      if (x < lowX) lowX = x;
+      if (x > highX) highX = x;
+      if (y < lowY) lowY = y;
+      if (y > highY) highY = y;
+    });
+    bounds = [lowX, lowY, highX, highY];
+  }
+  if (!bounds || bounds.length !== 4 || bounds.some((value) => !Number.isFinite(value))) {
+    bounds = [0, 0, WORLD, WORLD];
+  }
+  const [minX, minY, maxX, maxY] = bounds;
 
   const spanX = Math.max(1, maxX - minX);
   const spanY = Math.max(1, maxY - minY);
@@ -746,22 +768,11 @@ function renderMap() {
   const time = (performance.now() - state.t0) / 1000;
   const { scale } = state.camera;
 
-  // Terrain: the seed corpus, unnamed. It exists to show the shape of the land,
-  // so it has to be visible as texture without competing with the avatars.
-  ctx.save();
-  // Pale on purpose. The corpus is context: it shows where the land COULD be,
-  // and the posts drawn on top of it are the land that actually exists.
-  const dotRadius = Math.max(3.4, 6.8 * scale);
-  ctx.globalAlpha = 0.42;
-  ctx.fillStyle = INK.shallows;
-  state.map.seed.forEach(([x, y]) => {
-    const point = toScreen(x, y);
-    if (point.x < -20 || point.x > width + 20 || point.y < -20 || point.y > height + 20) return;
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, dotRadius, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.restore();
+  // The seed corpus is NOT drawn. It used to be a field of dots, which looked
+  // like a second kind of island while meaning something entirely different -
+  // the shape of the reference corpus, not a person. The names it produced are
+  // still worth keeping, so the regions stay labelled and the only land on the
+  // map is somebody's post. The seed coordinates still frame the camera.
 
   const meId = state.me && state.me.id;
 
@@ -775,10 +786,7 @@ function renderMap() {
     visible.push({ user, point, isMe: user.id === meId });
   });
   visible.forEach(({ user, point, isMe }) => {
-    // The land has to be the thing you see, with the face sitting on it. Too
-    // close to the avatar's own radius and an island reads as a coloured ring
-    // around a face rather than as a place.
-    drawIsland(ctx, point.x, point.y, Math.max(34, 58 * scale) * (isMe ? 1.2 : 1),
+    drawIsland(ctx, point.x, point.y, islandRadius(scale) * (isMe ? 1.25 : 1),
       user.id, islandColor(user.cluster_id));
   });
 
@@ -803,7 +811,10 @@ function renderMap() {
 
 
   visible.forEach(({ user, point, isMe }, index) => {
-    const size = isMe ? 34 : 24;
+    const radius = islandRadius(scale) * (isMe ? 1.25 : 1);
+    // A shade under the island's own radius, so the land still reads as land
+    // around the face rather than being covered by it.
+    const size = radius * 1.04;
 
     if (isMe) {
       const pulse = 1 + Math.sin(time * 1.9) * 0.09;
@@ -811,14 +822,11 @@ function renderMap() {
       ctx.strokeStyle = INK.self;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(point.x, point.y, (size / 2 + 8) * pulse, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, (radius + 7) * pulse, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
-    drawAvatar(ctx, user.icon_id, point.x, point.y, size, {
-      ring: mine(user.id) ? '#ffffff' : islandColor(user.cluster_id),
-      glow: isMe ? INK.glow : null,
-    });
+    drawFace(ctx, user.icon_id, point.x, point.y, size, islandColor(user.cluster_id));
     if (scale > 0.32 || isMe) {
       ctx.save();
       ctx.font = '10px system-ui, sans-serif';
@@ -826,12 +834,13 @@ function renderMap() {
       ctx.lineWidth = 3;
       ctx.lineJoin = 'round';
       ctx.strokeStyle = INK.halo;
-      ctx.strokeText(clip(user.name, 6), point.x, point.y + size / 2 + 12);
+      const below = point.y + radius + 11;
+      ctx.strokeText(clip(user.name, 6), point.x, below);
       ctx.fillStyle = INK.mapLabel;
-      ctx.fillText(clip(user.name, 6), point.x, point.y + size / 2 + 12);
+      ctx.fillText(clip(user.name, 6), point.x, below);
       ctx.restore();
     }
-    state.hits.push({ x: point.x, y: point.y, r: size / 2 + 8, user });
+    state.hits.push({ x: point.x, y: point.y, r: Math.max(18, radius + 6), user });
   });
 }
 
@@ -881,6 +890,12 @@ function islandPath(ctx, x, y, radius, seed) {
     ctx.quadraticCurveTo(control[0], control[1], end[0], end[1]);
   }
   ctx.closePath();
+}
+
+/** Island size for the current zoom. Small: the map is an archipelago of many
+ *  little places, not a handful of continents. */
+function islandRadius(scale) {
+  return Math.max(17, 29 * scale);
 }
 
 function drawIsland(ctx, x, y, radius, id, accent) {

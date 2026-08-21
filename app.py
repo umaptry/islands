@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parent
 ARTIFACTS = ROOT / "artifacts"
 WEB = ROOT / "web"
 
+
 def _int_env(name, default):
     try:
         return max(1, int(os.environ.get(name, "").strip() or default))
@@ -97,8 +98,16 @@ def load_artifacts():
         sparse_artifacts = pickle.load(handle)
 
     seed = np.array(seed_map["seed"], dtype=float)
+    # The client frames the camera on the corpus but no longer draws it, so it
+    # needs the extent and not the 1,000 points. Sending the points cost ~9KB
+    # gzipped on every 15-second poll, for pixels nobody sees.
+    seed_bounds = [
+        float(seed[:, 0].min()), float(seed[:, 1].min()),
+        float(seed[:, 0].max()), float(seed[:, 1].max()),
+    ]
     return {
         "seed_map": seed_map,
+        "seed_bounds": seed_bounds,
         "encoder": encoder,
         "scale_bounds": scale_bounds,
         "sparse_artifacts": sparse_artifacts,
@@ -145,11 +154,11 @@ async def lifespan(_app):
 
 app = FastAPI(title="かさなり", lifespan=lifespan, docs_url=None, redoc_url=None)
 
-# The free egress allowance on the deploy target is 1GiB/month, and the two
-# fattest responses are both highly compressible text: web/app.js 28.4KB -> 9.2KB
-# and /api/map 20.1KB -> 8.8KB, taking a first visit from ~70KB to ~28KB.
-# minimum_size skips the small JSON replies, where the header would cost more
-# than the compression saves.
+# The free egress allowance on the deploy target is 1GiB/month, and web/app.js
+# is highly compressible text: 30KB -> ~9KB. minimum_size skips the small JSON
+# replies, where the header would cost more than the compression saves.
+# (/api/map used to be the other fat response until it stopped shipping the
+# 1,000 seed points; it is now a couple of KB.)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
@@ -298,7 +307,7 @@ def get_map():
     except StoreError:
         counts = {}
     return {
-        "seed": state["seed_map"]["seed"],
+        "seed_bounds": state["seed_bounds"],
         "islands": state["islands"],
         "users": users,
         "like_counts": counts,

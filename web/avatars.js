@@ -46,52 +46,68 @@ export function paintAvatar(element, iconId) {
   element.textContent = emoji;
 }
 
-const gradientCache = new Map();
+const EMOJI_FONT =
+  '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", ' +
+  '"Twemoji Mozilla", "EmojiOne Color", "Android Emoji", sans-serif';
 
-/** Draw the avatar onto a canvas at (x, y) with the given diameter. */
-export function drawAvatar(ctx, iconId, x, y, size, options = {}) {
-  const { emoji, from, to } = avatarFor(iconId);
-  const radius = size / 2;
+/** Can this device actually paint an emoji onto a canvas?
+ *
+ * Some mobile browsers - and any device without a colour emoji font - paint
+ * nothing at all, which leaves the map looking empty rather than looking wrong.
+ * Probed once, lazily, because the answer cannot change within a session, and
+ * used to pick a fallback that always draws something.
+ */
+let emojiSupported = null;
 
-  const key = `${iconId}:${Math.round(size)}`;
-  let gradient = gradientCache.get(key);
-  if (!gradient) {
-    gradient = ctx.createLinearGradient(-radius, -radius, radius, radius);
-    gradient.addColorStop(0, from);
-    gradient.addColorStop(1, to);
-    gradientCache.set(key, gradient);
+function canDrawEmoji() {
+  if (emojiSupported !== null) return emojiSupported;
+  try {
+    const probe = document.createElement('canvas');
+    probe.width = 32;
+    probe.height = 32;
+    const context = probe.getContext('2d');
+    context.font = `20px ${EMOJI_FONT}`;
+    context.textBaseline = 'middle';
+    context.fillText(EMOJI[0], 4, 16);
+    // A glyph that rendered leaves non-transparent pixels. measureText alone is
+    // not enough: a missing-glyph box still reports a width.
+    const pixels = context.getImageData(0, 0, 32, 32).data;
+    let painted = false;
+    for (let i = 3; i < pixels.length; i += 4) {
+      if (pixels[i] !== 0) { painted = true; break; }
+    }
+    emojiSupported = painted;
+  } catch {
+    // A blocked getImageData must not be read as "this device is broken".
+    emojiSupported = true;
   }
+  return emojiSupported;
+}
 
+/** The face on its own: no disc, no ring, no shadow.
+ *
+ * Every post on the map is an island with a face standing on it, so a coloured
+ * disc behind the face only competed with the land. Keeping this path free of
+ * clip(), gradients and shadows also removes every canvas feature that a phone
+ * browser might quietly decline to render.
+ */
+export function drawFace(ctx, iconId, x, y, size, fallbackColor) {
+  const { emoji, to } = avatarFor(iconId);
   ctx.save();
-  ctx.translate(x, y);
-
-  if (options.glow) {
-    ctx.shadowColor = options.glow;
-    ctx.shadowBlur = size * 0.55;
-  }
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  if (options.ring) {
-    ctx.strokeStyle = options.ring;
-    ctx.lineWidth = Math.max(1.5, size * 0.07);
-    ctx.stroke();
-  }
-
-  // Clip to the disc before drawing the face. Emoji glyphs carry a lot of
-  // internal padding, so 0.74 of the diameter reads as a close-up rather than a
-  // small badge, and the clip keeps the silhouette round on the fonts that draw
-  // the glyph wider than its em box.
-  ctx.beginPath();
-  ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.font = `${Math.round(size * 0.74)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  // Emoji glyphs sit slightly high in their em box on most platforms.
-  ctx.fillText(emoji, 0, size * 0.03);
+  if (canDrawEmoji()) {
+    // Never let rounding produce a 0px font, which draws nothing at all.
+    ctx.font = `${Math.max(9, Math.round(size))}px ${EMOJI_FONT}`;
+    ctx.fillText(emoji, x, y + size * 0.04);
+  } else {
+    ctx.fillStyle = fallbackColor || to;
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.36, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, .9)';
+    ctx.lineWidth = Math.max(1, size * 0.07);
+    ctx.stroke();
+  }
   ctx.restore();
 }

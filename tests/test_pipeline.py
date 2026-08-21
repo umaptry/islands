@@ -60,7 +60,15 @@ def test_projection_is_deterministic(loaded):
 
 
 def test_joining_does_not_move_the_seed_map(client, loaded):
-    before = np.array(client.get("/api/map").json()["seed"], dtype=float)
+    """The frozen map is the whole promise: joining must not shift the terrain.
+
+    Checked against the loaded artifacts rather than the /api/map payload. The
+    map response stopped shipping the 1,000 seed points once the client stopped
+    drawing them, and the invariant being protected here is about the artifacts,
+    not about what happens to be on the wire.
+    """
+    before = np.array(loaded["seed_coords"], dtype=float).copy()
+    before_bounds = list(client.get("/api/map").json()["seed_bounds"])
     for index in range(5):
         response = client.post("/api/join", json={
             "icon_id": str(index),
@@ -68,8 +76,16 @@ def test_joining_does_not_move_the_seed_map(client, loaded):
             "text": f"{CAMPING_A}あと、最近は{index}番目の道具を買い足しました。",
         })
         assert response.status_code == 200, response.text
-    after = np.array(client.get("/api/map").json()["seed"], dtype=float)
+    after = np.array(loaded["seed_coords"], dtype=float)
     assert np.array_equal(before, after)
+    assert client.get("/api/map").json()["seed_bounds"] == before_bounds
+
+
+def test_map_payload_does_not_carry_the_seed_corpus(client):
+    """1,000 points on every 15-second poll is most of the egress budget."""
+    payload = client.get("/api/map").json()
+    assert "seed" not in payload
+    assert len(payload["seed_bounds"]) == 4
 
 
 def test_encoder_single_and_batch_agree(loaded):
