@@ -23,17 +23,26 @@ ENV PATH=/home/user/.local/bin:$PATH
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# The model is fetched at container start by default, which keeps the image
-# under the 0.5GB/month Artifact Registry free allowance. The cost is a ~20s
-# longer cold start, which the keep-alive ping hides (see README).
+# The 449MB fp32 ONNX and the 17MB tokenizer are baked into the image.
 #
-# Build with --build-arg KOTOBA_FETCH_MODEL_AT_START=0 to bake the 448MB fp32
-# ONNX and the tokenizer into the image instead: cold starts answer immediately,
-# but the image goes back to ~900MB.
-ARG KOTOBA_FETCH_MODEL_AT_START=1
-RUN if [ "$KOTOBA_FETCH_MODEL_AT_START" = "0" ]; then \
-      python -c "from huggingface_hub import hf_hub_download as d; r='intfloat/multilingual-e5-small'; d(r,'onnx/model.onnx'); d(r,'tokenizer.json')"; \
-    fi
+# They used to be fetched on first start, which halved the image and kept it
+# inside the 0.5GB/month Artifact Registry free allowance. That traded registry
+# bytes for a start-up that depended on huggingface.co being reachable AND not
+# rate-limiting, and on 2026-08-21 that bill came due: two deploys in a row died
+# with `429 Too Many Requests` on the tokenizer, the container never answered
+# its port, and Cloud Run's 4-minute startup probe timed out. Nothing reached
+# production - Cloud Run refuses to shift traffic to a revision that never went
+# healthy - but the deploy could not land either.
+#
+# Baking them in costs roughly $0.05/month of registry storage (keep exactly one
+# image; see the cleanup step in README.md) and buys a container start that does
+# no network I/O at all, which is the property a live demo actually needs.
+RUN python -c "from huggingface_hub import hf_hub_download as d; r='intfloat/multilingual-e5-small'; d(r,'onnx/model.onnx'); d(r,'tokenizer.json')"
+
+# Resolve both files from the cache above and never call the Hub. Without this,
+# hf_hub_download still makes one metadata request per file at start-up, and
+# that is exactly the call that was returning 429.
+ENV HF_HUB_OFFLINE=1
 
 COPY --chown=user artifacts/ ./artifacts/
 COPY --chown=user core/ ./core/

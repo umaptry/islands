@@ -35,11 +35,14 @@ PAD_ID = 1
 PAD_TOKEN = "<pad>"
 DEFAULT_BATCH = 16
 
-# The serving image does not carry the 448MB fp32 weights - they are fetched on
-# first start, which keeps the image inside the registry's free tier. That makes
-# start-up depend on huggingface.co being reachable for those few seconds, and a
-# raised exception here is a container that never becomes healthy. Retry before
-# giving up: a blip during a deploy should cost twenty seconds, not the demo.
+# The serving image bakes the weights in and runs with HF_HUB_OFFLINE=1, so in
+# production both calls resolve from the local cache and never touch the
+# network. The Dockerfile explains why that changed: fetching on first start
+# cost two deploys to HTTP 429 from the Hub.
+#
+# The retry stays for the paths that DO download - a fresh dev checkout, and the
+# Docker build itself. A raised exception here is a container that never becomes
+# healthy, so a blip should cost twenty seconds rather than the deploy.
 DOWNLOAD_ATTEMPTS = 4
 DOWNLOAD_BACKOFF = 2.0  # seconds, doubled each attempt
 

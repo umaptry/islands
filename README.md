@@ -186,9 +186,9 @@ gcloud run deploy kotoba-map \
 | 設定 | 理由 |
 |---|---|
 | `--region us-central1` | 無料枠は Tier 1 リージョンのみ。日本からは +130ms 程度だが、本アプリは通信回数が少ないので体感差はほぼ無い |
-| `--memory 2Gi` | 常駐 965MB + 起動時に取得する ONNX 448MB がコンテナの書き込み層（＝メモリ計上）に載る。1GiB では OOM する |
+| `--memory 2Gi` | 常駐 965MB + ONNX 449MB。1GiB では OOM する |
 | `--max-instances 1` | 支出の上限を物理的に固定する。副次的に、`app.py` のプロセス内レートリミッタ（3 join / 300秒 / IP）が分散で骨抜きにならない |
-| モデルを焼き込まない | Artifact Registry の無料枠は 0.5GB/月。焼き込むと圧縮後 ~600MB で超過する。`Dockerfile` の `ARG KOTOBA_FETCH_MODEL_AT_START` は既定 `1`（起動時取得）。イメージは圧縮後 ~180MB に収まる |
+| モデルをイメージに焼き込む | 起動時に Hugging Face から取る設計だったが、2026-08-21 に **HF が 429 を返して2回連続でデプロイが落ちた**（起動プローブ4分でタイムアウト）。焼き込めば起動時の外部依存がゼロになる。代償は Artifact Registry の無料枠 0.5GB/月の超過で、**1イメージだけ残す運用なら月 $0.05 程度**。詳細は `Dockerfile` のコメント |
 | gzip（`app.py`） | 下りの無料枠は北米 1GiB/月。実測で `app.js` 28.4KB→9.2KB、`/api/map` 20.1KB→8.8KB。初回訪問あたり約70KB→28KBになり、無料枠で捌ける来訪者が約2.5倍になる |
 
 無料枠の内訳（月あたり）: 200万リクエスト / 180,000 vCPU秒 / 360,000 GiB秒 / 下り 1GiB。
@@ -204,7 +204,7 @@ Artifact Registry には常に1イメージだけ残す運用にしてくださ�
 
 | 設定 | 値 | 理由 |
 |---|---|---|
-| `--min-instances` | **1** | コールドスタート（起動時のONNX取得で30〜60秒）を誰にも見せないため。**これだけは一時設定** — 下記参照 |
+| `--min-instances` | **1** | コールドスタートを誰にも見せないため。**これだけは一時設定** — 下記参照（モデル焼き込み後の起動は数秒） |
 | `--max-instances` | 4 | 人が一斉に来たときの詰まり対策。支出の上限も兼ねる |
 | `--concurrency` | 12 | 1 vCPU で ONNX 推論を40本同時に捌けないため。12×4=48並列まで |
 | `KOTOBA_RATE_LIMIT_MAX` | 50 / 300秒 | 会場のwifiは全員が同じグローバルIPになる。既定の3回だと5分間に4人目が弾かれる |
@@ -230,9 +230,11 @@ gcloud artifacts docker images list us-central1-docker.pkg.dev/kotoba-map-demo/c
 gcloud artifacts docker images delete "us-central1-docker.pkg.dev/kotoba-map-demo/cloud-run-source-deploy/kotoba-map@sha256:<latestが付いていない方>" --quiet
 ```
 
-Artifact Registry の無料枠は 0.5GB/月、イメージ1つで約470MB です。**1つ残す
-ぶんにはぎりぎり無料枠に収まりますが、2つ目からは即座に超えます。** 実際に
+Artifact Registry の無料枠は 0.5GB/月、イメージ1つで約900MB です（モデルを
+焼き込んでいるため。理由は `Dockerfile` のコメント）。**1つでも無料枠を約0.4GB
+超えるので月 $0.05 前後かかり、2つ残すとその倍になります。** 以前に
 デプロイを重ねて 1,969MB まで膨らみ、月 $0.15 ほどの課金が始まる手前でした。
+消し忘れると素直に増えるので、この手順はデプロイのたびに実行してください。
 `latest` が付いているものが稼働中なので、それ以外を消します。容量の表示は
 集計が遅れるので、消した直後は数字が変わりません。
 
