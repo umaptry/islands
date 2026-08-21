@@ -150,7 +150,8 @@ class SupabaseStore:
         }
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT)
 
-    def _send(self, method, *, label, url=None, headers=None, params=None, json=None):
+    def _send(self, method, *, label, url=None, headers=None, params=None, json=None,
+              allow_statuses=()):
         """One request, retried while the failure still looks transient.
 
         Every call into PostgREST goes through here so the retry policy is
@@ -173,7 +174,7 @@ class SupabaseStore:
             except httpx.HTTPError as error:  # timeout, DNS, connection reset
                 last = f"{type(error).__name__}: {error}"
             else:
-                if response.status_code < 400:
+                if response.status_code < 400 or response.status_code in allow_statuses:
                     return response
                 last = f"HTTP {response.status_code}: {response.text[:200]}"
                 if response.status_code not in RETRY_STATUSES:
@@ -230,9 +231,19 @@ class SupabaseStore:
             "POST",
             label="いいねの保存",
             url=self._likes,
+            # on_conflict names the constraint columns. Without it PostgREST
+            # builds ON CONFLICT against the PRIMARY KEY, which a fresh
+            # gen_random_uuid() never collides with - so a repeat like came back
+            # as a 409 and surfaced to the tapper as "送れませんでした".
+            params={"on_conflict": "from_id,to_id"},
             headers={"Prefer": "return=representation,resolution=ignore-duplicates"},
             json={"from_id": from_id, "to_id": to_id},
+            # Belt and braces: if a deployment ever loses the on_conflict hint,
+            # a duplicate must still read as "already liked" rather than an error.
+            allow_statuses=(409,),
         )
+        if response.status_code == 409:
+            return False
         # ignore-duplicates returns an empty body when the row already existed.
         body = response.json() if response.content else []
         return bool(body)
