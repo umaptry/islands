@@ -179,6 +179,13 @@ def test_matches_the_memory_backend_contract(store):
         created = backend.insert(sample("契約"))
         assert {"id", "edit_token", "created_at"} <= set(created)
         assert backend.get(created["id"])["name"] == "契約"
+        # get() must withhold the vector unless it is asked for, and hand it
+        # over when it is: similarity is unreadable without it.
+        assert "vec" not in backend.get(created["id"])
+        assert backend.get(created["id"], with_vec=True)["vec"] == sample("契約")["vec"]
+        rows = backend.list_vectors()
+        assert {row["id"] for row in rows} >= {created["id"]}
+        assert all(set(row) == {"id", "vec"} for row in rows), "vectors query stays lean"
         assert backend.delete(created["id"], created["edit_token"]) is True
 
 

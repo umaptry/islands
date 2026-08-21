@@ -40,6 +40,10 @@ FULL_COLUMNS = PUBLIC_COLUMNS + ",text,terms"
 # Just enough to name the islands. Naming needs the words, not the essays,
 # and certainly not the 448-float vectors that list_full drags along.
 TERM_COLUMNS = "id,cluster_id,x,y,terms"
+# Similarity needs the vectors and nothing else. Going through list_full would
+# drag every profile's essay along with them, which at the 200-person cap is
+# most of the response.
+VEC_COLUMNS = "id,vec"
 
 
 def _now():
@@ -90,10 +94,20 @@ class MemoryStore:
             rows = sorted(self._rows.values(), key=lambda row: row["created_at"])
         return [{key: row.get(key) for key in TERM_COLUMNS.split(",")} for row in rows]
 
-    def get(self, profile_id):
+    def list_vectors(self):
+        with self._lock:
+            rows = sorted(self._rows.values(), key=lambda row: row["created_at"])
+        return [{key: row.get(key) for key in VEC_COLUMNS.split(",")} for row in rows]
+
+    def get(self, profile_id, with_vec=False):
         with self._lock:
             row = self._rows.get(profile_id)
-        return dict(row) if row else None
+        if not row:
+            return None
+        row = dict(row)
+        if not with_vec:
+            row.pop("vec", None)
+        return row
 
     def verify(self, profile_id, edit_token):
         with self._lock:
@@ -295,8 +309,14 @@ class SupabaseStore:
     def list_terms(self):
         return self._get({"select": TERM_COLUMNS, "order": "created_at.asc"})
 
-    def get(self, profile_id):
-        rows = self._get({"select": FULL_COLUMNS, "id": f"eq.{profile_id}", "limit": "1"})
+    def list_vectors(self):
+        return self._get({"select": VEC_COLUMNS, "order": "created_at.asc"})
+
+    def get(self, profile_id, with_vec=False):
+        # vec is 448 floats and only two callers ever need it, so it stays off
+        # the default select rather than riding along on every profile open.
+        select = FULL_COLUMNS + ",vec" if with_vec else FULL_COLUMNS
+        rows = self._get({"select": select, "id": f"eq.{profile_id}", "limit": "1"})
         return rows[0] if rows else None
 
     def delete(self, profile_id, edit_token):

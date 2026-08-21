@@ -433,7 +433,8 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .sim-value { font-size: 34px; font-weight: 800; color: var(--sea-deep); line-height: 1; }
 .sim-label { font-size: 13px; color: var(--panel-muted); }
-.sim-bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; margin-bottom: 18px; }
+.sim-bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.sim-note { font-size: 11px; line-height: 1.5; color: var(--panel-muted); margin: 8px 0 18px; }
 .sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--sea), var(--like)); transition: width .7s var(--ease); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }

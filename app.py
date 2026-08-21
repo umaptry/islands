@@ -37,6 +37,8 @@ from core.encoder import load_encoder
 from core.features import build_hybrid_features, extract_label_terms, normalize_text
 from core.geometry import scale_projected_coordinate
 from core.similarity import (
+    cosine_between,
+    cosine_percent,
     describe_relation,
     distance_between,
     farthest_neighbor,
@@ -81,6 +83,16 @@ _rate_lock = threading.Lock()
 _islands_cache = {"key": None, "value": []}
 _islands_lock = threading.Lock()
 
+# The 448-dim vectors, cached under the same rule as the islands. /api/map is
+# polled every few seconds and pulling 200 x 448 floats out of PostgREST each
+# time would be the most expensive thing the server does, for data that cannot
+# change: a row's vector is written at join and never updated.
+_vectors_cache = {"key": None, "value": {}}
+_vectors_lock = threading.Lock()
+# Held across the fetch itself, so a room full of people polling at the same
+# moment after somebody joins produces one query rather than one each.
+_vectors_fetch_lock = threading.Lock()
+
 
 # --------------------------------------------------------------------------
 # startup
@@ -121,6 +133,10 @@ def load_artifacts():
         "seed_clusters": seed[:, 2].astype(int),
         "islands": seed_map["islands"],
         "quantiles": seed_map["distance_quantiles"],
+        # Absent in artifacts built before similarity moved off the map
+        # distance. None means every similarity path falls back to the 2-D
+        # measure, which is the old behaviour, so an old artifact still boots.
+        "cosine_anchors": seed_map.get("cosine_anchors"),
         "idf": seed_map["idf"],
     }
 
@@ -284,6 +300,63 @@ def live_islands(users):
 def invalidate_islands():
     with _islands_lock:
         _islands_cache["key"] = None
+    with _vectors_lock:
+        _vectors_cache["key"] = None
+
+
+def user_vectors(users):
+    """{id: vec} for everyone on the map, or {} if they cannot be fetched.
+
+    Keyed by the same signature as the islands, so a join refreshes both. An
+    unreachable store returns {} rather than raising: similarity then falls back
+    to the map distance and the map still draws.
+    """
+    if state.get("cosine_anchors") is None:
+        return {}
+    key = _island_signature(users)
+    with _vectors_lock:
+        if _vectors_cache["key"] == key:
+            return _vectors_cache["value"]
+
+    with _vectors_fetch_lock:
+        # Somebody else may have filled it while we waited for the lock.
+        with _vectors_lock:
+            if _vectors_cache["key"] == key:
+                return _vectors_cache["value"]
+        try:
+            rows = state["store"].list_vectors()
+        except StoreError:
+            return {}
+        vectors = {row["id"]: row.get("vec") for row in rows}
+        with _vectors_lock:
+            _vectors_cache["key"] = key
+            _vectors_cache["value"] = vectors
+        return vectors
+
+
+def viewer_similarity(viewer_id, users):
+    """{other_id: 似てる度} for one viewer, or None when it cannot be computed.
+
+    None is deliberate: the key is then left out of the response entirely and
+    the client keeps using its own map-distance fallback, rather than being
+    handed a half-populated table.
+    """
+    anchors = state.get("cosine_anchors")
+    if anchors is None or not viewer_id:
+        return None
+    vectors = user_vectors(users)
+    mine = vectors.get(viewer_id)
+    if mine is None:
+        return None
+    similarity = {}
+    for user in users:
+        if user["id"] == viewer_id:
+            continue
+        cosine = cosine_between(mine, vectors.get(user["id"]))
+        if cosine is None:
+            return None
+        similarity[user["id"]] = cosine_percent(cosine, anchors)
+    return similarity
 
 
 def island_of(cluster_id):
@@ -376,8 +449,13 @@ def health():
 
 
 @app.get("/api/map")
-def get_map():
-    """Terrain + islands + everyone currently on the map. No profile text."""
+def get_map(viewer: str = ""):
+    """Terrain + islands + everyone currently on the map. No profile text.
+
+    `viewer` adds a {id: 似てる度} table for that one person, so the orbit view
+    places people by the same measure the profile sheet prints. The vectors
+    themselves never leave the server.
+    """
     # The store has already retried by the time it raises. Turning that into a
     # 503 with a sentence a visitor can act on beats a bare 500, and the client
     # retries this call on its own.
@@ -391,7 +469,7 @@ def get_map():
         counts = state["store"].like_counts()
     except StoreError:
         counts = {}
-    return {
+    payload = {
         "seed_bounds": state["seed_bounds"],
         "islands": live_islands(users),
         "users": users,
@@ -402,6 +480,10 @@ def get_map():
             "max_users": MAX_USERS,
         },
     }
+    similarity = viewer_similarity(viewer, users)
+    if similarity is not None:
+        payload["similarity"] = similarity
+    return payload
 
 
 @app.post("/api/join")
@@ -442,8 +524,16 @@ def join(payload: JoinRequest, request: Request):
         )
 
     origin = {"x": x, "y": y}
-    neighbors = rank_neighbors(origin, others, state["quantiles"], limit=NEIGHBOR_COUNT)
-    farthest = farthest_neighbor(origin, others, state["quantiles"])
+    # list_full already carries every other person's vec, so ranking by the
+    # 448-dim cosine costs no extra query.
+    anchors = state.get("cosine_anchors")
+    neighbors = rank_neighbors(
+        origin, others, state["quantiles"], limit=NEIGHBOR_COUNT,
+        origin_vector=vector, anchors=anchors,
+    )
+    farthest = farthest_neighbor(
+        origin, others, state["quantiles"], origin_vector=vector, anchors=anchors,
+    )
 
     return {
         "id": row["id"],
@@ -465,8 +555,10 @@ def join(payload: JoinRequest, request: Request):
 @app.get("/api/user/{profile_id}")
 def get_user(profile_id: str, viewer: str = ""):
     store = state["store"]
+    anchors = state.get("cosine_anchors")
+    want_vec = bool(viewer and viewer != profile_id and anchors is not None)
     try:
-        target = store.get(profile_id)
+        target = store.get(profile_id, with_vec=want_vec)
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。もう一度お試しください。")
     if not target:
@@ -485,12 +577,20 @@ def get_user(profile_id: str, viewer: str = ""):
 
     if viewer and viewer != profile_id:
         try:
-            me = store.get(viewer)
+            me = store.get(viewer, with_vec=want_vec)
         except StoreError:
             me = None
         if me:
             distance = distance_between((me["x"], me["y"]), (target["x"], target["y"]))
-            similarity = similarity_percent(distance, state["quantiles"])
+            # Cosine when both sides have a vector, map distance otherwise. The
+            # fallback is what keeps a row written before vectors existed, or a
+            # store that dropped the column, from 500ing a profile open.
+            cosine = cosine_between(me.get("vec"), target.get("vec")) if want_vec else None
+            similarity = (
+                cosine_percent(cosine, anchors)
+                if cosine is not None
+                else similarity_percent(distance, state["quantiles"])
+            )
             shared = shared_keywords(me.get("terms") or [], target.get("terms") or [], state["idf"])
             result.update({
                 "distance": round(distance, 2),

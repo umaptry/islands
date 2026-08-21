@@ -2,8 +2,8 @@
 //
 // One rule the whole file obeys: coordinates that come from the server are
 // never recomputed here. The orbit view chooses a RADIUS for each person from
-// their real distance and an ANGLE from their real bearing; the map view is a
-// plain pan/zoom of the server's x/y. Nothing is re-projected client-side.
+// their 似てる度 and an ANGLE from their real bearing on the map; the map view
+// is a plain pan/zoom of the server's x/y. Nothing is re-projected client-side.
 
 import { EMOJI, avatarCss, drawFace, paintAvatar } from './avatars.js';
 
@@ -419,7 +419,10 @@ async function enterMain() {
 /** Returns true on success. Keeps the previous map on failure. */
 async function refreshMap() {
   try {
-    state.map = await api('/api/map');
+    // The viewer id buys a {id: 似てる度} table computed from the 448-dim
+    // vectors, so the orbit places people by the same number the sheet prints.
+    const query = state.me ? `?viewer=${encodeURIComponent(state.me.id)}` : '';
+    state.map = await api(`/api/map${query}`);
     return true;
   } catch {
     return false;
@@ -574,8 +577,13 @@ function render() {
 // ---- orbit -----------------------------------------------------------------
 //
 // Angle is the true bearing from you to the other person on the full map.
-// Radius is their distance expressed as a percentile against the seed corpus,
-// so a ring genuinely means "closer than N% of pairs" and is labelled as such.
+// Radius is 似てる度 inverted, so the innermost person is the one the profile
+// sheet also calls the closest. That number comes from the 448-dim vectors on
+// the server, not from the two map coordinates - the map is a 2-D shadow of
+// that space and loses most of the neighbourhood structure on the way down, so
+// reading closeness off it put unrelated people in the middle of this view.
+// Older servers send no similarity table; then the radius falls back to the
+// percentile of the map distance, which is what this view used to do.
 
 const RING_RANKS = [0.25, 0.5, 0.75];
 const SELF_SIZE = 56;
@@ -600,12 +608,20 @@ let orbitCache = { key: '', placed: [], size: 0 };
 
 function orbitLayout(others, quantiles) {
   const size = avatarSize(others.length);
-  const key = `${width}x${height}|${size}|${state.me.id}|${others.map((u) => u.id).join(',')}`;
+  // similarity is keyed on the viewer, so a switch of identity has to bust the
+  // cache even when the same people are on the map.
+  const similarity = state.map.similarity || null;
+  const key = `${width}x${height}|${size}|${state.me.id}|${similarity ? 'c' : 'd'}|${others.map((u) => u.id).join(',')}`;
   if (orbitCache.key === key) return orbitCache;
 
   const placed = others.map((user) => {
     const distance = distanceBetween(state.me, user);
-    const rank = Math.min(1, Math.max(0, percentileRank(distance, quantiles)));
+    // Radius is 似てる度 inverted: the server's cosine-based number when it is
+    // there, the map-distance percentile when it is not.
+    const percent = similarity ? similarity[user.id] : undefined;
+    const rank = typeof percent === 'number'
+      ? Math.min(1, Math.max(0, 1 - percent / 100))
+      : Math.min(1, Math.max(0, percentileRank(distance, quantiles)));
     return {
       user,
       distance,
@@ -643,7 +659,9 @@ function renderOrbit() {
   ctx.restore();
 
   // connectors to the three closest
-  const closest = [...placed].sort((a, b) => a.distance - b.distance).slice(0, 3);
+  // by radius, not by map distance, so the lines point at the three people the
+  // profile sheet would also call the closest.
+  const closest = [...placed].sort((a, b) => a.radius - b.radius).slice(0, 3);
   ctx.save();
   ctx.setLineDash([2, 5]);
   closest.forEach((item, index) => {
@@ -1395,7 +1413,12 @@ function renderSheet(person, isSelf) {
     const bar = document.createElement('div');
     bar.className = 'sim-bar';
     bar.innerHTML = '<div class="sim-fill" style="width:0"></div>';
-    body.append(sim, bar);
+    // Otherwise a high number next to somebody drawn on the far side of the
+    // map reads as a bug rather than as the two different things they are.
+    const note = document.createElement('div');
+    note.className = 'sim-note';
+    note.textContent = '地図の位置は全体を見渡すためのもの。似てる度は潰す前の448次元で測っています。';
+    body.append(sim, bar, note);
     requestAnimationFrame(() => {
       bar.querySelector('.sim-fill').style.width = `${person.similarity}%`;
     });

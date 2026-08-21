@@ -2,9 +2,19 @@
 
 Two questions the UI has to answer about any pair of people:
 
-  "How close are we?"  -> a percentage calibrated against the seed corpus, so
-                          it means "closer than N% of random pairs" rather than
-                          an unanchored pixel count.
+  "How close are we?"  -> the cosine between the two 448-dim vectors, mapped
+                          onto 0-100 against anchors measured on the seed
+                          corpus. NOT the distance on the map: the map is a
+                          2-D shadow of that space and this build's own gate
+                          records that only 34% of true neighbours survive the
+                          projection (meta.gates.generalization). Ranking by
+                          map distance put a different topic at the top for 3
+                          of 12 measured people; ranking by cosine got 12 of
+                          12. The map is a picture; similarity is measured
+                          before the squash.
+                          The old map-distance path is kept below and is used
+                          whenever a vector or the anchors are missing, so an
+                          older artifact or an older row still renders.
   "What do we share?"  -> the words both people actually used, ranked by how
                           rare those words are in the corpus. Rare words are
                           more interesting: two people who both said 電子工作
@@ -74,6 +84,80 @@ def distance_between(a, b):
     return float(math.hypot(a[0] - b[0], a[1] - b[1]))
 
 
+def as_vector(value):
+    """A stored `vec` as an array, or None if the row predates vectors / is empty."""
+    if value is None:
+        return None
+    vector = np.asarray(value, dtype=float)
+    if vector.ndim != 1 or vector.size == 0:
+        return None
+    return vector
+
+
+def cosine_between(a, b):
+    """Cosine of two stored vectors, or None if either is unusable.
+
+    Both sides are L2-normalised by build_hybrid_features, so this is a dot
+    product. The explicit norms cost nothing and keep the function honest if a
+    row was ever written by a different path.
+    """
+    left, right = as_vector(a), as_vector(b)
+    if left is None or right is None or left.shape != right.shape:
+        return None
+    scale = float(np.linalg.norm(left) * np.linalg.norm(right))
+    if scale == 0.0:
+        return None
+    return float(np.dot(left, right) / scale)
+
+
+def cosine_percent(cosine, anchors):
+    """0-100 from a cosine, against the two anchors measured on the seed corpus.
+
+    floor is the 5th percentile of random seed pairs and ceiling is the median
+    seed document's distance to its own nearest neighbour, so 0 reads as "no
+    more alike than two strangers" and 100 as "as close as neighbours in the
+    corpus". Linear in between, which keeps the number monotone in the cosine
+    and therefore never reorders the neighbour list.
+    """
+    floor = float(anchors["cosine_floor"])
+    ceiling = float(anchors["cosine_ceiling"])
+    span = ceiling - floor
+    if span <= 0:  # a broken artifact must not divide by zero
+        return 0
+    position = (float(cosine) - floor) / span
+    return int(round(100.0 * min(1.0, max(0.0, position))))
+
+
+def _cosine_scores(origin_vector, others, anchors):
+    """[(cosine, entry)] if every side has a vector, else None.
+
+    All or nothing on purpose: a list where some percentages came from the
+    cosine and others from the map distance would be two different scales
+    printed in the same column.
+    """
+    if anchors is None or as_vector(origin_vector) is None:
+        return None
+    scored = []
+    for other in others:
+        cosine = cosine_between(origin_vector, other.get("vec"))
+        if cosine is None:
+            return None
+        scored.append((cosine, other))
+    return scored
+
+
+def _annotated(distance, cosine, other, anchors, quantiles):
+    return {
+        **{key: value for key, value in other.items() if key != "vec"},
+        "distance": round(distance, 2),
+        "similarity": (
+            cosine_percent(cosine, anchors)
+            if cosine is not None
+            else similarity_percent(distance, quantiles)
+        ),
+    }
+
+
 def build_idf(token_lists):
     """Smoothed IDF over the seed corpus, used to rank shared words."""
     total = len(token_lists)
@@ -122,39 +206,56 @@ def describe_relation(similarity, shared):
         return "同じ語は使っていませんが、意味は近いです。"
     if similarity >= 40:
         return "同じ語はまだありません。"
-    return "地図の反対側の人です。"
+    return "重なるところは見つかりませんでした。"
 
 
-def rank_neighbors(origin, others, quantiles, limit=3):
+def rank_neighbors(origin, others, quantiles, limit=3, origin_vector=None, anchors=None):
     """Closest `limit` entries to `origin`, annotated with similarity.
 
-    `origin` and each entry of `others` are dicts with x / y keys.
+    `origin` and each entry of `others` are dicts with x / y keys. When every
+    entry carries a `vec` and `anchors` is present, both the ordering and the
+    percentage come from the 448-dim cosine; otherwise both fall back to the
+    map distance. Ordering and percentage always come from the same measure, so
+    the top of the list is always the largest number in it.
     """
-    scored = []
-    for other in others:
-        distance = distance_between((origin["x"], origin["y"]), (other["x"], other["y"]))
-        scored.append((distance, other))
-    scored.sort(key=lambda item: item[0])
+    scored = _cosine_scores(origin_vector, others, anchors)
+    if scored is not None:
+        scored.sort(key=lambda item: -item[0])
+        return [
+            _annotated(
+                distance_between((origin["x"], origin["y"]), (other["x"], other["y"])),
+                cosine, other, anchors, quantiles,
+            )
+            for cosine, other in scored[:limit]
+        ]
+
+    by_distance = sorted(
+        (
+            (distance_between((origin["x"], origin["y"]), (other["x"], other["y"])), other)
+            for other in others
+        ),
+        key=lambda item: item[0],
+    )
     return [
-        {
-            **other,
-            "distance": round(distance, 2),
-            "similarity": similarity_percent(distance, quantiles),
-        }
-        for distance, other in scored[:limit]
+        _annotated(distance, None, other, anchors, quantiles)
+        for distance, other in by_distance[:limit]
     ]
 
 
-def farthest_neighbor(origin, others, quantiles):
+def farthest_neighbor(origin, others, quantiles, origin_vector=None, anchors=None):
     if not others:
         return None
-    scored = [
-        (distance_between((origin["x"], origin["y"]), (other["x"], other["y"])), other)
-        for other in others
-    ]
-    distance, other = max(scored, key=lambda item: item[0])
-    return {
-        **other,
-        "distance": round(distance, 2),
-        "similarity": similarity_percent(distance, quantiles),
-    }
+    scored = _cosine_scores(origin_vector, others, anchors)
+    if scored is not None:
+        cosine, other = min(scored, key=lambda item: item[0])
+        distance = distance_between((origin["x"], origin["y"]), (other["x"], other["y"]))
+        return _annotated(distance, cosine, other, anchors, quantiles)
+
+    distance, other = max(
+        (
+            (distance_between((origin["x"], origin["y"]), (other["x"], other["y"])), other)
+            for other in others
+        ),
+        key=lambda item: item[0],
+    )
+    return _annotated(distance, None, other, anchors, quantiles)

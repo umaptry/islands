@@ -44,6 +44,14 @@ URL を知っていれば誰でも参加できます（アカウント不要・�
 これは `artifacts/` の一部として凍結されています。どの領域に入るかは
 `assign_cluster` が凍結レイアウトに対して決めるので、あとから動きません。
 
+**似てる度は地図の距離ではありません。** 地図は448次元を2次元まで潰した絵で、
+潰す過程でご近所関係の大半が失われます（このビルドでは本来の近傍の34%しか残らず、
+`artifacts/seed_map.json` の `meta.gates.generalization` に記録されています）。
+そこで似てる度と「近い人」の並び順は、潰す前の448次元ベクトルのコサインから
+計算しています。0〜100への変換に使う2つの基準値は
+`artifacts/seed_map.json` の `cosine_anchors`（シード1,000件から測定）です。
+このキーが無い古い artifacts では自動的に旧来の2D距離計算に戻ります。
+
 **島の名前は投稿から作ります。** 領域ごとに、そこにいる投稿の名詞を集めて
 「何人が使ったか × コーパスでの珍しさ」で上位2語を選びます。誰も投稿していない
 領域には名前が無く、地図にも出ません。地図は名前のない海から始まり、人が来る
@@ -99,8 +107,16 @@ python scripts/build_seed_map.py --relabel  # 島の分け方と名前だけ付�
 python scripts/rotate_map.py                # 地図を90度回して縦長にする（一瞬）
 ```
 
-どちらも保存済みの座標をそのまま使うため、**既存の点は1pxも動きません**
-（`rotate_map.py` は書き込む前に全ペア距離が不変であることを検証します）。
+```bash
+python scripts/build_similarity_calibration.py --dry-run  # 数値だけ見る
+python scripts/build_similarity_calibration.py            # 似てる度の目盛りを校正（3分）
+```
+
+どれも保存済みの座標をそのまま使うため、**既存の点は1pxも動きません**
+（`rotate_map.py` は書き込む前に全ペア距離が不変であることを検証し、
+`build_similarity_calibration.py` は `seed` / `scale_bounds` / `islands` /
+`meta` / `distance_quantiles` / `idf` が1文字も変わらないことを確認してから
+書き込みます）。
 
 島名を直したいときは、まず `core/stopwords.py` の `LABEL_ONLY_STOP_WORDS` /
 `DISPLAY_STOP_WORDS` を調整してから `--relabel` を実行してください。この2つは
@@ -273,13 +289,14 @@ core/
   encoder.py            凍結エンコーダの numpy 実装 + .npz の読み書き
   clustering.py         島の選定と特徴語ペアの命名
   geometry.py           等方スケール / 完全重複の分離
-  similarity.py         距離→似てる度% / 共通キーワード
+  similarity.py         448次元コサイン→似てる度% / 共通キーワード
   store.py              Supabase（PostgREST）とインメモリの2実装
   stopwords.py          自己紹介ドメイン向けストップワード
 scripts/
   seed_corpus.jsonl     シード1,000件
   validate_corpus.py    ビルド前の検査
   build_seed_map.py     凍結マップ構築（1回だけ実行）/ --relabel / --verify
+  build_similarity_calibration.py  似てる度の目盛りを校正（座標は動かない・再実行可）
   rotate_map.py         既存マップを90度回転（縦画面向け・座標の距離は不変）
   train_parametric.py   torch を使う唯一のモジュール（学習専用）
 artifacts/              seed_map.json / vectorizers.pkl / encoder.npz

@@ -248,3 +248,142 @@ def test_join_reports_neighbours_with_shared_words(client):
         assert "shared" in neighbour
     similarities = [neighbour["similarity"] for neighbour in payload["neighbors"]]
     assert similarities == sorted(similarities, reverse=True)
+
+
+# --------------------------------------------------------------------------
+# 似てる度 comes from the 448-dim cosine, not from the 2-D map distance
+# --------------------------------------------------------------------------
+
+# Four people, two topics. The point of the split is that the pair inside each
+# topic must beat every pair across topics - which is exactly what ranking by
+# map distance failed to do.
+CAMERA_A = "週末はフィルムカメラを持って街を歩いています。写真を撮るのが好きで、暗室で現像するのも楽しいです。"
+CAMERA_B = "写真が趣味です。一眼レフで風景写真を撮りに山へ出かけます。カメラの機材を集めるのも好きです。"
+COOK_A = "料理をするのが好きです。週末は家族のためにパンを焼いたりカレーを煮込んだりしています。"
+COOK_B = "毎日自炊しています。和食が得意で、出汁からきちんと取った味噌汁を作るのが好きです。"
+
+
+def test_artifacts_carry_the_cosine_anchors(loaded):
+    """Without these the whole cosine path silently stays switched off."""
+    anchors = loaded["cosine_anchors"]
+    assert anchors is not None, "run scripts/build_similarity_calibration.py"
+    assert 0.0 < anchors["cosine_floor"] < anchors["cosine_ceiling"] < 1.0
+
+
+def test_cosine_percent_is_calibrated_and_monotone(loaded):
+    from core.similarity import cosine_percent
+
+    anchors = loaded["cosine_anchors"]
+    assert cosine_percent(anchors["cosine_floor"], anchors) == 0
+    assert cosine_percent(anchors["cosine_ceiling"], anchors) == 100
+    assert cosine_percent(anchors["cosine_floor"] - 0.5, anchors) == 0, "must clip, not go negative"
+    assert cosine_percent(1.0, anchors) == 100
+    steps = np.linspace(anchors["cosine_floor"], anchors["cosine_ceiling"], 25)
+    values = [cosine_percent(step, anchors) for step in steps]
+    assert values == sorted(values)
+
+
+def test_same_topic_outranks_every_cross_topic_pair(loaded):
+    """The regression this whole change exists for.
+
+    Ranking on the 2-D coordinates put a different topic at the top for a third
+    of the people we measured. The 448-dim cosine has to keep the two camera
+    people, and the two cooking people, ahead of any camera/cooking pair.
+    """
+    import app as application
+    from core.similarity import cosine_between, cosine_percent
+
+    anchors = loaded["cosine_anchors"]
+    vectors = {
+        name: application.project(text)[4]
+        for name, text in (
+            ("camera_a", CAMERA_A), ("camera_b", CAMERA_B),
+            ("cook_a", COOK_A), ("cook_b", COOK_B),
+        )
+    }
+
+    def percent(left, right):
+        return cosine_percent(cosine_between(vectors[left], vectors[right]), anchors)
+
+    within = [percent("camera_a", "camera_b"), percent("cook_a", "cook_b")]
+    across = [
+        percent("camera_a", "cook_a"), percent("camera_a", "cook_b"),
+        percent("camera_b", "cook_a"), percent("camera_b", "cook_b"),
+    ]
+    assert min(within) > max(across), f"within={within} across={across}"
+
+
+def test_neighbours_are_ordered_by_cosine_not_by_map_distance(loaded):
+    from core.similarity import rank_neighbors
+
+    import app as application
+
+    anchors = loaded["cosine_anchors"]
+    people = []
+    for index, (name, text) in enumerate((
+        ("camera_b", CAMERA_B), ("cook_a", COOK_A), ("cook_b", COOK_B),
+    )):
+        x, y, cluster_id, _terms, vector = application.project(text)
+        people.append({"id": name, "x": x, "y": y, "cluster_id": cluster_id, "vec": vector})
+
+    x, y, _cluster, _terms, mine = application.project(CAMERA_A)
+    ranked = rank_neighbors(
+        {"x": x, "y": y}, people, loaded["quantiles"], limit=3,
+        origin_vector=mine, anchors=anchors,
+    )
+    assert ranked[0]["id"] == "camera_b"
+    assert [item["similarity"] for item in ranked] == sorted(
+        (item["similarity"] for item in ranked), reverse=True
+    )
+    assert all("vec" not in item for item in ranked), "vectors must not ride along"
+
+
+def test_similarity_falls_back_to_map_distance(loaded):
+    """No anchors, or a row without a vector, must degrade rather than raise."""
+    from core.similarity import cosine_between, farthest_neighbor, rank_neighbors
+
+    import app as application
+
+    x, y, cluster_id, _terms, mine = application.project(CAMERA_A)
+    other_x, other_y, other_cluster, _t, other_vec = application.project(COOK_A)
+    origin = {"x": x, "y": y}
+
+    for entry in (
+        {"id": "no-vec", "x": other_x, "y": other_y, "cluster_id": other_cluster, "vec": []},
+        {"id": "null-vec", "x": other_x, "y": other_y, "cluster_id": other_cluster, "vec": None},
+        {"id": "wrong-size", "x": other_x, "y": other_y, "cluster_id": other_cluster, "vec": [0.1, 0.2]},
+    ):
+        for anchors in (loaded["cosine_anchors"], None):
+            ranked = rank_neighbors(
+                origin, [entry], loaded["quantiles"], origin_vector=mine, anchors=anchors,
+            )
+            assert 0 <= ranked[0]["similarity"] <= 100
+            assert farthest_neighbor(
+                origin, [entry], loaded["quantiles"], origin_vector=mine, anchors=anchors,
+            ) is not None
+
+    assert cosine_between(mine, []) is None
+    assert cosine_between(None, other_vec) is None
+    assert rank_neighbors(origin, [], loaded["quantiles"]) == []
+
+
+def test_map_similarity_matches_the_profile_sheet(client):
+    """The orbit and the bottom sheet must not print two different numbers."""
+    me = client.post("/api/join", json={
+        "icon_id": "7", "name": "カメラ", "text": CAMERA_A,
+    }).json()
+    them = client.post("/api/join", json={
+        "icon_id": "8", "name": "料理", "text": COOK_A,
+    }).json()
+
+    payload = client.get(f"/api/map?viewer={me['id']}").json()
+    assert "similarity" in payload
+    assert me["id"] not in payload["similarity"], "your own row is not a neighbour"
+
+    sheet = client.get(f"/api/user/{them['id']}?viewer={me['id']}").json()
+    assert payload["similarity"][them["id"]] == sheet["similarity"]
+
+    # and no viewer means no table, which is what keeps an old client working
+    assert "similarity" not in client.get("/api/map").json()
+    for user in payload["users"]:
+        assert "vec" not in user
