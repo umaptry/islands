@@ -275,3 +275,116 @@ def test_error_message_does_not_leak_the_response_body(flaky, monkeypatch):
     with pytest.raises(store_module.StoreError) as caught:
         store.list_public()
     assert "503" not in str(caught.value)
+
+
+# ---------------------------------------------------------------- likes
+#
+# The duplicate case reached production. PostgREST builds ON CONFLICT against
+# the PRIMARY KEY unless the request names the columns, and likes collide on
+# unique(from_id, to_id) instead - so a second tap on the same person came back
+# 409 and the tapper was told the like could not be sent.
+#
+# MemoryStore keys likes by the pair, so it could never reproduce this. The fake
+# below models PostgREST's actual contract rather than our convenient one.
+
+LIKES = {}
+
+
+class FakeLikesPostgrest(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def _send(self, status, payload=None):
+        body = b"" if payload is None else json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        query = parse_qs(urlparse(self.path).query)
+        record = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+        key = (record["from_id"], record["to_id"])
+        prefer = self.headers.get("Prefer", "")
+
+        if key in LIKES:
+            names_the_pair = query.get("on_conflict", [""])[0] == "from_id,to_id"
+            if names_the_pair and "ignore-duplicates" in prefer:
+                return self._send(201, [])       # swallowed, nothing created
+            return self._send(409, {"code": "23505", "message": "duplicate key"})
+
+        LIKES[key] = "2026-01-01T00:00:00Z"
+        row = {"id": str(uuid.uuid4()), "from_id": key[0], "to_id": key[1],
+               "created_at": LIKES[key]}
+        self._send(201, [row] if "return=representation" in prefer else None)
+
+    def do_GET(self):
+        query = parse_qs(urlparse(self.path).query)
+        rows = [{"from_id": a, "to_id": b, "created_at": t} for (a, b), t in LIKES.items()]
+        for key, values in query.items():
+            if key in {"select", "order", "limit"}:
+                continue
+            for value in values:
+                if value.startswith("eq."):
+                    rows = [row for row in rows if str(row.get(key)) == value[3:]]
+        columns = query.get("select", ["*"])[0].split(",")
+        self._send(200, [{k: v for k, v in row.items() if k in columns} for row in rows])
+
+
+@pytest.fixture
+def likes_store():
+    LIKES.clear()
+    server = HTTPServer(("127.0.0.1", 0), FakeLikesPostgrest)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    yield SupabaseStore(f"http://{host}:{port}", SERVICE_KEY)
+    server.shutdown()
+
+
+def test_first_like_is_created(likes_store):
+    assert likes_store.add_like("a", "b") is True
+
+
+def test_liking_the_same_person_twice_is_not_an_error(likes_store):
+    """The demo behaviour: tapping again says "already liked", never fails."""
+    assert likes_store.add_like("a", "b") is True
+    assert likes_store.add_like("a", "b") is False
+
+
+def test_duplicate_survives_even_without_the_on_conflict_hint(likes_store, monkeypatch):
+    """If the hint is ever lost, a 409 must still read as "already liked"."""
+    import core.store as store_module
+
+    monkeypatch.setattr(store_module, "RETRY_BACKOFF", 0.01)
+    original = likes_store._send
+
+    def strip_hint(method, **kwargs):
+        if kwargs.get("params", {}).get("on_conflict"):
+            kwargs["params"] = {}
+        return original(method, **kwargs)
+
+    likes_store.add_like("a", "b")
+    monkeypatch.setattr(likes_store, "_send", strip_hint)
+    assert likes_store.add_like("a", "b") is False
+
+
+def test_likes_received_and_given(likes_store):
+    likes_store.add_like("b", "a")
+    likes_store.add_like("c", "a")
+    likes_store.add_like("a", "c")
+
+    received = likes_store.likes_received("a")
+    assert sorted(row["from_id"] for row in received) == ["b", "c"]
+    assert likes_store.likes_given("a") == ["c"]
+    assert likes_store.like_counts() == {"a": 2, "c": 1}
+
+
+def test_memory_and_supabase_agree_on_the_like_contract(likes_store):
+    memory = MemoryStore()
+    person = memory.insert(sample("うけとる"))
+    assert memory.add_like("someone", person["id"]) is True
+    assert memory.add_like("someone", person["id"]) is False
+    assert likes_store.add_like("someone", person["id"]) is True
+    assert likes_store.add_like("someone", person["id"]) is False
