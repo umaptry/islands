@@ -43,6 +43,7 @@ from core.similarity import (
     distance_between,
     farthest_neighbor,
     rank_neighbors,
+    resolve_scale,
     shared_keywords,
     similarity_percent,
 )
@@ -133,10 +134,15 @@ def load_artifacts():
         "seed_clusters": seed[:, 2].astype(int),
         "islands": seed_map["islands"],
         "quantiles": seed_map["distance_quantiles"],
-        # Absent in artifacts built before similarity moved off the map
-        # distance. None means every similarity path falls back to the 2-D
-        # measure, which is the old behaviour, so an old artifact still boots.
-        "cosine_anchors": seed_map.get("cosine_anchors"),
+        # Resolved once, here, rather than at each call site. Absent in
+        # artifacts built before similarity moved off the map distance; absent
+        # too when the ruler and the space disagree. Either way None means every
+        # similarity path falls back to the 2-D measure, which is the old
+        # behaviour, so an old artifact still boots.
+        **dict(zip(
+            ("cosine_anchors", "cosine_centroid"),
+            resolve_scale(seed_map.get("cosine_anchors"), seed_map.get("cosine_centroid")),
+        )),
         "idf": seed_map["idf"],
     }
 
@@ -352,7 +358,7 @@ def viewer_similarity(viewer_id, users):
     for user in users:
         if user["id"] == viewer_id:
             continue
-        cosine = cosine_between(mine, vectors.get(user["id"]))
+        cosine = cosine_between(mine, vectors.get(user["id"]), state.get("cosine_centroid"))
         if cosine is None:
             return None
         similarity[user["id"]] = cosine_percent(cosine, anchors)
@@ -527,12 +533,14 @@ def join(payload: JoinRequest, request: Request):
     # list_full already carries every other person's vec, so ranking by the
     # 448-dim cosine costs no extra query.
     anchors = state.get("cosine_anchors")
+    centroid = state.get("cosine_centroid")
     neighbors = rank_neighbors(
         origin, others, state["quantiles"], limit=NEIGHBOR_COUNT,
-        origin_vector=vector, anchors=anchors,
+        origin_vector=vector, anchors=anchors, centroid=centroid,
     )
     farthest = farthest_neighbor(
         origin, others, state["quantiles"], origin_vector=vector, anchors=anchors,
+        centroid=centroid,
     )
 
     return {
@@ -585,7 +593,10 @@ def get_user(profile_id: str, viewer: str = ""):
             # Cosine when both sides have a vector, map distance otherwise. The
             # fallback is what keeps a row written before vectors existed, or a
             # store that dropped the column, from 500ing a profile open.
-            cosine = cosine_between(me.get("vec"), target.get("vec")) if want_vec else None
+            cosine = (
+                cosine_between(me.get("vec"), target.get("vec"), state.get("cosine_centroid"))
+                if want_vec else None
+            )
             similarity = (
                 cosine_percent(cosine, anchors)
                 if cosine is not None

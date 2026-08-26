@@ -26,10 +26,27 @@ import math
 
 import numpy as np
 
+from core.config import DENSE_WEIGHT, FEATURE_CONFIG, SPARSE_WEIGHT
 from core.stopwords import DISPLAY_STOP_WORDS
 
 MAX_SHARED_KEYWORDS = 5
 QUANTILE_STEPS = 101  # p0..p100 inclusive
+
+# The number of trailing dimensions that belong to the sparse block. Derived, not
+# typed in, so it cannot drift away from the vector the features module builds.
+SPARSE_DIM = FEATURE_CONFIG["svd_components"]
+
+# The marker on cosine_anchors that says "these anchors were measured in the
+# centred space". Anchors and centroid are written by the same run of
+# scripts/build_similarity_calibration.py, so this is never half-true - but it is
+# what stops an older seed_map.json from being read on the new scale.
+CENTERED_SPACE = "centered-v2"
+
+# A text sitting exactly on the seed centroid has no residual direction left to
+# normalise. It cannot happen with real profiles (the closest of the 1,000 seeds
+# is 0.283 away) but dividing by it would produce noise amplified to unit length,
+# so such a vector is compared uncentred instead.
+MIN_RESIDUAL_NORM = 1e-6
 
 # Japanese compounds mean two people can write about the same thing and share no
 # identical token: 写真部 vs 写真, フィルムカメラ vs カメラ. Matching a shorter term
@@ -94,16 +111,71 @@ def as_vector(value):
     return vector
 
 
-def cosine_between(a, b):
+def _unit(vector):
+    norm = float(np.linalg.norm(vector))
+    return None if norm == 0.0 else vector / norm
+
+
+def similarity_view(vector, centroid):
+    """A stored vector re-expressed in the space 似てる度 is measured in.
+
+    multilingual-e5-small is anisotropic: measured over all 499,500 seed pairs,
+    90% of the dense block's cosines fall between 0.847 and 0.905 - a cone 0.058
+    wide. Almost nothing is distinguished there, so the 64-dim sparse block ended
+    up deciding about 72% of the spread in 似てる度 despite keeping only 13% of
+    the TF-IDF variance. The visible symptom was that two people who wrote about
+    the same thing in different words (フィルムカメラ / 写真部) scored BELOW two
+    people who merely phrased themselves alike.
+
+    Subtracting the seed centroid from the dense block removes the shared
+    direction that crowding is made of. Measured on 20 topics x 5 people, that
+    takes AUC from 0.812 to 0.890 and the same/different gap from 0.047 to 0.175.
+
+    The stored vector is normalize(hstack([dense * 0.65, sparse * 0.35])), so
+    re-normalising each half recovers the original blocks exactly (measured
+    error 1.6e-08). Nothing is re-encoded and no stored row changes: this is a
+    reinterpretation at comparison time, and the map coordinates never see it.
+
+    Returns the vector unchanged whenever it cannot be split confidently, so an
+    unexpected width degrades to the old behaviour instead of raising.
+    """
+    values = as_vector(vector)
+    if values is None or centroid is None:
+        return values
+
+    mean = as_vector(centroid.get("dense_mean"))
+    if mean is None or values.size != mean.size + SPARSE_DIM:
+        return values
+
+    dense = _unit(values[:-SPARSE_DIM])
+    sparse = _unit(values[-SPARSE_DIM:])
+    if dense is None or sparse is None:
+        return values
+
+    residual = _unit(dense - mean)
+    if residual is None or np.linalg.norm(dense - mean) < MIN_RESIDUAL_NORM:
+        return values
+    return _unit(np.hstack([residual * DENSE_WEIGHT, sparse * SPARSE_WEIGHT]))
+
+
+def cosine_between(a, b, centroid=None):
     """Cosine of two stored vectors, or None if either is unusable.
 
     Both sides are L2-normalised by build_hybrid_features, so this is a dot
     product. The explicit norms cost nothing and keep the function honest if a
     row was ever written by a different path.
+
+    `centroid` moves both sides into the centred space first. It is applied to
+    both or to neither: a cosine measured with one side centred would not be a
+    cosine of anything.
     """
     left, right = as_vector(a), as_vector(b)
     if left is None or right is None or left.shape != right.shape:
         return None
+    if centroid is not None:
+        centred_left, centred_right = similarity_view(a, centroid), similarity_view(b, centroid)
+        if centred_left.shape == centred_right.shape:
+            left, right = centred_left, centred_right
     scale = float(np.linalg.norm(left) * np.linalg.norm(right))
     if scale == 0.0:
         return None
@@ -128,7 +200,33 @@ def cosine_percent(cosine, anchors):
     return int(round(100.0 * min(1.0, max(0.0, position))))
 
 
-def _cosine_scores(origin_vector, others, anchors):
+def resolve_scale(anchors, centroid):
+    """(anchors, centroid) to serve with, given what an artifact happens to carry.
+
+    The space and the 0-100 ruler have to agree, because disagreeing is silent
+    rather than loud: a centred cosine read against uncentred anchors just prints
+    a plausible wrong number. Both are written by the same run of
+    scripts/build_similarity_calibration.py, which stamps the space onto the
+    anchors, so there are only three honest states:
+
+      stamped + centroid   -> compare centred, on the centred ruler
+      no stamp, no centroid-> compare raw, on the old ruler (older artifacts)
+      anything else        -> the two halves disagree. Drop the cosine path and
+                              let similarity fall back to the map distance,
+                              which at least measures itself.
+    """
+    if not anchors:
+        return None, None
+    stamped = anchors.get("space") == CENTERED_SPACE
+    usable = bool(centroid) and as_vector(centroid.get("dense_mean")) is not None
+    if stamped and usable:
+        return anchors, centroid
+    if not stamped and not centroid:
+        return anchors, None
+    return None, None
+
+
+def _cosine_scores(origin_vector, others, anchors, centroid=None):
     """[(cosine, entry)] if every side has a vector, else None.
 
     All or nothing on purpose: a list where some percentages came from the
@@ -139,7 +237,7 @@ def _cosine_scores(origin_vector, others, anchors):
         return None
     scored = []
     for other in others:
-        cosine = cosine_between(origin_vector, other.get("vec"))
+        cosine = cosine_between(origin_vector, other.get("vec"), centroid)
         if cosine is None:
             return None
         scored.append((cosine, other))
@@ -209,7 +307,8 @@ def describe_relation(similarity, shared):
     return "重なるところは見つかりませんでした。"
 
 
-def rank_neighbors(origin, others, quantiles, limit=3, origin_vector=None, anchors=None):
+def rank_neighbors(origin, others, quantiles, limit=3, origin_vector=None, anchors=None,
+                   centroid=None):
     """Closest `limit` entries to `origin`, annotated with similarity.
 
     `origin` and each entry of `others` are dicts with x / y keys. When every
@@ -218,7 +317,7 @@ def rank_neighbors(origin, others, quantiles, limit=3, origin_vector=None, ancho
     map distance. Ordering and percentage always come from the same measure, so
     the top of the list is always the largest number in it.
     """
-    scored = _cosine_scores(origin_vector, others, anchors)
+    scored = _cosine_scores(origin_vector, others, anchors, centroid)
     if scored is not None:
         scored.sort(key=lambda item: -item[0])
         return [
@@ -242,10 +341,11 @@ def rank_neighbors(origin, others, quantiles, limit=3, origin_vector=None, ancho
     ]
 
 
-def farthest_neighbor(origin, others, quantiles, origin_vector=None, anchors=None):
+def farthest_neighbor(origin, others, quantiles, origin_vector=None, anchors=None,
+                      centroid=None):
     if not others:
         return None
-    scored = _cosine_scores(origin_vector, others, anchors)
+    scored = _cosine_scores(origin_vector, others, anchors, centroid)
     if scored is not None:
         cosine, other = min(scored, key=lambda item: item[0])
         distance = distance_between((origin["x"], origin["y"]), (other["x"], other["y"]))

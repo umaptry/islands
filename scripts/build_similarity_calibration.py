@@ -6,12 +6,18 @@
 Unlike build_seed_map.py this script trains NOTHING and moves NO coordinate. It
 re-encodes the seed corpus with the vectorizers that are already shipped
 (fit_sparse=False, exactly as serving does), measures the distribution of cosine
-similarity over all seed pairs, and adds two anchors to seed_map.json:
+similarity over all seed pairs, and adds three keys to seed_map.json:
 
+    cosine_centroid the mean direction of the seed corpus's dense block, which
+                    似てる度 subtracts before comparing (see `centre` below)
     cosine_floor    a pair this far apart is as unremarkable as the 5th
                     percentile of random seed pairs      -> 似てる度 0
     cosine_ceiling  a pair this close is as close as a typical seed document
                     is to its own nearest neighbour      -> 似てる度 100
+
+The anchors are stamped with the space they were measured in, and core.similarity
+only centres when it sees that stamp, so the ruler and the space cannot come
+apart across artifact versions.
 
 Every other key in seed_map.json is copied through untouched. Verified: the
 features rebuilt here reproduce the shipped seed coordinates to within 0.005px,
@@ -40,8 +46,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_seed_map as build  # noqa: E402
 
+from core.config import DENSE_WEIGHT, SPARSE_WEIGHT  # noqa: E402
 from core.features import build_hybrid_features  # noqa: E402
-from core.similarity import QUANTILE_STEPS, cosine_percent  # noqa: E402
+from core.similarity import (  # noqa: E402
+    CENTERED_SPACE,
+    QUANTILE_STEPS,
+    SPARSE_DIM,
+    cosine_percent,
+)
 
 # The anchors, as percentiles of the measured seed distribution. Chosen so a
 # pair of strangers reads around 18% rather than 0%: a flat 0 next to somebody's
@@ -72,6 +84,39 @@ def seed_features():
     return features
 
 
+def centre(features):
+    """The seed centroid, and the features re-expressed relative to it.
+
+    multilingual-e5-small is anisotropic: 90% of the dense block's pairwise
+    cosines land between 0.847 and 0.905, a cone 0.058 wide. Nothing is
+    distinguished in there, which left the 64-dim sparse block deciding roughly
+    72% of the spread in 似てる度 while keeping only 13% of the TF-IDF variance.
+    Subtracting the centroid removes the shared direction the crowding is made
+    of and reopens the scale (usable range 0.231 -> 0.574).
+
+    This moves NO coordinate. The map is drawn from the uncentred vector by a
+    frozen encoder and never sees this function; only 似てる度 does.
+    """
+    dense = normalise(features[:, :-SPARSE_DIM])
+    sparse = normalise(features[:, -SPARSE_DIM:])
+    dense_mean = dense.mean(axis=0)
+
+    residual = normalise(dense - dense_mean)
+    centred = normalise(np.hstack([residual * DENSE_WEIGHT, sparse * SPARSE_WEIGHT]))
+    centroid = {
+        "dense_mean": [round(float(value), 8) for value in dense_mean],
+        "dense_dim": int(dense.shape[1]),
+        "sparse_dim": int(SPARSE_DIM),
+        "seed_count": int(len(features)),
+    }
+    return centroid, centred
+
+
+def normalise(matrix):
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    return matrix / np.where(norms == 0.0, 1.0, norms)
+
+
 def measure(features):
     """Anchors plus the full quantile table, from every seed pair."""
     gram = features @ features.T
@@ -87,6 +132,10 @@ def measure(features):
         "floor_percentile": FLOOR_PERCENTILE,
         "ceiling_percentile": CEILING_PERCENTILE,
         "pair_count": int(len(pairs)),
+        # Says which space these two numbers were measured in. core.similarity
+        # only centres when it sees this, so an artifact can never end up
+        # reading a centred cosine off an uncentred ruler.
+        "space": CENTERED_SPACE,
     }
     quantiles = [
         round(float(value), 6)
@@ -118,7 +167,7 @@ def report(anchors, quantiles, pairs, nearest):
 FROZEN_KEYS = ("meta", "scale_bounds", "islands", "seed", "distance_quantiles", "idf")
 
 
-def write(anchors, quantiles):
+def write(anchors, quantiles, centroid):
     with open(build.SEED_MAP_JSON, encoding="utf-8") as handle:
         payload = json.load(handle)
 
@@ -126,6 +175,7 @@ def write(anchors, quantiles):
               for key in FROZEN_KEYS}
     payload["cosine_anchors"] = anchors
     payload["cosine_quantiles"] = quantiles
+    payload["cosine_centroid"] = centroid
     after = {key: json.dumps(payload.get(key), ensure_ascii=False, sort_keys=True)
              for key in FROZEN_KEYS}
     changed = [key for key in FROZEN_KEYS if before[key] != after[key]]
@@ -136,7 +186,8 @@ def write(anchors, quantiles):
         build.SEED_MAP_JSON,
         lambda handle: json.dump(payload, handle, ensure_ascii=False, separators=(",", ":")),
     )
-    print(f"      {build.SEED_MAP_JSON.name} に cosine_anchors / cosine_quantiles を追記しました")
+    print(f"      {build.SEED_MAP_JSON.name} に cosine_anchors / cosine_quantiles / "
+          "cosine_centroid を追記しました")
     print("      地図側のキー（meta / scale_bounds / islands / seed / distance_quantiles / idf）は無変更です")
 
 
@@ -155,14 +206,15 @@ def main():
         print(f"[NG] artifacts がありません: {build.ARTIFACTS}")
         return 1
 
-    anchors, quantiles, pairs, nearest = measure(seed_features())
-    print("[3/3] 分布を測定しました")
+    centroid, centred = centre(seed_features())
+    anchors, quantiles, pairs, nearest = measure(centred)
+    print(f"[3/3] 分布を測定しました（シード{centroid['seed_count']}件の重心で中心化した空間）")
     report(anchors, quantiles, pairs, nearest)
 
     if args.dry_run:
         print("\n--dry-run のため書き込みません。")
         return 0
-    write(anchors, quantiles)
+    write(anchors, quantiles, centroid)
     return 0
 
 

@@ -267,7 +267,66 @@ def test_artifacts_carry_the_cosine_anchors(loaded):
     """Without these the whole cosine path silently stays switched off."""
     anchors = loaded["cosine_anchors"]
     assert anchors is not None, "run scripts/build_similarity_calibration.py"
-    assert 0.0 < anchors["cosine_floor"] < anchors["cosine_ceiling"] < 1.0
+    # The floor is NEGATIVE in the centred space: two unrelated people point in
+    # slightly opposite directions once the corpus-wide direction is removed.
+    assert -1.0 <= anchors["cosine_floor"] < anchors["cosine_ceiling"] <= 1.0
+
+
+def test_the_scale_and_the_space_are_stamped_together(loaded):
+    """The anchors and the centroid have to describe the same space.
+
+    A centred cosine read off an uncentred ruler would be silently wrong rather
+    than obviously broken, so serving only centres when the anchors say they
+    were measured that way.
+    """
+    from core.similarity import CENTERED_SPACE, resolve_scale
+
+    anchors = loaded["cosine_anchors"]
+    centroid = loaded["cosine_centroid"]
+    assert centroid is not None, "run scripts/build_similarity_calibration.py"
+    assert anchors["space"] == CENTERED_SPACE
+    assert len(centroid["dense_mean"]) == centroid["dense_dim"]
+
+    # The three honest states.
+    assert resolve_scale(anchors, centroid) == (anchors, centroid)
+    unstamped = {key: value for key, value in anchors.items() if key != "space"}
+    assert resolve_scale(unstamped, None) == (unstamped, None), "an old artifact still serves"
+    assert resolve_scale(None, None) == (None, None)
+
+    # A half-upgraded artifact must abandon the cosine path rather than read a
+    # centred cosine off an uncentred ruler, or the reverse. Both print a
+    # plausible wrong number instead of failing, which is why this is checked.
+    assert resolve_scale(anchors, None) == (None, None)
+    assert resolve_scale(anchors, {"dense_mean": []}) == (None, None)
+    assert resolve_scale(unstamped, centroid) == (None, None)
+
+
+def test_the_similarity_view_recovers_the_blocks_it_splits(loaded):
+    """The whole no-migration design rests on this being exact.
+
+    A stored vec is normalize(hstack([dense * 0.65, sparse * 0.35])). Centring
+    re-normalises each half to recover the original blocks, so if that recovery
+    drifts, every 似てる度 drifts with it.
+    """
+    import numpy as np
+
+    import app as application
+    from core.config import DENSE_WEIGHT, SPARSE_WEIGHT
+    from core.similarity import SPARSE_DIM, similarity_view
+
+    vector = application.project(CAMPING_A)[4]
+    dense = vector[:-SPARSE_DIM] / np.linalg.norm(vector[:-SPARSE_DIM])
+    sparse = vector[-SPARSE_DIM:] / np.linalg.norm(vector[-SPARSE_DIM:])
+    rebuilt = np.hstack([dense * DENSE_WEIGHT, sparse * SPARSE_WEIGHT])
+    rebuilt /= np.linalg.norm(rebuilt)
+    assert np.abs(rebuilt - vector).max() < 1e-6
+
+    centred = similarity_view(vector, loaded["cosine_centroid"])
+    assert centred.shape == vector.shape
+    assert abs(float(np.linalg.norm(centred)) - 1.0) < 1e-9
+    # An unexpected width must degrade to the old behaviour, not raise.
+    assert similarity_view([0.1, 0.2], loaded["cosine_centroid"]).size == 2
+    assert similarity_view(vector, None) is not None
 
 
 def test_cosine_percent_is_calibrated_and_monotone(loaded):
@@ -302,8 +361,12 @@ def test_same_topic_outranks_every_cross_topic_pair(loaded):
         )
     }
 
+    centroid = loaded["cosine_centroid"]
+
     def percent(left, right):
-        return cosine_percent(cosine_between(vectors[left], vectors[right]), anchors)
+        return cosine_percent(
+            cosine_between(vectors[left], vectors[right], centroid), anchors
+        )
 
     within = [percent("camera_a", "camera_b"), percent("cook_a", "cook_b")]
     across = [
@@ -329,7 +392,7 @@ def test_neighbours_are_ordered_by_cosine_not_by_map_distance(loaded):
     x, y, _cluster, _terms, mine = application.project(CAMERA_A)
     ranked = rank_neighbors(
         {"x": x, "y": y}, people, loaded["quantiles"], limit=3,
-        origin_vector=mine, anchors=anchors,
+        origin_vector=mine, anchors=anchors, centroid=loaded["cosine_centroid"],
     )
     assert ranked[0]["id"] == "camera_b"
     assert [item["similarity"] for item in ranked] == sorted(
@@ -354,13 +417,16 @@ def test_similarity_falls_back_to_map_distance(loaded):
         {"id": "wrong-size", "x": other_x, "y": other_y, "cluster_id": other_cluster, "vec": [0.1, 0.2]},
     ):
         for anchors in (loaded["cosine_anchors"], None):
-            ranked = rank_neighbors(
-                origin, [entry], loaded["quantiles"], origin_vector=mine, anchors=anchors,
-            )
-            assert 0 <= ranked[0]["similarity"] <= 100
-            assert farthest_neighbor(
-                origin, [entry], loaded["quantiles"], origin_vector=mine, anchors=anchors,
-            ) is not None
+            for centroid in (loaded["cosine_centroid"], None, {"dense_mean": [], "dense_dim": 0}):
+                ranked = rank_neighbors(
+                    origin, [entry], loaded["quantiles"], origin_vector=mine,
+                    anchors=anchors, centroid=centroid,
+                )
+                assert 0 <= ranked[0]["similarity"] <= 100
+                assert farthest_neighbor(
+                    origin, [entry], loaded["quantiles"], origin_vector=mine,
+                    anchors=anchors, centroid=centroid,
+                ) is not None
 
     assert cosine_between(mine, []) is None
     assert cosine_between(None, other_vec) is None
