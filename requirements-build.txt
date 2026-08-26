@@ -4,3 +4,7 @@
 -r requirements.txt
 torch==2.7.1
 umap-learn==0.5.5
+
+# scripts/benchmark_embeddings.py が Gemini / OpenAI の埋め込みを比較するときだけ使う。
+# serving には不要（requirements.txt には入れない）。
+google-genai==1.64.0
