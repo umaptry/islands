@@ -1,0 +1,40 @@
+/* エンジン切り替えデモの外枠だけ。アプリ側の style.css には一切触れていない。
+   .topbar は #main の中で position:absolute; top:0 なので、この分だけ下げる。 */
+
+.demobar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  background: #10202e;
+  color: #e6eef5;
+  font-family: var(--font, system-ui, sans-serif);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .08), 0 6px 20px -12px rgba(0, 0, 0, .8);
+  padding: 8px 12px 9px;
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.demobar-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.demobar-field > span {
+  font-size: 10px;
+  letter-spacing: .09em;
+  color: #8fa8bd;
+}
+.demobar-field select {
+  font: inherit;
+  font-size: 13px;
+  max-width: min(46vw, 340px);
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid #2c4356;
+  background: #17293a;
+  color: #e6eef5;
+}
+.demobar-field select:focus-visible { outline: 2px solid #6d97dd; outline-offset: 1px; }
+
+/* アプリの上端UIを、このバーのぶんだけ下げる。canvas はバーの下まで伸ばしたままにして
+   地図が欠けないようにする。 */
+#main .topbar { top: var(--demobar-h, 84px); }
+.island-badge { z-index: 6; }
+

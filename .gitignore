@@ -9,3 +9,6 @@ __pycache__/
 artifacts/benchmark_cache/
 artifacts/benchmark_results.json
 artifacts/map_views.json
+
+# エンジン切り替えデモの生成物。実ユーザーの投稿文を焼き込むので配布物には入れない。
+demo/

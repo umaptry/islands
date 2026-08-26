@@ -15,3 +15,5 @@ scripts/
 README.md
 requirements-build.txt
 supabase/
+demo/
+artifacts/benchmark_cache/

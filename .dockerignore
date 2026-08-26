@@ -6,3 +6,7 @@ tests/
 scripts/seed_corpus.jsonl
 
 .claude/
+
+# 開発用の生成物。demo/ には実ユーザーの投稿文が焼き込まれるのでイメージに入れない。
+demo/
+artifacts/benchmark_cache/
