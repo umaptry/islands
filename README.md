@@ -290,6 +290,7 @@ gcloud run deploy islands \
   --image "$IMAGE" \
   --region $REGION \
   --no-traffic --tag candidate \
+  --service-account "$SA" \
   --allow-unauthenticated \
   --memory 2Gi --cpu 1 \
   --max-instances 4 --concurrency 12 \
@@ -372,7 +373,11 @@ main へのプッシュで `.github/workflows/ci.yml` のテストが自動実�
 本番デプロイは、GCP/WIF/Cloud Run の初回セットアップ完了後に GitHub repository
 variable `DEPLOY_ENABLED=true` を設定した場合だけ続行されます。あわせて
 `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`,
-`CLOUD_RUN_REGION` を repository variables に設定してください。
+`CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT`, `CLOUD_RUN_REGION`, `SUPABASE_URL`,
+`SUPABASE_ANON_KEY` を repository variables に設定してください。
+`SUPABASE_SERVICE_KEY_VERSION` は Secret Manager の数値バージョンで、未設定時は
+`1` を使います。`SUPABASE_SERVICE_KEY` 自体は GitHub に保存せず、Cloud Run が
+Secret Manager の `supabase-service-key` を参照します。
 
 有効化後の流れ:
 
