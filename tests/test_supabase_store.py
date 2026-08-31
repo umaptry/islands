@@ -273,6 +273,24 @@ def store():
     server.shutdown()
 
 
+def test_current_secret_key_is_not_sent_as_a_bearer_token():
+    current = SupabaseStore("https://example.supabase.co", "sb_secret_example")
+    try:
+        assert current._headers["apikey"] == "sb_secret_example"
+        assert "Authorization" not in current._headers
+    finally:
+        current._client.close()
+
+
+def test_legacy_service_role_key_remains_a_bearer_token():
+    legacy = SupabaseStore("https://example.supabase.co", SERVICE_KEY)
+    try:
+        assert legacy._headers["apikey"] == SERVICE_KEY
+        assert legacy._headers["Authorization"] == f"Bearer {SERVICE_KEY}"
+    finally:
+        legacy._client.close()
+
+
 def account(store, name="てすと"):
     row = store.upsert_account(str(uuid.uuid4()), {"display_name": name, "icon_id": "3"})
     return row["id"]

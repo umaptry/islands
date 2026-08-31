@@ -2,8 +2,9 @@
 
 Two interchangeable backends behind one interface:
 
-  SupabaseStore  - the deployed app. PostgREST with the service_role key, held
-                   only by the server. Counts and notifications are maintained
+  SupabaseStore  - the deployed app. PostgREST with a Supabase secret key (or
+                   the legacy service_role key), held only by the server.
+                   Counts and notifications are maintained
                    by triggers in supabase/schema.sql, so writing a reaction
                    here is a single insert and nothing else.
   MemoryStore    - local development and tests. Nothing survives a restart, and
@@ -477,7 +478,7 @@ class MemoryStore:
 # ---------------------------------------------------------------------------
 
 class SupabaseStore:
-    """PostgREST client. Server-side only, with the service_role key."""
+    """PostgREST client. Server-side only, with an elevated API key."""
 
     backend = "supabase"
 
@@ -485,9 +486,14 @@ class SupabaseStore:
         self._root = f"{url.rstrip('/')}/rest/v1"
         self._headers = {
             "apikey": service_key,
-            "Authorization": f"Bearer {service_key}",
             "Content-Type": "application/json",
         }
+        # Legacy service_role keys are JWTs and must also be the bearer token.
+        # The current sb_secret_* keys are opaque API keys: Supabase's gateway
+        # maps them to service_role from the apikey header, while sending one as
+        # a bearer token makes PostgREST reject it as a non-JWT.
+        if not service_key.startswith("sb_secret_"):
+            self._headers["Authorization"] = f"Bearer {service_key}"
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT)
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,

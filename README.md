@@ -178,7 +178,7 @@ python -m pytest tests/ -v
 ## 何がどこで動くか
 
 ```
-ブラウザ ──(anon key + ユーザー JWT)──> Supabase PostgREST / GoTrue / Storage
+ブラウザ ──(publishable key + ユーザー JWT)──> Supabase PostgREST / GoTrue / Storage
    │                                     ↑ RLS が守る。全テーブルにポリシーがある
    │                                     地図の読み取り・コメント・リアクション
    │                                     ・通知・プロフィール・画像
@@ -194,17 +194,21 @@ python -m pytest tests/ -v
 だけ」動けばよくなります。1万人でほぼ無料、その先もコンテナの台数は**投稿数に
 しか比例しません**。
 
-### ブラウザが anon キーを持つことについて
+### ブラウザが publishable キーを持つことについて
 
 以前のこのリポジトリは「ブラウザは Supabase 資格情報を一切持たない / RLS ポリシー
 0件 / 全読み書きを service_role で FastAPI 経由」という設計でした。アカウントが
 本物になった時点で、これは**意図的に捨てています**。
 
-- Supabase Auth を使う以上、ブラウザは anon キーを持ちます（GoTrue がそれを要求
+- Supabase Auth を使う以上、ブラウザは publishable キーを持ちます（GoTrue がそれを要求
   するので、避ける方法がありません）
-- anon キーは公開前提の値です。守っているのは鍵ではなく
+- publishable キーは公開前提の値です。守っているのは鍵ではなく
   [`supabase/schema.sql`](supabase/schema.sql) の RLS ポリシーです
-- `service_role` キーは今も **Cloud Run だけ** が持ちます
+- `secret` キーは今も **Cloud Run だけ** が持ちます
+
+環境変数名は既存環境との互換性のため `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_KEY`
+のままですが、値には現在推奨の `sb_publishable_...` / `sb_secret_...` を使います。
+legacy の `anon` / `service_role` キーも移行期間中は利用できます。
 
 サーバー専用のままにしてある2つ:
 
@@ -244,7 +248,8 @@ supabase db push
 - **Authentication → Providers → Email** を有効化。OTP（6桁コード）が使えることを確認
 - Google / Apple を使うならここで設定し、環境変数 `KOTOBA_OAUTH_GOOGLE=1` /
   `KOTOBA_OAUTH_APPLE=1` を立てます（未設定ならログイン画面にボタンを出しません）
-- **Project Settings → API** から `URL` / `anon` / `service_role` / `JWT Secret` を控えます
+- **Project Settings → API Keys** から `URL` / publishable / secret キーを控えます
+  （legacy の anon / service_role キーも利用可能）
 - Storage のバケット `post-images` は migration が作ります
 
 スキーマの検証（`supabase test db` で自動実行、または SQL エディタで手動）:
@@ -256,11 +261,11 @@ supabase test db  # supabase/tests/ の pgTAP テストを実行
 ### 2. Secret Manager
 
 秘密値はシェル履歴に残さず Secret Manager に格納します。`SUPABASE_URL` と
-`SUPABASE_ANON_KEY` は公開前提の値なので通常の環境変数に置きます。
+`SUPABASE_ANON_KEY`（値は publishable キー）は公開前提なので通常の環境変数に置きます。
 
 ```bash
 gcloud secrets create supabase-service-key --replication-policy=automatic
-echo -n "eyJ..." | gcloud secrets versions add supabase-service-key --data-file=-
+echo -n "sb_secret_..." | gcloud secrets versions add supabase-service-key --data-file=-
 
 # HS256 プロジェクトのみ（ES256 + JWKS なら不要）:
 gcloud secrets create supabase-jwt-secret --replication-policy=automatic
