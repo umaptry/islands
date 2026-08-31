@@ -78,4 +78,8 @@ DISPLAY_STOP_WORDS = LABEL_ONLY_STOP_WORDS | {
     # once names were built from live posts: 「何個 / 湯飲み」 says nothing
     # about the place that 「湯飲み」 alone does not.
     "何個", "何本", "何度", "一日", "休み", "時間",
+    # Calendar words. A post that says "来年こそ税理士試験に" got named
+    # 「来年 / 税理士島」 - 来年 is when, not what, and the island is about the
+    # 税理士 half. Same argument as the counters above.
+    "来年", "今年", "去年", "毎年", "今度", "最近", "将来", "今後", "当時", "学生時代",
 }

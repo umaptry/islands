@@ -15,6 +15,11 @@ fastapi==0.111.1
 uvicorn[standard]==0.30.6
 pydantic==2.8.2
 httpx==0.27.2
+# Supabase Auth signs JWTs with HS256 on older projects and ES256 against a JWKS
+# on newer ones. core/auth.py verifies both LOCALLY - calling GoTrue to ask
+# "is this token good" would put a network round trip, and Supabase's uptime, in
+# front of every post. HS256 needs nothing extra; the asymmetric path needs this.
+cryptography==43.0.3
 numpy==1.26.4
 scipy==1.13.1
 scikit-learn==1.4.1.post1

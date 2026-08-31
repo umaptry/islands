@@ -6,43 +6,10 @@ These are the properties the whole design exists to provide. If any of them
 break, the map has stopped meaning what the UI claims it means.
 """
 
-import os
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-os.environ["KOTOBA_DISABLE_RATE_LIMIT"] = "1"
-
-pytest.importorskip("fastapi")
-
-CAMPING_A = "週末はソロキャンプに出かけて、焚き火を眺めながら静かに過ごすのが好きです。"
-CAMPING_B = "山で野営をするのが趣味で、薪を割って火をおこす時間がいちばん落ち着きます。"
-# Shares vocabulary with A, unlike B which says the same kind of thing in
-# entirely different words.
-CAMPING_C = "週末はキャンプで焚き火を眺めるのが好きです。道具を少しずつ揃えています。"
-BOOKKEEPING = "簿記二級の勉強をしています。毎晩、過去問を解いてから寝るのが日課になりました。"
-
-
-@pytest.fixture(scope="module")
-def client():
-    from fastapi.testclient import TestClient
-
-    import app as application
-
-    with TestClient(application.app) as test_client:
-        yield test_client
-
-
-@pytest.fixture(scope="module")
-def loaded(client):
-    """The app state, guaranteed populated by the lifespan."""
-    import app as application
-
-    return application.state
+from conftest import BOOKKEEPING, CAMPING_A, CAMPING_B, CAMPING_C, Person
 
 
 # --------------------------------------------------------------------------
@@ -59,33 +26,38 @@ def test_projection_is_deterministic(loaded):
         assert other[2] == results[0][2]
 
 
-def test_joining_does_not_move_the_seed_map(client, loaded):
-    """The frozen map is the whole promise: joining must not shift the terrain.
+def test_posting_does_not_move_the_seed_map(client, loaded):
+    """The frozen map is the whole promise: posting must not shift the terrain.
 
-    Checked against the loaded artifacts rather than the /api/map payload. The
-    map response stopped shipping the 1,000 seed points once the client stopped
-    drawing them, and the invariant being protected here is about the artifacts,
-    not about what happens to be on the wire.
+    Checked against the loaded artifacts rather than a response payload, because
+    the invariant is about the artifacts and not about what happens to be on the
+    wire this week.
     """
     before = np.array(loaded["seed_coords"], dtype=float).copy()
-    before_bounds = list(client.get("/api/map").json()["seed_bounds"])
-    for index in range(5):
-        response = client.post("/api/join", json={
-            "icon_id": str(index),
-            "name": f"drift{index}",
-            "text": f"{CAMPING_A}あと、最近は{index}番目の道具を買い足しました。",
-        })
-        assert response.status_code == 200, response.text
+    before_bounds = list(client.get("/api/config").json()["world"]["seed_bounds"])
+
+    drifter = Person(client, "drift@example.com", "drift")
+    placed = [
+        drifter.post(f"{CAMPING_A}あと、最近は{index}番目の道具を買い足しました。")
+        for index in range(5)
+    ]
+
     after = np.array(loaded["seed_coords"], dtype=float)
     assert np.array_equal(before, after)
-    assert client.get("/api/map").json()["seed_bounds"] == before_bounds
+    assert client.get("/api/config").json()["world"]["seed_bounds"] == before_bounds
+
+    # And nobody who was already placed moved either - which is the half of the
+    # promise a visitor actually notices.
+    for post in placed:
+        current = client.get(f"/api/local/post/{post['id']}").json()
+        assert (current["x"], current["y"]) == (post["x"], post["y"])
 
 
-def test_map_payload_does_not_carry_the_seed_corpus(client):
-    """1,000 points on every 15-second poll is most of the egress budget."""
-    payload = client.get("/api/map").json()
+def test_config_does_not_carry_the_seed_corpus(client):
+    """1,000 points on every page load would be most of the egress budget."""
+    payload = client.get("/api/config").json()
     assert "seed" not in payload
-    assert len(payload["seed_bounds"]) == 4
+    assert len(payload["world"]["seed_bounds"]) == 4
 
 
 def test_encoder_single_and_batch_agree(loaded):
@@ -189,63 +161,35 @@ def test_similarity_is_calibrated(loaded):
 # --------------------------------------------------------------------------
 
 def test_short_text_is_rejected(client):
-    response = client.post("/api/join", json={"icon_id": "1", "name": "x", "text": "短いです"})
+    person = Person(client, "short@example.com", "短文")
+    response = client.post("/api/posts", json={"body": "短いです"}, headers=person.headers)
     assert response.status_code == 422
     assert "30" in response.json()["detail"]
 
 
-def test_map_never_exposes_profile_text(client):
-    client.post("/api/join", json={
-        "icon_id": "2", "name": "秘密", "text": BOOKKEEPING,
-    })
-    payload = client.get("/api/map").json()
-    assert payload["users"], "expected at least one user"
-    for user in payload["users"]:
-        assert "text" not in user
-        assert "vec" not in user
-        assert "edit_token" not in user
+def test_the_map_never_ships_a_vector(client):
+    """The body IS public now - islands puts it on the card, and that is the
+    feature. The 448 numbers behind it are not, and never leave the server."""
+    Person(client, "secret@example.com", "秘密").post(BOOKKEEPING)
+    posts = client.get("/api/local/map").json()["posts"]
+    assert posts, "expected at least one post"
+    for post in posts:
+        assert "vec" not in post
+        assert "vec_c" not in post
+        assert "body" in post
 
 
-def test_contact_details_are_stripped(client):
-    response = client.post("/api/join", json={
-        "icon_id": "3",
-        "name": "連絡先",
-        "text": f"{CAMPING_A} 連絡は https://example.com/me か me@example.com までどうぞ。",
-    })
-    assert response.status_code == 200
-    text = response.json()["text"]
-    assert "example.com" not in text
-    assert "[リンク]" in text and "[メール]" in text
-
-
-def test_leave_requires_the_edit_token(client):
-    created = client.post("/api/join", json={
-        "icon_id": "4", "name": "退出", "text": CAMPING_B,
-    }).json()
-
-    denied = client.post("/api/leave", json={
-        "id": created["id"], "edit_token": "00000000-0000-0000-0000-000000000000",
-    })
-    assert denied.status_code == 403
-
-    allowed = client.post("/api/leave", json={
-        "id": created["id"], "edit_token": created["edit_token"],
-    })
-    assert allowed.status_code == 200
-    assert client.get(f"/api/user/{created['id']}").status_code == 404
-
-
-def test_join_reports_neighbours_with_shared_words(client):
-    client.post("/api/join", json={"icon_id": "5", "name": "野営", "text": CAMPING_B})
-    response = client.post("/api/join", json={"icon_id": "6", "name": "焚き火", "text": CAMPING_A})
-    assert response.status_code == 200
-    payload = response.json()
+def test_posting_reports_neighbours_with_shared_words(client):
+    person = Person(client, "camp@example.com", "野営")
+    person.post(CAMPING_B)
+    payload = person.post(CAMPING_A)
 
     assert payload["island"] is not None
     assert payload["neighbors"], "expected neighbours once others exist"
     for neighbour in payload["neighbors"]:
         assert 0 <= neighbour["similarity"] <= 100
         assert "shared" in neighbour
+        assert "vec" not in neighbour
     similarities = [neighbour["similarity"] for neighbour in payload["neighbors"]]
     assert similarities == sorted(similarities, reverse=True)
 
@@ -386,10 +330,10 @@ def test_neighbours_are_ordered_by_cosine_not_by_map_distance(loaded):
     for index, (name, text) in enumerate((
         ("camera_b", CAMERA_B), ("cook_a", COOK_A), ("cook_b", COOK_B),
     )):
-        x, y, cluster_id, _terms, vector = application.project(text)
+        x, y, cluster_id, _terms, vector, _centred = application.project(text)
         people.append({"id": name, "x": x, "y": y, "cluster_id": cluster_id, "vec": vector})
 
-    x, y, _cluster, _terms, mine = application.project(CAMERA_A)
+    x, y, _cluster, _terms, mine, _centred = application.project(CAMERA_A)
     ranked = rank_neighbors(
         {"x": x, "y": y}, people, loaded["quantiles"], limit=3,
         origin_vector=mine, anchors=anchors, centroid=loaded["cosine_centroid"],
@@ -407,8 +351,8 @@ def test_similarity_falls_back_to_map_distance(loaded):
 
     import app as application
 
-    x, y, cluster_id, _terms, mine = application.project(CAMERA_A)
-    other_x, other_y, other_cluster, _t, other_vec = application.project(COOK_A)
+    x, y, cluster_id, _terms, mine, _centred = application.project(CAMERA_A)
+    other_x, other_y, other_cluster, _t, other_vec, _oc = application.project(COOK_A)
     origin = {"x": x, "y": y}
 
     for entry in (
@@ -433,26 +377,28 @@ def test_similarity_falls_back_to_map_distance(loaded):
     assert rank_neighbors(origin, [], loaded["quantiles"]) == []
 
 
-def test_map_similarity_matches_the_profile_sheet(client):
-    """The orbit and the bottom sheet must not print two different numbers."""
-    me = client.post("/api/join", json={
-        "icon_id": "7", "name": "カメラ", "text": CAMERA_A,
-    }).json()
-    them = client.post("/api/join", json={
-        "icon_id": "8", "name": "料理", "text": COOK_A,
-    }).json()
+def test_the_orbit_and_the_sheet_print_the_same_number(client):
+    """Two routes, one measurement.
 
-    payload = client.get(f"/api/map?viewer={me['id']}").json()
-    assert "similarity" in payload
-    assert me["id"] not in payload["similarity"], "your own row is not a neighbour"
+    /api/neighbors ranks the orbit ring and /api/pair fills the bottom sheet. A
+    viewer seeing 82% on the ring and 74% on the card would have no way to know
+    which of them to believe, so they are required to agree exactly.
+    """
+    me = Person(client, "orbit@example.com", "カメラ")
+    them = Person(client, "orbit2@example.com", "料理")
+    mine = me.post(CAMERA_A)
+    theirs = them.post(COOK_A)
 
-    sheet = client.get(f"/api/user/{them['id']}?viewer={me['id']}").json()
-    assert payload["similarity"][them["id"]] == sheet["similarity"]
+    ranked = client.get(f"/api/neighbors?post={mine['id']}&limit=24").json()["neighbors"]
+    by_id = {row["id"]: row for row in ranked}
+    assert mine["id"] not in by_id, "your own post is not one of your neighbours"
+    assert theirs["id"] in by_id
 
-    # and no viewer means no table, which is what keeps an old client working
-    assert "similarity" not in client.get("/api/map").json()
-    for user in payload["users"]:
-        assert "vec" not in user
+    sheet = client.get(f"/api/pair?a={mine['id']}&b={theirs['id']}").json()
+    assert by_id[theirs["id"]]["similarity"] == sheet["similarity"]
+    assert by_id[theirs["id"]]["shared"] == sheet["shared"]
+    for row in ranked:
+        assert "vec" not in row and "vec_c" not in row
 
 
 # --------------------------------------------------------------------------
@@ -487,28 +433,34 @@ def test_tokenizer_survives_concurrent_use():
     assert all(results[i] == single for i, text in enumerate(texts) if text == CAMPING_A)
 
 
-def test_concurrent_joins_all_succeed(client):
+def test_concurrent_posts_all_succeed(client):
     """Twelve people pressing the button at the same moment."""
     from concurrent.futures import ThreadPoolExecutor
 
-    people = [
-        (f"同時{index}", f"{index % 30}", text)
-        for index, text in enumerate([CAMERA_A, CAMERA_B, COOK_A, COOK_B] * 3)
+    crowd = [
+        Person(client, f"crowd{index}@example.com", f"同時{index}")
+        for index in range(12)
     ]
+    texts = [CAMERA_A, CAMERA_B, COOK_A, COOK_B] * 3
 
-    def join(person):
-        name, icon, text = person
-        return client.post("/api/join", json={"icon_id": icon, "name": name, "text": text})
+    def submit(pair):
+        person, text = pair
+        return client.post(
+            "/api/posts", json={"body": text, "tags": [], "motivation": 50},
+            headers=person.headers,
+        )
 
-    with ThreadPoolExecutor(max_workers=len(people)) as pool:
-        responses = list(pool.map(join, people))
+    with ThreadPoolExecutor(max_workers=len(crowd)) as pool:
+        responses = list(pool.map(submit, zip(crowd, texts)))
 
     failed = [(r.status_code, r.text[:120]) for r in responses if r.status_code != 200]
-    assert not failed, f"{len(failed)}/{len(people)} joins failed: {failed[:3]}"
+    assert not failed, f"{len(failed)}/{len(crowd)} posts failed: {failed[:3]}"
 
     bodies = [r.json() for r in responses]
-    assert all(body["island"] for body in bodies), "island naming also tokenizes"
-    assert len({body["id"] for body in bodies}) == len(people)
+    assert len({body["id"] for body in bodies}) == len(crowd)
     for body in bodies:
         for neighbour in body["neighbors"]:
             assert 0 <= neighbour["similarity"] <= 100
+
+    # Landmass naming tokenizes too, and it runs on the same threadpool.
+    assert client.get("/api/islands").status_code == 200

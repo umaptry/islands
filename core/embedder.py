@@ -26,7 +26,7 @@ import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from tokenizers import Tokenizer
 
-from core.config import MODEL_NAME
+from core.config import MODEL_NAME, MODEL_REVISION
 
 ONNX_FILE = "onnx/model.onnx"
 TOKENIZER_FILE = "tokenizer.json"
@@ -47,11 +47,11 @@ DOWNLOAD_ATTEMPTS = 4
 DOWNLOAD_BACKOFF = 2.0  # seconds, doubled each attempt
 
 
-def _fetch(repo_id, filename):
+def _fetch(repo_id, filename, revision=MODEL_REVISION):
     delay = DOWNLOAD_BACKOFF
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         try:
-            return hf_hub_download(repo_id, filename)
+            return hf_hub_download(repo_id, filename, revision=revision)
         except Exception as error:  # noqa: BLE001 - network, disk, auth all retryable here
             if attempt == DOWNLOAD_ATTEMPTS:
                 raise

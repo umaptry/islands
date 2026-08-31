@@ -1,20 +1,15 @@
-# Keeps the demo warm for its public run.
+# Manual health check. The scheduled cron has been removed in favour of
+# Cloud Monitoring Uptime Checks, which double as keepalive pings (they hit
+# /api/health every 5 minutes). This avoids:
+#   - duplicate pings (Monitoring + GitHub cron)
+#   - Actions minutes consumption on private repos
+#   - GitHub auto-disabling the schedule after 60 days of no commits
 #
-# Two things go cold on their own: a Cloud Run instance scales to zero and then
-# pays ~30-60s of cold start (fetching the 448MB ONNX, building the ORT session,
-# loading the Sudachi dictionary), and a Supabase free project suspends itself
-# after 7 idle days. /api/health touches both, so one ping covers both.
-#
-# Cost: a sub-second request every 10 minutes is ~4,300 GiB-seconds a month
-# against a 360,000 GiB-second free allowance.
-#
-# GitHub disables scheduled workflows on a repo with no commits for 60 days.
-# That is longer than this demo is meant to run.
+# Keep this workflow for on-demand diagnosis:
+#   gh workflow run keepalive
 name: keepalive
 
 on:
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:

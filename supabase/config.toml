@@ -1,0 +1,33 @@
+# Supabase CLI local configuration.
+#
+# supabase start   → start local Postgres + Auth + Storage
+# supabase db reset → apply migrations from scratch
+# supabase test db  → run supabase/tests/*.sql via pgTAP
+#
+# Production project linking (supabase link) is done interactively and
+# stores credentials in .supabase/ which is gitignored.
+
+[project]
+id = ""
+
+[db]
+port = 54322
+major_version = 15
+
+[db.pooler]
+enabled = false
+
+[studio]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://localhost:7860"
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+
+[storage]
+enabled = true
+file_size_limit = "1MB"

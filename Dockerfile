@@ -37,7 +37,19 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # Baking them in costs roughly $0.05/month of registry storage (keep exactly one
 # image; see the cleanup step in README.md) and buys a container start that does
 # no network I/O at all, which is the property a live demo actually needs.
-RUN python -c "from huggingface_hub import hf_hub_download as d; r='intfloat/multilingual-e5-small'; d(r,'onnx/model.onnx'); d(r,'tokenizer.json')"
+# Revision and checksums must match core/config.py.
+ARG HF_REVISION=614241f622f53c4eeff9890bdc4f31cfecc418b3
+ARG ONNX_SHA256=ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665
+ARG TOKENIZER_SHA256=0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39
+RUN python -c "\
+import hashlib, sys; \
+from huggingface_hub import hf_hub_download as d; \
+r='intfloat/multilingual-e5-small'; rev='${HF_REVISION}'; \
+for fname, expect in [('onnx/model.onnx','${ONNX_SHA256}'),('tokenizer.json','${TOKENIZER_SHA256}')]: \
+    p=d(r, fname, revision=rev); got=hashlib.sha256(open(p,'rb').read()).hexdigest(); \
+    print(f'{fname}: {got}'); \
+    assert got==expect, f'{fname}: expected {expect}, got {got}'; \
+"
 
 # Resolve both files from the cache above and never call the Hub. Without this,
 # hf_hub_download still makes one metadata request per file at start-up, and

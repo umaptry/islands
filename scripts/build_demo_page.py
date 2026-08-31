@@ -7,6 +7,22 @@
 開発者が手で走らせるスクリプトです。`app.py` からは参照されず、`.dockerignore` /
 `.gcloudignore` で serving image からも除外してあります。
 
+┌───────────────────────────────────────────────────────────────────────────┐
+│ ⚠ このスクリプトは islands 化で動かなくなりました（未移植）。             │
+│                                                                           │
+│ 前提にしていたものが2つとも無くなっています:                              │
+│   - 1ファイルのフロント `web/app.js`（`web/js/` 以下のESモジュール群に分割）│
+│   - 旧API `/api/map` `/api/user/{id}` `/api/join` `/api/like` `/api/inbox` │
+│     （`map_posts` RPC と `/api/posts` `/api/neighbors` `/api/pair` に置換）│
+│                                                                           │
+│ 移植するなら `scripts/demo_shim.js` を `web/js/net.js` の `data` 面と      │
+│ `api` 面に対して書き直すのが本体です。エンジン比較そのもの（E1〜E4 と      │
+│ ゲートA〜C）のロジックは今も有効なので、通信の差し替え方だけの問題です。   │
+│                                                                           │
+│ 似てる度エンジンの比較だけが目的なら、移植を待たずに                      │
+│ `python scripts/benchmark_embeddings.py` が使えます（こちらは無傷）。      │
+└───────────────────────────────────────────────────────────────────────────┘
+
 作るもの
 --------
 本物の UI（web/index.html / app.js / style.css / avatars.js）をそのまま1ファイルに畳み、
@@ -604,12 +620,38 @@ DEMO_BAR_HTML = """
 
 # --------------------------------------------------------------------------
 
+def _refuse_if_unported():
+    """Fail with a sentence instead of a traceback four functions deep.
+
+    The islands rewrite removed both things this script builds on: the
+    single-file front end it inlines, and the API endpoints it snapshots. It is
+    better to say so at the top than to let somebody discover it from a
+    FileNotFoundError on web/app.js.
+    """
+    if (ROOT / "web" / "app.js").exists():
+        return
+    print(
+        "\n"
+        "このスクリプトは islands 化で動かなくなっています（未移植）。\n"
+        "\n"
+        "  - 畳み込む対象だった web/app.js は web/js/ 以下に分割されました\n"
+        "  - 取得先だった /api/map, /api/user/{id}, /api/join は廃止され、\n"
+        "    map_posts RPC と /api/posts, /api/neighbors, /api/pair に変わりました\n"
+        "\n"
+        "移植の本体は scripts/demo_shim.js を web/js/net.js の面に書き直すことです。\n"
+        "エンジン比較だけが目的なら scripts/benchmark_embeddings.py が使えます。\n",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
 def main():
     parser = argparse.ArgumentParser(description="実データでエンジンを切り替えるデモを作ります")
     parser.add_argument("--fetch-live", action="store_true", help="本番から取得（キャッシュがあれば省略）")
     parser.add_argument("--refetch", action="store_true", help="キャッシュを無視して取り直す")
     parser.add_argument("--verify", action="store_true", help="ゲートだけ回してHTMLは書かない")
     arguments = parser.parse_args()
+    _refuse_if_unported()
 
     say("[1/6] 本番スナップショット")
     if arguments.fetch_live or arguments.refetch or not LIVE_PAIRS.exists():

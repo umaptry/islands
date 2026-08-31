@@ -10,6 +10,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .claude/
+gha-creds-*.json
 tests/
 scripts/
 README.md

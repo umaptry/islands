@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .claude/
+gha-creds-*.json
 
 # ベンチマークが取得した生ベクトルのキャッシュと、実行のたびに中身が変わる測定結果。
 artifacts/benchmark_cache/
