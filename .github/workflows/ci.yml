@@ -131,11 +131,22 @@ jobs:
       - name: Deploy candidate revision (0% traffic)
         id: deploy
         run: |
+          # Cloud Run rejects --no-traffic while creating a service. The first
+          # healthy revision therefore creates the service normally; every
+          # later deploy remains isolated at 0% until verification succeeds.
+          TRAFFIC_ARGS=(--no-traffic)
+          if ! gcloud run services describe ${{ env.CLOUD_RUN_SERVICE }} \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region ${{ env.CLOUD_RUN_REGION }} >/dev/null 2>&1; then
+            TRAFFIC_ARGS=()
+            echo "Cloud Run service does not exist yet; creating the initial revision"
+          fi
+
           gcloud run deploy ${{ env.CLOUD_RUN_SERVICE }} \
             --image "${{ steps.build.outputs.image }}" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region ${{ env.CLOUD_RUN_REGION }} \
-            --no-traffic \
+            "${TRAFFIC_ARGS[@]}" \
             --tag candidate \
             --service-account "$CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT" \
             --memory 2Gi --cpu 1 \
