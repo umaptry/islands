@@ -128,7 +128,11 @@ export const session = {
     // "log in". islands had two screens that did the same thing; the only real
     // difference is whether the address has been seen before, and the server
     // is the only side that knows.
-    await gotrue('otp', { email: address, create_user: true });
+    await gotrue('otp', {
+      email: address,
+      create_user: true,
+      email_redirect_to: `${window.location.origin}/`,
+    });
     return { email: address, devCode: null };
   },
 
