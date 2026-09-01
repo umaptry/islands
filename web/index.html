@@ -156,7 +156,7 @@
 
     <div class="field">
       <textarea class="textarea" id="composeBody"
-        placeholder="例）昔は吹奏楽でトランペット、今は在宅で経理をしています。いつか小さなパン屋をやってみたい。"></textarea>
+        placeholder="取り組みや活動内容（最大140文字）"></textarea>
       <div class="counter-row">
         <div class="counter" id="composeCounter">
           <svg class="ring" viewBox="0 0 24 24">
@@ -169,7 +169,6 @@
     </div>
 
     <div class="field">
-      <span class="label-text">熱量</span>
       <div class="slider">
         <div class="slider-track">
           <div class="slider-fill" id="composeFill"></div>
@@ -182,12 +181,10 @@
     </div>
 
     <div class="field">
-      <span class="label-text">タグ<span class="hint-text">任意・いくつでも</span></span>
       <div class="checks" id="composeTags"></div>
     </div>
 
     <div class="field">
-      <span class="label-text">画像<span class="hint-text">任意・1枚</span></span>
       <div class="image-row">
         <button class="image-pick" id="composeImageBtn" type="button" aria-label="画像を選ぶ">🖼</button>
         <div class="image-preview" id="composeImagePreview" hidden>
@@ -263,6 +260,7 @@
 <section id="notifications" class="screen tinted">
   <div class="topbar-inline">
     <h2 class="screen-title">通知</h2>
+    <span class="unread-badge" id="notifUnreadBadge" hidden></span>
     <button class="btn btn-small btn-quiet" id="notifReadAll" hidden>すべて既読</button>
   </div>
   <div class="scroller" id="notifList"></div>
@@ -295,11 +293,11 @@
     </div>
     <label class="field">
       <span class="label-text">名前</span>
-      <input class="input" id="editName" maxlength="16" placeholder="ニックネーム">
+      <input class="input" id="editName" maxlength="16" placeholder="名前">
     </label>
     <label class="field">
       <span class="label-text">所属組織</span>
-      <input class="input" id="editAffiliation" maxlength="32" placeholder="会社・学校・チームなど">
+      <input class="input" id="editAffiliation" maxlength="32" placeholder="所属組織">
     </label>
     <label class="field">
       <span class="label-text">自己紹介</span>

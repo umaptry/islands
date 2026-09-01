@@ -178,7 +178,7 @@ def build_hybrid_features(texts, model, fit_sparse=True, sparse_artifacts=None):
         texts, fit=fit_sparse, artifacts=sparse_artifacts
     )
     raw_dense = model.encode(
-        [f"passage: {normalize_text(text)}" for text in texts],
+        [normalize_text(text) for text in texts],
         show_progress_bar=len(texts) > 20,
         normalize_embeddings=True,
     )
@@ -186,7 +186,7 @@ def build_hybrid_features(texts, model, fit_sparse=True, sparse_artifacts=None):
         " ".join(terms) or normalize_text(text) for terms, text in zip(token_lists, texts)
     ]
     concept_dense = model.encode(
-        [f"passage: {document}" for document in concept_docs],
+        concept_docs,
         show_progress_bar=len(texts) > 20,
         normalize_embeddings=True,
     )

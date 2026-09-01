@@ -59,7 +59,7 @@ from core.config import (
     MAX_NAME_LENGTH,
     MAX_TEXT_LENGTH,
     MIN_TEXT_LENGTH,
-    MODEL_NAME,
+    GEMINI_MODEL_NAME,
     MOTIVATION_DEFAULT,
     MOTIVATION_MAX,
     MOTIVATION_MIN,
@@ -177,7 +177,9 @@ async def lifespan(_app):
 
     print("artifacts を読み込み中...", flush=True)
     state.update(load_artifacts())
-    print(f"埋め込みモデルを読み込み中: {MODEL_NAME} (ONNX)", flush=True)
+    _gemini = bool(os.environ.get("GEMINI_API_KEY", "").strip())
+    _label = f"Gemini API ({GEMINI_MODEL_NAME})" if _gemini else "ONNX (multilingual-e5-small)"
+    print(f"埋め込みモデルを読み込み中: {_label}", flush=True)
     state["model"] = load_embedder()
     state["store"] = create_store()
     state["local_mode"] = state["store"].backend == "memory"
@@ -1042,6 +1044,11 @@ def index():
 @app.get("/how")
 def how():
     return FileResponse(WEB / "how.html", headers=NO_CACHE)
+
+
+@app.get("/docs")
+def docs_page():
+    return FileResponse(WEB / "docs.html", headers=NO_CACHE)
 
 
 class RevalidatingStatics(StaticFiles):

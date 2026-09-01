@@ -17,7 +17,7 @@ import { avatar, clip, el, motivationColor, timeAgo } from '../ui.js';
 const REACTIONS = [
   { kind: 'like', label: 'いいね', icon: '♥', countKey: 'like_count', tone: 'like' },
   { kind: 'help', label: '手伝えるかも', icon: '✋', countKey: 'help_count', tone: 'help' },
-  { kind: 'join', label: '参加したい', icon: '➕', countKey: 'join_count', tone: 'join' },
+  { kind: 'join', label: '参加', icon: '➕', countKey: 'join_count', tone: 'join' },
 ];
 
 /**

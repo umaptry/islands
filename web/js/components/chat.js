@@ -42,7 +42,7 @@ export function postChat(postId, { onCountChange } = {}) {
     if (!comments.length) {
       list.append(el('p', {
         className: 'chat-empty',
-        text: 'まだメッセージはありません。最初のメッセージを送ってみましょう。',
+        text: 'まだメッセージはありません。最初のメッセージを送ってみましょう！',
       }));
       return;
     }

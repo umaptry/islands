@@ -35,9 +35,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from core.clustering import select_cluster_model, sort_clusters_by_position  # noqa: E402
 from core.config import (  # noqa: E402
     FEATURE_CONFIG,
+    GEMINI_MODEL_NAME,
     LAYOUT_CONFIG,
     LAYOUT_VERSION,
-    MODEL_NAME,
     MODEL_VERSION,
 )
 from core.encoder import load_encoder, save_encoder  # noqa: E402
@@ -122,7 +122,8 @@ def build(args):
     texts, domains = load_corpus(CORPUS_PATH)
     print(f"[1/8] コーパス読み込み: {len(texts)} 件 / {len(set(domains))} ドメイン")
 
-    print(f"[2/8] 埋め込みモデル読み込み: {MODEL_NAME} (ONNX)")
+    _label = f"Gemini API ({GEMINI_MODEL_NAME})" if os.environ.get("GEMINI_API_KEY", "").strip() else "ONNX (e5-small)"
+    print(f"[2/8] 埋め込みモデル読み込み: {_label}")
     model = load_embedder()
 
     print("[3/8] 448次元ベクトルを構築中...")
@@ -183,7 +184,7 @@ def build(args):
         "meta": {
             "model_version": MODEL_VERSION,
             "layout_version": LAYOUT_VERSION,
-            "embedding_model": MODEL_NAME,
+            "embedding_model": GEMINI_MODEL_NAME,
             "feature_config": FEATURE_CONFIG,
             "layout_config": LAYOUT_CONFIG,
             "seed_count": len(texts),
@@ -312,7 +313,8 @@ def relabel(_args):
     coords = np.array([[row[0], row[1]] for row in payload["seed"]], dtype=float)
     print(f"[1/3] 保存済み座標を読み込み: {len(coords)} 点（座標は一切変更しません）")
 
-    print(f"[2/3] 埋め込みモデル読み込み: {MODEL_NAME} (ONNX)")
+    _label = f"Gemini API ({GEMINI_MODEL_NAME})" if os.environ.get("GEMINI_API_KEY", "").strip() else "ONNX (e5-small)"
+    print(f"[2/3] 埋め込みモデル読み込み: {_label}")
     model = load_embedder()
 
     print("[3/3] 島を選び直し中...")

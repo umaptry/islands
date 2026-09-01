@@ -45,9 +45,7 @@ function paintCounter() {
   ring.style.strokeDashoffset = String(56.5 * (1 - ratio));
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
-  $('composeCounterText').textContent = length >= min
-    ? `${length} / ${max}字`
-    : `あと${min - length}字`;
+  $('composeCounterText').textContent = `${length}/${max}`;
   $('composeSubmit').disabled = submitting || length < min || length > max;
 }
 

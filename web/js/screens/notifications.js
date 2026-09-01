@@ -14,7 +14,7 @@ import { $, avatar, clear, el, timeAgo } from '../ui.js';
 const KINDS = {
   like: { icon: '♥', tone: 'like', text: 'あなたの投稿に「いいね」しました。' },
   help: { icon: '✋', tone: 'help', text: 'あなたの投稿に「手伝えるかも」と反応しました。' },
-  join: { icon: '➕', tone: 'join', text: 'あなたの投稿に「参加したい」と反応しました。' },
+  join: { icon: '➕', tone: 'join', text: 'あなたの投稿に「参加」と反応しました。' },
   comment: { icon: '💬', tone: 'comment', text: 'あなたの投稿にメッセージを送りました。' },
 };
 
@@ -38,6 +38,10 @@ export function paintBadge() {
   const badge = $('navBadge');
   badge.hidden = state.unread === 0;
   badge.textContent = state.unread > 9 ? '9+' : String(state.unread);
+
+  const header = $('notifUnreadBadge');
+  header.hidden = state.unread === 0;
+  header.textContent = `未読 ${state.unread}件`;
 }
 
 function paintList() {

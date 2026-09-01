@@ -6,11 +6,11 @@ ablation. The only domain-specific change in this project is the stop-word
 list in `stopwords.py`: the geometry parameters stay identical.
 """
 
-MODEL_NAME = "intfloat/multilingual-e5-small"
-MODEL_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
-MODEL_ONNX_SHA256 = "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665"
-MODEL_TOKENIZER_SHA256 = "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
-MODEL_VERSION = "kotoba-map-v1"
+GEMINI_MODEL_NAME = "gemini-embedding-2"
+GEMINI_DIMENSIONS = 384
+GEMINI_TASK = "sentence similarity"
+
+MODEL_VERSION = "kotoba-map-v2"
 LAYOUT_VERSION = "parametric-isotropic-v1"
 
 # One free-text self-introduction per person is the ONLY input signal.

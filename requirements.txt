@@ -1,13 +1,9 @@
 # Serving dependencies.
 #
-# No torch. The embedding model runs through ONNX Runtime (core/embedder.py)
-# using the ONNX export that intfloat publishes in the same repo, and the frozen
-# UMAP encoder runs in numpy (core/encoder.py). Together these drop resident
-# memory from ~1,250MB to ~965MB and remove ~1.2GB from the image.
-#
-# fp32, not int8: measured against sentence-transformers on 300 seed texts, the
-# int8 build keeps cosine 0.9956 but changes the NEAREST NEIGHBOUR 29% of the
-# time. fp32 matches exactly (cosine 1.00000), so the frozen map stays valid.
+# Dense embeddings come from the Gemini API (gemini-embedding-2) in production.
+# ONNX Runtime + e5-small is kept as a test-only fallback so the test suite
+# runs without network access or an API key.
+google-genai>=1.0.0
 onnxruntime==1.29.0
 tokenizers==0.22.2
 huggingface-hub==1.26.0
