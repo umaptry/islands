@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # Cloud Run / any Docker host. (Hugging Face Docker Spaces now need a paid
 # plan to create - see the deploy section of README.md.)
 #
@@ -41,15 +43,30 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 ARG HF_REVISION=614241f622f53c4eeff9890bdc4f31cfecc418b3
 ARG ONNX_SHA256=ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665
 ARG TOKENIZER_SHA256=0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39
-RUN python -c "\
-import hashlib, sys; \
-from huggingface_hub import hf_hub_download as d; \
-r='intfloat/multilingual-e5-small'; rev='${HF_REVISION}'; \
-for fname, expect in [('onnx/model.onnx','${ONNX_SHA256}'),('tokenizer.json','${TOKENIZER_SHA256}')]: \
-    p=d(r, fname, revision=rev); got=hashlib.sha256(open(p,'rb').read()).hexdigest(); \
-    print(f'{fname}: {got}'); \
-    assert got==expect, f'{fname}: expected {expect}, got {got}'; \
-"
+RUN HF_REVISION="${HF_REVISION}" \
+    ONNX_SHA256="${ONNX_SHA256}" \
+    TOKENIZER_SHA256="${TOKENIZER_SHA256}" \
+    python - <<'PY'
+import hashlib
+import os
+
+from huggingface_hub import hf_hub_download
+
+repository = "intfloat/multilingual-e5-small"
+revision = os.environ["HF_REVISION"]
+files = (
+    ("onnx/model.onnx", os.environ["ONNX_SHA256"]),
+    ("tokenizer.json", os.environ["TOKENIZER_SHA256"]),
+)
+
+for filename, expected in files:
+    path = hf_hub_download(repository, filename, revision=revision)
+    with open(path, "rb") as model_file:
+        actual = hashlib.file_digest(model_file, "sha256").hexdigest()
+    print(f"{filename}: {actual}")
+    if actual != expected:
+        raise RuntimeError(f"{filename}: expected {expected}, got {actual}")
+PY
 
 # Resolve both files from the cache above and never call the Hub. Without this,
 # hf_hub_download still makes one metadata request per file at start-up, and
