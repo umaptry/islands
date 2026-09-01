@@ -55,6 +55,7 @@ export function setupIntro() {
 // ---------------------------------------------------------------- sign in
 
 let pendingEmail = '';
+const RESEND_COOLDOWN_MS = 60_000;
 
 function showStep(name) {
   $$('.auth-step').forEach((node) => { node.hidden = node.dataset.step !== name; });
@@ -65,9 +66,33 @@ export function setupAuth() {
   const code = $('authCode');
   const send = $('authSend');
   const verify = $('authVerify');
+  let sending = false;
+  let resendUntil = 0;
+  let resendTimer = null;
+
+  function paintSend() {
+    const seconds = Math.max(0, Math.ceil((resendUntil - Date.now()) / 1000));
+    if (seconds === 0 && resendTimer) {
+      clearInterval(resendTimer);
+      resendTimer = null;
+    }
+    send.disabled = sending || seconds > 0 || !email.value.includes('@');
+    send.textContent = sending ? '送信中…' : (
+      seconds > 0 ? `再送まで ${seconds}秒` : 'パスコードを送る'
+    );
+  }
+
+  function startResendCooldown(delay = RESEND_COOLDOWN_MS) {
+    // GoTrue has a per-address resend window. Mirroring it in the client
+    // prevents accidental double-clicks and back-and-forth navigation from
+    // consuming the project-wide mail allowance.
+    resendUntil = Math.max(resendUntil, Date.now() + Math.max(delay, RESEND_COOLDOWN_MS));
+    if (!resendTimer) resendTimer = setInterval(paintSend, 250);
+    paintSend();
+  }
 
   email.addEventListener('input', () => {
-    send.disabled = !email.value.includes('@');
+    paintSend();
     $('authError').textContent = '';
   });
   code.addEventListener('input', () => {
@@ -85,11 +110,13 @@ export function setupAuth() {
   });
 
   send.addEventListener('click', async () => {
-    send.disabled = true;
-    send.textContent = '送信中…';
+    if (sending || Date.now() < resendUntil) return;
+    sending = true;
+    paintSend();
     try {
       const result = await session.requestCode(email.value);
       pendingEmail = result.email;
+      startResendCooldown();
       $('authSentTo').textContent = `${result.email} に届いたパスコードを入力してください。`;
       const devBox = $('authDevCode');
       if (result.devCode) {
@@ -110,9 +137,12 @@ export function setupAuth() {
       code.focus();
     } catch (error) {
       $('authError').textContent = error.message;
+      if (error.code === 'over_email_send_rate_limit') {
+        startResendCooldown(error.retryAfterMs || RESEND_COOLDOWN_MS);
+      }
     } finally {
-      send.disabled = !email.value.includes('@');
-      send.textContent = 'パスコードを送る';
+      sending = false;
+      paintSend();
     }
   });
 
@@ -133,12 +163,14 @@ export function setupAuth() {
   $('authBack').addEventListener('click', () => {
     showStep('email');
     $('authCodeError').textContent = '';
+    paintSend();
   });
 
   screen('auth', {
     enter: () => {
       showStep('email');
       $('authError').textContent = '';
+      paintSend();
       paintOAuth();
     },
   });

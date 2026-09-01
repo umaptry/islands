@@ -53,10 +53,26 @@ function gotrue(path, body, { token } = {}) {
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
       const message = payload && (payload.msg || payload.error_description || payload.message);
-      throw new Error(message || 'サインインできませんでした。');
+      const error = new Error(message || 'サインインできませんでした。');
+      // Keep GoTrue's machine-readable code and Retry-After hint. The screen
+      // can then distinguish a temporary sending limit from a bad address or
+      // a network error without relying on English error text alone.
+      error.code = payload && (payload.code || payload.error_code);
+      const retryAfter = Number(response.headers.get('retry-after'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        error.retryAfterMs = retryAfter * 1000;
+      }
+      throw error;
     }
     return payload;
   });
+}
+
+function isEmailRateLimited(error) {
+  return error && (
+    error.code === 'over_email_send_rate_limit' ||
+    /email rate limit exceeded/i.test(String(error.message || ''))
+  );
 }
 
 function store(payload) {
@@ -128,11 +144,21 @@ export const session = {
     // "log in". islands had two screens that did the same thing; the only real
     // difference is whether the address has been seen before, and the server
     // is the only side that knows.
-    await gotrue('otp', {
-      email: address,
-      create_user: true,
-      email_redirect_to: `${window.location.origin}/`,
-    });
+    try {
+      await gotrue('otp', {
+        email: address,
+        create_user: true,
+        email_redirect_to: `${window.location.origin}/`,
+      });
+    } catch (error) {
+      if (!isEmailRateLimited(error)) throw error;
+      const friendly = new Error(
+        'メール送信の上限に達しました。連続送信を避け、しばらく待ってからもう一度お試しください。',
+      );
+      friendly.code = 'over_email_send_rate_limit';
+      friendly.retryAfterMs = error.retryAfterMs;
+      throw friendly;
+    }
     return { email: address, devCode: null };
   },
 
