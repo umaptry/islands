@@ -533,6 +533,9 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   display: flex; justify-content: space-between;
   margin-top: 8px; font-size: 11px; font-weight: 700; color: var(--ink-3);
 }
+.motivation-sub {
+  display: block; font-size: .625rem; font-weight: normal; opacity: .6;
+}
 
 .post-image { margin-top: 13px; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-3); }
 .post-image img { display: block; width: 100%; height: auto; max-height: 300px; object-fit: cover; }

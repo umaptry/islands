@@ -142,8 +142,14 @@ function motivationBar(value) {
       }),
     ),
     el('div', { className: 'motivation-labels' },
-      el('span', { text: 'エンジョイ' }),
-      el('span', { text: 'ガチ' }),
+      el('span', {},
+        el('span', { text: 'エンジョイ' }),
+        el('span', { className: 'motivation-sub', text: 'casual' }),
+      ),
+      el('span', {},
+        el('span', { text: 'ガチ' }),
+        el('span', { className: 'motivation-sub', text: 'hardcore' }),
+      ),
     ),
   );
 }

@@ -48,7 +48,7 @@ function paintList() {
     list.append(el('div', { className: 'empty-panel' },
       el('div', { className: 'empty-icon', text: '🔔' }),
       el('p', { text: '通知はありません' }),
-      el('p', { className: 'empty-sub', text: 'あなたの投稿に反応があると、ここに出ます。' }),
+      el('p', { className: 'empty-sub', text: 'いいね・手伝えるかも・参加したい・メッセージが届くと、ここに表示されます。' }),
     ));
     return;
   }

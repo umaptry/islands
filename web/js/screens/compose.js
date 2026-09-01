@@ -130,8 +130,8 @@ export function setupCompose() {
       $('composeSubmit').textContent = editing ? '保存' : '投稿する';
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
-        ? 'まずは1つ、書いてみましょう。この文章だけで、地図の中のどこに立つかが決まります。'
-        : 'やってきたこと・やってみたいことを書いてください。この文章だけで、地図の中のどこに立つかが決まります。';
+        ? 'ためしに1つ、書いてみましょう。あなたの投稿に合わせて投稿される島の位置が決まります。'
+        : '取り組みや関心を書いてください。あなたの投稿に合わせて投稿される島の位置が決まります。';
 
       body.value = editing ? editing.body : '';
       $('composeMotivation').value = editing
