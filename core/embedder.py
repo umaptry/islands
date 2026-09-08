@@ -37,8 +37,6 @@ class GeminiEmbedder:
     """Gemini API embeddings via REST (httpx). Bypasses the SDK's internal
     tenacity retry so we have full control over rate-limit pacing."""
 
-    _API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
-
     def __init__(self, api_key, model="gemini-embedding-2", dimensions=384,
                  task="sentence similarity"):
         import httpx

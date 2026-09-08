@@ -65,6 +65,7 @@ export function setupIntro() {
 // ---------------------------------------------------------------- sign in
 
 let pendingEmail = '';
+let registerIntent = false;
 const RESEND_COOLDOWN_MS = 60_000;
 
 function showStep(name) {
@@ -178,8 +179,10 @@ export function setupAuth() {
 
   screen('auth', {
     enter: (_params, query) => {
-      const register = query?.get('intent') === 'register';
-      document.querySelector('#auth [data-step="email"] h2').textContent = register ? 'アカウント作成' : 'ログイン';
+      registerIntent = query?.get('intent') === 'register';
+      const title = registerIntent ? 'アカウント作成' : 'ログイン';
+      document.querySelector('#auth [data-step="email"] h2').textContent = title;
+      document.querySelector('#auth [data-step="code"] h2').textContent = title;
       showStep('email');
       $('authError').textContent = '';
       paintSend();

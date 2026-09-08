@@ -150,7 +150,7 @@ export function setupCompose() {
       $('composeSubmit').textContent = editing ? '保存' : '投稿する';
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
-        ? 'ためしに1つ、書いてみましょう。あなたの投稿に合わせて投稿される島の位置が決まります。'
+        ? 'ためしに1つ投稿してみましょう。'
         : '取り組みや活動内容を30〜140文字で書いてください。';
 
       body.value = draft?.body ?? (editing ? editing.body : '');
