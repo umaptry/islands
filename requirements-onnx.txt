@@ -1,0 +1,5 @@
+# E5 development, tests and rollback images only.
+-r requirements.txt
+onnxruntime==1.29.0
+tokenizers==0.22.2
+huggingface-hub==1.26.0

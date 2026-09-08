@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .cache/
 output/
+.release-artifacts/
+node_modules/
 .playwright-cli/
 .pytest_cache/
 .claude/

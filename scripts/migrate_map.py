@@ -33,6 +33,13 @@ def read_posts(store):
         last = batch[-1]["id"]
 
 
+def identities(rows):
+    result = {r["id"]: (r["body"], r["updated_at"]) for r in rows}
+    if len(result) != len(rows):
+        raise RuntimeError("Duplicate post IDs")
+    return result
+
+
 def write(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +60,14 @@ def prepare(args):
     app.state["local_mode"] = False
     app.state["model"] = CachedEmbedder(load_embedder(), store, app.state["manifest"]["embedding"])
     old = read_posts(store)
-    write(args.backup, {"version": runtime["active_version"], "rows": old})
+    if Path(args.output).exists():
+        raise FileExistsError("Output already exists; validate it or choose new snapshot paths")
+    if getattr(args, "resume", False):
+        backup = json.loads(Path(args.backup).read_text(encoding="utf-8"))
+        if backup["version"] != runtime["active_version"] or identities(backup["rows"]) != identities(old):
+            raise RuntimeError("Posts or runtime changed; prepare a new snapshot")
+    else:
+        write(args.backup, {"version": runtime["active_version"], "rows": old})
     new = []
     for row in old:
         x, y, cluster, terms, vec, vec_c = app.project(row["body"])
@@ -74,10 +88,14 @@ def maintenance(args):
 def apply(args):
     data = json.loads(Path(args.input).read_text(encoding="utf-8"))
     store = connect()
+    if not data.get("next_version") or data.get("next_version") == data.get("expected_version"):
+        raise RuntimeError("A distinct target map version is required")
+    expected = identities(data["rows"])
+    if store.runtime_status()["active_version"] != data["expected_version"]:
+        raise RuntimeError("Unexpected active map version")
     if not args.execute:
         current = read_posts(store)
-        expected = {r["id"]: (r["body"], r["updated_at"]) for r in data["rows"]}
-        actual = {r["id"]: (r["body"], r["updated_at"]) for r in current}
+        actual = identities(current)
         if expected != actual:
             raise RuntimeError("Posts changed since preparation; prepare a new snapshot")
         print(f"Dry run: {len(current)} posts match. No writes performed.")
@@ -129,6 +147,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("prepare")
     p.add_argument("--backup", required=True); p.add_argument("--output", required=True)
+    p.add_argument("--resume", action="store_true", help="Reuse an unchanged backup and completed embedding cache batches")
     p.set_defaults(run=prepare)
     p = sub.add_parser("maintenance"); p.add_argument("state", choices=["on", "off"]); p.set_defaults(run=maintenance)
     p = sub.add_parser("apply"); p.add_argument("--input", required=True); p.add_argument("--execute", action="store_true"); p.set_defaults(run=apply)

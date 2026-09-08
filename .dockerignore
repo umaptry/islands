@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .env
 .cache/
+node_modules/
 output/
 .playwright-cli/
 tests/

@@ -162,7 +162,7 @@ AUC 0.812 → 0.890、同topic・異topicの差 0.047 → 0.175 になりまし�
 ## ローカルで動かす
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-onnx.txt
 python -m uvicorn app:app --reload --port 7860
 ```
 

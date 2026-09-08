@@ -1,104 +1,101 @@
 # islands 運用手順
 
-更新日: 2026-09-08。以下は今回の追加コードに対応する手順案。
-新マイグレーション・Gemini移行・復旧の本番リハーサルは未実施。
-未検証の手順を「復旧確認済み」として扱わない。
+更新日: 2026-09-08。実装・検証結果と本番反映状況を分けて記録する。
 
-## リリースを分ける
+## 確定した対象と管理者
 
-1. E5/v1のまま操作・外観とモデル整合性保護をリリースする。
-2. 別領域でGeminiの成果物と既存投稿の計算値を準備する。
-3. 品質比較と復旧リハーサルを通してから、メンテナンスでDB・artifacts・コンテナを同時に切り替える。
+| 対象 | 継続利用する環境 |
+|---|---|
+| 運用管理 | umaptry@gmail.com / GitHub umaptry |
+| GCP | gen-lang-client-0999045451 |
+| Cloud Run | islands / asia-northeast1 |
+| 公開URL | https://islands-vfjsyo6oyq-an.a.run.app（最新成功デプロイで確認） |
+| Supabase | soznrzkhvktzxlslpphm |
+| GitHub | umaptry/islands |
+| 暫定Geminiキー | otofuya22@gmail.comの既存キー。継続利用し、発行元を削除しない |
+| runtime SA | cloud-run-runtime@gen-lang-client-0999045451.iam.gserviceaccount.com |
+| deploy SA | github-deploy@gen-lang-client-0999045451.iam.gserviceaccount.com |
+| WIF | projects/657692547640/locations/global/workloadIdentityPools/github-pool/providers/github-provider |
 
-現在のCIは1のE5リリース用であり、Gemini切替後の通常デプロイにはそのまま使わない。
-Gemini切替を始める前に `DEPLOY_ENABLED=false` で自動リリース・cleanupを止める。
-Gemini用のprovider・Secret・artifact版を明示したCIへの変更と再検証が終わるまで再開しない。
+gen-lang-client-0496696977への移転・新サービス作成は行わない。他アプリ、共有プロジェクト、Googleアカウント自体は整理対象外。
 
-## 事前検証
+## 今回確認した結果
 
-ローカルで利用可能なPythonを使い、作業ディレクトリをリポジトリルートにする。
+- GitHub CLIをumaptryで認証し、ADMINを確認。`DEPLOY_ENABLED=false` に変更済み。既存runは終了済みだった。
+- 最新成功デプロイ（run 34224490347）はislands-vfjsyo6oyqでstore_ok=true・投稿6件を確認。旧KOTOBA_MAP_URLのislands-6roec5boqaはstore_ok=falseだったが、現行本番の結果と混同しない。
+- GCP CLIはumaptryでCloud Run取得不可。otofuya22でも対象projectのIAM取得不可。GCP管理権限の集約は未実施。
+- ローカル `.env` のGeminiキーで合成テキスト1件の疎通成功。384次元、L2ノルム1.0。Supabase接続情報はローカルに未設定。
+- 同梱manifestは `onnx / kotoba-map-v1`。旧資料の「providerがgeminiで不整合」という記述は現状に当てはまらない。manifestの手編集・checkoutによる巻き戻しは不要。
+- Python回帰131件と追加復旧2件、Node回帰5件、DB29件、Playwright8件（375/390/768/1440px）成功。追加変更後の結果はリリース記録で更新する。
+- Gemini成果物ビルド、品質比較、本番migration、復旧リハーサル、本番切替、24時間監視は完了記録が揃うまで未完了扱い。
+
+## 作業環境と認証
+
+Python 3.12を使用。このPCでは `C:/Users/zk-ht/AppData/Local/Programs/Python/Python312/python.exe` が利用可能。
+ローカルE5は `requirements-onnx.txt`、テストは `requirements-test.txt`、学習は `requirements-build.txt` を使用する。`requirements.txt` はGemini配信用。
 
 ```powershell
-python -m pytest tests/ -v --tb=short
-node --test tests/frontend/*.test.mjs
-npm install --no-save @playwright/test@1.55.0
-npx playwright install chromium
-npx playwright test
-npx --yes supabase@2.39.2 start
-npx --yes supabase@2.39.2 test db
+gh auth status
+gh repo view umaptry/islands --json viewerPermission
+gcloud auth list
+gcloud run services describe islands --project gen-lang-client-0999045451 --region asia-northeast1 --account umaptry@gmail.com
 ```
 
-Supabaseローカル検証にはDockerが必要。CLI設定の根拠は
-[Supabase公式](https://supabase.com/docs/guides/local-development/cli/config)、
-ブラウザCIの根拠は [Playwright公式](https://playwright.dev/docs/ci-intro)。
-ブラウザ結果は `output/`。参照側は指定フォルダで `npx next dev --webpack` を起動し、
-既存devプロセスとのロック競合を確認する。ユーザーが起動したプロセスを無断終了しない。
+GCPはプロジェクトの表示名ではなく実IDを明示する。umaptryに権限がなければ既存管理者が付与する。別プロジェクトを作って代替しない。Supabaseもumaptry管理の既存projectへログインする。
+WIFは対象repositoryとmainに制限し、deploy SAとruntime SAを分離する。runtimeには必要なSecretのみaccessorを付与する。
 
-Node回帰5件とJavaScript構文チェックはこの作業中に成功。
-Pythonの113件成功は変更前の基準結果。追加後のPython、ブラウザ、DBは未実行。
-新CIジョブを追加したことと、CIが成功したことを区別する。
+## 変更前の保全とDB準備
 
-## DBマイグレーションとSecret
+1. `DEPLOY_ENABLED=false` と実行中workflowの有無を確認する。
+2. 現行traffic/revision/image digest、SA、設定、Secret版番号、E5成果物4点のhashを非公開のリリース記録に保存する。
+3. DB全体（Authを含む復元範囲を確認）とStorage実体をバックアップする。migrate_mapのJSONは計算値スナップショットであり完全バックアップではない。
+4. 隔離DBで全migrationと `supabase test db` を通す。ローカルにはDockerが必要。GitHubのdatabase-testでも実行する。
+5. 本番のmigration履歴を確認し、`20260908000000_model_runtime.sql` と `20260908010000_runtime_write_lock.sql` の未適用分のみ適用する。手動SQL適用歴があればCLI履歴と整合させる。
+6. DB接続を復旧し、E5/v1のまま `MAP_RUNTIME_CHECK=1` のリリースを先行させる。healthのstore_ok/ready/compatible=trueと版一致を確認する。
 
-`supabase/migrations/20260908000000_model_runtime.sql` をE5保護リリースより先に適用する。
-ローカルで全migrationsを再生してRLS/Storageテストを通し、対象projectの適用履歴を確認する。
-SQL Editorでの手適用とCLI適用を混在させる場合、履歴の一致も確認する。
+## Gemini成果物と品質判定
 
-追加するのはruntime行、サーバー専用embedding cache、直接書き込みの保守制御、
-service専用 `apply_map_version` RPC。デフォルトはE5/v1かつmaintenance=falseなので
-旧アプリを停止せずにDBを準備できる。適用を省くと新CI候補はreadyチェックで失敗する。
-
-本番SecretはGoogle Secret Managerで版を固定し、Cloud Run runtimeサービスアカウントに
-必要なSecretへのaccessorを付与する。キーの値をコマンド引数・ログ・Gitに書かない。
-
-| 設定 | E5保護リリース | Geminiリリース |
-|---|---|---|
-| EMBEDDING_PROVIDER | `onnx` | `gemini` |
-| MAP_RUNTIME_CHECK | `1` | `1`（本番Geminiは必須） |
-| MAP_ARTIFACTS_DIR | 同梱`artifacts` | Geminiのimmutableディレクトリ |
-| SUPABASE_SERVICE_KEY | Secret参照 | 同じDBのSecret参照 |
-| GEMINI_API_KEY | 不要 | `gemini-api-key:<固定版>` などのSecret参照 |
-| SUPABASE_URL / ANON_KEY | 既存project | 同じproject |
-
-`gcloud run deploy` の `--set-secrets` はSupabaseとGeminiの両方を含め、既存Secretを
-意図せず消さない。環境変数も同様に全必要値を含める。Secret名と現在のIAMは未確認。
-
-## E5候補を確認して昇格
-
-CIはテスト→image push→候補リビジョン0%→health/config/static確認→100%へ昇格する。
-候補の `/api/health` で次を一致させる。
-
-- `store=supabase`, `store_ok=true`, `ready=true`
-- `embedding.provider=onnx`, `embedding.model=intfloat/multilingual-e5-small`
-- `artifact_version=active_map_version=kotoba-map-v1`, `artifact_compatible=true`
-- `maintenance=false`、公開configのmap_versionも一致
-
-併せて参照との差分スクリーンショット、実際の画像保存、OTP・反応・コメントの往復を確認する。
-現在のCI静的チェックだけでは画面の品質承認を代替できない。
-
-## Geminiのビルドと既存投稿の準備
-
-現在の `artifacts/` を直接上書きしない。旧3ファイルとmanifest、旧DB計算値、
-旧コンテナのdigestを同じリリース記録に保存する。旧コンテナはcleanup対象から外す。
-旧DBの完全バックアップ、Storageのバックアップも別途取得し、復元可否を確認する。
-移行スクリプトが保存するのは計算値の復旧用スナップショットで、完全DBバックアップではない。
-
-以下の `output/` はGitとDocker送信対象外。ファイルには投稿本文とベクトルが含まれるため
-アクセスを制限し、運用保管先へ移すときも公開バケットを使わない。
+キーは既存のプロセス環境または非公開設定から読み、コマンド引数や履歴へ値を書かない。
+API上限はAI Studioの当該projectで確認する。資料の無料枠数値を固定仕様と見なさない。
+`GEMINI_REQUESTS_PER_MINUTE=60` と `GEMINI_ITEMS_PER_MINUTE=90` はプロセス単位の既定値。
+複数コンテナ合計の制限やTPM/RPD保証ではない。429時は停止・キャッシュ再利用し、無断で課金枠を変更しない。
 
 ```powershell
 $env:EMBEDDING_PROVIDER = 'gemini'
 $env:MAP_BUILD_VERSION = 'islands-gemini-20260908-v1'
 python scripts/build_seed_map.py --artifacts output/gemini-v1
 python scripts/build_seed_map.py --artifacts output/gemini-v1 --verify
+python scripts/compare_map_release.py --baseline artifacts --candidate output/gemini-v1 --output output/quality-gemini-v1.json
+python scripts/artifact_release.py pack --source output/gemini-v1 --output output/gemini-v1.zip --provider gemini --version islands-gemini-20260908-v1 --quality-report output/quality-gemini-v1.json
 ```
 
-Geminiキーは事前にプロセス環境に渡す。`--fast` は品質確認を省くため移行には使わない。
-成果物は教師UMAP、encoder、vectorizers、cluster、重心、類似度校正、manifestを一組で生成する。
-ビルド完了後も意味類似度と近傍品質を現行評価コーパスでE5と比較し、既存品質ゲートだけでなく
-主要指標が下がっていないことを確認する。比較結果が未取得なので現在は移行不可。
+ビルドは `--fast` を使わず4ゲートすべてを通す。比較は同じラベル付きprobeで、本番と同じ384次元・前処理・学習済みvectorizersを使う。AUC、top1、特徴空間と地図それぞれの近傍精度がE5以上でなければ終了コード1。比較未達の成果物を公開しない。
+packは合格レポートとmanifest hashの一致を要求し、4成果物だけをZIPへ格納する。投稿本文・再計算JSONは配布しない。
+ZIPをislands専用の非公開GCSバケットへ新しいオブジェクト名で保存する。public access prevention、versioningを有効にし、CIには当該バケットのobjectViewerだけを付与する。既存名を上書きせず `--if-generation-match=0` を使用する。
+リリース選択は `gs://bucket/object.zip#generation` とZIP全体のSHA-256で固定する。
 
-準備用プロセスにSupabaseのservice権限を設定してから実行する。
+## CIの操作
+
+`.github/workflows/ci.yml` は次の3操作を持つ。通常pushは `DEPLOY_ENABLED=true` の時だけリリースする。
+
+| workflow_dispatch action | 挙動 |
+|---|---|
+| test | テストのみ |
+| audit | 既存CIのWIFでCloud Run・IAM・API・Secret版メタデータを読み取り。秘密値は取得しない |
+| migration-candidate | DEPLOY_ENABLED=falseでも明示起動可。候補を0%で作成・確認し、昇格しない |
+| release | DEPLOY_ENABLED=trueが必要。readyな候補のみ、検証したrevisionへ100%昇格 |
+
+共通variablesは既存WIF/deploy SA/runtime SA、SUPABASE_URL/ANON_KEYと `SUPABASE_SERVICE_KEY_VERSION`（固定の整数）。
+通常pushの選択には `EMBEDDING_PROVIDER`, `MAP_ARTIFACT_VERSION`, `MAP_ARTIFACT_URI`, `MAP_ARTIFACT_SHA256` を使う。
+Gemini時は `GEMINI_API_KEY_VERSION`（Secret Managerの固定の整数）も設定する。GitHub SecretのGEMINI_API_KEYを本番コンテナへ直渡ししない。
+手動実行ではprovider/artifact_version/artifact_uri/artifact_sha256を明示する。
+既存サービスが存在しなければ停止し、新規公開サービスは自動作成しない。環境変数とSecretはupdateで変更し、既存OAuth等の設定を保持する。
+Docker target=geminiにはONNXモデルや推論・学習依存を含めず、target=onnxは復旧用モデルを同梱する。イメージのbytesとdigestはActions summaryへ記録する。
+自動cleanupは削除処理を行わない。DEPLOY_ENABLEDをtrueへ変えるだけではデプロイは開始されない。
+
+## 投稿再計算とメンテナンス切替
+
+Supabase service key等を準備プロセスへ設定する。ファイルは非公開のoutput配下に保存する。
 
 ```powershell
 $env:MAP_ARTIFACTS_DIR = (Resolve-Path output/gemini-v1).Path
@@ -106,35 +103,22 @@ python scripts/migrate_map.py prepare --backup output/e5-before.json --output ou
 python scripts/migrate_map.py apply --input output/gemini-posts.json
 ```
 
-2つ目のコマンドはdry-run。prepareはDBを変更しない。ID/本文/updated_at/件数が
-準備時から変わっていれば再準備する。保存先が既存なら上書きせず失敗する。
-準備時のGemini入力は本番と同じDB cacheに残り、同じ入力の再利用に使う。
+prepareは投稿・runtimeを変更しないが、サーバー専用embedding_cacheへ書き込む。途中でAPI制限に当たった場合、同じbackup/outputで `prepare --resume` を使う。版・ID・本文・更新時刻が変わっていれば再利用せず、新しい保存先で再準備する。
 
-## 短時間メンテナンスで切替
+1. migration-candidateを明示起動してGeminiコンテナを先に作る。新モデル/成果物/公開configを検査し、DBとの不一致はこの段階だけ許容する。
+2. アプリ内で位置変更を案内する。別途指示のない外部メール等は送らない。
+3. `python scripts/migrate_map.py maintenance on`。API、直接DB、Storage書き込み停止を確認する。
+4. applyのdry-runでID/本文/更新時刻/件数/現行版を再確認。不一致なら適用せずE5側を再開して再準備する。
+5. `python scripts/migrate_map.py apply --input output/gemini-posts.json --execute`。RPCは全計算値とDB版を一括更新し、途中不一致なら全体を取り消す。
+6. `verify_release.py --phase maintenance` に候補URL/provider/version/supabase-urlを渡す。DB版一致・compatible=true・maintenance=true・ready=falseを要求する。
+7. 候補の既存投稿・地形・読み取りを確認後、記録済みrevisionへ `gcloud run services update-traffic islands --project gen-lang-client-0999045451 --region asia-northeast1 --to-revisions REVISION=100`。
+8. `maintenance off` の後、同じverifyを `--phase ready` で実行する。正式URLでも確認する。
+9. 投稿・本文編集・画像・本人による認証・反応・コメントを確認し、Gemini使用量と遅延を測定する。
+10. 通常push用のGemini設定を固定し、CI再リリースを確認してから自動運用へ戻す。
 
-1. Geminiコンテナを別image digestでビルドし、Secret・provider・新artifactsを含めて0%候補へデプロイする。まだDBはE5なのでartifact_compatible=falseでよい。
-2. 「マップ更新で投稿位置が変わる」ことをアプリ内案内に表示する。外部へのメール等は別途送信指示がない限り送らない。
-3. `python scripts/migrate_map.py maintenance on`。直接API/DB/Storageの書き込みが止まったことを確認する。
-4. dry-runをもう一度実行し、差分がなければ下記のapplyを実行する。
+## 復旧とデータ保持
 
-```powershell
-python scripts/migrate_map.py apply --input output/gemini-posts.json --execute
-```
-
-RPCはruntimeをロックし、現行版と全live投稿の件数・ID・本文・更新時刻を検査。
-計算列とactive_versionを1トランザクションで変更し、1件でも不一致なら全変更を取り消す。
-投稿本文・画像・反応・コメント・アカウント・投稿IDは変更しない。maintenanceはONのまま。
-
-5. 候補healthでGeminiモデル・新artifact版・DB版・compatible=trueを確認する。保守中のready=falseは想定どおり。
-6. 候補の読み取りAPI・地形・既存投稿を確認する。保守中でも版が一致する候補のGETは許可される。旧版APIは版不一致で503。
-7. 候補に100%トラフィックを向け、`maintenance off`。ready=trueを確認する。
-8. 本人操作で投稿・画像・反応・コメントのスモークを行う。画面・DB・モデル版、ID/本文/画像/社会データ保持を比較する。
-
-候補のルーティングとSecret設定は現在未実施。新マップ画像、API結果、品質比較をリリース記録に残す。
-
-## 復旧
-
-公開再開前、または公開後に本文・投稿集合が変わっていない場合:
+切替前に隔離DBで両経路をリハーサルし、ID/本文/画像実体/反応/コメント/アカウントの保持を確認する。
 
 ```powershell
 python scripts/migrate_map.py maintenance on
@@ -143,26 +127,28 @@ python scripts/migrate_map.py apply --input output/rollback-e5.json
 python scripts/migrate_map.py apply --input output/rollback-e5.json --execute
 ```
 
-その後、保存したE5コンテナdigestのリビジョンへトラフィックを戻す。
-DB版=旧artifacts版、provider=onnx、compatible=trueを確認してmaintenanceを解除する。
-コンテナだけを旧版へ戻すとDBのGemini座標と混ざるため解除しない。
+公開後に投稿集合や本文が変わっていれば通常rollbackは停止する。旧E5 provider/artifactsを指定して `rollback --reproject` で現在の投稿を再計算する。古い全DBバックアップを戻して新規投稿や反応を消さない。
+DBを戻した後に保存したE5 revisionへtrafficを戻す。DB/成果物/モデル版が揃ってからmaintenanceを解除する。コンテナだけ戻さない。
 
-公開後に投稿が追加/削除、本文が編集された場合、通常のrollbackは意図的に停止する。
-その場合は旧版のproviderと旧artifactsディレクトリを指定し、`rollback --reproject` を使う。
-現在存在する全投稿を旧モデルで再投影するため、新投稿・本文・社会データを維持できる。
-例: `$env:EMBEDDING_PROVIDER='onnx'`、`$env:MAP_ARTIFACTS_DIR` に保存したE5ディレクトリを設定し、
-`python scripts/migrate_map.py rollback --backup output/e5-before.json --output output/rollback-current.json --reproject`。
-生成物をdry-run→applyしてから旧コンテナへ戻す。この復旧経路の実行試験は未実施で、
-本番移行前に投稿・反応・画像を失わないリハーサルを行う必要がある。
-完全DBバックアップの巻き戻しは新しい社会データを失うため、自動的に選ばない。
+## 監視・整理・記録
 
-## 監視とリリース記録
+公開後24時間、ready/store_ok/artifact_compatibleとprovider/model/version、503/429、埋め込み遅延、メモリ、Supabase応答、認証を観測する。Monitoringと通知先は実リソースを確認・設定して記録し、READMEの記述だけで稼働済みとしない。
+E5の復旧用image/成果物/設定/計算値は移行後30日以上保持する。
+整理候補は今回不要になったislands専用のservice/image/Secret/WIF等だけ。現行参照・暫定キー・復旧用途・共有用途のあるものは保持する。リソース一覧と根拠が揃ってから削除し、削除後に本番を再確認する。
+リリース記録には確認日時、git SHA、image digest/サイズ、revision/traffic、Secret版、成果物hash、migration履歴、件数、品質・復旧・画面テスト結果、監視開始/終了時刻を残す。秘密値と実投稿本文を公開記録へ含めない。
 
-HTTP200だけでなくhealthのready、store_ok、artifact_compatible、provider/model/版を監視。
-503/429率、embedding遅延、Cloud Runメモリ、Supabase応答時間、OTP送信失敗を観測する。
-Cloud Monitoringの実チェック・通知先・アラートは未確認。READMEにあるだけで有効とはみなさない。
-`keepalive.yml` は手動起動のみで、定期実行を前提にしない。
+## 引き継ぎ資料
 
-リリースごとに確認時刻、git SHA、image digest、revision、traffic、resources、manifest hashes、
-DB migration履歴、active_version、件数、品質結果、画面比較、復旧結果を記録する。
-Secretは版番号までとし、値を記録しない。
+1. [環境構成マップ](https://claude.ai/code/artifact/3902e970-3c3c-40a9-9f34-52572cffd2d3)
+2. [Gemini移行手順](https://claude.ai/code/artifact/a62dfb40-1160-4db1-8fa1-ec1e82a42c47)
+3. この運用手順
+
+外部2資料は参考の過去記録。0496696977への移転、他アプリの削除、APIキーの平文入力、CI variable変更だけでデプロイする手順は採用しない。最新の対象・順序・実施状況は本書とリリース記録を優先する。
+
+### 2026-09-08 追加確認
+
+- 現行URL `https://islands-vfjsyo6oyq-an.a.run.app/api/health` の直接確認に成功。store_ok=true、ready=true、onnx/kotoba-map-v1、maintenance=false、投稿4件（時点値）。旧URLの結果を訂正。
+- KOTOBA_MAP_URLを現行URLに修正済み。
+- PR #1のCIでDB29件を含む全4系統のテストが成功。続く変更は再検証中。
+- Geminiは公開seed corpusの980ベクトルをキャッシュ済み。残りは `EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier`、quotaValue=1000で停止。日次枠回復または課金枠変更まで再試行しない。課金設定の変更は未実施。
+- 日次制限は専用エラーで即時停止し、繰り返しAPIへ送らない。取得済みキャッシュを保持する。

@@ -10,6 +10,8 @@ __pycache__/
 .venv/
 .env
 .cache/
+node_modules/
+.release-artifacts/
 output/
 .playwright-cli/
 .pytest_cache/
