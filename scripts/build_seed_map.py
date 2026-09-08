@@ -133,7 +133,8 @@ def build(args):
     model = load_embedder()
     if provider == "gemini":
         from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
-        model = CachedEmbedder(model, SQLiteEmbeddingCache(str(ROOT / ".cache" / "embeddings.sqlite3")), spec)
+        model = CachedEmbedder(model, SQLiteEmbeddingCache(os.environ.get(
+            "EMBEDDING_CACHE_PATH", str(ROOT / ".cache" / "embeddings.sqlite3"))), spec)
 
     print("[3/8] 448次元ベクトルを構築中...")
     features, token_lists, zero_rows, sparse_artifacts = build_hybrid_features(
@@ -200,6 +201,7 @@ def build(args):
             "feature_dim": int(features.shape[1]),
             "train_stats": train_stats,
             "gates": {name: detail for name, (_, detail) in gates.items()},
+            "quality_checked": not args.fast and passed,
             "nearest_neighbor_stats": nearest_neighbor_stats(coords),
         },
         "scale_bounds": scale_bounds,

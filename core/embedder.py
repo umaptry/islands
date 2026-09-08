@@ -15,6 +15,7 @@ core/features.py does not care which backend it is talking to.
 import os
 import re
 import time
+import threading
 
 import numpy as np
 
@@ -33,6 +34,27 @@ class EmbeddingUnavailable(RuntimeError):
     """Safe public error; never includes provider response bodies or credentials."""
 
 
+class RequestPacer:
+    """Per-process pacing; 429 handling remains necessary across replicas."""
+
+    def __init__(self, requests_per_minute, items_per_minute):
+        if requests_per_minute <= 0 or items_per_minute <= 0:
+            raise ValueError("Gemini rate limits must be positive")
+        self.requests, self.items = requests_per_minute, items_per_minute
+        self.next_at = 0.0
+        self.lock = threading.Lock()
+
+    def take(self, count, deadline):
+        with self.lock:
+            now = time.monotonic()
+            start = max(now, self.next_at)
+            if start >= deadline:
+                raise EmbeddingUnavailable("埋め込みの待機上限に達しました。再試行してください。")
+            self.next_at = start + max(60 / self.requests, 60 * count / self.items)
+        if start > now:
+            time.sleep(start - now)
+
+
 class GeminiEmbedder:
     """Gemini API embeddings via REST (httpx). Bypasses the SDK's internal
     tenacity retry so we have full control over rate-limit pacing."""
@@ -47,6 +69,10 @@ class GeminiEmbedder:
         self._task = task
         self._http = httpx.Client(timeout=20)
         self.provider = "gemini"
+        self._pacer = RequestPacer(
+            float(os.environ.get("GEMINI_REQUESTS_PER_MINUTE", "60")),
+            float(os.environ.get("GEMINI_ITEMS_PER_MINUTE", "90")),
+        )
 
     def _prompt(self, text):
         return f"task: {self._task} | query: {text}"
@@ -71,6 +97,7 @@ class GeminiEmbedder:
         import httpx
         deadline = time.monotonic() + 45.0
         for attempt in range(GEMINI_RETRIES):
+            self._pacer.take(len(chunk), deadline)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

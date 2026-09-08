@@ -1,12 +1,7 @@
 # Serving dependencies.
 #
-# Dense embeddings come from the Gemini API (gemini-embedding-2) in production.
-# ONNX Runtime + e5-small is kept as a test-only fallback so the test suite
-# runs without network access or an API key.
-google-genai>=1.0.0
-onnxruntime==1.29.0
-tokenizers==0.22.2
-huggingface-hub==1.26.0
+# Gemini serving uses REST through httpx. E5 dependencies are installed
+# explicitly from requirements-onnx.txt; provider failures never switch models.
 fastapi==0.111.1
 uvicorn[standard]==0.30.6
 pydantic==2.8.2

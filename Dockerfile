@@ -1,85 +1,44 @@
 # syntax=docker/dockerfile:1
-
-# Cloud Run / any Docker host. (Hugging Face Docker Spaces now need a paid
-# plan to create - see the deploy section of README.md.)
-#
-# No torch. The embedding model runs through ONNX Runtime and the frozen UMAP
-# encoder runs in numpy, which takes the image from ~1.9GB to roughly 900MB and
-# resident memory from ~1,250MB to ~965MB.
-FROM python:3.12-slim
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    HF_HOME=/app/.cache/huggingface \
-    OMP_NUM_THREADS=1 \
-    PORT=7860
-
+FROM python:3.12-slim AS base
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 PORT=7860
 WORKDIR /app
-
-# Run as a non-root uid that owns /app, so the HF_HOME cache below is
-# writable at container start. uid 1000 also matches what HF Spaces expects.
-RUN useradd -m -u 1000 user && mkdir -p /app/.cache && chown -R user /app
+RUN useradd -m -u 1000 user && chown user:user /app
 USER user
 ENV PATH=/home/user/.local/bin:$PATH
-
-COPY --chown=user requirements.txt .
+COPY --chown=user requirements.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
+COPY --chown=user core/ ./core/
+COPY --chown=user web/ ./web/
+COPY --chown=user app.py ./
+EXPOSE 7860
+CMD ["python", "app.py"]
 
-# The 449MB fp32 ONNX and the 17MB tokenizer are baked into the image.
-#
-# They used to be fetched on first start, which halved the image and kept it
-# inside the 0.5GB/month Artifact Registry free allowance. That traded registry
-# bytes for a start-up that depended on huggingface.co being reachable AND not
-# rate-limiting, and on 2026-08-21 that bill came due: two deploys in a row died
-# with `429 Too Many Requests` on the tokenizer, the container never answered
-# its port, and Cloud Run's 4-minute startup probe timed out. Nothing reached
-# production - Cloud Run refuses to shift traffic to a revision that never went
-# healthy - but the deploy could not land either.
-#
-# Baking them in costs roughly $0.05/month of registry storage (keep exactly one
-# image; see the cleanup step in README.md) and buys a container start that does
-# no network I/O at all, which is the property a live demo actually needs.
-# Revision and checksums must match core/config.py.
+# This context directory contains only the four verified map files.
+FROM base AS gemini
+ARG MAP_ARTIFACTS_SOURCE=.release-artifacts
+COPY --chown=user ${MAP_ARTIFACTS_SOURCE}/ /app/artifacts/
+ENV EMBEDDING_PROVIDER=gemini MAP_ARTIFACTS_DIR=/app/artifacts MAP_RUNTIME_CHECK=1
+RUN python -c "from core.artifact_manifest import validate_manifest; validate_manifest('/app/artifacts', 'gemini')"
+RUN python -c "import importlib.util; assert all(importlib.util.find_spec(n) is None for n in ('onnxruntime','tokenizers','huggingface_hub','torch','umap'))"
+
+# Default target retains E5 development and offline rollback support.
+FROM base AS onnx
+COPY --chown=user requirements-onnx.txt ./
+RUN pip install --no-cache-dir --user -r requirements-onnx.txt
+ENV HF_HOME=/app/.cache/huggingface EMBEDDING_PROVIDER=onnx MAP_ARTIFACTS_DIR=/app/artifacts
 ARG HF_REVISION=614241f622f53c4eeff9890bdc4f31cfecc418b3
 ARG ONNX_SHA256=ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665
 ARG TOKENIZER_SHA256=0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39
-RUN HF_REVISION="${HF_REVISION}" \
-    ONNX_SHA256="${ONNX_SHA256}" \
-    TOKENIZER_SHA256="${TOKENIZER_SHA256}" \
-    python - <<'PY'
+RUN HF_REVISION="${HF_REVISION}" ONNX_SHA256="${ONNX_SHA256}" TOKENIZER_SHA256="${TOKENIZER_SHA256}" python - <<'PY'
 import hashlib
 import os
-
 from huggingface_hub import hf_hub_download
-
-repository = "intfloat/multilingual-e5-small"
-revision = os.environ["HF_REVISION"]
-files = (
-    ("onnx/model.onnx", os.environ["ONNX_SHA256"]),
-    ("tokenizer.json", os.environ["TOKENIZER_SHA256"]),
-)
-
-for filename, expected in files:
-    path = hf_hub_download(repository, filename, revision=revision)
-    with open(path, "rb") as model_file:
-        actual = hashlib.file_digest(model_file, "sha256").hexdigest()
-    print(f"{filename}: {actual}")
-    if actual != expected:
-        raise RuntimeError(f"{filename}: expected {expected}, got {actual}")
+for filename, expected in (("onnx/model.onnx", os.environ["ONNX_SHA256"]), ("tokenizer.json", os.environ["TOKENIZER_SHA256"])):
+    path = hf_hub_download("intfloat/multilingual-e5-small", filename, revision=os.environ["HF_REVISION"])
+    with open(path, "rb") as handle:
+        if hashlib.file_digest(handle, "sha256").hexdigest() != expected:
+            raise RuntimeError(f"Checksum mismatch: {filename}")
 PY
-
-# Resolve both files from the cache above and never call the Hub. Without this,
-# hf_hub_download still makes one metadata request per file at start-up, and
-# that is exactly the call that was returning 429.
 ENV HF_HUB_OFFLINE=1
-
-COPY --chown=user artifacts/ ./artifacts/
-COPY --chown=user core/ ./core/
-COPY --chown=user web/ ./web/
-COPY --chown=user app.py .
-
-EXPOSE 7860
-# Not `uvicorn --port 7860`: Cloud Run injects $PORT (8080) and a hardcoded port
-# makes the container fail its startup probe. app.py's __main__ branch already
-# reads $PORT and falls back to 7860, so defer to it.
-CMD ["python", "app.py"]
+COPY --chown=user artifacts/ /app/artifacts/
+RUN python -c "from core.artifact_manifest import validate_manifest; validate_manifest('/app/artifacts', 'onnx')"
