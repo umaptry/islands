@@ -34,6 +34,10 @@ class EmbeddingUnavailable(RuntimeError):
     """Safe public error; never includes provider response bodies or credentials."""
 
 
+class EmbeddingDailyQuotaExceeded(EmbeddingUnavailable):
+    """Do not retry a daily quota; completed batches remain cached."""
+
+
 class RequestPacer:
     """Per-process pacing; 429 handling remains necessary across replicas."""
 
@@ -124,6 +128,16 @@ class GeminiEmbedder:
 
             if resp.status_code not in (429, 500, 502, 503, 504):
                 raise EmbeddingUnavailable("埋め込みサービスを利用できません。")
+
+            if resp.status_code == 429:
+                try:
+                    details = resp.json().get("error", {}).get("details", [])
+                    daily = any("PerDay" in violation.get("quotaId", "")
+                                for detail in details for violation in detail.get("violations", []))
+                except (ValueError, TypeError, AttributeError):
+                    daily = False
+                if daily:
+                    raise EmbeddingDailyQuotaExceeded("埋め込みAPIの日次上限に達しました。枠の回復後にキャッシュから再開してください。")
 
             if attempt == GEMINI_RETRIES - 1:
                 break

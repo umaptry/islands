@@ -130,3 +130,20 @@ def test_reproject_rollback_uses_current_bodies_and_ids(tmp_path, monkeypatch):
     assert seen == ["new body"]
     assert result["rows"][0]["id"] == "new-post"
     assert result["rows"][0]["body"] == "new body"
+
+
+def test_daily_quota_stops_without_retry_or_provider_details():
+    import httpx
+    from core.embedder import GeminiEmbedder, EmbeddingDailyQuotaExceeded
+    calls = []
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429, json={"error": {"message": "private provider detail", "details": [
+            {"violations": [{"quotaId": "EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier"}]}]}})
+    model = GeminiEmbedder("test-key")
+    model._http.close()
+    model._http = httpx.Client(transport=httpx.MockTransport(respond))
+    with pytest.raises(EmbeddingDailyQuotaExceeded) as error:
+        model.encode(["synthetic"])
+    assert len(calls) == 1
+    assert "private" not in str(error.value)

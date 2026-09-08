@@ -144,3 +144,11 @@ E5の復旧用image/成果物/設定/計算値は移行後30日以上保持す�
 3. この運用手順
 
 外部2資料は参考の過去記録。0496696977への移転、他アプリの削除、APIキーの平文入力、CI variable変更だけでデプロイする手順は採用しない。最新の対象・順序・実施状況は本書とリリース記録を優先する。
+
+### 2026-09-08 追加確認
+
+- 現行URL `https://islands-vfjsyo6oyq-an.a.run.app/api/health` の直接確認に成功。store_ok=true、ready=true、onnx/kotoba-map-v1、maintenance=false、投稿4件（時点値）。旧URLの結果を訂正。
+- KOTOBA_MAP_URLを現行URLに修正済み。
+- PR #1のCIでDB29件を含む全4系統のテストが成功。続く変更は再検証中。
+- Geminiは公開seed corpusの980ベクトルをキャッシュ済み。残りは `EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier`、quotaValue=1000で停止。日次枠回復または課金枠変更まで再試行しない。課金設定の変更は未実施。
+- 日次制限は専用エラーで即時停止し、繰り返しAPIへ送らない。取得済みキャッシュを保持する。

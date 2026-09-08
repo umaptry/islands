@@ -76,6 +76,16 @@ jobs:
         with:
           node-version: '22'
       - run: node --test tests/frontend/*.test.mjs
+  image-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: docker build --target onnx -t islands-e5-check .
+      - name: Verify offline E5 container
+        run: |
+          docker run --rm --network none islands-e5-check python -c "from core.embedder import load_embedder; from core.artifact_manifest import validate_manifest; validate_manifest('/app/artifacts','onnx'); assert load_embedder(provider='onnx').encode(['offline smoke']).shape == (1,384)"
+          docker image inspect islands-e5-check --format='E5 image bytes: {{.Size}}' >> "$GITHUB_STEP_SUMMARY"
   python-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -130,7 +140,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         (inputs.action == 'migration-candidate' ||
          (inputs.action == 'release' && vars.DEPLOY_ENABLED == 'true'))))
-    needs: [frontend-test, python-test, browser-test, database-test]
+    needs: [frontend-test, python-test, browser-test, database-test, image-test]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: production
