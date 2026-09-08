@@ -120,6 +120,18 @@ export const session = {
   userId: () => (current ? current.user_id : null),
   email: () => (current ? current.email : null),
 
+  async validateUser() {
+    if (!current || isLocal()) return;
+    const { url, anon_key } = config().supabase;
+    const token = await this.accessToken();
+    if (!token) return;
+    const response = await fetch(`${url}/auth/v1/user`, {
+      headers: { apikey: anon_key, authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401 || response.status === 403) this.signOut();
+    else if (!response.ok) throw new Error('認証状態を確認できませんでした。');
+  },
+
   async accessToken() {
     if (!current) return null;
     if (current.expires_at - REFRESH_MARGIN < Date.now()) await refresh();

@@ -49,7 +49,7 @@ export function setupIntro() {
       introIndex += 1;
       paintIntro();
     } else {
-      navigate('#/auth');
+      navigate('#/welcome');
     }
   });
   $('introBack').addEventListener('click', () => {

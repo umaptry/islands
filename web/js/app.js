@@ -43,7 +43,7 @@ setGuard((pattern) => {
   }
   // A finished account has no business back on the sign-in or setup screens.
   if (signedIn && (pattern === '#/auth' || pattern === '#/intro')) return '#/map';
-  if (signedIn && (pattern === '#/setup' || pattern === '#/guidance')) return '#/map';
+  if (signedIn && pattern === '#/setup') return '#/map';
   return null;
 });
 
@@ -86,6 +86,8 @@ async function boot() {
     try {
       const result = await api.get('/api/account/me');
       state.account = result.account;
+      // A deleted user can still have an unexpired JWT in this browser.
+      if (!state.account) await session.validateUser();
     } catch (error) {
       // A 401 means the token is no longer good; anything else means the server
       // is briefly unhappy, and throwing somebody out over that would cost them
@@ -100,8 +102,8 @@ async function boot() {
   // awaiting the map's first fetch, so the second navigate found it busy and
   // did nothing but change the address bar - leaving the hash saying #/intro
   // over a map screen.
-  if (!window.location.hash) {
-    let first = '#/welcome';
+  if (!window.location.hash || (!session.signedIn() && !state.account && adopted)) {
+    let first = '#/intro';
     if (state.account && state.account.display_name) first = '#/map';
     else if (session.signedIn()) first = '#/setup';
     history.replaceState(null, '', first);
