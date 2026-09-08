@@ -8,7 +8,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [test, release, migration-candidate]
+        options: [test, audit, release, migration-candidate]
         default: test
       provider:
         type: choice
@@ -34,6 +34,40 @@ env:
   CLOUD_RUN_REGION: asia-northeast1
   GCP_PROJECT_ID: gen-lang-client-0999045451
 jobs:
+  audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'audit' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@77e7a554d41e2ee56fc945c52dfd3f33d12def9a
+      - name: Read service identity and health without secrets
+        run: |
+          set -euo pipefail
+          gcloud run services describe islands --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" --format=json > /tmp/service.json
+          python3 - <<'PY'
+          import json, urllib.request
+          d=json.load(open('/tmp/service.json'))
+          s=d['spec']['template']['spec']
+          print(json.dumps({'url': d['status']['url'], 'traffic':d['status']['traffic'], 'service_account':s.get('serviceAccountName'), 'containers':[{'image':c['image'], 'resources':c.get('resources'), 'secret_refs':[{'name':e['name'],'ref':e['valueFrom']} for e in c.get('env',[]) if 'valueFrom' in e]} for c in s['containers']]}, indent=2))
+          for path in ['/api/health']:
+              with urllib.request.urlopen(d['status']['url']+path, timeout=120) as r:
+                  print(r.read().decode())
+          PY
+      - name: Read IAM, enabled APIs and secret version metadata
+        run: |
+          gcloud projects get-iam-policy "$GCP_PROJECT_ID" --format=json || true
+          gcloud services list --enabled --project "$GCP_PROJECT_ID" --format='value(config.name)' || true
+          for secret in supabase-service-key gemini-api-key; do
+            gcloud secrets versions list "$secret" --project "$GCP_PROJECT_ID" --format='table(name,state,createTime)' || true
+          done
   frontend-test:
     runs-on: ubuntu-latest
     steps:

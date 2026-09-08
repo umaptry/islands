@@ -1,8 +1,8 @@
 # islands システム構成
 
 2026-09-08追記: 最新の対象・実測結果は [運用手順](operations_runbook.md) を参照。
-GitHubのKOTOBA_MAP_URLは `https://islands-6roec5boqa-an.a.run.app`。
-今回の公開healthは `store_ok=false` で、接続復旧が必要。
+最新成功デプロイのURLは `https://islands-vfjsyo6oyq-an.a.run.app`。
+旧keepalive URLのstore_ok=falseを現行本番の障害と混同しない。
 以下のURL・revision等は過去の確認記録として扱う。
 
 確認日: 2026-09-08（JST）。「稼働確認」「リポジトリ設定」「今回追加・未反映」を区別する。

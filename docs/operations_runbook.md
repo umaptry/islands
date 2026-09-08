@@ -9,7 +9,7 @@
 | 運用管理 | umaptry@gmail.com / GitHub umaptry |
 | GCP | gen-lang-client-0999045451 |
 | Cloud Run | islands / asia-northeast1 |
-| 公開URL | https://islands-6roec5boqa-an.a.run.app（GitHub variableと公開healthで確認） |
+| 公開URL | https://islands-vfjsyo6oyq-an.a.run.app（最新成功デプロイで確認） |
 | Supabase | soznrzkhvktzxlslpphm |
 | GitHub | umaptry/islands |
 | 暫定Geminiキー | otofuya22@gmail.comの既存キー。継続利用し、発行元を削除しない |
@@ -22,12 +22,12 @@ gen-lang-client-0496696977への移転・新サービス作成は行わない。
 ## 今回確認した結果
 
 - GitHub CLIをumaptryで認証し、ADMINを確認。`DEPLOY_ENABLED=false` に変更済み。既存runは終了済みだった。
-- 公開healthはHTTP応答するが `store_ok=false`, `posts=null`, `model_version=kotoba-map-v1`。この既存DB接続問題の復旧が切替の前提。
+- 最新成功デプロイ（run 34224490347）はislands-vfjsyo6oyqでstore_ok=true・投稿6件を確認。旧KOTOBA_MAP_URLのislands-6roec5boqaはstore_ok=falseだったが、現行本番の結果と混同しない。
 - GCP CLIはumaptryでCloud Run取得不可。otofuya22でも対象projectのIAM取得不可。GCP管理権限の集約は未実施。
 - ローカル `.env` のGeminiキーで合成テキスト1件の疎通成功。384次元、L2ノルム1.0。Supabase接続情報はローカルに未設定。
 - 同梱manifestは `onnx / kotoba-map-v1`。旧資料の「providerがgeminiで不整合」という記述は現状に当てはまらない。manifestの手編集・checkoutによる巻き戻しは不要。
-- Python回帰131件、Node回帰5件、Playwright8件（375/390/768/1440px）成功。追加変更後の結果はリリース記録で更新する。
-- Gemini成果物ビルド、品質比較、DBテスト、本番migration、復旧リハーサル、本番切替、24時間監視は完了記録が揃うまで未完了扱い。
+- Python回帰131件と追加復旧2件、Node回帰5件、DB29件、Playwright8件（375/390/768/1440px）成功。追加変更後の結果はリリース記録で更新する。
+- Gemini成果物ビルド、品質比較、本番migration、復旧リハーサル、本番切替、24時間監視は完了記録が揃うまで未完了扱い。
 
 ## 作業環境と認証
 
@@ -81,6 +81,7 @@ ZIPをislands専用の非公開GCSバケットへ新しいオブジェクト名�
 | workflow_dispatch action | 挙動 |
 |---|---|
 | test | テストのみ |
+| audit | 既存CIのWIFでCloud Run・IAM・API・Secret版メタデータを読み取り。秘密値は取得しない |
 | migration-candidate | DEPLOY_ENABLED=falseでも明示起動可。候補を0%で作成・確認し、昇格しない |
 | release | DEPLOY_ENABLED=trueが必要。readyな候補のみ、検証したrevisionへ100%昇格 |
 
