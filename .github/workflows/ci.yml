@@ -65,7 +65,7 @@ jobs:
         run: |
           gcloud projects get-iam-policy "$GCP_PROJECT_ID" --format=json || true
           gcloud services list --enabled --project "$GCP_PROJECT_ID" --format='value(config.name)' || true
-          for secret in supabase-service-key gemini-api-key; do
+          for secret in supabase-service-key GEMINI_API_KEY; do
             gcloud secrets versions list "$secret" --project "$GCP_PROJECT_ID" --format='table(name,state,createTime)' || true
           done
   frontend-test:
@@ -214,7 +214,7 @@ jobs:
           IMAGE="$REPO@$DIGEST"
           SECRETS="SUPABASE_SERVICE_KEY=supabase-service-key:$SUPABASE_SECRET_VERSION"
           if [ "$PROVIDER" = gemini ]; then
-            SECRETS="$SECRETS,GEMINI_API_KEY=gemini-api-key:$GEMINI_SECRET_VERSION"
+            SECRETS="$SECRETS,GEMINI_API_KEY=GEMINI_API_KEY:$GEMINI_SECRET_VERSION"
           fi
           gcloud run deploy "$CLOUD_RUN_SERVICE" --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" \
             --image "$IMAGE" --no-traffic --tag "candidate-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \

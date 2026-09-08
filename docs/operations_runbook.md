@@ -1,6 +1,6 @@
 # islands 運用手順
 
-更新日: 2026-09-08。実装・検証結果と本番反映状況を分けて記録する。
+更新日: 2026-09-09。実装・検証結果と本番反映状況を分けて記録する。
 
 ## 確定した対象と管理者
 
@@ -23,7 +23,7 @@ gen-lang-client-0496696977への移転・新サービス作成は行わない。
 
 - GitHub CLIをumaptryで認証し、ADMINを確認。`DEPLOY_ENABLED=false` に変更済み。既存runは終了済みだった。
 - 最新成功デプロイ（run 34224490347）はislands-vfjsyo6oyqでstore_ok=true・投稿6件を確認。旧KOTOBA_MAP_URLのislands-6roec5boqaはstore_ok=falseだったが、現行本番の結果と混同しない。
-- GCP CLIはumaptryでCloud Run取得不可。otofuya22でも対象projectのIAM取得不可。GCP管理権限の集約は未実施。
+- GCPはumaptry@gmail.comがownerであることをブラウザとCLIの両方で確認し、CLI認証と既定projectを対象へ統一済み。
 - ローカル `.env` のGeminiキーで合成テキスト1件の疎通成功。384次元、L2ノルム1.0。Supabase接続情報はローカルに未設定。
 - 同梱manifestは `onnx / kotoba-map-v1`。旧資料の「providerがgeminiで不整合」という記述は現状に当てはまらない。manifestの手編集・checkoutによる巻き戻しは不要。
 - Python回帰131件と追加復旧2件、Node回帰5件、DB29件、Playwright8件（375/390/768/1440px）成功。追加変更後の結果はリリース記録で更新する。
@@ -42,13 +42,13 @@ gcloud run services describe islands --project gen-lang-client-0999045451 --regi
 ```
 
 GCPはプロジェクトの表示名ではなく実IDを明示する。umaptryに権限がなければ既存管理者が付与する。別プロジェクトを作って代替しない。Supabaseもumaptry管理の既存projectへログインする。
-WIFは対象repositoryとmainに制限し、deploy SAとruntime SAを分離する。runtimeには必要なSecretのみaccessorを付与する。
+WIFは `umaptry/islands` のmainだけに制限済み。deploy SAとruntime SAは分離済みで、runtimeのSecret accessorは `supabase-service-key` と `GEMINI_API_KEY` の個別Secretに限定済み。
 
 ## 変更前の保全とDB準備
 
 1. `DEPLOY_ENABLED=false` と実行中workflowの有無を確認する。
 2. 現行traffic/revision/image digest、SA、設定、Secret版番号、E5成果物4点のhashを非公開のリリース記録に保存する。
-3. DB全体（Authを含む復元範囲を確認）とStorage実体をバックアップする。migrate_mapのJSONは計算値スナップショットであり完全バックアップではない。
+3. `scripts/backup_supabase.py` でアプリ用テーブル、Authユーザー情報、Storage実体の論理バックアップを `output/` に保存する。Supabaseの基盤バックアップ範囲もdashboardで確認する。migrate_mapのJSONは計算値スナップショットであり完全バックアップではない。
 4. 隔離DBで全migrationと `supabase test db` を通す。ローカルにはDockerが必要。GitHubのdatabase-testでも実行する。
 5. 本番のmigration履歴を確認し、`20260908000000_model_runtime.sql` と `20260908010000_runtime_write_lock.sql` の未適用分のみ適用する。手動SQL適用歴があればCLI履歴と整合させる。
 6. DB接続を復旧し、E5/v1のまま `MAP_RUNTIME_CHECK=1` のリリースを先行させる。healthのstore_ok/ready/compatible=trueと版一致を確認する。
@@ -87,7 +87,7 @@ ZIPをislands専用の非公開GCSバケットへ新しいオブジェクト名�
 
 共通variablesは既存WIF/deploy SA/runtime SA、SUPABASE_URL/ANON_KEYと `SUPABASE_SERVICE_KEY_VERSION`（固定の整数）。
 通常pushの選択には `EMBEDDING_PROVIDER`, `MAP_ARTIFACT_VERSION`, `MAP_ARTIFACT_URI`, `MAP_ARTIFACT_SHA256` を使う。
-Gemini時は `GEMINI_API_KEY_VERSION`（Secret Managerの固定の整数）も設定する。GitHub SecretのGEMINI_API_KEYを本番コンテナへ直渡ししない。
+Gemini時は `GEMINI_API_KEY_VERSION`（Secret Managerの固定の整数）も設定する。参照先は既存の `GEMINI_API_KEY`。GitHub SecretのGEMINI_API_KEYを本番コンテナへ直渡ししない。
 手動実行ではprovider/artifact_version/artifact_uri/artifact_sha256を明示する。
 既存サービスが存在しなければ停止し、新規公開サービスは自動作成しない。環境変数とSecretはupdateで変更し、既存OAuth等の設定を保持する。
 Docker target=geminiにはONNXモデルや推論・学習依存を含めず、target=onnxは復旧用モデルを同梱する。イメージのbytesとdigestはActions summaryへ記録する。
@@ -152,3 +152,13 @@ E5の復旧用image/成果物/設定/計算値は移行後30日以上保持す�
 - PR #1のCIでDB29件を含む全4系統のテストが成功。続く変更は再検証中。
 - Geminiは公開seed corpusの980ベクトルをキャッシュ済み。残りは `EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier`、quotaValue=1000で停止。日次枠回復または課金枠変更まで再試行しない。課金設定の変更は未実施。
 - 日次制限は専用エラーで即時停止し、繰り返しAPIへ送らない。取得済みキャッシュを保持する。
+
+### 2026-09-09 追加確認
+
+- `umaptry@gmail.com` のGCP ownerを確認し、gcloud CLI認証を更新済み。WIF条件を `umaptry/islands` かつ `refs/heads/main` に限定した。
+- Cloud Run runtime SAのproject全体Secret accessorを外し、`supabase-service-key:1` と `GEMINI_API_KEY:1` の参照だけを個別付与した。Geminiの有効Secret版とローカル暫定キーは、値を表示せず同一性を確認した。
+- 非公開成果物バケット `gs://islands-map-artifacts-657692547640` をasia-northeast1に作成。uniform access、public access prevention、object versioningを有効化し、deploy SAにはobjectViewerだけを付与した。
+- deploy SAには監査用のIAM policy、Service Usage、Secretメタデータの読取ロールを付与した。秘密値の参照権限は付与していない。
+- 切替前論理バックアップを `output/backups/20260909-pre-gemini` に保存。accounts 3、posts 4、comments 1、Auth users 3、Storage objects 4（その他の対象テーブル0）をmanifestとSHA-256付きで記録した。
+- 本番へ `20260908000000_model_runtime.sql` と `20260908010000_runtime_write_lock.sql` を適用し、手動適用済みのinitialを含む3版を `supabase_migrations.schema_migrations` と同期した。確認時点はactive_version=`kotoba-map-v1`、maintenance=false、posts 4、accounts 3、embedding_cache 0。
+- GitHub Actions run 34246448487でPython、frontend、browser、DB、offline E5 imageと0%候補を検証。候補 `islands-00012-zow` を公開URLでもready=trueと確認後、同revisionへtrafficを100%固定した。
