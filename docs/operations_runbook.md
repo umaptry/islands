@@ -12,14 +12,14 @@
 | 公開URL | https://islands-vfjsyo6oyq-an.a.run.app（最新成功デプロイで確認） |
 | Supabase | soznrzkhvktzxlslpphm |
 | GitHub | umaptry/islands |
-| 暫定Geminiキー | otofuya22@gmail.comの既存キー。継続利用し、発行元を削除しない |
+| Geminiキー | 対象projectでユーザーが発行した有料キー。Secret Manager `GEMINI_API_KEY:2`。旧暫定キーは移行後の保持確認まで削除しない |
 | runtime SA | cloud-run-runtime@gen-lang-client-0999045451.iam.gserviceaccount.com |
 | deploy SA | github-deploy@gen-lang-client-0999045451.iam.gserviceaccount.com |
 | WIF | projects/657692547640/locations/global/workloadIdentityPools/github-pool/providers/github-provider |
 
 gen-lang-client-0496696977への移転・新サービス作成は行わない。他アプリ、共有プロジェクト、Googleアカウント自体は整理対象外。
 
-## 今回確認した結果
+## 初期確認の記録（最新状況は下記の本番切替記録を参照）
 
 - GitHub CLIをumaptryで認証し、ADMINを確認。`DEPLOY_ENABLED=false` に変更済み。既存runは終了済みだった。
 - 最新成功デプロイ（run 34224490347）はislands-vfjsyo6oyqでstore_ok=true・投稿6件を確認。旧KOTOBA_MAP_URLのislands-6roec5boqaはstore_ok=falseだったが、現行本番の結果と混同しない。
@@ -28,6 +28,29 @@ gen-lang-client-0496696977への移転・新サービス作成は行わない。
 - 同梱manifestは `onnx / kotoba-map-v1`。旧資料の「providerがgeminiで不整合」という記述は現状に当てはまらない。manifestの手編集・checkoutによる巻き戻しは不要。
 - Python回帰131件と追加復旧2件、Node回帰5件、DB29件、Playwright8件（375/390/768/1440px）成功。追加変更後の結果はリリース記録で更新する。
 - Gemini成果物ビルド、品質比較、本番migration、復旧リハーサル、本番切替、24時間監視は完了記録が揃うまで未完了扱い。
+
+### 有料キーへの更新と候補検証（2026-09-09）
+
+- ユーザーが対象projectで発行した有料キーを `GEMINI_API_KEY:2` に保存し、GitHubの `GEMINI_API_KEY_VERSION=2` を設定。キー値は記録しない。
+- `output/gemini-v1` に `islands-gemini-20260909-v1` の4成果物を生成。既存 `artifacts/` は維持。
+- 本番とホールドアウトの学習を同じ3000 epochへ統一（PR #3、全CI成功）。1500 epochでの汎化比率0.633も履歴として残し、同条件再評価では0.6872（基準0.65）。ドリフト0、決定性一致、NumPy/Torch最大差1.10e-06。固定ホールドアウトを再利用した再評価であり、独立の追加評価は次の100件比較による。
+- 公開 `scripts/probe_topics.jsonl` の100件でE5比較に合格。AUC 0.811629→0.896695、top1 0.29→0.52、特徴空間P@k 0.255→0.3525、地図P@k 0.1175→0.2025。
+- 比較レポート: `output/quality/islands-gemini-20260909-v1.json`。配布ZIP SHA-256: `877bf9d123a29d5480a59c434e0d014dab656238fcfe62d2082870121f8419c4`。
+- 非公開固定版: `gs://islands-map-artifacts-657692547640/releases/islands-gemini-20260909-v1.zip#1788907608171460`。
+- 切替前バックアップ: `output/backups/20260909-before-gemini-switch`。投稿4、accounts/Auth各3、comments 1、Storage画像4、energy_cells 6。
+- 投稿4件のGemini再計算を `output/gemini-posts-20260909.json`、E5計算値を `output/e5-before-gemini-20260909.json` に保存。本番適用結果は次節。
+
+### 本番切替と通常CIの確認（2026-09-09 JST）
+
+- 候補CI [34287609059](https://github.com/umaptry/islands/actions/runs/34287609059) 成功。保守開始、投稿4件の最終差分確認、移行RPC適用、候補のmaintenance検証、`islands-00014-jik` へのtraffic切替、保守解除、公開URLのready検証を実施した。
+- 通常リリースCI [34288478999](https://github.com/umaptry/islands/actions/runs/34288478999) も成功（2026-09-09 08:04 JST完了）。Python・frontend・browser・DB・image検証と候補検証・昇格が成功。コードはPR #3反映済み `de29887`。
+- 最新確認時のtrafficは `islands-00016-bum` に100%。image digestは `sha256:b4a8401ad8a00ce2f4d29b38748f813ffd4613ddf8fd22b968154e02f089d8bd`。公開healthはgemini / gemini-embedding-2 / 384次元、DB・成果物とも `islands-gemini-20260909-v1`、ready/store_ok/artifact_compatible=true、maintenance=false、投稿4件。
+- 通常CI変数をGemini・上記固定成果物URI/hash・Secret版2へ設定し、`DEPLOY_ENABLED=true` に復帰。変数変更後に明示的なreleaseを起動し、継続デプロイまで確認した。
+- 本番で一時テストユーザーのパスワード認証、アカウント作成、画像upload/read、投稿、本文編集、反応、コメント、投稿削除を確認。Geminiを使った投稿1.750秒・編集1.031秒。一時画像・ユーザーは削除済み。記録は `output/production-smoke-result.json`。メールOTP配送・本人によるログイン確認は未実施。ブラウザでは版変更後の再読込と地図表示を確認した。
+- 切替後バックアップは `output/backups/20260909-after-gemini-switch`。切替前とのローカル比較でaccounts 3・comments 1の全フィールド一致、投稿4件は座標・cluster_id・vec・vec_c・updated_atのみ変更、Storage画像4件はSHA-256一致。reactionsは前後0件。energy_cellsは6→10、embedding_cacheは0→7。
+- Artifact Registryの圧縮imageSizeBytesはE5 `islands-00012-zow` が562,499,829、Gemini候補 `islands-00014-jik` が239,801,373（約57.4%削減）。Docker展開後容量とは区別する。
+- E5復旧revision `islands-00012-zow`、digest `sha256:6e4b7fc946eeb70c6f0ac417bbc6ea0c7d803de68e6ef7c15a41eabd3ee9f96e` と計算値・成果物・バックアップは30日以上保持する。削除はまだ行っていない。
+- 未完了: 公開後24時間の観測、隔離環境で実CLIの通常rollbackと `rollback --reproject` をStorageまで含めて通す総合リハーサル、Supabase組織管理権限の集約確認、不要リソースの参照監査と整理。既存の復旧回帰テスト・DBテスト成功を総合リハーサル完了とは扱わない。
 
 ## 作業環境と認証
 
