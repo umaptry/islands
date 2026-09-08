@@ -19,7 +19,7 @@ select is(
 -- -----------------------------------------------------------------------
 select is(
   (select file_size_limit from storage.buckets where id = 'post-images'),
-  1048576,
+  1048576::bigint,
   'post-images file_size_limit is 1MB'
 );
 
