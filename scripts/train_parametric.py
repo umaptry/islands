@@ -271,11 +271,13 @@ def neighborhood_overlap(features, coords, query_features, query_coords, k=15):
 
 
 def evaluate_generalization(features, coords, graph_neighbors, ab_params, holdout=60,
-                            fit_epochs=1500, umap_epochs=UMAP_EPOCHS, k=15):
+                            fit_epochs=FIT_EPOCHS, umap_epochs=UMAP_EPOCHS, k=15):
     """Hold points out, retrain, and check they land among their semantic neighbours.
 
     Reported relative to the ceiling reached by the reference layout itself, so
-    the gate measures the encoder rather than the difficulty of the data.
+    the gate measures the encoder rather than the difficulty of the data. Use
+    the production training schedule here as well; a shorter holdout schedule
+    measures under-training instead of the frozen encoder recipe.
     """
     features = np.asarray(features, dtype=np.float32)
     coords = np.asarray(coords, dtype=np.float32)
