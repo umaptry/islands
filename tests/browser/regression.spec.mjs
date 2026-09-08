@@ -2,6 +2,9 @@ import { test, expect } from '@playwright/test';
 
 test('landing, anonymous guard and navigation fit each viewport', async ({ page }) => {
   await page.goto('/');
+  await expect(page.locator('#intro')).toHaveClass(/active/);
+  const slides = await page.locator('#slideTrack > .slide').count();
+  for (let i = 0; i < slides; i++) await page.locator('#introNext').click();
   await expect(page.locator('#welcome')).toHaveClass(/active/);
   await page.goto('/#/map');
   await expect(page.locator('#map')).toHaveClass(/active/);
@@ -11,6 +14,27 @@ test('landing, anonymous guard and navigation fit each viewport', async ({ page 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.locator('[data-route="#/post"]').click();
   await expect(page.locator('#auth')).toHaveClass(/active/);
+});
+
+test('new profile reaches guidance before the first post, including after reload', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#intro')).toHaveClass(/active/);
+  await page.evaluate(async () => {
+    const { session } = await import('/static/js/session.js');
+    const { navigate } = await import('/static/js/router.js');
+    const email = `guide-${crypto.randomUUID()}@example.com`;
+    const otp = await session.requestCode(email);
+    await session.verifyCode(email, otp.devCode);
+    await navigate('#/setup');
+  });
+  await page.locator('#setupName').fill('ガイド確認');
+  await page.locator('#setupSave').click();
+  await expect(page.locator('#guidance')).toHaveClass(/active/);
+  await page.reload();
+  await expect(page.locator('#guidance')).toHaveClass(/active/);
+  const slides = await page.locator('#guidanceTrack > *').count();
+  for (let i = 0; i < slides; i++) await page.locator('#guidanceNext').click();
+  await expect(page.locator('#compose')).toHaveClass(/active/);
 });
 
 test('draft survives navigation; panel cleanup and responsive modality', async ({ page }, info) => {
