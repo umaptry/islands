@@ -24,6 +24,17 @@ export function config() {
 
 export const isLocal = () => config().mode === 'local';
 
+export async function checkMapVersion() {
+  const response = await fetch('/api/config', { cache: 'no-store' });
+  if (!response.ok) return false;
+  const latest = await response.json();
+  if (cache?.map_version && latest.map_version !== cache.map_version) {
+    document.dispatchEvent(new CustomEvent('map:version-changed'));
+    return true;
+  }
+  return false;
+}
+
 // --- derived helpers, so no screen has to remember the shape of the payload --
 
 export function energyOf(post) {

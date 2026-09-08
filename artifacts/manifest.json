@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "artifact_version": "kotoba-map-v1",
+  "embedding": {
+    "provider": "onnx",
+    "model": "intfloat/multilingual-e5-small",
+    "dimensions": 384,
+    "task": "passage",
+    "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "preprocessing": "hybrid-raw35-concept65-dense65-sparse35-v1"
+  },
+  "feature_config": {
+    "dense_weight": 0.65,
+    "sparse_weight": 0.35,
+    "char_weight": 0.25,
+    "dense_raw_weight": 0.35,
+    "dense_concept_weight": 0.65,
+    "word_min_df": 1,
+    "word_max_features": 8000,
+    "char_min_df": 1,
+    "char_max_features": 6000,
+    "svd_components": 64
+  },
+  "feature_dimensions": 448,
+  "files": {
+    "seed_map.json": "527a2b429498a6563288a1bc27e4b9fce4cc680700704461454bddf9e0dcaac7",
+    "encoder.npz": "5b6a2432ee46e2800f2e1880482b11918cc3ad89be1a932e94f3ed3c83d82934",
+    "vectorizers.pkl": "40a5c40f7fa31da87d4a79a788f0adf08d4379e5e6ade91402b1437dc10df62b"
+  }
+}

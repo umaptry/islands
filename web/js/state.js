@@ -11,6 +11,8 @@ export const state = {
   posts: [],              // what is in the viewport right now
   postsById: new Map(),
   cells: [],              // the coarse layer, only when the viewport saturated
+  terrainGrid: null,
+  revision: 0,
   saturated: false,
   islands: [],            // named landmasses from /api/islands
   reactions: new Set(),   // "postId:kind" for everything I have reacted to
@@ -38,6 +40,7 @@ export function setPosts(posts, { saturated = false } = {}) {
   state.posts = posts;
   state.saturated = saturated;
   state.postsById = new Map(posts.map((post) => [post.id, post]));
+  state.revision += 1;
   notify('posts');
 }
 
@@ -57,7 +60,10 @@ const COUNT_KEYS = ['like_count', 'help_count', 'join_count', 'comment_count'];
 export function upsertPost(post) {
   if (!post) return;
   const index = state.posts.findIndex((entry) => entry.id === post.id);
-  const merged = { ...(index >= 0 ? state.posts[index] : {}), ...post };
+  const known = index >= 0 ? state.posts[index] : state.myPosts.find((p) => p.id === post.id)
+    || (state.selected?.id === post.id ? state.selected : null);
+  if (!known && !('body' in post)) return;
+  const merged = { ...known, ...post };
   const touchedCount = COUNT_KEYS.some((key) => key in post);
   if (touchedCount && !('energy' in post)) merged.energy = null;
   if (index >= 0) state.posts[index] = merged;
@@ -68,6 +74,7 @@ export function upsertPost(post) {
   }
   const mine = state.myPosts.findIndex((entry) => entry.id === post.id);
   if (mine >= 0) state.myPosts[mine] = { ...state.myPosts[mine], ...merged };
+  state.revision += 1;
   notify('posts');
 }
 
@@ -76,6 +83,7 @@ export function removePost(postId) {
   state.postsById.delete(postId);
   state.myPosts = state.myPosts.filter((post) => post.id !== postId);
   if (state.selected && state.selected.id === postId) state.selected = null;
+  state.revision += 1;
   notify('posts');
 }
 

@@ -177,19 +177,15 @@ def build_hybrid_features(texts, model, fit_sparse=True, sparse_artifacts=None):
     sparse_features, token_lists, zero_rows, sparse_artifacts = build_sparse_features(
         texts, fit=fit_sparse, artifacts=sparse_artifacts
     )
-    raw_dense = model.encode(
-        [normalize_text(text) for text in texts],
-        show_progress_bar=len(texts) > 20,
-        normalize_embeddings=True,
-    )
     concept_docs = [
         " ".join(terms) or normalize_text(text) for terms, text in zip(token_lists, texts)
     ]
-    concept_dense = model.encode(
-        concept_docs,
+    combined_dense = model.encode(
+        [normalize_text(text) for text in texts] + concept_docs,
         show_progress_bar=len(texts) > 20,
         normalize_embeddings=True,
     )
+    raw_dense, concept_dense = np.split(combined_dense, 2)
     dense = normalize(raw_dense * DENSE_RAW_WEIGHT + concept_dense * DENSE_CONCEPT_WEIGHT)
     hybrid = normalize(np.hstack([dense * DENSE_WEIGHT, sparse_features * SPARSE_WEIGHT]))
     return hybrid, token_lists, zero_rows, sparse_artifacts

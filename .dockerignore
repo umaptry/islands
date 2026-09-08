@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 .git/
 .venv/
+.env
+.cache/
+output/
+.playwright-cli/
 tests/
 scripts/seed_corpus.jsonl
 

@@ -10,6 +10,17 @@ pinned: false
 
 # islands
 
+2026-09-08改修の設計・稼働構成・運用資料:
+[デザイン監査](docs/design_audit.md) / [システム構成](docs/system_architecture.md) /
+[運用・移行・復旧](docs/operations_runbook.md)。現在は作業ツリーへの実装段階で、
+本番反映・Geminiデータ再構築・移行は未実施です。
+
+比較基準は `C:\Users\zk-ht\Downloads\islands\islands` 内のソースを
+`npx next dev --webpack` で起動したアプリです。画像だけを正本にはしません。
+embeddingは `EMBEDDING_PROVIDER` で明示指定し、`artifacts/manifest.json` と一致させます。
+同梱データはE5/v1。Geminiキーの存在だけではモデルは切り替わりません。
+本番Geminiでは `MAP_RUNTIME_CHECK=1` と新DB migrationが必要です。
+
 一言の自己紹介だけで、自分の居場所が地図の上にできる。近い人＝似た話をしている人で、
 タップすると二人が共有していることばが見える。人が集まった場所は島になり、
 その島の名前は、そこにいる人たちの言葉から作られる。
@@ -326,8 +337,9 @@ gcloud run services update-traffic islands --region $REGION --to-revisions <前�
 
 ### 4. 監視（Cloud Monitoring Uptime Check）
 
-Cloud Monitoring で `/api/health` を5分おきに監視します。これが keepalive を兼ねる
-ため、GitHub Actions の `keepalive.yml` のスケジュールは停止済みです。
+Cloud Monitoring で `/api/health` を5分おきに監視する構想です。実リソースの設定は
+2026-09-08時点で未確認です。GitHub Actions の `keepalive.yml` は手動起動のみで、
+定期keepaliveが動いているとは判断しないでください。
 
 - **Content matching**: status code 2xx だけでなく、レスポンスに `"store":"supabase"`
   と `"store_ok":true` が含まれることを確認。`/api/health` は DB 障害時も HTTP 200

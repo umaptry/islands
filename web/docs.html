@@ -1,0 +1,1333 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🏝️ かさなり / islands — アーキテクチャ & API Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;700;800&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --font-sans: 'Inter', 'Noto Sans JP', system-ui, -apple-system, sans-serif;
+      --font-heading: 'Outfit', 'Noto Sans JP', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      
+      --bg-primary: #0b0f19;
+      --bg-secondary: #111827;
+      --bg-card: #1e293b;
+      --bg-card-hover: #273549;
+      --bg-glass: rgba(30, 41, 59, 0.7);
+      --border-color: #334155;
+      --border-focus: #6366f1;
+      
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      
+      --accent-primary: #6366f1;
+      --accent-primary-hover: #4f46e5;
+      --accent-glow: rgba(99, 102, 241, 0.25);
+      
+      --get-color: #0ea5e9;
+      --post-color: #10b981;
+      --patch-color: #f59e0b;
+      --put-color: #d97706;
+      --delete-color: #ef4444;
+      
+      --badge-pk: #ec4899;
+      --badge-fk: #8b5cf6;
+      --badge-gen: #06b6d4;
+      
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+      --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.2);
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #f8fafc;
+      --bg-secondary: #ffffff;
+      --bg-card: #ffffff;
+      --bg-card-hover: #f1f5f9;
+      --bg-glass: rgba(255, 255, 255, 0.85);
+      --border-color: #e2e8f0;
+      --border-focus: #4f46e5;
+      
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #94a3b8;
+      
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+      --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg-glass);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo-badge {
+      font-size: 26px;
+      background: linear-gradient(135deg, #6366f1, #ec4899);
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      box-shadow: var(--shadow-glow);
+    }
+
+    .header-title h1 {
+      font-family: var(--font-heading);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .header-title p {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .search-bar {
+      position: relative;
+      width: 240px;
+    }
+
+    .search-bar input {
+      width: 100%;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 8px 12px 8px 34px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: var(--font-sans);
+      outline: none;
+    }
+
+    .search-bar input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .search-bar svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      width: 16px;
+      height: 16px;
+    }
+
+    .theme-toggle {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .theme-toggle:hover {
+      background: var(--bg-card-hover);
+    }
+
+    /* Layout */
+    .app-container {
+      display: flex;
+      flex: 1;
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 20px;
+      gap: 24px;
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 80px;
+      height: calc(100vh - 110px);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .nav-group-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      padding: 8px 12px 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .nav-item:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: var(--accent-glow);
+      color: var(--accent-primary);
+      border-color: rgba(99, 102, 241, 0.4);
+      font-weight: 600;
+    }
+
+    .nav-item svg {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    .section-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .section-title {
+      font-family: var(--font-heading);
+      font-size: 20px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+    }
+
+    .badge-primary { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+    .badge-success { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .badge-warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .badge-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .badge-info { background: rgba(14, 165, 233, 0.2); color: #38bdf8; }
+
+    /* Flowchart / Diagram container */
+    .diagram-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+      overflow-x: auto;
+      display: flex;
+      justify-content: center;
+    }
+
+    /* ER Interactive Grid */
+    .er-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+      margin-top: 16px;
+    }
+
+    .table-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .table-card-header {
+      background: rgba(30, 41, 59, 0.5);
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    [data-theme="light"] .table-card-header {
+      background: #f1f5f9;
+    }
+
+    .table-name {
+      font-family: var(--font-mono);
+      font-size: 15px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .table-description {
+      padding: 10px 16px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      background: rgba(0, 0, 0, 0.1);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .column-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      font-size: 12.5px;
+    }
+
+    .column-item {
+      padding: 8px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    [data-theme="light"] .column-item {
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .column-item:last-child {
+      border-bottom: none;
+    }
+
+    .column-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .col-name-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .col-type {
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .col-comment {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .key-badge {
+      font-size: 9px;
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-weight: 700;
+    }
+
+    .key-pk { background: var(--badge-pk); color: white; }
+    .key-fk { background: var(--badge-fk); color: white; }
+    .key-gen { background: var(--badge-gen); color: black; }
+
+    /* API Endpoint Cards (Swagger Style) */
+    .api-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .api-card {
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--bg-secondary);
+    }
+
+    .api-header {
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      gap: 12px;
+    }
+
+    .api-header:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .api-method-path {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .method-badge {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      color: white;
+      min-width: 70px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .method-get { background-color: var(--get-color); }
+    .method-post { background-color: var(--post-color); }
+    .method-patch { background-color: var(--patch-color); }
+    .method-put { background-color: var(--put-color); }
+    .method-delete { background-color: var(--delete-color); }
+
+    .api-path {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text-primary);
+    }
+
+    .api-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .api-body {
+      padding: 18px;
+      border-top: 1px solid var(--border-color);
+      background: rgba(0, 0, 0, 0.15);
+      display: none;
+    }
+
+    .api-card.open .api-body {
+      display: block;
+    }
+
+    .api-detail-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin: 14px 0 6px;
+    }
+
+    .api-detail-title:first-child {
+      margin-top: 0;
+    }
+
+    .code-box {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: #e2e8f0;
+      overflow-x: auto;
+      position: relative;
+    }
+
+    [data-theme="light"] .code-box {
+      background: #f8fafc;
+      border-color: #cbd5e1;
+      color: #0f172a;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .copy-btn:hover {
+      color: var(--text-primary);
+      background: var(--bg-card-hover);
+    }
+
+    /* Comparison Table */
+    .styled-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+      margin: 12px 0;
+    }
+
+    .styled-table th, .styled-table td {
+      padding: 10px 14px;
+      border: 1px solid var(--border-color);
+      text-align: left;
+    }
+
+    .styled-table th {
+      background: var(--bg-secondary);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    /* Callout Box */
+    .callout {
+      padding: 14px 18px;
+      border-radius: 8px;
+      margin: 14px 0;
+      font-size: 13.5px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      line-height: 1.5;
+    }
+
+    .callout-info {
+      background: rgba(14, 165, 233, 0.1);
+      border-left: 4px solid var(--get-color);
+      color: #7dd3fc;
+    }
+
+    [data-theme="light"] .callout-info {
+      color: #0369a1;
+    }
+
+    .callout-warning {
+      background: rgba(245, 158, 11, 0.1);
+      border-left: 4px solid var(--patch-color);
+      color: #fde68a;
+    }
+
+    [data-theme="light"] .callout-warning {
+      color: #b45309;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .app-container {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        height: auto;
+        position: static;
+        flex-direction: row;
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
+      .nav-group-title {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="header-left">
+      <div class="logo-badge">🏝️</div>
+      <div class="header-title">
+        <h1>かさなり / islands <span class="badge badge-primary">v1.0 Interactive Explorer</span></h1>
+        <p>テキスト意味座標化 & リアルタイム地形生成 SNS アーキテクチャリファレンス</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="search-bar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" id="searchInput" placeholder="テーブル・APIを検索...">
+      </div>
+      <button class="theme-toggle" id="themeToggle" title="テーマ切り替え">🌙</button>
+    </div>
+  </header>
+
+  <!-- App Layout -->
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="nav-group-title">ドキュメント</div>
+      <a class="nav-item active" href="#overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        1. システム全体像
+      </a>
+      <a class="nav-item" href="#er-diagram">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+        2. ER図 & テーブル定義
+      </a>
+      <a class="nav-item" href="#triggers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polyline></svg>
+        3. 自動トリガー連鎖
+      </a>
+      <a class="nav-item" href="#auth">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        4. 認証システム
+      </a>
+      
+      <div class="nav-group-title">API リファレンス</div>
+      <a class="nav-item" href="#api-public">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+        🔓 公開 API (5)
+      </a>
+      <a class="nav-item" href="#api-auth">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
+        🔒 認証必須 API (5)
+      </a>
+      <a class="nav-item" href="#api-local">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+        🏠 ローカルモード API (18)
+      </a>
+
+      <div class="nav-group-title">ガイド</div>
+      <a class="nav-item" href="#security">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        セキュリティ & RLS
+      </a>
+      <a class="nav-item" href="#glossary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        用語集
+      </a>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+      <!-- Section 1: Overview -->
+      <section class="section-card" id="overview">
+        <div class="section-header">
+          <h2 class="section-title">1. システム全体像</h2>
+          <span class="badge badge-info">Architecture</span>
+        </div>
+        <p>「かさなり」は、<strong>一言の自己紹介文からその意味を数値化（448次元）し、ニューラルネットワークによって地図上の(x, y)座標を決定する</strong> Webアプリケーションです。似た話をしている人が自動的に近くに集まり、島や大陸を形成します。</p>
+        
+        <div class="callout callout-info">
+          <div>💡</div>
+          <div><strong>2つの動作モード</strong>：本番環境（Supabaseモード）ではブラウザが直接データベースにアクセスして高速描画。ローカル開発時はメモリ上でスタンドアローン稼働します。</div>
+        </div>
+
+        <div class="diagram-container">
+          <pre class="mermaid">
+graph LR
+    UI["👤 ブラウザ<br/>地図UI / React"]
+    API["⚡ FastAPI サーバー<br/>NLP / エンコーダ"]
+    DB[("🗄️ Supabase<br/>PostgreSQL / RLS")]
+
+    UI -->|"① 自己紹介文を送信"| API
+    API -->|"② NLP解析 + 座標計算"| API
+    API -->|"③ 座標付きで保存"| DB
+    UI -->|"④ 地図・コメントを直接取得"| DB
+    API -->|"⑤ 似てる度・島命名"| UI
+          </pre>
+        </div>
+      </section>
+
+      <!-- Section 2: ER Diagram -->
+      <section class="section-card" id="er-diagram">
+        <div class="section-header">
+          <h2 class="section-title">2. ER図 & テーブル定義</h2>
+          <span class="badge badge-primary">7 Tables</span>
+        </div>
+        <p>データベース内のテーブル設計と各カラムの詳細定義です。すべてのテーブルでRLS（行レベルセキュリティ）が有効化されています。</p>
+
+        <div class="diagram-container">
+          <pre class="mermaid">
+erDiagram
+    accounts ||--o{ posts : "1人のユーザーが0件以上の投稿を持つ"
+    accounts ||--o{ reactions : "1人のユーザーが0件以上のリアクションを行う"
+    accounts ||--o{ comments : "1人のユーザーが0件以上のコメントを書く"
+    accounts ||--o{ notifications : "1人のユーザーが0件以上の通知を受け取る"
+    accounts ||--o{ reports : "1人のユーザーが0件以上の通報を行う"
+
+    posts ||--o{ reactions : "1つの投稿に0件以上のリアクションがつく"
+    posts ||--o{ comments : "1つの投稿に0件以上のコメントがつく"
+    posts ||--o{ notifications : "1つの投稿に関連して通知が発生する"
+    posts ||--o{ reports : "1つの投稿に対して通報が寄せられる"
+
+    comments ||--o{ notifications : "コメントが書かれると通知が発生する"
+    comments ||--o{ reports : "コメントに対して通報が寄せられる"
+          </pre>
+        </div>
+
+        <!-- Interactive ER Cards -->
+        <div class="er-grid">
+          
+          <!-- accounts -->
+          <div class="table-card" data-search="accounts ユーザー プロフィール">
+            <div class="table-card-header">
+              <div class="table-name">🧑‍💼 accounts</div>
+              <span class="badge badge-primary">RLS On</span>
+            </div>
+            <div class="table-description">ユーザーの公開プロフィール。auth.users と連動。</div>
+            <ul class="column-list">
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">id <span class="key-badge key-pk">PK</span></span>
+                  <span class="col-type">uuid</span>
+                </div>
+                <div class="col-comment">Supabase Auth の user_id。退会時 CASCADE 削除。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">display_name</span>
+                  <span class="col-type">text (1-16)</span>
+                </div>
+                <div class="col-comment">地図上に表示される名前。唯一の必須項目。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">affiliation</span>
+                  <span class="col-type">text (32)</span>
+                </div>
+                <div class="col-comment">所属（大学・会社名など）。未設定可。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">bio</span>
+                  <span class="col-type">text (300)</span>
+                </div>
+                <div class="col-comment">自己紹介文。投稿本文とは別物。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">icon_id / avatar_path</span>
+                  <span class="col-type">text</span>
+                </div>
+                <div class="col-comment">絵文字番号またはアップロード画像パス。</div>
+              </li>
+            </ul>
+          </div>
+
+          <!-- posts -->
+          <div class="table-card" data-search="posts 投稿 座標 ベクトル energy">
+            <div class="table-card-header">
+              <div class="table-name">📍 posts</div>
+              <span class="badge badge-success">Core Table</span>
+            </div>
+            <div class="table-description">地図上の投稿。座標・エネルギー・ベクトルを保持。</div>
+            <ul class="column-list">
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">id <span class="key-badge key-pk">PK</span></span>
+                  <span class="col-type">uuid</span>
+                </div>
+                <div class="col-comment">投稿の一意識別子。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">author_id <span class="key-badge key-fk">FK</span></span>
+                  <span class="col-type">uuid -> accounts</span>
+                </div>
+                <div class="col-comment">投稿者ID。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">body</span>
+                  <span class="col-type">text (30-140)</span>
+                </div>
+                <div class="col-comment">本文。この文章の意味から座標が計算される。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">x, y</span>
+                  <span class="col-type">double precision</span>
+                </div>
+                <div class="col-comment">地図上の座標（0〜1000）。サーバーのみ計算。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">vec, vec_c</span>
+                  <span class="col-type">vector(448)</span>
+                </div>
+                <div class="col-comment">意味ベクトル。ブラウザからは閲覧不可。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">energy <span class="key-badge key-gen">GEN</span></span>
+                  <span class="col-type">real</span>
+                </div>
+                <div class="col-comment">熱量 + (全リアクション数 + コメント数) × 5。</div>
+              </li>
+            </ul>
+          </div>
+
+          <!-- reactions -->
+          <div class="table-card" data-search="reactions リアクション いいね">
+            <div class="table-card-header">
+              <div class="table-name">❤️ reactions</div>
+              <span class="badge badge-warning">Composite PK</span>
+            </div>
+            <div class="table-description">いいね・手伝えるかも・参加したいの記録。</div>
+            <ul class="column-list">
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">post_id <span class="key-badge key-pk">PK</span><span class="key-badge key-fk">FK</span></span>
+                  <span class="col-type">uuid -> posts</span>
+                </div>
+                <div class="col-comment">対象の投稿ID。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">actor_id <span class="key-badge key-pk">PK</span><span class="key-badge key-fk">FK</span></span>
+                  <span class="col-type">uuid -> accounts</span>
+                </div>
+                <div class="col-comment">リアクションしたユーザーID。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">kind <span class="key-badge key-pk">PK</span></span>
+                  <span class="col-type">'like'|'help'|'join'</span>
+                </div>
+                <div class="col-comment">リアクションの種類。複合主キーで二重送信を防止。</div>
+              </li>
+            </ul>
+          </div>
+
+          <!-- comments -->
+          <div class="table-card" data-search="comments コメント メッセージ">
+            <div class="table-card-header">
+              <div class="table-name">💬 comments</div>
+              <span class="badge badge-primary">RLS On</span>
+            </div>
+            <div class="table-description">投稿に対するチャット・メッセージ。</div>
+            <ul class="column-list">
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">id <span class="key-badge key-pk">PK</span></span>
+                  <span class="col-type">uuid</span>
+                </div>
+                <div class="col-comment">コメントの一意識別子。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">post_id <span class="key-badge key-fk">FK</span></span>
+                  <span class="col-type">uuid -> posts</span>
+                </div>
+                <div class="col-comment">コメント先の投稿ID。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">body</span>
+                  <span class="col-type">text (1-500)</span>
+                </div>
+                <div class="col-comment">コメント本文。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">deleted_at</span>
+                  <span class="col-type">timestamptz</span>
+                </div>
+                <div class="col-comment">論理削除日時。NULLなら表示中。</div>
+              </li>
+            </ul>
+          </div>
+
+          <!-- notifications -->
+          <div class="table-card" data-search="notifications 通知">
+            <div class="table-card-header">
+              <div class="table-name">🔔 notifications</div>
+              <span class="badge badge-info">Auto Created</span>
+            </div>
+            <div class="table-description">リアクションやコメント発生時のユーザー通知。</div>
+            <ul class="column-list">
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">recipient_id <span class="key-badge key-fk">FK</span></span>
+                  <span class="col-type">uuid -> accounts</span>
+                </div>
+                <div class="col-comment">通知を受け取る投稿者。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">actor_id <span class="key-badge key-fk">FK</span></span>
+                  <span class="col-type">uuid -> accounts</span>
+                </div>
+                <div class="col-comment">リアクションした人。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">read_at</span>
+                  <span class="col-type">timestamptz</span>
+                </div>
+                <div class="col-comment">既読日時。NULLなら未読バッジ表示。</div>
+              </li>
+            </ul>
+          </div>
+
+          <!-- energy_cells -->
+          <div class="table-card" data-search="energy_cells 地形 キャッシュ">
+            <div class="table-card-header">
+              <div class="table-name">🗺️ energy_cells</div>
+              <span class="badge badge-gen">Terrain Map</span>
+            </div>
+            <div class="table-description">20×20セルごとの広域エネルギーキャッシュ。</div>
+            <ul class="column-list">
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">cell_x, cell_y <span class="key-badge key-pk">PK</span></span>
+                  <span class="col-type">integer</span>
+                </div>
+                <div class="col-comment">セルの格子座標（0〜50）。</div>
+              </li>
+              <li class="column-item">
+                <div class="column-header-row">
+                  <span class="col-name-group">sum_energy, post_count</span>
+                  <span class="col-type">real, integer</span>
+                </div>
+                <div class="col-comment">セル内の合計エネルギーと投稿数。</div>
+              </li>
+            </ul>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Section 3: Triggers -->
+      <section class="section-card" id="triggers">
+        <div class="section-header">
+          <h2 class="section-title">3. 自動トリガー連鎖</h2>
+          <span class="badge badge-warning">Database Triggers</span>
+        </div>
+        <p>ユーザーが画面上でリアクションやコメントを行った際、データベース側で自動実行される処理フローです。</p>
+        
+        <div class="diagram-container">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as 👤 ユーザー
+    participant R as 📋 reactions
+    participant P as 📍 posts
+    participant N as 🔔 notifications
+    participant E as 🗺️ energy_cells
+
+    U->>R: リアクション送信 (like)
+    Note over R,P: トリガー: on_reaction_change
+    R->>P: like_count を +1
+    P->>P: energy を自動再計算
+    R->>N: 相手への通知を自動作成
+    Note over P,E: トリガー: on_post_energy_change
+    P->>E: 該当セルの sum_energy を加算
+          </pre>
+        </div>
+      </section>
+
+      <!-- Section 4: Public APIs -->
+      <section class="section-card" id="api-public">
+        <div class="section-header">
+          <h2 class="section-title">4. 🔓 公開 API (認証不要)</h2>
+          <span class="badge badge-info">Public Endpoints</span>
+        </div>
+
+        <div class="api-list">
+          
+          <!-- GET /api/config -->
+          <div class="api-card">
+            <div class="api-header" onclick="toggleApi(this)">
+              <div class="api-method-path">
+                <span class="method-badge method-get">GET</span>
+                <span class="api-path">/api/config</span>
+                <span class="api-desc">— アプリ起動時の初期化設定（定数・範囲）を一括取得</span>
+              </div>
+              <span>▼</span>
+            </div>
+            <div class="api-body">
+              <div class="api-detail-title">レスポンス例 (200 OK)</div>
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "mode": "supabase",
+  "world": { "min": 0.0, "max": 1000.0 },
+  "energy": { "base": 30.0, "scale": 0.45, "trim": 0.6667 },
+  "tags": ["気軽に話しかけて", "助けてほしい", "参加者募集中", "仲間募集中"],
+  "limits": { "body_min": 30, "body_max": 140, "name_max": 16 }
+}</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- GET /api/islands -->
+          <div class="api-card">
+            <div class="api-header" onclick="toggleApi(this)">
+              <div class="api-method-path">
+                <span class="method-badge method-get">GET</span>
+                <span class="api-path">/api/islands</span>
+                <span class="api-desc">— 現在の投稿群から自動命名された島の一覧を取得</span>
+              </div>
+              <span>▼</span>
+            </div>
+            <div class="api-body">
+              <div class="api-detail-title">レスポンス例 (200 OK)</div>
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "islands": [
+    {
+      "name": "焚き火と珈琲の島",
+      "centroid": [423.5, 612.3],
+      "radius": 85.2,
+      "post_count": 12,
+      "top_terms": ["焚き火", "珈琲", "キャンプ"]
+    }
+  ]
+}</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- GET /api/neighbors -->
+          <div class="api-card">
+            <div class="api-header" onclick="toggleApi(this)">
+              <div class="api-method-path">
+                <span class="method-badge method-get">GET</span>
+                <span class="api-path">/api/neighbors</span>
+                <span class="api-desc">— 448次元空間で意味的に近い投稿をランキング取得</span>
+              </div>
+              <span>▼</span>
+            </div>
+            <div class="api-body">
+              <div class="api-detail-title">クエリパラメータ</div>
+              <table class="styled-table">
+                <tr><th>パラメータ</th><th>型</th><th>必須</th><th>説明</th></tr>
+                <tr><td><code>post</code></td><td>UUID</td><td>✅</td><td>基準となる投稿ID</td></tr>
+                <tr><td><code>limit</code></td><td>integer</td><td>❌</td><td>取得件数（デフォルト: 24）</td></tr>
+              </table>
+              <div class="api-detail-title">レスポンス例 (200 OK)</div>
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "post": "550e8400-...",
+  "neighbors": [
+    {
+      "id": "7c9e6679-...",
+      "display_name": "山田太郎",
+      "similarity": 82,
+      "shared": ["焚き火", "珈琲"],
+      "note": "とても似ています（共通: 焚き火, 珈琲）"
+    }
+  ]
+}</pre>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Section 5: Auth APIs -->
+      <section class="section-card" id="api-auth">
+        <div class="section-header">
+          <h2 class="section-title">5. 🔒 認証必須 API</h2>
+          <span class="badge badge-warning">Requires Token</span>
+        </div>
+
+        <div class="api-list">
+          
+          <!-- POST /api/posts -->
+          <div class="api-card">
+            <div class="api-header" onclick="toggleApi(this)">
+              <div class="api-method-path">
+                <span class="method-badge method-post">POST</span>
+                <span class="api-path">/api/posts</span>
+                <span class="api-desc">— 自己紹介文を送り、NLP+エンコーダで座標を決定して投稿</span>
+              </div>
+              <span>▼</span>
+            </div>
+            <div class="api-body">
+              <div class="callout callout-warning">
+                <div>⚠️</div>
+                <div>このAPIはサーバーのみが実行できます（凍結エンコーダによる座標計算が必要なため）。</div>
+              </div>
+              <div class="api-detail-title">リクエストボディ</div>
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "body": "焚き火を囲みながら珈琲を淹れるのが好きです。星空の下で過ごす時間が最高です。",
+  "tags": ["気軽に話しかけて", "仲間募集中"],
+  "motivation": 75,
+  "image_path": null
+}</pre>
+              </div>
+              <div class="api-detail-title">レスポンス例 (200 OK)</div>
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "id": "a3f4b5c6-...",
+  "x": 423.56,
+  "y": 612.33,
+  "cluster_id": 2,
+  "terms": ["焚き火", "珈琲", "星空"],
+  "energy": 75.0,
+  "island": { "name": "焚き火と珈琲の島" }
+}</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- PATCH /api/posts/{id} -->
+          <div class="api-card">
+            <div class="api-header" onclick="toggleApi(this)">
+              <div class="api-method-path">
+                <span class="method-badge method-patch">PATCH</span>
+                <span class="api-path">/api/posts/{post_id}</span>
+                <span class="api-desc">— 投稿を編集（本文変更時は座標が再計算されて移動）</span>
+              </div>
+              <span>▼</span>
+            </div>
+            <div class="api-body">
+              <p style="font-size:13px; color:var(--text-secondary); margin-bottom:8px;">本文を変更すると、別の場所に自動的に移動します。</p>
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "body": "最近はキャンプより山登りにハマっています。頂上のコーヒーは格別。",
+  "motivation": 80
+}</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- PUT /api/account/me -->
+          <div class="api-card">
+            <div class="api-header" onclick="toggleApi(this)">
+              <div class="api-method-path">
+                <span class="method-badge method-put">PUT</span>
+                <span class="api-path">/api/account/me</span>
+                <span class="api-desc">— プロフィール（表示名・所属・自己紹介）を更新</span>
+              </div>
+              <span>▼</span>
+            </div>
+            <div class="api-body">
+              <div class="code-box">
+                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre>{
+  "display_name": "ゆうた",
+  "affiliation": "東京大学",
+  "bio": "アウトドア好きのエンジニアです",
+  "icon_id": "3"
+}</pre>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Section 6: Security & Glossary -->
+      <section class="section-card" id="security">
+        <div class="section-header">
+          <h2 class="section-title">6. セキュリティ & RLS ポリシー</h2>
+          <span class="badge badge-danger">Security</span>
+        </div>
+        <p>ブラウザが直接 Supabase にアクセスしても安全なのは、データベースの各テーブルに <strong>Row Level Security (RLS)</strong> が設定されているためです。</p>
+
+        <table class="styled-table">
+          <tr><th>テーブル</th><th>操作</th><th>許可ルール (RLS)</th></tr>
+          <tr><td><code>accounts</code></td><td>SELECT</td><td>全ユーザー閲覧可（メールアドレスは含まない）</td></tr>
+          <tr><td><code>accounts</code></td><td>INSERT/UPDATE</td><td><code>auth.uid() = id</code>（自分のアカウントのみ）</td></tr>
+          <tr><td><code>posts</code></td><td>INSERT</td><td>❌ クライアント不可（サーバーのみ）</td></tr>
+          <tr><td><code>posts</code></td><td>UPDATE</td><td><code>auth.uid() = author_id</code>（自分の投稿のみ）</td></tr>
+          <tr><td><code>reactions</code></td><td>INSERT/DELETE</td><td><code>auth.uid() = actor_id</code>（自分のリアクションのみ）</td></tr>
+          <tr><td><code>notifications</code></td><td>SELECT/UPDATE</td><td><code>auth.uid() = recipient_id</code>（自分宛のみ）</td></tr>
+        </table>
+      </section>
+
+      <!-- Section 7: Glossary -->
+      <section class="section-card" id="glossary">
+        <div class="section-header">
+          <h2 class="section-title">7. 用語集</h2>
+          <span class="badge badge-info">Glossary</span>
+        </div>
+        <table class="styled-table">
+          <tr><th style="width:160px;">用語</th><th>解説</th></tr>
+          <tr><td><strong>凍結エンコーダ</strong></td><td>448次元のベクトルを2次元座標(x, y)に圧縮する固定重みのニューラルネット。新しい人が投稿しても既存の点は1pxも動かない。</td></tr>
+          <tr><td><strong>コサイン類似度</strong></td><td>2つのベクトルの向きの近さを測る指標（-1〜1）。1に近いほど意味が似ている。</td></tr>
+          <tr><td><strong>似てる度</strong></td><td>コサイン類似度を一般ユーザー向けに 0〜100% のスコアに校正したもの。</td></tr>
+          <tr><td><strong>エネルギー</strong></td><td>投稿の熱量 + リアクション数×5 で算出される値。周囲の地形の高さを決定する。</td></tr>
+          <tr><td><strong>HNSW</strong></td><td>高次元ベクトルの近似最近傍探索インデックス。数万件の投稿からミリ秒で似ている人を見つけ出す。</td></tr>
+        </table>
+      </section>
+
+    </main>
+
+  </div>
+
+  <script>
+    // Mermaid initialize
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#111827',
+        primaryColor: '#6366f1',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#4f46e5',
+        lineColor: '#64748b'
+      }
+    });
+
+    // Theme Toggle
+    const themeToggle = document.getElementById('themeToggle');
+    themeToggle.addEventListener('click', () => {
+      const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+      document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+      themeToggle.textContent = isDark ? '☀️' : '🌙';
+    });
+
+    // Accordion Toggle for APIs
+    function toggleApi(el) {
+      const card = el.closest('.api-card');
+      card.classList.toggle('open');
+    }
+
+    // Copy Code Box
+    function copyCode(btn) {
+      const pre = btn.nextElementSibling;
+      navigator.clipboard.writeText(pre.textContent).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = orig, 1500);
+      });
+    }
+
+    // Live Search Filter
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase().trim();
+      
+      // Filter Table Cards
+      document.querySelectorAll('.table-card').forEach(card => {
+        const text = (card.getAttribute('data-search') || '' + card.textContent).toLowerCase();
+        card.style.display = text.includes(query) ? '' : 'none';
+      });
+
+      // Filter API Cards
+      document.querySelectorAll('.api-card').forEach(card => {
+        const text = card.textContent.toLowerCase();
+        card.style.display = text.includes(query) ? '' : 'none';
+      });
+    });
+
+    // Sidebar smooth scroll active states
+    const navItems = document.querySelectorAll('.nav-item');
+    window.addEventListener('scroll', () => {
+      let current = '';
+      document.querySelectorAll('section').forEach(section => {
+        const sectionTop = section.offsetTop - 100;
+        if (pageYOffset >= sectionTop) {
+          current = section.getAttribute('id');
+        }
+      });
+
+      navItems.forEach(item => {
+        item.classList.remove('active');
+        if (item.getAttribute('href') === `#${current}`) {
+          item.classList.add('active');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

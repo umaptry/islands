@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 .venv/
+.cache/
+output/
+.playwright-cli/
 .pytest_cache/
 .claude/
 gha-creds-*.json

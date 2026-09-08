@@ -109,6 +109,9 @@ def atomic_write(path, write_callback, mode="w"):
 
 
 def build(args):
+    if (ARTIFACTS / "manifest.json").exists():
+        print("[NG] 版付き成果物は上書きできません。--artifacts で新しい出力先を指定してください。")
+        return 1
     import train_parametric
     import umap
 
@@ -122,9 +125,15 @@ def build(args):
     texts, domains = load_corpus(CORPUS_PATH)
     print(f"[1/8] コーパス読み込み: {len(texts)} 件 / {len(set(domains))} ドメイン")
 
-    _label = f"Gemini API ({GEMINI_MODEL_NAME})" if os.environ.get("GEMINI_API_KEY", "").strip() else "ONNX (e5-small)"
+    _label = os.environ.get("EMBEDDING_PROVIDER", "onnx")
     print(f"[2/8] 埋め込みモデル読み込み: {_label}")
+    from core.artifact_manifest import embedding_spec, write_manifest
+    provider = os.environ.get("EMBEDDING_PROVIDER", "onnx")
+    spec = embedding_spec(provider)
     model = load_embedder()
+    if provider == "gemini":
+        from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
+        model = CachedEmbedder(model, SQLiteEmbeddingCache(str(ROOT / ".cache" / "embeddings.sqlite3")), spec)
 
     print("[3/8] 448次元ベクトルを構築中...")
     features, token_lists, zero_rows, sparse_artifacts = build_hybrid_features(
@@ -173,7 +182,7 @@ def build(args):
         return 1
 
     # --- persist -----------------------------------------------------------
-    ARTIFACTS.mkdir(exist_ok=True)
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
     save_encoder(
         ENCODER_NPZ, torch_artifacts["encoder_state_dict"], torch_artifacts["encoder_arch"],
         torch_artifacts["coord_mean"], torch_artifacts["coord_scale"], scale_bounds,
@@ -182,9 +191,9 @@ def build(args):
 
     payload = {
         "meta": {
-            "model_version": MODEL_VERSION,
+            "model_version": os.environ.get("MAP_BUILD_VERSION") or (MODEL_VERSION if provider == "gemini" else "kotoba-map-e5-rebuilt-v1"),
             "layout_version": LAYOUT_VERSION,
-            "embedding_model": GEMINI_MODEL_NAME,
+            "embedding_model": spec["model"],
             "feature_config": FEATURE_CONFIG,
             "layout_config": LAYOUT_CONFIG,
             "seed_count": len(texts),
@@ -211,6 +220,15 @@ def build(args):
     print()
     print(f"完了: {SEED_MAP_JSON.name} / {VECTORIZERS_PICKLE.name} / {ENCODER_NPZ.name}")
     print(f"      近傍距離 {payload['meta']['nearest_neighbor_stats']}")
+    # Calibration belongs to this exact feature space; publish it with the map.
+    import build_similarity_calibration as calibration
+    centroid, centred = calibration.centre(features)
+    anchors, quantiles, _pairs, _nearest = calibration.measure(centred)
+    payload["cosine_anchors"] = anchors
+    payload["cosine_centroid"] = centroid
+    payload["cosine_quantiles"] = quantiles
+    atomic_write(SEED_MAP_JSON, lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")))
+    write_manifest(ARTIFACTS, spec)
     print("\n*** このスクリプトは今後実行しないでください（実行するとマップが動きます） ***")
     return 0
 
@@ -298,6 +316,8 @@ def relabel(_args):
     bad island name without the 25-minute retrain that build() would cost.
     """
     from core.embedder import load_embedder
+    from core.artifact_manifest import validate_manifest, write_manifest
+    manifest = validate_manifest(ARTIFACTS, os.environ.get("EMBEDDING_PROVIDER", "onnx"))
 
     if not SEED_MAP_JSON.exists():
         print(f"[NG] {SEED_MAP_JSON.name} がありません。")
@@ -313,7 +333,7 @@ def relabel(_args):
     coords = np.array([[row[0], row[1]] for row in payload["seed"]], dtype=float)
     print(f"[1/3] 保存済み座標を読み込み: {len(coords)} 点（座標は一切変更しません）")
 
-    _label = f"Gemini API ({GEMINI_MODEL_NAME})" if os.environ.get("GEMINI_API_KEY", "").strip() else "ONNX (e5-small)"
+    _label = manifest["embedding"]["model"]
     print(f"[2/3] 埋め込みモデル読み込み: {_label}")
     model = load_embedder()
 
@@ -334,12 +354,15 @@ def relabel(_args):
         lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")),
     )
     print()
+    write_manifest(ARTIFACTS, manifest["embedding"])
     print(f"完了: {SEED_MAP_JSON.name} の島情報のみ更新しました。座標は不変です。")
     return 0
 
 
 def verify(_args):
     """Re-check an existing build without rebuilding anything."""
+    from core.artifact_manifest import validate_manifest
+    validate_manifest(ARTIFACTS, os.environ.get("EMBEDDING_PROVIDER", "onnx"))
     for path in (SEED_MAP_JSON, VECTORIZERS_PICKLE, ENCODER_NPZ):
         if not path.exists():
             print(f"[NG] {path.name} がありません。先にビルドしてください。")

@@ -4,13 +4,14 @@
 // does not watch slide 1 flash past before their session is restored. Whichever
 // branch wins here picks the first screen anybody actually sees.
 
-import { loadConfig } from './config.js';
+import { loadConfig, checkMapVersion } from './config.js';
 import { api } from './net.js';
 import { session } from './session.js';
 import { state } from './state.js';
 import { route, screen, setGuard, show, startRouter } from './router.js';
 import { $, toast } from './ui.js';
-import { setupAuth, setupIntro, setupProfileSetup } from './screens/auth.js';
+import { setupIcons } from './icons.js';
+import { setupAuth, setupGuidance, setupIntro, setupProfileSetup } from './screens/auth.js';
 import { setupCompose, setupReveal } from './screens/compose.js';
 import { setupMapScreen, refreshMyPosts } from './screens/map.js';
 import { refreshNotifications, setupNotifications, paintBadge } from './screens/notifications.js';
@@ -18,8 +19,10 @@ import { setupProfile } from './screens/profile.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/intro', 'intro');
+route('#/welcome', 'welcome');
 route('#/auth', 'auth');
 route('#/setup', 'setup');
+route('#/guidance', 'guidance');
 route('#/map', 'map');
 route('#/post', 'compose');
 route('#/post/:id/edit', 'compose');
@@ -40,7 +43,7 @@ setGuard((pattern) => {
   }
   // A finished account has no business back on the sign-in or setup screens.
   if (signedIn && (pattern === '#/auth' || pattern === '#/intro')) return '#/map';
-  if (signedIn && pattern === '#/setup') return '#/map';
+  if (signedIn && (pattern === '#/setup' || pattern === '#/guidance')) return '#/map';
   return null;
 });
 
@@ -56,8 +59,16 @@ async function boot() {
   }
 
   setupIntro();
+  setupIcons();
+  document.addEventListener('map:version-changed', () => {
+    const node = document.getElementById('mapVersionNotice');
+    if (node) node.hidden = false;
+  });
+  document.getElementById('mapVersionReload').addEventListener('click', () => location.reload());
+  document.addEventListener('route:error', () => toast('読み込めませんでした。もう一度お試しください。'));
   setupAuth();
   setupProfileSetup();
+  setupGuidance();
   setupCompose();
   setupReveal();
   setupMapScreen();
@@ -90,7 +101,7 @@ async function boot() {
   // did nothing but change the address bar - leaving the hash saying #/intro
   // over a map screen.
   if (!window.location.hash) {
-    let first = '#/intro';
+    let first = '#/welcome';
     if (state.account && state.account.display_name) first = '#/map';
     else if (session.signedIn()) first = '#/setup';
     history.replaceState(null, '', first);
@@ -104,6 +115,7 @@ async function boot() {
   // until they reloaded.
   setInterval(() => {
     if (!document.hidden && state.account) refreshNotifications();
+    if (!document.hidden) checkMapVersion().catch(() => {});
   }, NOTIFY_MS);
   if (state.account) {
     refreshMyPosts();

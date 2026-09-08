@@ -2,12 +2,11 @@
 
 Two backends:
 
-  GeminiEmbedder  — production. Calls the Gemini API (gemini-embedding-2) with
-                    Matryoshka truncation to 384 dims. Active when GEMINI_API_KEY
-                    is set.
+  GeminiEmbedder  — Gemini API (gemini-embedding-2), 384 dimensions.
+                    Selected explicitly with EMBEDDING_PROVIDER=gemini.
 
-  OnnxEmbedder    — test fallback. multilingual-e5-small via ONNX Runtime, no
-                    network required. Active when GEMINI_API_KEY is absent.
+  OnnxEmbedder    — current distributed E5 map; EMBEDDING_PROVIDER=onnx (default).
+                    We never fall back to another model on a provider error.
 
 Both expose the same `encode(sentences, normalize_embeddings=True)` interface so
 core/features.py does not care which backend it is talking to.
@@ -24,10 +23,14 @@ import numpy as np
 # Gemini
 # =========================================================================
 
-GEMINI_RETRIES = 8
+GEMINI_RETRIES = 3
 GEMINI_BACKOFF = 2.0
 GEMINI_BATCH = 20
-GEMINI_BATCH_DELAY = 13.0
+GEMINI_BATCH_DELAY = 0.0
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """Safe public error; never includes provider response bodies or credentials."""
 
 
 class GeminiEmbedder:
@@ -44,7 +47,8 @@ class GeminiEmbedder:
         self._model = model
         self._dimensions = dimensions
         self._task = task
-        self._http = httpx.Client(timeout=120)
+        self._http = httpx.Client(timeout=20)
+        self.provider = "gemini"
 
     def _prompt(self, text):
         return f"task: {self._task} | query: {text}"
@@ -63,42 +67,52 @@ class GeminiEmbedder:
         }
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self._model}:batchEmbedContents?key={self._api_key}"
+            f"{self._model}:batchEmbedContents"
         )
 
-        last_error = None
+        import httpx
+        deadline = time.monotonic() + 45.0
         for attempt in range(GEMINI_RETRIES):
-            resp = self._http.post(url, json=body)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                resp = self._http.post(url, json=body, headers={"x-goog-api-key": self._api_key},
+                                       timeout=min(12.0, remaining / 4))
+            except httpx.TransportError:
+                resp = None
+            if resp is None:
+                if attempt < GEMINI_RETRIES - 1:
+                    time.sleep(min(2 ** attempt, max(0, deadline - time.monotonic())))
+                continue
             if resp.status_code == 200:
-                data = resp.json()
-                values = [emb["values"] for emb in data["embeddings"]]
-                if len(values) != len(chunk):
-                    raise RuntimeError(
-                        f"{len(chunk)} 件送って {len(values)} 本返りました。"
-                        "集約されている可能性があります。"
-                    )
+                try:
+                    values = np.asarray([emb["values"] for emb in resp.json()["embeddings"]], dtype=np.float32)
+                    valid = values.shape == (len(chunk), self._dimensions) and np.isfinite(values).all()
+                    norms = np.linalg.norm(values, axis=1) if valid else np.array([])
+                    valid = valid and bool(np.isfinite(norms).all() and (norms > 0).all())
+                except (KeyError, TypeError, ValueError):
+                    valid = False
+                if not valid:
+                    raise EmbeddingUnavailable("埋め込みの応答形式が不正です。")
                 return values
 
-            if resp.status_code == 400:
-                raise ValueError(resp.text[:200])
+            if resp.status_code not in (429, 500, 502, 503, 504):
+                raise EmbeddingUnavailable("埋め込みサービスを利用できません。")
 
-            last_error = resp.text
             if attempt == GEMINI_RETRIES - 1:
                 break
             hint = re.search(r'"retryDelay"\s*:\s*"([\d.]+)s"', resp.text)
             delay = float(hint.group(1)) if hint else GEMINI_BACKOFF * (2 ** attempt)
-            if resp.status_code == 429:
-                delay = max(delay, 60)
-            print(
-                f"[embedder] Gemini API {resp.status_code} ({attempt + 1}/{GEMINI_RETRIES}): "
-                f"{delay:.0f}秒後に再試行します。",
-                flush=True,
-            )
+            try:
+                delay = max(delay, float(resp.headers.get("retry-after", "0")))
+            except ValueError:
+                pass
+            if delay >= deadline - time.monotonic():
+                break
             time.sleep(delay)
 
-        raise RuntimeError(
-            f"Gemini API への {GEMINI_RETRIES} 回の試行がすべて失敗しました: {last_error}"
-        )
+        raise EmbeddingUnavailable("埋め込みサービスが混み合っています。時間をおいて再試行してください。")
 
     def encode(self, sentences, normalize_embeddings=True, **_):
         if isinstance(sentences, str):
@@ -110,7 +124,7 @@ class GeminiEmbedder:
                 time.sleep(GEMINI_BATCH_DELAY)
             all_values.extend(self._call_batch(sentences[start:start + GEMINI_BATCH]))
 
-        pooled = np.array(all_values, dtype=np.float32)
+        pooled = np.array(all_values, dtype=np.float32).reshape((-1, self._dimensions))
         if normalize_embeddings:
             pooled = pooled / np.clip(
                 np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12, None
@@ -208,8 +222,13 @@ class OnnxEmbedder:
 # Factory
 # =========================================================================
 
-def load_embedder(**kwargs):
+def load_embedder(provider=None, **kwargs):
+    provider = provider or os.environ.get("EMBEDDING_PROVIDER", "onnx")
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if api_key:
+    if provider == "gemini":
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY is required for EMBEDDING_PROVIDER=gemini")
         return GeminiEmbedder(api_key=api_key)
-    return OnnxEmbedder(**kwargs)
+    if provider == "onnx":
+        return OnnxEmbedder(**kwargs)
+    raise ValueError("Unknown EMBEDDING_PROVIDER")

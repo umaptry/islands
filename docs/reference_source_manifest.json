@@ -1,0 +1,30 @@
+{
+  "captured_at": "2026-09-08T10:30:33.880Z",
+  "root": "C:\\Users\\zk-ht\\Downloads\\islands\\islands",
+  "command": "npx next dev --webpack",
+  "rendering_verified": false,
+  "files": {
+    "src/app/favicon.ico": "2b8ad2d33455a8f736fc3a8ebf8f0bdea8848ad4c0db48a2833bd0f9cd775932",
+    "src/app/globals.css": "c5f738f85fbc7c43e312e457acdbf544107bfd3c00cfc96a9ef230a5844b446b",
+    "src/app/layout.tsx": "67ad39330e6599af62c3208ed68dab4c702f97265292af0ab432b426d884f5bb",
+    "src/app/login/page.tsx": "e6b19229af77adea397ea3ed097f9965fb97aea8bd8ee216603132c807423b5e",
+    "src/app/map/page.tsx": "de2f9e8be832561f83cefe03acae1d298043524439a5148682a9bc98a8d138b6",
+    "src/app/notifications/page.tsx": "e22367b39c98246641b4a140fe65e1f526776364c1c567bdbcfc30c8e312da41",
+    "src/app/page.tsx": "0b30656363b73198a36a93416e95c4ef56b183ad9f0543f3ce065118d22885ba",
+    "src/app/post/page.tsx": "3de16b5e24bf8479fdd3d8541bc840e89487cb64b24511ffd4102a6a6b18434f",
+    "src/app/profile/edit/page.tsx": "ccc4a77b4df3fc5896ab4724a4ec13e83d57cc2c871088d096952e4c6257d355",
+    "src/app/profile/page.tsx": "55dbe25af3f004f5d357fd81f99df2c8529f21f33f927007926aa67ec22121e2",
+    "src/app/profile/[userId]/page.tsx": "128c0ab0088b54b1b84ff2271a34975816a7f853bc2422c3c2e99f5a39be934a",
+    "src/app/register/page.tsx": "a34213eaa6b6093d573990f23a414d65d38f54e05ba3abde725787ce803e8b47",
+    "src/components/common/BottomNav.tsx": "44a09f8ab98aebb34d5872a73e6a1fbc04258207f4aff998c08cdc02ad7a9baf",
+    "src/components/domain/MapApp.tsx": "005fe35c867790130c4e5e25e97042c16020baad0ae8bde7e2090994f878ca91",
+    "src/components/domain/PostCard.tsx": "278555698155d1cd79f199f230200435464eb0881e294e7785e59e290fa5c38d",
+    "src/components/domain/PostChat.tsx": "8dacf19807b5d69121ea149120100c8b06e7d1ba04b37d7ae2e8c07df166529d",
+    "src/components/ui/Button.tsx": "d92375f64bada2cb44c7df7c6b8b53a7be78e31041de67f4805590e95042d5d1",
+    "src/components/ui/Input.tsx": "d26b5dd4b8247efaadfe3ab7e75d42e0d08a435c79f477c26408135b2f04de7d",
+    "src/lib/store.ts": "aa015dff638be2ed2ada03d3d505688be4290f40a6b4daed8b6896a45c324fb2",
+    "package.json": "f64da6a4ced1defc2c0d406d7c06925b13a823b2155938f71d8592fa91ae9566",
+    "package-lock.json": "c711069a15a736c8ec6caaacd0758c7b43fa66de1945f3958c57e7a2a7f68113",
+    "next.config.ts": "614bce25b089c3f19b1e17a6346c74b858034040154c6621e7d35303004767cc"
+  }
+}

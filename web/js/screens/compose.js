@@ -16,15 +16,23 @@ import { navigate, screen, show } from '../router.js';
 import { state, upsertPost } from '../state.js';
 import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
 import { postRow } from '../components/postcard.js';
+import { openOnMap } from './map.js';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
 let imageBlob = null;     // chosen but not yet uploaded
 let submitting = false;
+const drafts = new Map();
+let draftKey = '';
+let previewUrl = null;
+let requestKey = null;
+let requestBody = null;
 
 // ---------------------------------------------------------------- image
 
 function paintImage(url) {
+  if (previewUrl?.startsWith('blob:') && previewUrl !== url) URL.revokeObjectURL(previewUrl);
+  previewUrl = url;
   const preview = $('composeImagePreview');
   if (!url) {
     preview.hidden = true;
@@ -83,6 +91,7 @@ function paintTags(selected = []) {
 
 export function setupCompose() {
   const body = $('composeBody');
+  $('composeTags').closest('.field').before($('composeImageBtn').closest('.field'));
   body.addEventListener('input', paintCounter);
   $('composeMotivation').addEventListener('input', paintMotivation);
 
@@ -112,7 +121,11 @@ export function setupCompose() {
   $('composeSubmit').addEventListener('click', submit);
 
   screen('compose', {
-    enter: (params, query) => {
+    leave() {
+      if (draftKey) drafts.set(draftKey, { body: body.value, tags: selectedTags(), motivation: $('composeMotivation').value,
+        imagePath, imageBlob, requestKey, requestBody });
+    },
+    enter: async (params, query) => {
       const first = query && query.get('first') === '1';
       editing = null;
       imageBlob = null;
@@ -121,23 +134,39 @@ export function setupCompose() {
 
       if (params && params.id) {
         editing = state.myPosts.find((post) => post.id === params.id)
-          || state.postsById.get(params.id) || null;
+          || state.postsById.get(params.id) || await data.getPost(params.id);
+        if (!editing || editing.author_id !== state.account?.id) {
+          $('composeError').textContent = 'この投稿は編集できません。';
+          $('composeSubmit').disabled = true;
+          return;
+        }
       }
+      draftKey = `${state.account?.id}:${editing?.id || 'new'}`;
+      const draft = drafts.get(draftKey);
+      requestKey = draft?.requestKey || null;
+      requestBody = draft?.requestBody || null;
 
       $('composeTitle').textContent = editing ? '投稿を編集' : '新規投稿';
       $('composeSubmit').textContent = editing ? '保存' : '投稿する';
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
         ? 'ためしに1つ、書いてみましょう。あなたの投稿に合わせて投稿される島の位置が決まります。'
-        : '取り組みや関心を書いてください。あなたの投稿に合わせて投稿される島の位置が決まります。';
+        : '取り組みや活動内容を30〜140文字で書いてください。';
 
-      body.value = editing ? editing.body : '';
+      body.value = draft?.body ?? (editing ? editing.body : '');
       $('composeMotivation').value = editing
         ? editing.motivation
         : config().limits.motivation_default;
       paintTags(editing ? (editing.tags || []) : []);
       imagePath = editing ? (editing.image_path || null) : null;
       paintImage(imagePath ? data.imageUrl(imagePath) : null);
+      if (draft) {
+        $('composeMotivation').value = draft.motivation;
+        paintTags(draft.tags);
+        imagePath = draft.imagePath;
+        imageBlob = draft.imageBlob;
+        paintImage(imageBlob ? URL.createObjectURL(imageBlob) : imagePath ? data.imageUrl(imagePath) : null);
+      }
       $('composeError').textContent = '';
       paintCounter();
       paintMotivation();
@@ -172,12 +201,16 @@ async function submit() {
         clear_image: !imagePath,
       });
       upsertPost(updated);
+      drafts.delete(draftKey);
+      draftKey = '';
       toast(moved ? '保存しました。地図の位置も更新されました。' : '保存しました。');
       navigate('#/me');
       return;
     }
 
     const result = await runPlacement(payload);
+    drafts.delete(draftKey);
+    draftKey = '';
     showReveal(result);
   } catch (error) {
     $('composeError').textContent = error.message;
@@ -205,7 +238,9 @@ async function runPlacement(payload) {
 
   const started = performance.now();
   try {
-    const result = await api.post('/api/posts', payload);
+    const fingerprint = JSON.stringify(payload);
+    if (requestBody !== fingerprint) { requestKey = crypto.randomUUID(); requestBody = fingerprint; }
+    const result = await api.post('/api/posts', payload, { headers: { 'Idempotency-Key': requestKey } });
     // Let the animation finish, so the reveal never flashes past. The wait is
     // capped by how long the request actually took, not added to it.
     const elapsed = performance.now() - started;
@@ -243,11 +278,7 @@ function showReveal(result) {
         trailing: el('span', { className: 'list-row-score num' },
           el('b', { text: String(person.similarity ?? '—') }),
           el('small', { text: '%' })),
-        onClick: () => {
-          navigate('#/map');
-          setTimeout(() => document.dispatchEvent(
-            new CustomEvent('map:open', { detail: { postId: person.id } })), 60);
-        },
+        onClick: () => openOnMap(person.id),
       });
       card.style.animationDelay = `${position * 150}ms`;
       card.classList.add('appear');
@@ -264,12 +295,8 @@ function showReveal(result) {
 
 export function setupReveal() {
   $('revealToMap').addEventListener('click', () => {
-    navigate('#/map');
-    if (revealTarget) {
-      const target = revealTarget;
-      setTimeout(() => document.dispatchEvent(
-        new CustomEvent('map:focus', { detail: { postId: target.id } })), 60);
-    }
+    if (revealTarget) openOnMap(revealTarget.id);
+    else navigate('#/map');
   });
   screen('reveal', {});
   screen('computing', {});

@@ -27,6 +27,7 @@ work with nothing else running.
 import hashlib
 import io
 import json
+import logging
 import os
 import pickle
 import re
@@ -81,7 +82,7 @@ from core.similarity import (
 from core.store import StoreError, create_store
 
 ROOT = Path(__file__).resolve().parent
-ARTIFACTS = ROOT / "artifacts"
+ARTIFACTS = Path(os.environ.get("MAP_ARTIFACTS_DIR") or str(ROOT / "artifacts"))
 WEB = ROOT / "web"
 
 
@@ -107,6 +108,8 @@ ISLAND_CACHE_SECONDS = 60
 # contributes puddles that cannot carry a name anyway.
 NAMING_POST_LIMIT = 5000
 
+_logger = logging.getLogger(__name__)
+
 _URL = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
@@ -128,6 +131,8 @@ _islands_lock = threading.Lock()
 
 def load_artifacts():
     """Load the frozen map. Missing artifacts is a hard failure, not a warning."""
+    from core.artifact_manifest import validate_manifest
+    manifest = validate_manifest(ARTIFACTS, os.environ.get("EMBEDDING_PROVIDER", "onnx"))
     seed_map_path = ARTIFACTS / "seed_map.json"
     if not seed_map_path.exists():
         raise RuntimeError(
@@ -152,6 +157,7 @@ def load_artifacts():
     ]
     return {
         "seed_map": seed_map,
+        "manifest": manifest,
         "seed_bounds": seed_bounds,
         "encoder": encoder,
         "scale_bounds": scale_bounds,
@@ -177,12 +183,19 @@ async def lifespan(_app):
 
     print("artifacts を読み込み中...", flush=True)
     state.update(load_artifacts())
-    _gemini = bool(os.environ.get("GEMINI_API_KEY", "").strip())
+    _gemini = os.environ.get("EMBEDDING_PROVIDER", "onnx") == "gemini"
     _label = f"Gemini API ({GEMINI_MODEL_NAME})" if _gemini else "ONNX (multilingual-e5-small)"
     print(f"埋め込みモデルを読み込み中: {_label}", flush=True)
     state["model"] = load_embedder()
     state["store"] = create_store()
+    if _gemini:
+        from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
+        cache = state["store"] if state["store"].backend == "supabase" else SQLiteEmbeddingCache(
+            os.environ.get("EMBEDDING_CACHE_PATH", str(ROOT / ".cache" / "embeddings.sqlite3")))
+        state["model"] = CachedEmbedder(state["model"], cache, state["manifest"]["embedding"])
     state["local_mode"] = state["store"].backend == "memory"
+    if _gemini and not state["local_mode"] and os.environ.get("MAP_RUNTIME_CHECK") != "1":
+        raise RuntimeError("Production Gemini requires MAP_RUNTIME_CHECK=1 and the model-runtime migration")
     state["images"] = {}
     state["otp"] = {}
 
@@ -217,12 +230,34 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="かさなり", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="islands", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 # The free egress allowance on the deploy target is 1GiB/month, and the web
 # assets are highly compressible text. minimum_size skips the small JSON
 # replies, where the header would cost more than the compression saves.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+def runtime_status():
+    if state.get("local_mode") or os.environ.get("MAP_RUNTIME_CHECK", "0") != "1":
+        return {"maintenance": False, "active_version": state["manifest"]["artifact_version"]}
+    return state["store"].runtime_status()
+
+
+@app.middleware("http")
+async def map_runtime_guard(request, call_next):
+    protected = request.url.path.startswith('/api/') and request.url.path not in ('/api/health', '/api/config')
+    if protected and state.get("manifest"):
+        from starlette.concurrency import run_in_threadpool
+        try:
+            runtime = await run_in_threadpool(runtime_status)
+        except StoreError:
+            return JSONResponse({"detail": "現在、稼働状態を確認できません。"}, status_code=503)
+        writes = request.method not in ("GET", "HEAD", "OPTIONS")
+        if (runtime["maintenance"] and writes) or runtime["active_version"] != state["manifest"]["artifact_version"]:
+            return JSONResponse({"detail": "地図を更新しています。しばらくしてから再読み込みしてください。"}, status_code=503,
+                                headers={"Retry-After": "30"})
+    return await call_next(request)
 
 
 # --------------------------------------------------------------------------
@@ -328,9 +363,13 @@ def project(text):
     chips and to name a landmass, and a name led by 揃える reads worse than one
     led by 焚き火.
     """
-    features, _token_lists, zero_rows, _ = build_hybrid_features(
-        [text], state["model"], fit_sparse=False, sparse_artifacts=state["sparse_artifacts"]
-    )
+    from core.embedder import EmbeddingUnavailable
+    try:
+        features, _token_lists, zero_rows, _ = build_hybrid_features(
+            [text], state["model"], fit_sparse=False, sparse_artifacts=state["sparse_artifacts"]
+        )
+    except (EmbeddingUnavailable, StoreError):
+        raise HTTPException(status_code=503, detail="文章の配置を完了できませんでした。時間をおいて再試行してください。", headers={"Retry-After": "15"})
     if zero_rows:
         raise HTTPException(
             status_code=422,
@@ -383,13 +422,12 @@ def live_islands(force=False):
         with _islands_lock:
             return _islands_cache["value"]
 
+    if len(posts) >= NAMING_POST_LIMIT:
+        _logger.warning("island naming capped at %d posts; some posts will have no island membership", NAMING_POST_LIMIT)
+
     named = name_landmasses(posts, state["idf"], name_group)
-    # post_ids can run to thousands and the client never uses them; they exist
-    # so a caller inside the server can ask "which landmass is this post on".
-    payload = [
-        {key: value for key, value in island.items() if key != "post_ids"}
-        for island in named
-    ]
+    # Explicit membership replaces the client's former centre-distance guess.
+    payload = named
     membership = {}
     for index, island in enumerate(named):
         for post_id in island["post_ids"]:
@@ -485,6 +523,7 @@ def config():
     anchors = state.get("cosine_anchors") or {}
     return {
         "mode": "local" if state["local_mode"] else "supabase",
+        "map_version": state["manifest"]["artifact_version"],
         "supabase": {
             "url": os.environ.get("SUPABASE_URL", "").strip(),
             "anon_key": os.environ.get("SUPABASE_ANON_KEY", "").strip(),
@@ -532,6 +571,12 @@ def health():
     except StoreError:
         posts = None
         store_ok = False
+    try:
+        runtime = runtime_status()
+        compatible = runtime['active_version'] == state['manifest']['artifact_version']
+    except StoreError:
+        runtime = {"maintenance": True, "active_version": None}
+        compatible = False
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
@@ -540,6 +585,12 @@ def health():
         "store_ok": store_ok,
         "posts": posts,
         "model_version": state["seed_map"]["meta"]["model_version"],
+        "embedding": state["manifest"]["embedding"],
+        "artifact_version": state["manifest"]["artifact_version"],
+        "artifact_compatible": compatible,
+        "maintenance": runtime["maintenance"],
+        "active_map_version": runtime["active_version"],
+        "ready": store_ok and compatible and not runtime["maintenance"],
     }
 
 
@@ -550,6 +601,44 @@ def islands(response: Response):
     # timer rather than per viewer. Worth a CDN hop if one is ever put in front.
     response.headers["Cache-Control"] = "public, max-age=30"
     return {"islands": payload}
+
+
+@app.get("/api/map/bounds")
+def map_bounds():
+    from core.energy import post_radius
+    try:
+        posts = state["store"].terrain_posts()
+    except StoreError as exc:
+        raise HTTPException(503, "地図の範囲を読み込めませんでした。") from exc
+    if not posts:
+        return {"bounds": None, "count": 0}
+    return {"bounds": [min(p["x"] - post_radius(p) for p in posts),
+                       min(p["y"] - post_radius(p) for p in posts),
+                       max(p["x"] + post_radius(p) for p in posts),
+                       max(p["y"] + post_radius(p) for p in posts)], "count": len(posts)}
+
+
+@app.get("/api/terrain")
+def terrain(min_x: float, min_y: float, max_x: float, max_y: float,
+            query: str = "", tags: str = ""):
+    from core.terrain import energy_grid
+    bounds = [min_x, min_y, max_x, max_y]
+    if not all(np.isfinite(bounds)) or not (min_x < max_x and min_y < max_y):
+        raise HTTPException(422, "地図の範囲が不正です。")
+    if max_x - min_x > 100000 or max_y - min_y > 100000 or len(query) > 140:
+        raise HTTPException(422, "地図の範囲が大きすぎます。")
+    selected = [tag for tag in tags.split(',') if tag]
+    if any(tag not in TAGS for tag in selected):
+        raise HTTPException(422, "タグが不正です。")
+    try:
+        posts = state["store"].terrain_posts()
+    except StoreError:
+        raise HTTPException(503, "地形を読み込めませんでした。")
+    needle = query.lower()
+    posts = [p for p in posts if
+             (not needle or needle in (p.get('body', '') + ' ' + p.get('display_name', '')).lower())
+             and (not selected or any(tag in p.get('tags', []) for tag in selected))]
+    return energy_grid(posts, bounds)
 
 
 @app.post("/api/posts")
@@ -563,6 +652,23 @@ def create_post(payload: PostCreate, request: Request):
     """
     user_id = current_user(request)
     body = clean_body(payload.body)
+    request_key = request.headers.get("Idempotency-Key")
+    stable_id = None
+    if request_key:
+        try:
+            uuid.UUID(request_key)
+        except ValueError:
+            raise HTTPException(422, "再試行キーが不正です。")
+        canonical = json.dumps({"body": body, "tags": clean_tags(payload.tags),
+            "motivation": clean_motivation(payload.motivation), "image_path": payload.image_path or None},
+            sort_keys=True, ensure_ascii=False)
+        stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id + ':' + request_key + ':' + canonical))
+        try:
+            existing = state["store"].get_post(stable_id)
+        except StoreError:
+            raise HTTPException(503, "投稿の保存状況を確認できませんでした。")
+        if existing:
+            return {**existing, "island": island_of(existing["id"]), "neighbors": []}
     if not check_rate_limit(user_id):
         raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
 
@@ -592,6 +698,8 @@ def create_post(payload: PostCreate, request: Request):
         # MemoryStore keeps arrays, not pgvector literals.
         record["vec"] = [round(float(value), 6) for value in vector]
         record["vec_c"] = [round(float(value), 6) for value in centred]
+    if stable_id:
+        record["id"] = stable_id
 
     try:
         row = store.insert_post(record)

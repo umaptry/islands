@@ -9,6 +9,8 @@
 import { data } from '../net.js';
 import { navigate, screen } from '../router.js';
 import { state } from '../state.js';
+import { openOnMap } from './map.js';
+import { icon } from '../icons.js';
 import { $, avatar, clear, el, timeAgo } from '../ui.js';
 
 const KINDS = {
@@ -65,7 +67,7 @@ function paintList() {
       attrs: { type: 'button' },
       on: { click: () => open(row) },
     },
-      el('span', { className: 'notif-icon', text: kind.icon }),
+      el('span', { className: 'notif-icon' }, icon({ like: 'heart', help: 'help', join: 'hand', comment: 'message' }[row.type])),
       avatar(actor, 34),
       el('span', { className: 'notif-body' },
         el('span', { className: 'notif-head' },
@@ -92,11 +94,7 @@ async function open(row) {
     });
   }
   if (!row.post_id) return;
-  navigate('#/map');
-  setTimeout(() => {
-    document.dispatchEvent(new CustomEvent('map:focus', { detail: { postId: row.post_id } }));
-    document.dispatchEvent(new CustomEvent('map:open', { detail: { postId: row.post_id } }));
-  }, 80);
+  await openOnMap(row.post_id);
 }
 
 export function setupNotifications() {

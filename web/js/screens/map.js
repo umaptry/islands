@@ -7,13 +7,13 @@
 
 import { config, islandColor } from '../config.js';
 import { api, data } from '../net.js';
-import { navigate, screen } from '../router.js';
+import { navigate, screen, activeScreen } from '../router.js';
 import {
-  hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, upsertPost,
+  hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, upsertPost, notify,
 } from '../state.js';
 import {
   $, $$, clear, closeSheet, confirmAction, el, expandSheet, openSheet, sheetExpanded,
-  sheetOpen, toast,
+  sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
 import { chatInput, postChat } from '../components/chat.js';
@@ -25,15 +25,55 @@ const POLL_MS = 15000;
 let pollTimer = 0;
 let booted = false;
 let activeChat = null;
+let selectionGeneration = 0;
+let sheetEvents = null;
+let restorePost = null;
+let mapRequest = 0;
+let filterTimer = 0;
+let mapError = false;
+
+function paintMapStatus() {
+  const status = $('mapStatus');
+  const filtering = state.filters.query || state.filters.tags.length;
+  const terrainNote = state.saturated && state.terrainGrid ? '・地形は表示範囲のみ' : '';
+  status.hidden = !mapError && !filtering && state.posts.length > 0 && !terrainNote;
+  status.textContent = mapError ? '地図を更新できませんでした。接続を確認してください。'
+    : filtering ? `${state.posts.filter(matchesFilters).length}件表示・検索対象は読み込み済みの範囲です${terrainNote}`
+    : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
+    : 'まだ投稿がありません。最初の投稿で島をつくりましょう。';
+}
+
+function filtersChanged() {
+  mapRequest += 1;
+  paintMapStatus();
+  clearTimeout(filterTimer);
+  state.terrainGrid = null;
+  if (state.saturated) filterTimer = setTimeout(() => refreshMap(), 250);
+}
+
+export async function openOnMap(postId) {
+  if (!await navigate('#/map')) return;
+  await openPost(postId);
+  if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+}
 
 // ---------------------------------------------------------------- data
 
 export async function refreshMap({ fitFirst = false } = {}) {
-  if (fitFirst) fitCamera();
+  const generation = ++mapRequest;
+  if (fitFirst) {
+    try {
+      const result = await api.get('/api/map/bounds', { auth: false });
+      if (generation !== mapRequest) return false;
+      fitCamera([], result.bounds);
+    } catch { fitCamera(); }
+  }
   const bounds = viewport();
   const limit = config().limits.map_post_limit;
   try {
     const posts = await data.mapPosts({ ...bounds, limit });
+    if (generation !== mapRequest) return false;
+    mapError = false;
     const saturated = posts.length >= limit;
     setPosts(posts, { saturated });
     if (saturated) {
@@ -41,15 +81,24 @@ export async function refreshMap({ fitFirst = false } = {}) {
       // the viewport holds more posts than we asked for. Fetching it always
       // would be a second query on every pan for nothing.
       try {
-        state.cells = await data.mapCells(bounds);
+        const params = new URLSearchParams({ min_x: bounds.minX, min_y: bounds.minY,
+          max_x: bounds.maxX, max_y: bounds.maxY, query: state.filters.query, tags: state.filters.tags.join(',') });
+        const grid = await api.get(`/api/terrain?${params}`, { auth: false });
+        if (generation !== mapRequest) return false;
+        state.terrainGrid = grid;
       } catch {
-        state.cells = [];
+        state.terrainGrid = null;
+        mapError = true;
       }
     } else {
-      state.cells = [];
+      state.terrainGrid = null;
     }
+    state.cells = [];
+    paintMapStatus();
     return true;
   } catch {
+    mapError = true;
+    paintMapStatus();
     return false;
   }
 }
@@ -69,6 +118,7 @@ export async function refreshMyReactions() {
   try {
     const rows = await data.myReactions();
     state.reactions = new Set(rows.map((row) => reactionKey(row.post_id, row.kind)));
+    notify('reactions');
   } catch {
     /* a missed poll is not worth telling anyone about */
   }
@@ -116,8 +166,7 @@ function paintBadge() {
     badge.hidden = true;
     return;
   }
-  const named = state.islands.find((island) =>
-    Math.hypot(island.cx - mine.x, island.cy - mine.y) < 260);
+  const named = state.islands.find((island) => island.post_ids?.includes(mine.id));
   const local = landmassOf(mine.id);
   if (!named && !local) {
     badge.hidden = true;
@@ -147,6 +196,7 @@ function paintFilterPanel() {
             : state.filters.tags.concat(tag);
           paintFilterPanel();
           paintFilterCount();
+          filtersChanged();
         },
       },
     }));
@@ -166,11 +216,13 @@ function setupChrome() {
   search.addEventListener('input', () => {
     state.filters.query = search.value.trim();
     $('mapSearchClear').hidden = !search.value;
+    filtersChanged();
   });
   $('mapSearchClear').addEventListener('click', () => {
     search.value = '';
     state.filters.query = '';
     $('mapSearchClear').hidden = true;
+    filtersChanged();
   });
 
   $('mapFilterBtn').addEventListener('click', (event) => {
@@ -187,8 +239,9 @@ function setupChrome() {
       $$('.tab').forEach((other) => other.classList.remove('on'));
       tab.classList.add('on');
       state.view = tab.dataset.view;
-      if (state.view === 'map') fitCamera();
-      else refreshNeighbors();
+      if (state.view !== 'map') refreshNeighbors();
+      tab.setAttribute('aria-selected', 'true');
+      $$('.tab').filter((item) => item !== tab).forEach((item) => item.setAttribute('aria-selected', 'false'));
       paintBadge();
     });
   });
@@ -219,12 +272,18 @@ function setupChrome() {
 // ---------------------------------------------------------------- sheet
 
 export async function openPost(postId) {
+  if (sheetOpen()) closeSheet();
+  const generation = ++selectionGeneration;
   let post = state.postsById.get(postId);
   const body = openSheet({ onClose: () => {
+    selectionGeneration += 1;
+    sheetEvents?.abort();
+    sheetEvents = null;
     if (activeChat) activeChat.destroy();
     activeChat = null;
     state.selected = null;
   } });
+  sheetEvents = new AbortController();
   clear(body).append(el('p', { className: 'sheet-loading', text: '読み込み中…' }));
   clear($('sheetFoot'));
 
@@ -232,19 +291,21 @@ export async function openPost(postId) {
     try {
       post = await data.getPost(postId);
     } catch (error) {
+      if (generation !== selectionGeneration) return;
       clear(body).append(el('p', { className: 'sheet-error', text: error.message }));
       return;
     }
   }
+  if (generation !== selectionGeneration) return;
   if (!post) {
     clear(body).append(el('p', { className: 'sheet-error', text: '見つかりませんでした。' }));
     return;
   }
   state.selected = post;
-  await renderSheet(post);
+  await renderSheet(post, generation);
 }
 
-async function renderSheet(post) {
+async function renderSheet(post, generation) {
   const body = clear($('sheetBody'));
   const mine = state.account && post.author_id === state.account.id;
 
@@ -263,8 +324,8 @@ async function renderSheet(post) {
     }
   }
 
-  const island = state.islands.find((entry) =>
-    Math.hypot(entry.cx - post.x, entry.cy - post.y) < 260);
+  if (generation !== selectionGeneration || !sheetOpen()) return;
+  const island = state.islands.find((entry) => entry.post_ids?.includes(post.id));
   if (island) {
     body.append(el('div', { className: 'sheet-island' },
       el('i', { className: 'island-swatch', style: { background: islandColor(post.cluster_id) } }),
@@ -276,6 +337,7 @@ async function renderSheet(post) {
     similarity,
     onReact: (kind) => react(post.id, kind),
     onOpenAuthor: (authorId) => {
+      restorePost = post.id;
       closeSheet();
       navigate(mine ? '#/me' : `#/u/${authorId}`);
     },
@@ -294,7 +356,13 @@ async function renderSheet(post) {
   const thread = el('div', { className: 'sheet-thread' });
   body.append(thread);
   paintThread(post, thread);
-  document.addEventListener('sheet:expand', () => paintThread(post, thread));
+  let layout = desktopSheet();
+  document.addEventListener('sheet:expand', () => paintThread(post, thread), { signal: sheetEvents.signal });
+  document.addEventListener('sheet:layout', () => {
+    if (layout === desktopSheet()) return;
+    layout = desktopSheet();
+    paintThread(post, thread);
+  }, { signal: sheetEvents.signal });
 }
 
 function paintThread(post, container) {
@@ -304,7 +372,7 @@ function paintThread(post, container) {
     activeChat.destroy();
     activeChat = null;
   }
-  if (!sheetExpanded()) {
+  if (!sheetExpanded() && !desktopSheet()) {
     container.append(el('button', {
       className: 'thread-open',
       attrs: { type: 'button' },
@@ -320,7 +388,8 @@ function paintThread(post, container) {
   });
   container.append(el('div', { className: 'section-label', text: 'メッセージ' }), activeChat.node);
   if (state.account) {
-    $('sheetFoot').append(chatInput(post.id, { onSent: () => activeChat.refresh() }));
+    const chat = activeChat;
+    $('sheetFoot').append(chatInput(post.id, { onSent: () => chat.refresh() }));
   } else {
     $('sheetFoot').append(el('button', {
       className: 'btn btn-block',
@@ -330,14 +399,17 @@ function paintThread(post, container) {
   }
 }
 
-async function react(postId, kind) {
+export async function react(postId, kind) {
   if (!state.account) {
     toast('リアクションするにはログインしてください。');
     navigate('#/auth');
     return;
   }
   const on = hasReacted(postId, kind);
-  const post = state.postsById.get(postId) || state.selected;
+  const post = state.postsById.get(postId) || state.myPosts.find((p) => p.id === postId)
+    || (state.selected?.id === postId ? state.selected : null) || await data.getPost(postId);
+  if (!post) return;
+  upsertPost(post);
   const column = `${kind}_count`;
   // Optimistic: the tap should feel done immediately, and a failure puts it
   // back rather than leaving the button lying about what happened.
@@ -398,6 +470,7 @@ async function report(post) {
 
 /** islands' swipe: half height to full and back. */
 function setupSheetGesture() {
+  setupSheetAccessibility();
   const sheet = $('sheet');
   const scroll = $('sheetScroll');
   let startY = 0;
@@ -409,6 +482,7 @@ function setupSheetGesture() {
   }, { passive: true });
 
   sheet.addEventListener('touchmove', (event) => {
+    if (desktopSheet()) return;
     const delta = startY - event.touches[0].clientY;
     if (!sheetExpanded() && delta > 24) expandSheet(true);
     // Only collapse from the top of the thread. Otherwise scrolling back up
@@ -419,6 +493,7 @@ function setupSheetGesture() {
   }, { passive: true });
 
   scroll.addEventListener('wheel', (event) => {
+    if (desktopSheet()) return;
     if (!sheetOpen()) return;
     if (!sheetExpanded() && event.deltaY > 8) expandSheet(true);
     else if (sheetExpanded() && event.deltaY < -8 && scroll.scrollTop <= 0) expandSheet(false);
@@ -457,6 +532,9 @@ export function setupMapScreen() {
   paintFilterCount();
 
   screen('map', {
+    leave(next) {
+      if (['me', 'user'].includes(next) && state.selected) restorePost = state.selected.id;
+    },
     async enter() {
       if (!booted) {
         booted = true;
@@ -475,6 +553,11 @@ export function setupMapScreen() {
         refreshIslands();
       }
       paintBadge();
+      if (restorePost && activeScreen() === 'map') {
+        const postId = restorePost;
+        restorePost = null;
+        await openPost(postId);
+      }
     },
   });
 }

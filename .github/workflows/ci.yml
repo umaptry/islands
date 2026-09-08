@@ -30,6 +30,48 @@ env:
   CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION || 'asia-northeast1' }}
 
 jobs:
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/frontend/*.test.mjs
+
+  browser-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-test.txt
+      - run: npm install --no-save @playwright/test@1.55.0
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-verification
+          path: output/
+
+  database-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npx --yes supabase@2.39.2 start
+      - run: npx --yes supabase@2.39.2 test db
+      - if: always()
+        run: npx --yes supabase@2.39.2 stop --no-backup
   # ------------------------------------------------------------------
   # 1. Python tests (runs on every push and PR)
   # ------------------------------------------------------------------
@@ -59,7 +101,7 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       vars.DEPLOY_ENABLED == 'true'
-    needs: [python-test]
+    needs: [python-test, frontend-test, browser-test, database-test]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -71,7 +113,7 @@ jobs:
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_KEY_VERSION: ${{ vars.SUPABASE_SERVICE_KEY_VERSION || '1' }}
-      # GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # re-enable after artifacts are rebuilt with Gemini embeddings
+      # E5 design release stays on onnx. Gemini migration is a separate maintenance release.
     outputs:
       candidate_url: ${{ steps.deploy.outputs.candidate_url }}
       revision: ${{ steps.deploy.outputs.revision }}
@@ -148,7 +190,7 @@ jobs:
             --max-instances 4 --concurrency 12 \
             --timeout 120 --cpu-boost \
             --allow-unauthenticated \
-            --set-env-vars "^##^SUPABASE_URL=${SUPABASE_URL}##SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}" \
+            --set-env-vars "^##^SUPABASE_URL=${SUPABASE_URL}##SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}##EMBEDDING_PROVIDER=onnx##MAP_RUNTIME_CHECK=0" \
             --set-secrets "SUPABASE_SERVICE_KEY=supabase-service-key:${SUPABASE_SERVICE_KEY_VERSION}" \
             --format json > /tmp/deploy.json
 
@@ -217,6 +259,10 @@ jobs:
               errors.append(f\"store={h.get('store')}, expected supabase\")
           if not h.get('store_ok'):
               errors.append('store_ok is false — DB connection failed')
+          if not h.get('ready') or not h.get('artifact_compatible'):
+              errors.append('map runtime is not ready or artifact version mismatches')
+          if h.get('embedding', {}).get('provider') != 'onnx':
+              errors.append('this workflow releases the E5 design phase only')
           if errors:
               for e in errors: print(f'::error::{e}')
               sys.exit(1)

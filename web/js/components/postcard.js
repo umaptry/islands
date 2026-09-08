@@ -11,8 +11,29 @@
 // flattened them, and which words the two people actually share.
 
 import { data } from '../net.js';
-import { hasReacted, state } from '../state.js';
+import { hasReacted, state, subscribe } from '../state.js';
 import { avatar, clip, el, motivationColor, timeAgo } from '../ui.js';
+import { icon } from '../icons.js';
+
+// One outside-click listener for every card menu, including cards removed with a sheet.
+let activeMenu = null;
+document.addEventListener('pointerdown', (event) => {
+  if (activeMenu && (!activeMenu.wrap.isConnected || !activeMenu.wrap.contains(event.target))) activeMenu.close();
+});
+
+// One subscription for all mounted cards; removed cards retain no subscriptions.
+subscribe(() => {
+  document.querySelectorAll('.post-card[data-post-id]').forEach((card) => {
+    const post = state.postsById.get(card.dataset.postId) || state.myPosts.find((p) => p.id === card.dataset.postId);
+    if (!post) return;
+    card.querySelectorAll('[data-count]').forEach((node) => { node.textContent = post[node.dataset.count] || 0; });
+    card.querySelectorAll('[data-reaction]').forEach((node) => {
+      const on = hasReacted(post.id, node.dataset.reaction);
+      node.classList.toggle('on', on);
+      node.setAttribute('aria-pressed', String(on));
+    });
+  });
+});
 
 const REACTIONS = [
   { kind: 'like', label: 'いいね', icon: '♥', countKey: 'like_count', tone: 'like' },
@@ -30,6 +51,7 @@ const REACTIONS = [
 export function postCard(post, options = {}) {
   const mine = state.account && post.author_id === state.account.id;
   const card = el('article', { className: 'post-card' });
+  card.dataset.postId = post.id;
 
   // --- author row -------------------------------------------------------
   const author = el('button', {
@@ -49,16 +71,13 @@ export function postCard(post, options = {}) {
     tools.append(menu(post, options));
   } else if (options.onReport) {
     tools.append(el('button', {
-      className: 'icon-button', attrs: { type: 'button', 'aria-label': '報告' }, text: '⋯',
+      className: 'icon-button', attrs: { type: 'button', 'aria-label': '報告' },
       on: { click: () => options.onReport(post) },
-    }));
+    }, icon('more', 20)));
   }
   card.append(el('div', { className: 'post-head' }, author, tools));
 
   // --- similarity, when this is somebody else's post --------------------
-  if (options.similarity && typeof options.similarity.similarity === 'number') {
-    card.append(similarityBlock(options.similarity));
-  }
 
   // --- tags -------------------------------------------------------------
   if ((post.tags || []).length) {
@@ -78,12 +97,19 @@ export function postCard(post, options = {}) {
     const url = data.imageUrl(post.image_path);
     if (url) {
       card.append(el('div', { className: 'post-image' },
-        el('img', { attrs: { src: url, alt: '添付画像', loading: 'lazy' } })));
+        el('a', { attrs: { href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': '添付画像を全体表示' } },
+          el('img', { attrs: { src: url, alt: '添付画像', loading: 'lazy' },
+            on: { error: (event) => { event.target.alt = '画像を読み込めませんでした'; } } }))));
     }
   }
 
   // --- footer -----------------------------------------------------------
   if (!options.compact) card.append(footer(post, options));
+  if (options.similarity && typeof options.similarity.similarity === 'number') {
+    const detail = el('details', { className: 'similarity-details' },
+      el('summary', { text: `似てる度 ${options.similarity.similarity}%・共通点を見る` }), similarityBlock(options.similarity));
+    card.append(detail);
+  }
 
   return card;
 }
@@ -103,21 +129,21 @@ function menu(post, options) {
   const button = el('button', {
     className: 'icon-button',
     attrs: { type: 'button', 'aria-label': 'この投稿の操作' },
-    text: '⋮',
     on: {
       click: (event) => {
         event.stopPropagation();
-        panel.hidden = !panel.hidden;
-        if (!panel.hidden) setTimeout(() => document.addEventListener('pointerdown', away), 0);
+        const opening = panel.hidden;
+        activeMenu?.close();
+        panel.hidden = !opening;
+        button.setAttribute('aria-expanded', String(opening));
+        if (opening) activeMenu = { wrap, close };
       },
     },
-  });
-  function away(event) {
-    if (!wrap.contains(event.target)) close();
-  }
+  }, icon('more', 20));
   function close() {
     panel.hidden = true;
-    document.removeEventListener('pointerdown', away);
+    button.setAttribute('aria-expanded', 'false');
+    activeMenu = null;
   }
   wrap.append(button, panel);
   return wrap;
@@ -179,7 +205,7 @@ function similarityBlock({ similarity, shared, note }) {
   // reads as a bug rather than as the two different things they are.
   block.append(el('p', {
     className: 'similarity-foot',
-    text: '地図の位置は全体を見渡すためのもの。似てる度は潰す前の448次元で測っています。',
+    text: '似てる度は文章の意味の近さです。地図上の距離とは異なる場合があります。',
   }));
   return block;
 }
@@ -189,25 +215,26 @@ function footer(post, options) {
 
   row.append(el('button', {
     className: 'post-action',
-    attrs: { type: 'button' },
+    attrs: { type: 'button', 'aria-label': 'メッセージを開く' },
     on: { click: () => options.onComments && options.onComments(post) },
   },
-    el('span', { className: 'post-action-icon', text: '💬' }),
-    el('span', { className: 'post-action-count num', text: post.comment_count || 0 }),
+    el('span', { className: 'post-action-icon' }, icon('message', 20)),
+    el('span', { className: 'post-action-count num', attrs: { 'data-count': 'comment_count' }, text: post.comment_count || 0 }),
   ));
 
   REACTIONS.forEach((reaction) => {
     const button = el('button', {
       className: `post-action reaction ${reaction.tone}`,
-      attrs: { type: 'button' },
+      attrs: { type: 'button', 'data-reaction': reaction.kind, 'aria-label': reaction.label },
     },
-      el('span', { className: 'post-action-icon', text: reaction.icon }),
+      el('span', { className: 'post-action-icon' }, icon({ like: 'heart', help: 'help', join: 'hand' }[reaction.kind], 20)),
       el('span', { className: 'post-action-label', text: reaction.label }),
-      el('span', { className: 'post-action-count num', text: post[reaction.countKey] || 0 }),
+      el('span', { className: 'post-action-count num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
     );
 
     const paint = () => {
       button.classList.toggle('on', hasReacted(post.id, reaction.kind));
+      button.setAttribute('aria-pressed', String(hasReacted(post.id, reaction.kind)));
       const count = button.querySelector('.post-action-count');
       const current = state.postsById.get(post.id) || post;
       count.textContent = String(current[reaction.countKey] || 0);

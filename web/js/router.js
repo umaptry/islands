@@ -40,13 +40,10 @@ export function setGuard(handler) {
 }
 
 export function navigate(hash, { replace = false } = {}) {
-  if (window.location.hash === hash) {
-    apply(hash);
-    return;
+  if (window.location.hash !== hash) {
+    history[replace ? 'replaceState' : 'pushState'](null, '', hash);
   }
-  if (replace) history.replaceState(null, '', hash);
-  else window.location.hash = hash;
-  if (replace) apply(hash);
+  return apply(hash);
 }
 
 export const currentRoute = () => window.location.hash || '#/map';
@@ -70,42 +67,52 @@ function match(hash) {
 }
 
 let applying = false;
+let pending = null;
+let waiters = [];
 
 async function apply(hash) {
-  if (applying) return;
-  const found = match(hash) || match('#/map');
-  if (!found) return;
-
-  const redirect = guard(found.pattern, found.params);
-  if (redirect && redirect !== hash) {
-    navigate(redirect, { replace: true });
-    return;
-  }
-
+  pending = hash;
+  const done = new Promise((resolve) => waiters.push({ hash, resolve }));
+  if (applying) return done;
   applying = true;
   try {
-    // A sheet belongs to the screen that opened it. Leaving without closing it
-    // would strand a panel over an unrelated screen.
-    closeSheet();
-    if (current && current !== found.target) {
+    while (pending !== null) {
+      const requested = pending;
+      pending = null;
+      const found = match(requested) || match('#/map');
+      if (!found) continue;
+      const redirect = guard(found.pattern, found.params);
+      if (redirect && redirect !== requested) {
+        history.replaceState(null, '', redirect);
+        pending = redirect;
+        continue;
+      }
       const previous = screens.get(current);
-      if (previous && previous.leave) previous.leave();
+      if (previous?.leave) previous.leave(found.target);
+      closeSheet();
+      show(found.target);
+      current = found.target;
+      try {
+        await screens.get(current)?.enter?.(found.params, found.query);
+      } catch (error) {
+        document.dispatchEvent(new CustomEvent('route:error', { detail: error }));
+      }
+      if (pending === null) paintNav(found.pattern);
     }
-    show(found.target);
-    current = found.target;
-    const handlers = screens.get(found.target);
-    if (handlers && handlers.enter) await handlers.enter(found.params, found.query);
-    paintNav(found.pattern);
   } finally {
     applying = false;
+    const completed = waiters;
+    waiters = [];
+    completed.forEach(({ hash: target, resolve }) => resolve(currentRoute() === target));
   }
+  return done;
 }
 
 export function show(id) {
   $$('.screen').forEach((node) => node.classList.toggle('active', node.id === id));
   // The nav is hidden on the screens you have to finish before you can use the
   // app - an intro you are half way through, a sign-in, a first profile.
-  const chrome = ['map', 'notifications', 'me', 'user'].includes(id);
+  const chrome = ['map', 'notifications', 'me', 'user', 'compose', 'profileEdit'].includes(id);
   $('bottomNav').hidden = !chrome;
   document.body.classList.toggle('has-nav', chrome);
 }
@@ -115,7 +122,10 @@ export const activeScreen = () => current;
 function paintNav(pattern) {
   $$('.nav-item').forEach((item) => {
     const target = item.dataset.route;
-    item.classList.toggle('on', pattern === target || pattern.startsWith(`${target}/`));
+    const active = pattern === target || pattern.startsWith(`${target}/`);
+    item.classList.toggle('on', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
   });
 }
 

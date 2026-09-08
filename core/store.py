@@ -164,6 +164,8 @@ class MemoryStore:
             row.setdefault(column, 0)
         row["energy"] = computed_energy(row)
         with self._lock:
+            if row["id"] in self._posts:
+                return self._public_post(self._posts[row["id"]])
             self._posts[row["id"]] = row
         return self._public_post(row)
 
@@ -243,6 +245,10 @@ class MemoryStore:
         keys = TERM_COLUMNS.split(",")
         return [{key: (computed_energy(row) if key == "energy" else row.get(key))
                  for key in keys} for row in rows]
+
+    def terrain_posts(self):
+        with self._lock:
+            return [self._joined(row) for row in self._live()]
 
     def nearest_posts(self, post_id, k):
         import numpy as np
@@ -543,6 +549,22 @@ class SupabaseStore:
 
     # -- accounts ----------------------------------------------------------
 
+    def get_embedding(self, key):
+        rows = self._get("embedding_cache", {"cache_key": f"eq.{key}", "select": "embedding"})
+        return rows[0]["embedding"] if rows else None
+
+    def runtime_status(self):
+        rows = self._get("map_runtime", {"select": "maintenance,active_version", "singleton": "eq.true"})
+        if len(rows) != 1:
+            raise StoreError("Map runtime configuration is missing")
+        return rows[0]
+
+    def put_embedding(self, key, value):
+        self._send("POST", "embedding_cache", label="埋め込みの保存",
+                   headers={"Prefer": "resolution=ignore-duplicates"},
+                   json={"cache_key": key, "embedding": value})
+        return self.get_embedding(key)
+
     def get_account(self, account_id):
         rows = self._get(ACCOUNTS, {
             "select": ACCOUNT_COLUMNS, "id": f"eq.{account_id}", "limit": "1",
@@ -575,11 +597,17 @@ class SupabaseStore:
     def insert_post(self, record):
         response = self._send(
             "POST", POSTS, label="保存",
-            headers={"Prefer": "return=representation"},
+            headers={"Prefer": "return=representation,resolution=ignore-duplicates"},
             params={"select": POST_COLUMNS},
             json=record,
         )
-        return response.json()[0]
+        rows = response.json()
+        if rows:
+            return rows[0]
+        existing = self.get_post(record["id"])
+        if not existing:
+            raise StoreError("投稿を保存できませんでした。")
+        return existing
 
     def get_post(self, post_id, with_vec=False):
         select = POST_COLUMNS + (",vec,vec_c" if with_vec else "")
@@ -640,6 +668,20 @@ class SupabaseStore:
             "order": "energy.desc",
             "limit": str(limit),
         }, label="領域名の読み込み")
+
+    def terrain_posts(self):
+        rows = []
+        last = None
+        while True:
+            params = {"select": "id,x,y,energy,body,tags,accounts(display_name)",
+                      "deleted_at": "is.null", "order": "id", "limit": "1000"}
+            if last:
+                params["id"] = f"gt.{last}"
+            batch = self._get(POSTS, params, label="地形の読み込み")
+            rows.extend(_flatten(row) for row in batch)
+            if len(batch) < 1000:
+                return rows
+            last = batch[-1]["id"]
 
     def nearest_posts(self, post_id, k):
         rows = self._rpc("nearest_posts", {"from_post": post_id, "k": k},

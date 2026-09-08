@@ -65,18 +65,25 @@ function colorFor(energy) {
 
 /** A stable key for "would this produce the same texture". */
 function signature(posts, cells, region, unit) {
-  let sum = 0;
-  for (const post of posts) {
-    // Position and energy are the only inputs. Ids are not: two posts swapping
-    // ids would produce the same ground, and rebuilding for that is waste.
-    sum = (sum + post.x * 31 + post.y * 17 + energyOf(post) * 7) % 1e12;
-  }
-  return [
-    posts.length, Math.round(sum), cells.length,
-    Math.round(region.minX), Math.round(region.minY),
-    Math.round(region.maxX), Math.round(region.maxY),
-    unit.toFixed(2),
-  ].join('|');
+  return JSON.stringify([posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2)]);
+}
+
+let gridCache = null;
+export function gridTerrain(grid) {
+  if (!grid) return null;
+  if (gridCache?.key === grid.revision) return gridCache;
+  const canvas = document.createElement('canvas');
+  canvas.width = grid.width; canvas.height = grid.height;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(grid.width, grid.height);
+  grid.values.forEach((energy, i) => {
+    const at = i * 4;
+    if (energy < bands().floor) return;
+    img.data.set([...colorFor(energy), 255], at);
+  });
+  ctx.putImageData(img, 0, 0);
+  gridCache = { key: grid.revision, canvas, ...grid };
+  return gridCache;
 }
 
 /**

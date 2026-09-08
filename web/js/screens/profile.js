@@ -9,10 +9,13 @@
 import { data, api } from '../net.js';
 import { session } from '../session.js';
 import { navigate, screen } from '../router.js';
-import { state } from '../state.js';
-import { $, avatar, clear, el, safeUrl, toast } from '../ui.js';
+import { state, removePost } from '../state.js';
+import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
+import { react, openOnMap as openMapPost } from './map.js';
 import { postCard } from '../components/postcard.js';
 import { setupAvatarField } from './auth.js';
+
+let editDraft = null;
 
 // ---------------------------------------------------------------- shared
 
@@ -59,7 +62,7 @@ function tabs(counts, onSelect) {
     entries.forEach(([id, label, count]) => {
       row.append(el('button', {
         className: `profile-tab${active === id ? ' on' : ''}`,
-        attrs: { type: 'button' },
+        attrs: { type: 'button', 'aria-pressed': String(active === id) },
         on: {
           click: () => {
             active = id;
@@ -103,8 +106,8 @@ function postList(posts, { own, onOpen }) {
     box.append(postCard(post, {
       compact: false,
       onComments: () => onOpen(post),
-      onOpenAuthor: () => {},
-      onReact: null,
+      onOpenAuthor: (id) => navigate(state.account?.id === id ? '#/me' : `#/u/${id}`),
+      onReact: (kind) => react(post.id, kind),
       onEdit: own ? () => navigate(`#/post/${post.id}/edit`) : null,
       onDelete: own ? () => remove(post) : null,
     }));
@@ -113,23 +116,19 @@ function postList(posts, { own, onOpen }) {
 }
 
 async function remove(post) {
+  if (!await confirmAction({ title: 'この投稿を削除しますか？', body: '地図からも消えます。', confirmLabel: '削除する', danger: true })) return;
   try {
     await api.del(`/api/posts/${post.id}`);
-    state.myPosts = state.myPosts.filter((entry) => entry.id !== post.id);
+    removePost(post.id);
     toast('削除しました。');
-    navigate('#/me');
-    renderMe();
+    await navigate('#/me');
   } catch (error) {
     toast(error.message);
   }
 }
 
 function openOnMap(post) {
-  navigate('#/map');
-  setTimeout(() => {
-    document.dispatchEvent(new CustomEvent('map:focus', { detail: { postId: post.id } }));
-    document.dispatchEvent(new CustomEvent('map:open', { detail: { postId: post.id } }));
-  }, 80);
+  return openMapPost(post.id);
 }
 
 // ---------------------------------------------------------------- my page
@@ -182,6 +181,7 @@ function paintTab(panel, tab, posts, own) {
   }
   const total = posts.reduce((sum, post) =>
     sum + (post.help_count || 0) + (post.join_count || 0), 0);
+  panel.append(el('p', { className: 'empty-note', text: '協働は「手伝えるかも」「参加したい」の反応を集計しています。' }));
   panel.append(total
     ? el('div', { className: 'profile-summary' },
       el('p', { text: `${total} 件の「手伝えるかも」「参加したい」が届いています。` }),
@@ -227,6 +227,7 @@ export function setupProfileEdit() {
         ...(await avatarField.commit()),
       });
       state.account = result.account;
+      editDraft = null;
       toast('保存しました。');
       navigate('#/me');
     } catch (error) {
@@ -246,13 +247,29 @@ export function setupProfileEdit() {
   });
 
   screen('profileEdit', {
+    leave() {
+      editDraft = {
+        name: $('editName').value,
+        affiliation: $('editAffiliation').value,
+        bio: $('editBio').value,
+        link: $('editLink').value,
+      };
+    },
     enter() {
       const account = state.account || {};
       avatarField.reset(account);
-      $('editName').value = account.display_name || '';
-      $('editAffiliation').value = account.affiliation || '';
-      $('editBio').value = account.bio || '';
-      $('editLink').value = account.link_url || '';
+      if (editDraft) {
+        $('editName').value = editDraft.name;
+        $('editAffiliation').value = editDraft.affiliation;
+        $('editBio').value = editDraft.bio;
+        $('editLink').value = editDraft.link;
+      } else {
+        $('editName').value = account.display_name || '';
+        $('editAffiliation').value = account.affiliation || '';
+        $('editBio').value = account.bio || '';
+        $('editLink').value = account.link_url || '';
+      }
+      $('editEmail').value = session.email() || '';
       $('editError').textContent = '';
     },
   });

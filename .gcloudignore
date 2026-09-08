@@ -8,6 +8,10 @@
 __pycache__/
 *.pyc
 .venv/
+.env
+.cache/
+output/
+.playwright-cli/
 .pytest_cache/
 .claude/
 gha-creds-*.json

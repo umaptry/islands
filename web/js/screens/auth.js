@@ -30,6 +30,16 @@ function paintIntro() {
   $('introNext').textContent = introIndex === total - 1 ? 'はじめる' : '次へ';
 }
 export function setupIntro() {
+  $('welcomeRegister').addEventListener('click', () => navigate('#/auth?intent=register'));
+  $('welcomeLogin').addEventListener('click', () => navigate('#/auth?intent=login'));
+  $('welcomeBrowse').addEventListener('click', () => navigate('#/map'));
+  screen('welcome', { enter() {
+    const box = clear($('welcomeOAuth'));
+    (config().oauth || []).forEach((provider) => box.append(el('button', {
+      className: 'btn btn-block', text: `${provider === 'google' ? 'Google' : 'Apple'}で登録`,
+      on: { click: () => session.startOAuth(provider) },
+    })));
+  } });
   // Buttons are the only way through. A scroll-snap track let a half swipe
   // settle between two slides with the dots showing one thing and the screen
   // showing another.
@@ -167,7 +177,9 @@ export function setupAuth() {
   });
 
   screen('auth', {
-    enter: () => {
+    enter: (_params, query) => {
+      const register = query?.get('intent') === 'register';
+      document.querySelector('#auth [data-step="email"] h2').textContent = register ? 'アカウント作成' : 'ログイン';
       showStep('email');
       $('authError').textContent = '';
       paintSend();
@@ -362,7 +374,7 @@ export function setupProfileSetup() {
       state.account = result.account;
       // islands walked a new person straight into writing their first post,
       // which is right: an empty map is not something to be dropped into.
-      navigate('#/post?first=1');
+      navigate('#/guidance');
     } catch (error) {
       $('setupError').textContent = error.message;
       save.disabled = false;
@@ -378,4 +390,38 @@ export function setupProfileSetup() {
       sync();
     },
   });
+}
+
+// ---------------------------------------------------------------- guidance
+
+export function setupGuidance() {
+  let index = 0;
+  const track = () => $('guidanceTrack');
+  const dots = () => [...$('guidanceDots').children];
+
+  function paint() {
+    const total = track().children.length;
+    track().style.transform = `translateX(${-index * 100}%)`;
+    dots().forEach((dot, i) => dot.classList.toggle('on', i === index));
+    $('guidanceBack').hidden = index === 0;
+    $('guidanceNext').textContent = index === total - 1 ? 'はじめる' : '次へ';
+  }
+
+  $('guidanceNext').addEventListener('click', () => {
+    const total = track().children.length;
+    if (index < total - 1) {
+      index += 1;
+      paint();
+    } else {
+      navigate('#/post?first=1');
+    }
+  });
+  $('guidanceBack').addEventListener('click', () => {
+    if (index > 0) {
+      index -= 1;
+      paint();
+    }
+  });
+
+  screen('guidance', { enter: () => { index = 0; paint(); } });
 }

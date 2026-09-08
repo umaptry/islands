@@ -81,8 +81,45 @@ export function toast(message) {
 // state is what lets you read a card without losing sight of the map.
 
 const sheetState = { open: false, expanded: false, onClose: null };
+export const desktopSheet = () => window.matchMedia('(min-width: 768px)').matches;
+let sheetFocus = null;
+
+export function setupSheetAccessibility() {
+  const sheet = $('sheet');
+  const sync = () => {
+    const modal = sheetState.open && !desktopSheet();
+    sheet.setAttribute('aria-modal', String(modal));
+    sheet.setAttribute('aria-hidden', String(!sheetState.open));
+    sheet.inert = !sheetState.open;
+    document.querySelectorAll('.screen, #bottomNav').forEach((node) => { node.inert = modal; });
+    $('sheetBackdrop').classList.toggle('on', modal);
+    document.dispatchEvent(new CustomEvent('sheet:layout'));
+    if (window.visualViewport) {
+      document.documentElement.style.setProperty('--viewport-height', `${window.visualViewport.height}px`);
+      document.documentElement.style.setProperty('--keyboard-inset',
+        `${Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop)}px`);
+    }
+  };
+  window.matchMedia('(min-width: 768px)').addEventListener('change', sync);
+  window.visualViewport?.addEventListener('resize', sync);
+  document.addEventListener('sheet:state', sync);
+  document.addEventListener('keydown', (event) => {
+    if (!sheetState.open || document.querySelector('.modal-backdrop')) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeSheet(); }
+    if (event.key === 'Tab' && !desktopSheet()) {
+      const nodes = [...sheet.querySelectorAll('button, input, textarea, a[href], [tabindex="0"]')]
+        .filter((node) => !node.disabled && node.getClientRects().length);
+      const first = nodes[0], last = nodes[nodes.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  });
+  sync();
+}
 
 export function openSheet({ expanded = false, onClose = null } = {}) {
+  if (sheetState.open) closeSheet();
+  sheetFocus = document.activeElement;
   const sheet = $('sheet');
   sheetState.open = true;
   sheetState.expanded = expanded;
@@ -91,6 +128,8 @@ export function openSheet({ expanded = false, onClose = null } = {}) {
   sheet.classList.toggle('full', expanded);
   $('sheetBackdrop').classList.add('on');
   document.body.classList.add('sheet-open');
+  document.dispatchEvent(new CustomEvent('sheet:state'));
+  if (!desktopSheet()) $('sheetClose').focus();
   return $('sheetBody');
 }
 
@@ -114,6 +153,8 @@ export function closeSheet() {
   const done = sheetState.onClose;
   sheetState.onClose = null;
   if (done) done();
+  document.dispatchEvent(new CustomEvent('sheet:state'));
+  if (sheetFocus?.isConnected) sheetFocus.focus();
 }
 
 // ---------------------------------------------------------------- formatting
@@ -160,8 +201,11 @@ export function safeUrl(raw) {
 /** A yes/no the app owns, rather than window.confirm's browser chrome. */
 export function confirmAction({ title, body, confirmLabel = 'OK', danger = false }) {
   return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const events = new AbortController();
+    const background = [...document.body.children].map(node => [node, node.inert]);
     const backdrop = el('div', { className: 'modal-backdrop' });
-    const panel = el('div', { className: 'modal' },
+    const panel = el('div', { className: 'modal', attrs: { role: 'alertdialog', 'aria-modal': 'true', 'aria-label': title } },
       el('h3', { className: 'modal-title', text: title }),
       body ? el('p', { className: 'modal-body', text: body }) : null,
       el('div', { className: 'modal-actions' },
@@ -180,10 +224,23 @@ export function confirmAction({ title, body, confirmLabel = 'OK', danger = false
       if (event.target === backdrop) finish(false);
     });
     document.body.append(backdrop);
+    background.forEach(([node]) => { node.inert = true; });
+    const buttons = [...panel.querySelectorAll('button')];
+    buttons[0].focus();
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+      if (event.key === 'Tab') {
+        if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons.at(-1).focus(); }
+        else if (!event.shiftKey && document.activeElement === buttons.at(-1)) { event.preventDefault(); buttons[0].focus(); }
+      }
+    }, { signal: events.signal });
     requestAnimationFrame(() => backdrop.classList.add('on'));
 
     function finish(answer) {
+      events.abort();
       backdrop.remove();
+      background.forEach(([node, inert]) => { if (node.isConnected) node.inert = inert; });
+      if (previousFocus?.isConnected) previousFocus.focus();
       resolve(answer);
     }
   });

@@ -24,7 +24,7 @@ import {
   INK, drawBirds, drawBoats, drawSeaMarks, drawSurf, hashId, islandPath, makeLabelSpace,
 } from './decor.js';
 import { detectLandmasses, membership } from './landmass.js';
-import { buildTerrain } from './terrain.js';
+import { buildTerrain, gridTerrain } from './terrain.js';
 
 let canvas = null;
 let ctx = null;
@@ -80,15 +80,19 @@ export function resize() {
  * corners are always empty. Fitting the seed corpus's real bounding box fills
  * the screen with sea and islands instead of margin.
  */
-export function fitCamera() {
-  const bounds = seedBounds();
+export function fitCamera(posts = state.posts, extent = null) {
+  const valid = posts.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  const bounds = extent || (valid.length ? [
+    Math.min(...valid.map((p) => p.x - radiusOf(p))), Math.min(...valid.map((p) => p.y - radiusOf(p))),
+    Math.max(...valid.map((p) => p.x + radiusOf(p))), Math.max(...valid.map((p) => p.y + radiusOf(p))),
+  ] : seedBounds());
   const [minX, minY, maxX, maxY] = bounds;
   const spanX = Math.max(1, maxX - minX);
   const spanY = Math.max(1, maxY - minY);
   // Room for the top bar, the island badge and the bottom nav.
   const scale = Math.max(
     0.05,
-    Math.min((width * 0.94) / spanX, Math.max(120, height - 210) / spanY),
+    Math.min(1.6, (width * 0.9) / spanX, Math.max(120, height - 210) / spanY),
   );
   state.camera = {
     scale,
@@ -331,21 +335,27 @@ function renderMap(time) {
   // and still supplies the IDF that names things.
   const visible = [];
   state.posts.forEach((post) => {
+    if (!matchesFilters(post)) return;
     const point = toScreen(post.x, post.y);
     if (point.x < -80 || point.x > width + 80 || point.y < -80 || point.y > height + 80) return;
     visible.push({ post, point, mine: post.author_id === meId, dim: !matchesFilters(post) });
   });
 
-  drawSeaMarks(ctx, view, time);
+  // Keep the map calm; the posts and terrain carry its visual hierarchy.
 
   // The ground. Built from every post the client holds, not just the ones on
   // screen, so panning does not make a coastline appear out of nothing.
-  const terrain = buildTerrain({
+  const grid = gridTerrain(state.terrainGrid);
+  const terrain = grid ? null : buildTerrain({
     posts: state.posts.filter((post) => !filtering() || matchesFilters(post)),
     cells: state.saturated ? state.cells : [],
     region: postsRegion(),
     scale,
   });
+  if (grid) {
+    const origin = toScreen(grid.minX, grid.minY);
+    ctx.drawImage(grid.canvas, origin.x, origin.y, (grid.maxX - grid.minX) * scale, (grid.maxY - grid.minY) * scale);
+  }
   if (terrain) {
     const origin = toScreen(terrain.minX, terrain.minY);
     ctx.save();
@@ -362,21 +372,13 @@ function renderMap(time) {
     ctx.restore();
   }
 
-  drawBoats(ctx, view, time);
 
-  const showFaces = scale >= FACE_ZOOM;
+  const showFaces = false;
   const markerSize = Math.max(15, Math.min(30, 22 * Math.max(scale, 0.6)));
 
   // Surf first for every post, then the markers: drawing each ring immediately
   // before its own marker would let a later ring cover an earlier face wherever
   // two posts land close together.
-  visible.forEach(({ post, point, mine, dim }) => {
-    if (dim) return;
-    const radius = Math.max(10, radiusOf(post) * scale * 0.5);
-    drawSurf(ctx, point.x, point.y, radius * (mine ? 1.2 : 1), post.id, time);
-  });
-
-  drawBirds(ctx, view, time);
 
   const claim = makeLabelSpace();
   const labels = [];
@@ -393,6 +395,7 @@ function renderMap(time) {
   ctx.save();
   ctx.font = '700 13px system-ui, sans-serif';
   state.islands.forEach((island) => {
+    if (filtering() && !visible.some(({ post }) => island.post_ids?.includes(post.id))) return;
     const spot = toScreen(island.cx, island.cy);
     if (spot.x < -120 || spot.x > width + 120) return;
     if (spot.y < -80 || spot.y > height + 80) return;

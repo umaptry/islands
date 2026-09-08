@@ -168,6 +168,9 @@ FROZEN_KEYS = ("meta", "scale_bounds", "islands", "seed", "distance_quantiles", 
 
 
 def write(anchors, quantiles, centroid):
+    from core.artifact_manifest import validate_manifest, write_manifest
+    import os
+    manifest = validate_manifest(build.ARTIFACTS, os.environ.get("EMBEDDING_PROVIDER", "onnx"))
     with open(build.SEED_MAP_JSON, encoding="utf-8") as handle:
         payload = json.load(handle)
 
@@ -186,6 +189,7 @@ def write(anchors, quantiles, centroid):
         build.SEED_MAP_JSON,
         lambda handle: json.dump(payload, handle, ensure_ascii=False, separators=(",", ":")),
     )
+    write_manifest(build.ARTIFACTS, manifest["embedding"])
     print(f"      {build.SEED_MAP_JSON.name} に cosine_anchors / cosine_quantiles / "
           "cosine_centroid を追記しました")
     print("      地図側のキー（meta / scale_bounds / islands / seed / distance_quantiles / idf）は無変更です")

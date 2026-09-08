@@ -7,8 +7,7 @@
 # Production project linking (supabase link) is done interactively and
 # stores credentials in .supabase/ which is gitignored.
 
-[project]
-id = ""
+project_id = "islands-local"
 
 [db]
 port = 54322
