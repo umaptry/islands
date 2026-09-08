@@ -322,4 +322,9 @@ export const data = new Proxy({}, {
     if (!backend) backend = isLocal() ? localBackend : supabaseBackend;
     return backend[key];
   },
+  set(_target, key, value) {
+    if (!backend) backend = isLocal() ? localBackend : supabaseBackend;
+    backend[key] = value;
+    return true;
+  },
 });
