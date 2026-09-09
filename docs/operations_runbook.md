@@ -54,6 +54,13 @@ gen-lang-client-0496696977への移転・新サービス作成は行わない。
 
 ## 作業環境と認証
 
+### localhost参照画面の反映完了（2026-09-09）
+
+- 正本 `C:/Users/zk-ht/Downloads/islands/islands` のwebpack開発サーバー（localhost:3001）と4画面幅で比較し、登録入口・名前/所属/メール入力・登録後ガイド3画面・初回投稿を反映した。登録前introを初期導線から外し、登録後に参照元の説明を表示する。
+- [PR #5](https://github.com/umaptry/islands/pull/5)、commit `677f494`、[本番CI 34295713919](https://github.com/umaptry/islands/actions/runs/34295713919) 全テスト・デプロイ成功。稼働revision `islands-00020-xod`。ローカルとCIのブラウザ回帰16件成功。
+- 公開URLで登録項目、ガイド順序、起動し直した際の途中再開、実認証でのプロフィール保存、実Gemini初回投稿→地図表示、完了後にガイドを繰り返さないことを検証した。メールOTPの実配送は今回の検証に含めず、ローカルOTPと本番の認証済み一時ユーザーで確認。
+- 一時ユーザーとその投稿は削除済み。最終healthはready=true、artifact_compatible=true、posts=0、Gemini版は `islands-gemini-20260909-v1` のまま。記録画像は `output/production-reference-*.png`。対象外の参照フォルダや共有環境は変更していない。
+
 ### 初回ガイド修正とユーザーデータ初期化（2026-09-09）
 
 - ユーザーの明示依頼により、対象SupabaseのAuthユーザー4件と全投稿・関連データ・Storage画像4件を削除した。削除直後のaccounts/posts/reactions/comments/notifications/reports/Auth/Storageはすべて0件。energy_cellsとembedding_cacheも消去し、モデル・成果物・map_runtimeは保持した。
