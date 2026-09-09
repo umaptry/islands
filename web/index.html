@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#2FA6FF">
 <title>islands — 好きが集う、新たな世界がここに。</title>
@@ -93,7 +93,11 @@
 
     <div class="auth-step" data-step="email">
       <h2 class="screen-title">はじめる</h2>
-      <p class="lede">メールアドレスにパスコードを送ります。<br>はじめての方はそのままアカウントが作られます。</p>
+      <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
+      <div id="registerFields" hidden>
+        <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
+        <label class="field"><span class="label-text">所属組織<span class="hint-text">任意</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属組織"></label>
+      </div>
       <label class="field">
         <span class="label-text">メールアドレス</span>
         <input class="input" id="authEmail" type="email" inputmode="email"
@@ -157,24 +161,27 @@
 
 <!-- ============ 3b. guidance (new accounts only) ============ -->
 <section id="guidance" class="screen tinted">
-  <div class="brand">islands</div>
-  <div class="slides">
+  <div class="slides guidance-pages">
     <div class="slide-track" id="guidanceTrack">
       <div class="slide">
         <h2>islandsへようこそ。</h2>
-        <p class="slide-note">islandsは、会社や交流会、スクールなど すでに同じ場にいる人たちの活動・関心・経験・やりたいこと同士の関係性を「島」として可視化するサービスです。</p>
+        <p>islandsは、会社や交流会、スクールなど</p>
+        <p>すでに同じ場にいる人たちの活動・関心・経験・やりたいこと同士の関係性を</p>
+        <p>「島」として可視化するサービスです。</p>
       </div>
       <div class="slide">
-        <h2>自分が取り組んでいる活動や、<br>過去に取り組んでいたこと</h2>
-        <p class="slide-note">もしくはこれから挑戦してみたいことなどを投稿すると、自動で似た取り組みを行っている人達が集まる"島"に投稿がプロットされ、共通点や関わりしろを発見できます。</p>
+        <p>意味内容が近い投稿が集まってできる<br>島を通して</p>
+        <p>これまで見えていなかった<br>共通点や関わりしろを発見し</p>
+        <p>会話・相談・参加・小さな協働が<br>生まれるきっかけをつくります。</p>
       </div>
       <div class="slide">
-        <h2>意味内容が近い投稿が集まってできる<br>島を通して</h2>
-        <p class="slide-note">これまで見えていなかった共通点や関わりしろを発見し、会話・相談・参加・小さな協働が生まれるきっかけをつくります。</p>
+        <p>自分が取り組んでいる活動や、<br>過去に取り組んでいたこと</p>
+        <p>もしくはこれから挑戦してみたい<br>ことなどを投稿すると</p>
+        <p>自動で似た取り組みを行っている<br>人達が集まる"島"に投稿がプロットされ<br>共通点や関わりしろを発見できます。</p>
       </div>
     </div>
   </div>
-  <div class="dots" id="guidanceDots"><i class="dot on"></i><i class="dot"></i><i class="dot"></i></div>
+  <div class="dots" id="guidanceDots" aria-label="ガイドの進行状況"><i class="dot on"></i><i class="dot"></i><i class="dot"></i></div>
   <div class="nav-row">
     <button class="btn btn-quiet" id="guidanceBack" hidden>戻る</button>
     <button class="btn" id="guidanceNext">次へ</button>
@@ -237,6 +244,7 @@
       本文を書き換えると、この投稿は地図の別の場所に移動します。
     </div>
     <div class="error" id="composeError" role="alert"></div>
+    <div id="firstPostFooter" hidden></div>
   </div>
 </section>
 

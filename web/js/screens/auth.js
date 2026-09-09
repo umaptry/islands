@@ -12,6 +12,7 @@ import { AVATAR_IMAGE, prepareImage } from '../image.js';
 import { api, data } from '../net.js';
 import { session } from '../session.js';
 import { state } from '../state.js';
+import { onboardingStep, setOnboardingStep } from '../onboarding.js';
 import { navigate, screen } from '../router.js';
 import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
@@ -87,9 +88,9 @@ export function setupAuth() {
       clearInterval(resendTimer);
       resendTimer = null;
     }
-    send.disabled = sending || seconds > 0 || !email.value.includes('@');
+    send.disabled = sending || seconds > 0 || !email.value.includes('@') || (registerIntent && !$('registerName').value.trim());
     send.textContent = sending ? '送信中…' : (
-      seconds > 0 ? `再送まで ${seconds}秒` : 'パスコードを送る'
+      seconds > 0 ? `再送まで ${seconds}秒` : '次へ'
     );
   }
 
@@ -106,6 +107,7 @@ export function setupAuth() {
     paintSend();
     $('authError').textContent = '';
   });
+  $('registerName').addEventListener('input', paintSend);
   code.addEventListener('input', () => {
     // GoTrue's email codes are six digits; local mode's are too. Anything
     // shorter cannot be one, and enabling the button for it only produces a
@@ -180,6 +182,9 @@ export function setupAuth() {
   screen('auth', {
     enter: (_params, query) => {
       registerIntent = query?.get('intent') === 'register';
+      $('registerFields').hidden = !registerIntent;
+      $('auth').classList.toggle('register', registerIntent);
+      $('authLede').textContent = registerIntent ? '下記の情報を入力してください。' : 'メールアドレスにパスコードを送ります。';
       const title = registerIntent ? 'アカウント作成' : 'ログイン';
       document.querySelector('#auth [data-step="email"] h2').textContent = title;
       document.querySelector('#auth [data-step="code"] h2').textContent = title;
@@ -224,6 +229,23 @@ export async function afterSignIn() {
   }
   state.account = result.account;
   if (!state.account || !state.account.display_name) {
+    if (registerIntent && $('registerName').value.trim()) {
+      try {
+        state.account = (await api.put('/api/account/me', {
+          display_name: $('registerName').value.trim(),
+          affiliation: $('registerAffiliation').value.trim() || null,
+        })).account;
+        setOnboardingStep('0');
+        navigate('#/guidance');
+      } catch (error) {
+        toast(error.message);
+        await navigate('#/setup');
+        $('setupName').value = $('registerName').value.trim();
+        $('setupAffiliation').value = $('registerAffiliation').value.trim();
+        $('setupName').dispatchEvent(new Event('input'));
+      }
+      return;
+    }
     navigate('#/setup');
     return;
   }
@@ -375,6 +397,7 @@ export function setupProfileSetup() {
         ...(await field.commit()),
       });
       state.account = result.account;
+      setOnboardingStep('0');
       // islands walked a new person straight into writing their first post,
       // which is right: an empty map is not something to be dropped into.
       navigate('#/guidance');
@@ -404,10 +427,11 @@ export function setupGuidance() {
 
   function paint() {
     const total = track().children.length;
-    track().style.transform = `translateX(${-index * 100}%)`;
+    [...track().children].forEach((slide, i) => { slide.hidden = i !== index; });
     dots().forEach((dot, i) => dot.classList.toggle('on', i === index));
     $('guidanceBack').hidden = index === 0;
-    $('guidanceNext').textContent = index === total - 1 ? 'はじめる' : '次へ';
+    $('guidanceNext').textContent = '次へ';
+    setOnboardingStep(String(index));
   }
 
   $('guidanceNext').addEventListener('click', () => {
@@ -416,6 +440,7 @@ export function setupGuidance() {
       index += 1;
       paint();
     } else {
+      setOnboardingStep('post');
       navigate('#/post?first=1');
     }
   });
@@ -426,5 +451,9 @@ export function setupGuidance() {
     }
   });
 
-  screen('guidance', { enter: () => { index = 0; paint(); } });
+  screen('guidance', { enter: () => {
+    const saved = Number(onboardingStep());
+    index = Number.isInteger(saved) && saved >= 0 && saved < track().children.length ? saved : 0;
+    paint();
+  } });
 }

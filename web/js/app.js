@@ -8,6 +8,7 @@ import { loadConfig, checkMapVersion } from './config.js';
 import { api } from './net.js';
 import { session } from './session.js';
 import { state } from './state.js';
+import { onboardingStep } from './onboarding.js';
 import { route, screen, setGuard, show, startRouter } from './router.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
@@ -38,6 +39,10 @@ const NEEDS_ACCOUNT = new Set(['#/post', '#/post/:id/edit', '#/notifications', '
 
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
+  const onboarding = onboardingStep();
+  if (signedIn && pattern === '#/map' && onboarding) {
+    return onboarding === 'post' ? '#/post?first=1' : '#/guidance';
+  }
   if (NEEDS_ACCOUNT.has(pattern) && !signedIn) {
     return session.signedIn() ? '#/setup' : '#/auth';
   }
@@ -107,7 +112,7 @@ async function boot() {
   // did nothing but change the address bar - leaving the hash saying #/intro
   // over a map screen.
   if (!window.location.hash || invalidatedSession) {
-    let first = '#/intro';
+    let first = '#/welcome';
     if (state.account && state.account.display_name) first = '#/map';
     else if (session.signedIn()) first = '#/setup';
     history.replaceState(null, '', first);

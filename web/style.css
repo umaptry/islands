@@ -43,7 +43,7 @@
   --shadow: 0 1px 2px rgba(16, 42, 71, .08), 0 10px 28px rgba(16, 42, 71, .14);
   --shadow-up: 0 -8px 26px rgba(16, 42, 71, .16);
 
-  --font: Arial, "Hiragino Sans", "Yu Gothic", sans-serif;
+  --font: Arial, Helvetica, sans-serif;
   --num: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
 }
 
@@ -867,6 +867,45 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .landing .btn { margin-top: 16px; }
 .landing .returning { margin-top: 44px; font-weight: bold; }
 .version-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 12px; background: white; color: #173047; box-shadow: var(--shadow); text-align: center; font-size: 13px; }
+/* Registration guidance follows the running Downloads/islands reference. */
+#guidance { overflow-y: auto; justify-content: safe center; padding: 48px 24px 112px; }
+#guidance .guidance-pages { flex: none; width: 100%; max-width: 464px; margin: 0 auto; overflow: visible; }
+#guidanceTrack { display: block; transform: none; }
+#guidance .slide { width: 100%; padding: 0; display: block; text-align: left; }
+#guidance h2 { font-size: 20px; line-height: 1.625; margin: 0 0 24px; }
+#guidance .slide p { font-size: 16px; font-weight: 500; line-height: 1.625; margin: 0 0 24px; }
+#guidance .nav-row { width: 100%; max-width: 464px; padding: 0; margin: 32px auto 0; display: flex; flex-direction: column-reverse; gap: 12px; }
+#guidanceNext { width: 100%; background: rgb(255 255 255 / .4); color: white; border: 0; }
+#guidanceBack { position: absolute; top: 16px; left: 24px; width: auto; min-height: 40px; padding: 8px 12px; border: 0; }
+#guidanceDots { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#compose.first-post .topbar-inline { display: none; }
+#compose.first-post .scroller { flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px 80px; overflow: visible; }
+#compose.first-post { overflow-y: auto; }
+#compose.first-post #composeLede { white-space: pre-line; font-size: 20px; font-weight: 700; line-height: 1.625; margin-bottom: 32px; color: white; }
+#firstPostFooter { margin-top: auto; padding-top: 32px; }
+#firstPostFooter .btn { width: 100%; min-height: 48px; }
+#compose .scroller { display: flex; flex-direction: column; }
+#compose .textarea { display: block; resize: none; }
+#compose .counter-row { margin-top: 4px; }
+#compose .field:has(#composeBody) { margin-bottom: 4px; }
+#compose .slider { padding-left: 8px; padding-right: 8px; }
+#compose .scroller > .field:has(.image-row) { order: 3; }
+#compose .scroller > .field:has(.checks) { order: 4; }
+#compose .scroller > .notice, #compose .scroller > .error, #firstPostFooter { order: 5; }
+#compose:not(.first-post) #composeLede { display: none; }
+#auth { overflow-y: auto; }
+#auth .auth-scroll { display: flex; flex-direction: column; flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px; overflow: visible; }
+#auth .brand-inline { font-size: 36px; line-height: 40px; margin: 0 0 32px; }
+#auth .auth-step { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+#auth .screen-title { font-size: 24px; margin-bottom: 32px; }
+#auth .field { margin-bottom: 16px; }
+#auth.register .label-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#auth .input { padding: 12px 16px; font-size: 16px; }
+#authSend { margin-top: 16px; }
+.profile-name { display: block; font-size: 20px; margin-top: 24px; margin-bottom: 16px; }
+.profile-affiliation { display: inline; margin-right: 8px; font-size: 16px; color: white; }
+.profile-tabs { gap: 32px; }
+.profile-tab-label { font-size: 14px; }
 @media (min-width: 768px) {
   .sheet { bottom: auto; }
   .sheet-open .bottom-nav { visibility: visible; }

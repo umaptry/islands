@@ -54,6 +54,14 @@ gen-lang-client-0496696977への移転・新サービス作成は行わない。
 
 ## 作業環境と認証
 
+### 初回ガイド修正とユーザーデータ初期化（2026-09-09）
+
+- ユーザーの明示依頼により、対象SupabaseのAuthユーザー4件と全投稿・関連データ・Storage画像4件を削除した。削除直後のaccounts/posts/reactions/comments/notifications/reports/Auth/Storageはすべて0件。energy_cellsとembedding_cacheも消去し、モデル・成果物・map_runtimeは保持した。
+- 非公開バックアップ: `output/backups/20260909-before-user-reset`。削除記録: `output/user-reset-result.json`。この操作で過去の「既存データ保持」の状態は意図的に更新された。バックアップは復旧用に残る。
+- 原因は未認証の初期ルートがwelcomeを指してintroを通らないことと、登録済みアカウントをguidanceからmapへ戻すguard。PR #4で初期intro→welcome、プロフィール保存→guidance→初回投稿へ修正し、削除済みユーザーの残存セッションも再確認してintroへ戻すようにした。
+- 4画面幅で導入スライド完了とプロフィール保存後のguidance・再読込・投稿画面遷移を回帰検証。ローカル12件成功。本番反映CI: [34292695151](https://github.com/umaptry/islands/actions/runs/34292695151) 全検証・デプロイ成功。リリース `a8d20b1`、revision `islands-00018-qor`、公開healthはready=true・posts=0。
+- 公開URLの実ブラウザでintro→welcome、実認証ユーザーによるsetup保存→guidance→再読込→compose、削除済みユーザーの残存セッション→introを確認。一時テストユーザーは削除済み。画面記録 `output/production-intro.png`。
+
 Python 3.12を使用。このPCでは `C:/Users/zk-ht/AppData/Local/Programs/Python/Python312/python.exe` が利用可能。
 ローカルE5は `requirements-onnx.txt`、テストは `requirements-test.txt`、学習は `requirements-build.txt` を使用する。`requirements.txt` はGemini配信用。
 
