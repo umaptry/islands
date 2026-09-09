@@ -2,7 +2,10 @@
   "captured_at": "2026-09-08T10:30:33.880Z",
   "root": "C:\\Users\\zk-ht\\Downloads\\islands\\islands",
   "command": "npx next dev --webpack",
-  "rendering_verified": false,
+  "rendering_verified": true,
+  "rendering_verified_at": "2026-09-09",
+  "rendering_url": "http://localhost:3001",
+  "rendering_viewports": [375, 390, 768, 1440],
   "files": {
     "src/app/favicon.ico": "2b8ad2d33455a8f736fc3a8ebf8f0bdea8848ad4c0db48a2833bd0f9cd775932",
     "src/app/globals.css": "c5f738f85fbc7c43e312e457acdbf544107bfd3c00cfc96a9ef230a5844b446b",

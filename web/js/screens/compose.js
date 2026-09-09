@@ -14,6 +14,7 @@ import { POST_IMAGE, prepareImage } from '../image.js';
 import { api, data } from '../net.js';
 import { navigate, screen, show } from '../router.js';
 import { state, upsertPost } from '../state.js';
+import { setOnboardingStep } from '../onboarding.js';
 import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
 import { postRow } from '../components/postcard.js';
 import { openOnMap } from './map.js';
@@ -27,6 +28,7 @@ let draftKey = '';
 let previewUrl = null;
 let requestKey = null;
 let requestBody = null;
+let firstPost = false;
 
 // ---------------------------------------------------------------- image
 
@@ -53,7 +55,7 @@ function paintCounter() {
   ring.style.strokeDashoffset = String(56.5 * (1 - ratio));
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
-  $('composeCounterText').textContent = `${length}/${max}`;
+  $('composeCounterText').textContent = `${length}/${max}${length < min ? `（${min}文字から）` : ''}`;
   $('composeSubmit').disabled = submitting || length < min || length > max;
 }
 
@@ -127,6 +129,14 @@ export function setupCompose() {
     },
     enter: async (params, query) => {
       const first = query && query.get('first') === '1';
+      firstPost = Boolean(first);
+      $('compose').classList.toggle('first-post', firstPost);
+      $('firstPostFooter').hidden = !firstPost;
+      (firstPost ? $('firstPostFooter') : document.querySelector('#compose .topbar-inline')).append($('composeSubmit'));
+      if (firstPost) {
+        $('bottomNav').hidden = true;
+        document.body.classList.remove('has-nav');
+      }
       editing = null;
       imageBlob = null;
       imagePath = null;
@@ -150,7 +160,7 @@ export function setupCompose() {
       $('composeSubmit').textContent = editing ? '保存' : '投稿する';
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
-        ? 'ためしに1つ投稿してみましょう。'
+        ? 'ためしに１つ\n投稿してみましょう。'
         : '取り組みや活動内容を30〜140文字で書いてください。';
 
       body.value = draft?.body ?? (editing ? editing.body : '');
@@ -209,9 +219,11 @@ async function submit() {
     }
 
     const result = await runPlacement(payload);
+    setOnboardingStep(null);
     drafts.delete(draftKey);
     draftKey = '';
-    showReveal(result);
+    if (firstPost) await openOnMap(result.id);
+    else showReveal(result);
   } catch (error) {
     $('composeError').textContent = error.message;
     show('compose');

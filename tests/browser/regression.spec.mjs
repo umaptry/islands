@@ -2,9 +2,6 @@ import { test, expect } from '@playwright/test';
 
 test('landing, anonymous guard and navigation fit each viewport', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('#intro')).toHaveClass(/active/);
-  const slides = await page.locator('#slideTrack > .slide').count();
-  for (let i = 0; i < slides; i++) await page.locator('#introNext').click();
   await expect(page.locator('#welcome')).toHaveClass(/active/);
   await page.goto('/#/map');
   await expect(page.locator('#map')).toHaveClass(/active/);
@@ -18,7 +15,7 @@ test('landing, anonymous guard and navigation fit each viewport', async ({ page 
 
 test('new profile reaches guidance before the first post, including after reload', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('#intro')).toHaveClass(/active/);
+  await expect(page.locator('#welcome')).toHaveClass(/active/);
   await page.evaluate(async () => {
     const { session } = await import('/static/js/session.js');
     const { navigate } = await import('/static/js/router.js');
@@ -30,11 +27,38 @@ test('new profile reaches guidance before the first post, including after reload
   await page.locator('#setupName').fill('ガイド確認');
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
-  await page.reload();
+  await expect(page.locator('#guidanceTrack > .slide').nth(0)).toBeVisible();
+  await page.locator('#guidanceNext').click();
+  await page.goto('/');
   await expect(page.locator('#guidance')).toHaveClass(/active/);
+  await expect(page.locator('#guidanceTrack > .slide').nth(1)).toBeVisible();
   const slides = await page.locator('#guidanceTrack > *').count();
-  for (let i = 0; i < slides; i++) await page.locator('#guidanceNext').click();
+  for (let i = 1; i < slides; i++) await page.locator('#guidanceNext').click();
   await expect(page.locator('#compose')).toHaveClass(/active/);
+  await expect(page.locator('#composeLede')).toHaveText('ためしに１つ\n投稿してみましょう。');
+  await expect(page.locator('#bottomNav')).toBeHidden();
+  await expect(page.locator('#firstPostFooter #composeSubmit')).toBeVisible();
+});
+
+test('reference registration saves profile and completes the first post', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#welcomeRegister').click();
+  await page.locator('#authEmail').fill(`register-${crypto.randomUUID()}@example.com`);
+  await expect(page.locator('#authSend')).toBeDisabled();
+  await page.locator('#registerName').fill('登録の確認');
+  await page.locator('#registerAffiliation').fill('islands');
+  await page.locator('#authSend').click();
+  await expect(page.locator('.dev-code-value')).toBeVisible();
+  await page.locator('#authCode').fill(await page.locator('.dev-code-value').innerText());
+  await page.locator('#authVerify').click();
+  await expect(page.locator('#guidance')).toHaveClass(/active/);
+  await expect(page.locator('#guidance h2')).toHaveText('islandsへようこそ。');
+  for (let i = 0; i < 3; i++) await page.locator('#guidanceNext').click();
+  await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
+  await page.locator('#composeSubmit').click();
+  await expect(page.locator('#map')).toHaveClass(/active/);
+  await page.goto('/');
+  await expect(page.locator('#map')).toHaveClass(/active/);
 });
 
 test('draft survives navigation; panel cleanup and responsive modality', async ({ page }, info) => {
