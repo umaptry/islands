@@ -38,6 +38,9 @@ from core.config import ENERGY_CELL_SIZE
 from core.energy import computed_energy, total_energy
 
 ACCOUNTS = "accounts"
+# posts reach accounts through the author key and, many-to-many, through
+# reactions/comments/notifications/reports, so PostgREST needs the key named.
+POST_AUTHOR = "accounts!posts_author_id_fkey"
 POSTS = "posts"
 REACTIONS = "reactions"
 COMMENTS = "comments"
@@ -527,7 +530,7 @@ class SupabaseStore:
             except httpx.HTTPError as error:  # timeout, DNS, connection reset
                 last = f"{type(error).__name__}: {error}"
             else:
-                if response.status_code < 400 or response.status_code in allow_statuses:
+                if response.status_code < 300 or response.status_code in allow_statuses:
                     return response
                 last = f"HTTP {response.status_code}: {response.text[:200]}"
                 if response.status_code not in RETRY_STATUSES:
@@ -634,7 +637,7 @@ class SupabaseStore:
 
     def posts_by_author(self, author_id):
         rows = self._get(POSTS, {
-            "select": POST_COLUMNS + f",{ACCOUNTS}(id,display_name,icon_id,avatar_path)",
+            "select": POST_COLUMNS + f",{POST_AUTHOR}(id,display_name,icon_id,avatar_path)",
             "author_id": f"eq.{author_id}",
             "deleted_at": "is.null",
             "order": "created_at.desc",
@@ -673,7 +676,7 @@ class SupabaseStore:
         rows = []
         last = None
         while True:
-            params = {"select": "id,x,y,energy,body,tags,accounts(display_name)",
+            params = {"select": f"id,x,y,energy,body,tags,{POST_AUTHOR}(display_name)",
                       "deleted_at": "is.null", "order": "id", "limit": "1000"}
             if last:
                 params["id"] = f"gt.{last}"

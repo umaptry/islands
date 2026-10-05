@@ -90,6 +90,8 @@ const rpc = (name, args) =>
   restCall(`rpc/${name}`, { method: 'POST', body: args });
 
 const ACCOUNT_EMBED = 'accounts(id,display_name,icon_id,avatar_path)';
+// Posts also reach accounts through reactions and comments, so name the key.
+const POST_AUTHOR_EMBED = 'accounts!posts_author_id_fkey(id,display_name,icon_id,avatar_path)';
 const POST_COLUMNS =
   'id,author_id,body,tags,motivation,image_path,x,y,cluster_id,' +
   'like_count,help_count,join_count,comment_count,energy,created_at,updated_at';
@@ -126,7 +128,7 @@ const supabaseBackend = {
   async getPost(id) {
     const rows = await restCall('posts', {
       params: {
-        select: `${POST_COLUMNS},${ACCOUNT_EMBED}`,
+        select: `${POST_COLUMNS},${POST_AUTHOR_EMBED}`,
         id: `eq.${id}`, deleted_at: 'is.null', limit: '1',
       },
     });
@@ -135,7 +137,7 @@ const supabaseBackend = {
   async postsByAuthor(authorId) {
     const rows = await restCall('posts', {
       params: {
-        select: `${POST_COLUMNS},${ACCOUNT_EMBED}`,
+        select: `${POST_COLUMNS},${POST_AUTHOR_EMBED}`,
         author_id: `eq.${authorId}`, deleted_at: 'is.null', order: 'created_at.desc',
       },
     });

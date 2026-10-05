@@ -24,7 +24,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.store import MemoryStore, SupabaseStore  # noqa: E402
+from core.store import MemoryStore, StoreError, SupabaseStore  # noqa: E402
 
 SERVICE_KEY = "test-service-role-key"
 
@@ -139,6 +139,10 @@ class FakePostgrest(BaseHTTPRequestHandler):
             return self._send(401, {"message": "unauthorized"})
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        # Real PostgREST also sees posts->accounts through reactions, comments and
+        # notifications, and answers a bare embed with 300 instead of guessing.
+        if self._table() == "posts" and "accounts(" in query.get("select", [""])[0]:
+            return self._send(300, {"code": "PGRST201", "message": "ambiguous embed"})
         rows = [row for row in TABLES[self._table()].values() if self._filters(query)(row)]
         rows.sort(key=lambda row: row.get("created_at") or "")
 
@@ -361,6 +365,21 @@ def test_posts_by_author_flattens_the_embedded_account(store):
     assert rows
     assert rows[0]["display_name"] == "作者"
     assert "accounts" not in rows[0]
+
+
+def test_terrain_posts_names_the_author_key(store):
+    """A bare accounts() embed from posts is ambiguous and took /api/map/bounds down."""
+    author = account(store, "地形の人")
+    post_id = store.insert_post(sample(author))["id"]
+    row = next(r for r in store.terrain_posts() if r["id"] == post_id)
+    assert row["display_name"] == "地形の人"
+    assert "accounts" not in row
+
+
+def test_an_ambiguous_embed_raises_rather_than_crashing(store):
+    """PostgREST's 300 is an error, not rows; it must surface as StoreError (503)."""
+    with pytest.raises(StoreError):
+        store._get("posts", {"select": "id,accounts(display_name)"})
 
 
 def test_get_post_by_id(store):
