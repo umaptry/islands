@@ -1,27 +1,36 @@
-# Manual health check. The scheduled cron has been removed in favour of
-# Cloud Monitoring Uptime Checks, which double as keepalive pings (they hit
-# /api/health every 5 minutes). This avoids:
-#   - duplicate pings (Monitoring + GitHub cron)
-#   - Actions minutes consumption on private repos
-#   - GitHub auto-disabling the schedule after 60 days of no commits
+# Keepalive and on-demand health check.
 #
-# Keep this workflow for on-demand diagnosis:
+# The free Supabase project pauses after about a week without traffic, and a
+# paused project takes the whole app down (it happened in October 2026 even
+# with the Cloud Monitoring Uptime Check that was meant to cover this). So the
+# schedule is back: /api/health counts posts, which is a real database query.
+#
+# Every third day leaves room for one missed run inside the pause window. In a
+# public repository GitHub disables a schedule after 60 days without commits
+# and emails the owner; re-enable it from the Actions tab when that happens.
+#
+# On-demand diagnosis:
 #   gh workflow run keepalive
 name: keepalive
 
 on:
+  schedule:
+    - cron: '17 3 */3 * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Ping /api/health
         env:
-          URL: ${{ vars.KOTOBA_MAP_URL }}
+          URL: ${{ vars.KOTOBA_MAP_URL || 'https://islands-vfjsyo6oyq-an.a.run.app' }}
+        # /api/health answers 200 even when the database is down, so read
+        # store_ok; a failed run is what emails the owner about a pause.
         run: |
-          if [ -z "$URL" ]; then
-            echo "Set the repository variable KOTOBA_MAP_URL to the Cloud Run URL." >&2
-            exit 1
-          fi
-          curl --fail --silent --show-error --max-time 120 "$URL/api/health"
+          curl --fail --silent --show-error --max-time 120 --retry 3 --retry-delay 30 "$URL/api/health" \
+            | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d); sys.exit(0 if d.get("store_ok") else 1)'

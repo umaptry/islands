@@ -338,8 +338,10 @@ gcloud run services update-traffic islands --region $REGION --to-revisions <前�
 ### 4. 監視（Cloud Monitoring Uptime Check）
 
 Cloud Monitoring で `/api/health` を5分おきに監視する構想です。実リソースの設定は
-2026-09-08時点で未確認です。GitHub Actions の `keepalive.yml` は手動起動のみで、
-定期keepaliveが動いているとは判断しないでください。
+未確認で、2026-10 に Supabase の無料プロジェクトが一時停止しました。そのため
+GitHub Actions の `keepalive.yml` が3日ごとに `/api/health` を呼び、`store_ok` が
+false なら失敗します（失敗メールで停止に気づける）。公開リポジトリでは60日コミットが
+ないと定期実行が止まるので、そのときは Actions タブから有効に戻してください。
 
 - **Content matching**: status code 2xx だけでなく、レスポンスに `"store":"supabase"`
   と `"store_ok":true` が含まれることを確認。`/api/health` は DB 障害時も HTTP 200
