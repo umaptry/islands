@@ -21,6 +21,9 @@ sys.path.insert(0, str(ROOT))
 for name in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY"):
     os.environ.pop(name, None)
 os.environ["KOTOBA_DISABLE_RATE_LIMIT"] = "1"
+# Tests call track_islands() themselves; a background step would still be
+# writing to the store a test has already swapped out.
+os.environ["ISLANDS_AUTO_TRACK"] = "0"
 
 pytest.importorskip("fastapi")
 
@@ -113,13 +116,14 @@ class Person:
             headers=self.headers,
         )
 
-    def inbox(self):
-        return self.client.get(
+    def inbox(self, kinds=None):
+        rows = self.client.get(
             "/api/local/notifications", headers=self.headers
         ).json()["notifications"]
+        return [row for row in rows if kinds is None or row["type"] in kinds]
 
-    def unread(self):
-        return [row for row in self.inbox() if not row["read_at"]]
+    def unread(self, kinds=None):
+        return [row for row in self.inbox(kinds) if not row["read_at"]]
 
 
 @pytest.fixture

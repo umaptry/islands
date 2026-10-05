@@ -206,7 +206,7 @@ const supabaseBackend = {
   async listNotifications() {
     const rows = await restCall('notifications', {
       params: {
-        select: 'id,recipient_id,actor_id,post_id,comment_id,type,created_at,read_at,'
+        select: 'id,recipient_id,actor_id,post_id,comment_id,type,payload,created_at,read_at,'
           + 'accounts!notifications_actor_id_fkey(id,display_name,icon_id,avatar_path)',
         recipient_id: `eq.${session.userId()}`,
         order: 'created_at.desc',

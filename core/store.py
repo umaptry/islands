@@ -25,14 +25,16 @@ encoder), naming the landmasses, and the local-mode shim that stands in for
 PostgREST when there is no Supabase project at all.
 """
 
+import json
 import math
 import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
+import numpy as np
 
 from core.config import ENERGY_CELL_SIZE
 from core.energy import computed_energy, total_energy
@@ -46,6 +48,9 @@ REACTIONS = "reactions"
 COMMENTS = "comments"
 NOTIFICATIONS = "notifications"
 REPORTS = "reports"
+NOTIFICATION_SETTINGS = "notification_settings"
+ISLANDS_STATE = "islands_state"
+ISLAND_EVENTS = "island_events"
 REQUEST_TIMEOUT = 10.0
 
 # A dropped connection or a 502 from the PostgREST front end is routine and
@@ -66,13 +71,46 @@ POST_COLUMNS = (
     "id,author_id,body,tags,motivation,image_path,x,y,cluster_id,terms,"
     "like_count,help_count,join_count,comment_count,energy,created_at,updated_at"
 )
-ACCOUNT_COLUMNS = "id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at"
+ACCOUNT_COLUMNS = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
+                   "updated_at,topics,goal,seeking,offering")
+# The hidden profile vectors. Written by the server only, never selected for a client.
+PROFILE_VECTOR_COLUMNS = ("vec_topics", "vec_goal", "vec_seeking", "vec_offering")
 # Naming a landmass needs the words and the position, not the essays.
-TERM_COLUMNS = "id,cluster_id,x,y,terms,motivation,like_count,help_count,join_count,comment_count,energy"
+# author_id and created_at are what island growth and tracking count.
+TERM_COLUMNS = ("id,author_id,cluster_id,x,y,terms,motivation,like_count,help_count,"
+                "join_count,comment_count,energy,created_at")
+NOTIFICATION_COLUMNS = ("id,recipient_id,actor_id,post_id,comment_id,type,created_at,read_at,"
+                        "island_id,event_id,payload")
+ISLAND_STATE_COLUMNS = ("id,name,label,tier,score_total,score_recent,score_shown,post_ids,"
+                        "author_ids,cx,cy,landmarks,challenger,quiet,active,last_activity_at,"
+                        "created_at,updated_at")
+ISLAND_EVENT_COLUMNS = "id,island_id,kind,cause,place,before,after,created_at"
 
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _stamp(value):
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _since(value):
+    """An ISO string for a `since` argument given as datetime, string or None."""
+    if value is None:
+        return "1970-01-01T00:00:00+00:00"
+    return value.isoformat() if isinstance(value, datetime) else str(value)
+
+
+def _parse_vector(value):
+    """pgvector's text form "[0.1,0.2]" (or a list) as a list of floats."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = json.loads(value)
+    return [float(v) for v in value]
 
 
 def _flatten(row, key=ACCOUNTS, into=None):
@@ -123,6 +161,12 @@ class MemoryStore:
         self._comments = {}
         self._notifications = {}
         self._reports = {}
+        self._profile_vectors = {}  # account_id -> {vec_topics: [...], ...}
+        self._last_seen = {}        # account_id -> iso time
+        self._settings = {}         # (account_id, category) -> row
+        self._islands = {}
+        self._island_events = {}
+        self._island_run_at = None
         self._lock = threading.RLock()
 
     # -- accounts ----------------------------------------------------------
@@ -146,8 +190,17 @@ class MemoryStore:
                 "link_url": None,
                 "icon_id": "0",
                 "avatar_path": None,
+                "topics": [],
+                "goal": None,
+                "seeking": None,
+                "offering": None,
                 "created_at": _now(),
             }
+            # The vectors are kept apart, like the column grant that hides them.
+            fields = dict(fields)
+            vectors = {key: fields.pop(key) for key in PROFILE_VECTOR_COLUMNS if key in fields}
+            if vectors:
+                self._profile_vectors.setdefault(account_id, {}).update(vectors)
             # No `is not None` filter: null is how the client clears a field.
             # Dropping it here made 自己紹介 and リンク write-once.
             row.update(fields)
@@ -303,6 +356,7 @@ class MemoryStore:
             post["energy"] = computed_energy(post)
             if post["author_id"] != actor_id:
                 self._notify(post["author_id"], actor_id, post_id, None, kind)
+                self._notify_new_connection(actor_id, post["author_id"])
         return True
 
     def remove_reaction(self, post_id, actor_id, kind):
@@ -334,24 +388,39 @@ class MemoryStore:
 
     # -- comments ----------------------------------------------------------
 
-    def add_comment(self, post_id, author_id, body):
+    def add_comment(self, post_id, author_id, body, reply_to=None):
         with self._lock:
             post = self._posts.get(post_id)
             if not post or post.get("deleted_at"):
                 raise StoreError("post")
+            parent_author = None
+            if reply_to is not None:
+                parent = self._comments.get(reply_to)
+                if not parent or parent["post_id"] != post_id:
+                    raise StoreError("reply_to")
+                parent_author = parent["author_id"]
             row = {
                 "id": str(uuid.uuid4()),
                 "post_id": post_id,
                 "author_id": author_id,
                 "body": body,
+                "reply_to": reply_to,
                 "created_at": _now(),
                 "deleted_at": None,
             }
             self._comments[row["id"]] = row
             post["comment_count"] = post.get("comment_count", 0) + 1
             post["energy"] = computed_energy(post)
-            if post["author_id"] != author_id:
-                self._notify(post["author_id"], author_id, post_id, row["id"], "comment")
+            # Same rules as on_comment_change(): the person answered hears
+            # 'reply'; the owner hears 'comment' only if they are somebody else.
+            owner = post["author_id"]
+            if parent_author is not None and parent_author != author_id:
+                self._notify(parent_author, author_id, post_id, row["id"], "reply")
+                self._notify_new_connection(author_id, parent_author)
+            if owner != author_id and owner != parent_author:
+                self._notify(owner, author_id, post_id, row["id"], "comment")
+            if owner != author_id:
+                self._notify_new_connection(author_id, owner)
             return self._with_author(row)
 
     def list_comments(self, post_id):
@@ -384,7 +453,8 @@ class MemoryStore:
 
     # -- notifications -----------------------------------------------------
 
-    def _notify(self, recipient_id, actor_id, post_id, comment_id, kind):
+    def _notify(self, recipient_id, actor_id, post_id, comment_id, kind,
+                island_id=None, event_id=None, payload=None):
         row = {
             "id": str(uuid.uuid4()),
             "recipient_id": recipient_id,
@@ -392,10 +462,61 @@ class MemoryStore:
             "post_id": post_id,
             "comment_id": comment_id,
             "type": kind,
+            "island_id": island_id,
+            "event_id": event_id,
+            "payload": payload,
             "created_at": _now(),
             "read_at": None,
         }
         self._notifications[row["id"]] = row
+        return row
+
+    def _pair_interaction_count(self, a, b):
+        """pair_interaction_count() in Python. Caller holds the lock."""
+        count = 0
+        for (post_id, actor, _) in self._reactions:
+            owner = (self._posts.get(post_id) or {}).get("author_id")
+            if (actor == a and owner == b) or (actor == b and owner == a):
+                count += 1
+        for row in self._comments.values():
+            if row["deleted_at"]:
+                continue
+            owner = (self._posts.get(row["post_id"]) or {}).get("author_id")
+            parent = self._comments.get(row.get("reply_to")) if row.get("reply_to") else None
+            touched = {owner, parent["author_id"] if parent else None}
+            if (row["author_id"] == a and b in touched) or (row["author_id"] == b and a in touched):
+                count += 1
+        return count
+
+    def _notify_new_connection(self, a, b):
+        """notify_new_connection(): the first interaction tells both, once ever."""
+        if a is None or b is None or a == b:
+            return
+        if self._pair_interaction_count(a, b) != 1:
+            return
+        for row in self._notifications.values():
+            if row["type"] == "connection" and {row["recipient_id"], row["actor_id"]} == {a, b}:
+                return
+        self._notify(b, a, None, None, "connection")
+        self._notify(a, b, None, None, "connection")
+
+    def insert_notifications(self, rows):
+        """Server-written notifications (similar, island)."""
+        with self._lock:
+            return [dict(self._notify(
+                row["recipient_id"], row.get("actor_id"), row.get("post_id"), None, row["type"],
+                row.get("island_id"), row.get("event_id"), row.get("payload"),
+            )) for row in rows]
+
+    def recent_notifications(self, kind, since, recipient_id=None):
+        """Rows of one type since a time, for the per-day limits."""
+        start = _stamp(_since(since))
+        with self._lock:
+            return [
+                dict(row) for row in self._notifications.values()
+                if row["type"] == kind and _stamp(row["created_at"]) >= start
+                and (recipient_id is None or row["recipient_id"] == recipient_id)
+            ]
 
     def list_notifications(self, recipient_id, limit=100):
         with self._lock:
@@ -408,7 +529,7 @@ class MemoryStore:
         with self._lock:
             for row in rows:
                 actor = self._accounts.get(row["actor_id"]) or {}
-                row["actor"] = {
+                row["actor"] = None if row["actor_id"] is None else {
                     "id": row["actor_id"],
                     "display_name": actor.get("display_name", ""),
                     "icon_id": actor.get("icon_id", "0"),
@@ -437,6 +558,134 @@ class MemoryStore:
                 1 for row in self._notifications.values()
                 if row["recipient_id"] == recipient_id and not row["read_at"]
             )
+
+    # -- notification settings ---------------------------------------------
+
+    def get_notification_settings(self, account_id):
+        with self._lock:
+            return [dict(row) for (owner, _), row in self._settings.items() if owner == account_id]
+
+    def put_notification_settings(self, account_id, rows):
+        with self._lock:
+            for row in rows:
+                self._settings[(account_id, row["category"])] = {
+                    "account_id": account_id, "category": row["category"],
+                    "push": bool(row["push"]), "in_app": bool(row["in_app"]),
+                    "updated_at": _now(),
+                }
+        return self.get_notification_settings(account_id)
+
+    # -- people layer --------------------------------------------------------
+
+    def profile_vectors(self):
+        """Every account's four fields and hidden vectors (server only)."""
+        with self._lock:
+            out = []
+            for account_id, row in self._accounts.items():
+                vectors = self._profile_vectors.get(account_id, {})
+                out.append({
+                    "id": account_id, "topics": list(row.get("topics") or []),
+                    "goal": row.get("goal"), "seeking": row.get("seeking"),
+                    "offering": row.get("offering"),
+                    **{key: vectors.get(key) for key in PROFILE_VECTOR_COLUMNS},
+                })
+            return out
+
+    def post_centroids(self):
+        """{author_id: {"centroid": [...], "post_count": n}} from live vec_c."""
+        groups = {}
+        with self._lock:
+            for row in self._live():
+                if row.get("vec_c") is None:
+                    continue
+                groups.setdefault(row["author_id"], []).append(np.asarray(row["vec_c"], dtype=float))
+        return {
+            author: {"centroid": [float(v) for v in np.mean(vectors, axis=0)],
+                     "post_count": len(vectors)}
+            for author, vectors in groups.items()
+        }
+
+    def interaction_events(self, since=None):
+        """interaction_events() in Python: reactions, comments and replies."""
+        start = _stamp(_since(since))
+        out = []
+        with self._lock:
+            for (post_id, actor, kind), created_at in self._reactions.items():
+                post = self._posts.get(post_id)
+                if not post or post.get("deleted_at") or actor == post["author_id"]:
+                    continue
+                if _stamp(created_at) < start:
+                    continue
+                out.append({"actor_id": actor, "post_author_id": post["author_id"],
+                            "post_id": post_id, "kind": kind, "reply_author_id": None,
+                            "created_at": created_at})
+            for row in self._comments.values():
+                post = self._posts.get(row["post_id"])
+                if row["deleted_at"] or not post or post.get("deleted_at"):
+                    continue
+                if _stamp(row["created_at"]) < start:
+                    continue
+                parent = self._comments.get(row.get("reply_to")) if row.get("reply_to") else None
+                parent_author = parent["author_id"] if parent else None
+                if row["author_id"] == post["author_id"] and parent_author in (None, row["author_id"]):
+                    continue
+                out.append({"actor_id": row["author_id"], "post_author_id": post["author_id"],
+                            "post_id": row["post_id"],
+                            "kind": "reply" if row.get("reply_to") else "comment",
+                            "reply_author_id": parent_author, "created_at": row["created_at"]})
+        out.sort(key=lambda event: event["created_at"])
+        return out
+
+    def touch_last_seen(self, account_id):
+        """Record this visit; return the previous one (None on a first visit)."""
+        with self._lock:
+            previous = self._last_seen.get(account_id)
+            self._last_seen[account_id] = _now()
+            return previous
+
+    # -- islands -------------------------------------------------------------
+
+    def island_states(self, active_only=True):
+        with self._lock:
+            return [dict(row) for row in self._islands.values()
+                    if row.get("active", True) or not active_only]
+
+    def save_island_states(self, rows):
+        stamp = _now()
+        with self._lock:
+            for row in rows:
+                saved = dict(self._islands.get(row["id"]) or {"created_at": stamp})
+                saved.update(row)
+                saved["updated_at"] = stamp
+                self._islands[row["id"]] = saved
+        return len(rows)
+
+    def add_island_events(self, rows):
+        with self._lock:
+            for row in rows:
+                saved = dict(row)
+                saved.setdefault("id", str(uuid.uuid4()))
+                saved.setdefault("created_at", _now())
+                self._island_events[saved["id"]] = saved
+        return len(rows)
+
+    def list_island_events(self, since=None, limit=50, island_ids=None):
+        start = _stamp(_since(since))
+        with self._lock:
+            rows = [dict(row) for row in self._island_events.values()
+                    if _stamp(row["created_at"]) >= start
+                    and (island_ids is None or row["island_id"] in island_ids)]
+        rows.sort(key=lambda row: row["created_at"], reverse=True)
+        return rows[:limit]
+
+    def claim_island_run(self, min_seconds):
+        """True for one caller per min_seconds, like claim_island_run()."""
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            if self._island_run_at and now - self._island_run_at < timedelta(seconds=min_seconds):
+                return False
+            self._island_run_at = now
+            return True
 
     # -- reports -----------------------------------------------------------
 
@@ -471,7 +720,7 @@ class MemoryStore:
         return out
 
     def _with_author(self, row):
-        out = {key: row[key] for key in ("id", "post_id", "author_id", "body", "created_at")}
+        out = {key: row.get(key) for key in ("id", "post_id", "author_id", "body", "reply_to", "created_at")}
         account = self._accounts.get(row["author_id"]) or {}
         out["author"] = {
             "id": row["author_id"],
@@ -586,10 +835,14 @@ class SupabaseStore:
         # so a column that is dropped here can never be emptied again.
         record = dict(fields)
         record["id"] = account_id
+        for key in PROFILE_VECTOR_COLUMNS:
+            if record.get(key) is not None:
+                record[key] = "[" + ",".join(repr(float(v)) for v in record[key]) + "]"
         response = self._send(
             "POST", ACCOUNTS, label="プロフィールの保存",
             headers={"Prefer": "return=representation,resolution=merge-duplicates"},
-            params={"on_conflict": "id"},
+            # select keeps the hidden vectors out of the answer.
+            params={"on_conflict": "id", "select": ACCOUNT_COLUMNS},
             json=record,
         )
         body = response.json()
@@ -732,19 +985,28 @@ class SupabaseStore:
             "select": "post_id,kind", "actor_id": f"eq.{actor_id}",
         })
 
-    def add_comment(self, post_id, author_id, body):
+    def add_comment(self, post_id, author_id, body, reply_to=None):
+        record = {"post_id": post_id, "author_id": author_id, "body": body}
+        if reply_to is not None:
+            # The trigger refuses a parent on another post (23514 -> 400); the
+            # lookup here only turns that into the same error MemoryStore raises.
+            parent = self._get(COMMENTS, {"select": "id", "id": f"eq.{reply_to}",
+                                          "post_id": f"eq.{post_id}", "limit": "1"})
+            if not parent:
+                raise StoreError("reply_to")
+            record["reply_to"] = reply_to
         response = self._send(
             "POST", COMMENTS, label="メッセージの送信",
             headers={"Prefer": "return=representation"},
-            params={"select": f"id,post_id,author_id,body,created_at,"
+            params={"select": f"id,post_id,author_id,body,reply_to,created_at,"
                               f"{ACCOUNTS}(id,display_name,icon_id,avatar_path)"},
-            json={"post_id": post_id, "author_id": author_id, "body": body},
+            json=record,
         )
         return _flatten(response.json()[0], into="author")
 
     def list_comments(self, post_id):
         rows = self._get(COMMENTS, {
-            "select": f"id,post_id,author_id,body,created_at,"
+            "select": f"id,post_id,author_id,body,reply_to,created_at,"
                       f"{ACCOUNTS}(id,display_name,icon_id,avatar_path)",
             "post_id": f"eq.{post_id}",
             "deleted_at": "is.null",
@@ -764,13 +1026,132 @@ class SupabaseStore:
 
     def list_notifications(self, recipient_id, limit=100):
         rows = self._get(NOTIFICATIONS, {
-            "select": f"id,recipient_id,actor_id,post_id,comment_id,type,created_at,read_at,"
+            "select": f"{NOTIFICATION_COLUMNS},"
                       f"{ACCOUNTS}!notifications_actor_id_fkey(id,display_name,icon_id,avatar_path)",
             "recipient_id": f"eq.{recipient_id}",
             "order": "created_at.desc",
             "limit": str(limit),
         })
-        return [_flatten(row, into="actor") for row in rows]
+        rows = [_flatten(row, into="actor") for row in rows]
+        for row in rows:
+            if row.get("actor_id") is None:
+                row["actor"] = None  # island notifications have nobody behind them
+        return rows
+
+    def insert_notifications(self, rows):
+        if not rows:
+            return []
+        keys = ("recipient_id", "actor_id", "post_id", "type", "island_id", "event_id", "payload")
+        response = self._send(
+            "POST", NOTIFICATIONS, label="通知の保存",
+            headers={"Prefer": "return=representation"},
+            params={"select": NOTIFICATION_COLUMNS},
+            json=[{key: row.get(key) for key in keys} for row in rows],
+        )
+        return response.json()
+
+    def recent_notifications(self, kind, since, recipient_id=None):
+        params = {"select": NOTIFICATION_COLUMNS, "type": f"eq.{kind}",
+                  "created_at": f"gte.{_since(since)}", "order": "created_at.desc",
+                  "limit": "1000"}
+        if recipient_id is not None:
+            params["recipient_id"] = f"eq.{recipient_id}"
+        return self._get(NOTIFICATIONS, params, label="通知の読み込み")
+
+    # -- notification settings ---------------------------------------------
+
+    def get_notification_settings(self, account_id):
+        return self._get(NOTIFICATION_SETTINGS, {
+            "select": "account_id,category,push,in_app,updated_at",
+            "account_id": f"eq.{account_id}",
+        }, label="通知設定の読み込み")
+
+    def put_notification_settings(self, account_id, rows):
+        if rows:
+            self._send(
+                "POST", NOTIFICATION_SETTINGS, label="通知設定の保存",
+                headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
+                params={"on_conflict": "account_id,category"},
+                json=[{"account_id": account_id, "category": row["category"],
+                       "push": bool(row["push"]), "in_app": bool(row["in_app"]),
+                       "updated_at": _now()} for row in rows],
+            )
+        return self.get_notification_settings(account_id)
+
+    # -- people layer --------------------------------------------------------
+
+    def profile_vectors(self):
+        rows = self._rpc("profile_vectors", {}, label="プロフィールの読み込み")
+        for row in rows:
+            row["topics"] = list(row.get("topics") or [])
+            for key in PROFILE_VECTOR_COLUMNS:
+                row[key] = _parse_vector(row.get(key))
+        return rows
+
+    def post_centroids(self):
+        rows = self._rpc("account_post_centroids", {}, label="投稿の平均の読み込み")
+        return {
+            row["author_id"]: {"centroid": _parse_vector(row["centroid"]),
+                               "post_count": int(row["post_count"])}
+            for row in rows if row.get("centroid") is not None
+        }
+
+    def interaction_events(self, since=None):
+        rows = self._rpc("interaction_events", {"since": _since(since)}, label="交流の読み込み")
+        rows.sort(key=lambda event: _stamp(event["created_at"]))
+        return rows
+
+    def touch_last_seen(self, account_id):
+        # touch_last_seen() reads auth.uid(), which is empty for the server's
+        # key, so the server does the same two steps directly.
+        rows = self._get(ACCOUNTS, {"select": "last_seen_at", "id": f"eq.{account_id}",
+                                    "limit": "1"}, label="前回の訪問の読み込み")
+        self._send("PATCH", ACCOUNTS, label="訪問の記録",
+                   headers={"Prefer": "return=minimal"},
+                   params={"id": f"eq.{account_id}"}, json={"last_seen_at": _now()})
+        return rows[0].get("last_seen_at") if rows else None
+
+    # -- islands -------------------------------------------------------------
+
+    def island_states(self, active_only=True):
+        params = {"select": ISLAND_STATE_COLUMNS, "order": "created_at.asc"}
+        if active_only:
+            params["active"] = "is.true"
+        return self._get(ISLANDS_STATE, params, label="島の読み込み")
+
+    def save_island_states(self, rows):
+        if rows:
+            keys = ISLAND_STATE_COLUMNS.split(",")
+            stamp = _now()
+            self._send(
+                "POST", ISLANDS_STATE, label="島の保存",
+                headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
+                params={"on_conflict": "id"},
+                json=[{**{key: row.get(key) for key in keys if key in row and key != "created_at"},
+                       "updated_at": stamp} for row in rows],
+            )
+        return len(rows)
+
+    def add_island_events(self, rows):
+        if rows:
+            keys = ISLAND_EVENT_COLUMNS.split(",")
+            self._send("POST", ISLAND_EVENTS, label="島の変化の保存",
+                       headers={"Prefer": "return=minimal"},
+                       json=[{key: row[key] for key in keys if key in row} for row in rows])
+        return len(rows)
+
+    def list_island_events(self, since=None, limit=50, island_ids=None):
+        params = {"select": ISLAND_EVENT_COLUMNS, "created_at": f"gte.{_since(since)}",
+                  "order": "created_at.desc", "limit": str(limit)}
+        if island_ids is not None:
+            if not island_ids:
+                return []
+            params["island_id"] = f"in.({','.join(island_ids)})"
+        return self._get(ISLAND_EVENTS, params, label="島の変化の読み込み")
+
+    def claim_island_run(self, min_seconds):
+        return bool(self._rpc("claim_island_run", {"min_seconds": int(min_seconds)},
+                              label="島の処理の確認"))
 
     def mark_notifications_read(self, recipient_id, ids=None):
         params = {"recipient_id": f"eq.{recipient_id}", "read_at": "is.null"}

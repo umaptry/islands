@@ -18,7 +18,26 @@ const KINDS = {
   help: { icon: '✋', tone: 'help', text: 'あなたの投稿に「手伝えるかも」と反応しました。' },
   join: { icon: '➕', tone: 'join', text: 'あなたの投稿に「参加」と反応しました。' },
   comment: { icon: '💬', tone: 'comment', text: 'あなたの投稿にメッセージを送りました。' },
+  reply: { icon: '💬', tone: 'comment', text: 'あなたのメッセージに返信しました。' },
+  connection: { icon: '➕', tone: 'join', text: '初めてやりとりしました。地図に線が引かれます。' },
+  similar: { icon: '✋', tone: 'help', text: '話題や目標が近い人が参加しました。' },
+  island: { icon: '📍', tone: 'join', text: '島が変わりました。' },
 };
+const ICONS = { like: 'heart', help: 'help', join: 'hand', comment: 'message', reply: 'message',
+  connection: 'hand', similar: 'user', island: 'pin' };
+
+// An island change has nobody behind it: the island's name stands in for a
+// person, and the recorded cause says what happened.
+function headline(row) {
+  if (row.type !== 'island') return (row.actor || {}).display_name || 'だれか';
+  const name = (row.payload || {}).name;
+  return name ? `島「${name}」` : '島';
+}
+
+function message(row, kind) {
+  const cause = row.type === 'island' && (row.payload || {}).cause;
+  return cause ? `${cause}。` : kind.text;
+}
 
 export async function refreshNotifications() {
   if (!state.account) {
@@ -67,14 +86,14 @@ function paintList() {
       attrs: { type: 'button' },
       on: { click: () => open(row) },
     },
-      el('span', { className: 'notif-icon' }, icon({ like: 'heart', help: 'help', join: 'hand', comment: 'message' }[row.type])),
+      el('span', { className: 'notif-icon' }, icon(ICONS[row.type])),
       avatar(actor, 34),
       el('span', { className: 'notif-body' },
         el('span', { className: 'notif-head' },
-          el('b', { text: actor.display_name || 'だれか' }),
+          el('b', { text: headline(row) }),
           el('span', { className: 'notif-time', text: timeAgo(row.created_at) }),
         ),
-        el('span', { className: 'notif-text', text: kind.text }),
+        el('span', { className: 'notif-text', text: message(row, kind) }),
       ),
       row.read_at ? null : el('i', { className: 'notif-dot' }),
     );

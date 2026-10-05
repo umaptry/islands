@@ -214,9 +214,15 @@ erDiagram
 | `id` | Supabaseの認証システム（`auth.users`）と連動するので、ログインすれば自動でこのIDが付きます。ユーザーが退会（`auth.users`を削除）すると、`ON DELETE CASCADE` で関連データも自動削除されます。 |
 | `display_name` | 地図上に表示される名前です。**唯一の必須項目**で、空にはできません（`CHECK (length BETWEEN 1 AND 16)`）。これがないと地図にドットだけ表示されてしまい、誰だかわかりません。 |
 | `icon_id` / `avatar_path` | どちらもアバターですが使い分けがあります。`icon_id` はアプリ内蔵の絵文字から選ぶもの（デフォルト）、`avatar_path` はユーザーが自分の写真をアップロードしたときのパスです。`avatar_path` が設定されていればそちらが優先されます。 |
+| `topics` / `goal` / `seeking` / `offering` | 話題（`text[]`・8個まで・各1〜12字、`topics_ok()` で確認）、目標・探している相手・手伝えること（各60字まで）。「似ている人」の計算に使います。**サーバー（`PUT /api/account/me`）だけが書けます**。ブラウザに `update` 権限を渡すと、文字だけ変わってベクトルが古いまま残るためです。 |
+| `vec_topics` / `vec_goal` / `vec_seeking` / `vec_offering` | 上の4項目を埋め込んだ `vector(384)`。**誰にも読めません**（`anon`・`authenticated` への列の権限から外しています）。読むのは `service_role` の RPC `profile_vectors()` だけです。 |
+| `last_seen_at` | 前回来た日時。留守中の一覧（`/api/changes/digest`）の起点に使います。他人に来訪の時刻を知られないよう、これも列の権限から外しています。 |
 
 > [!NOTE]
 > **メールアドレスはこのテーブルに保存されません。** メールは `auth.users` 側にのみ存在します。`accounts` テーブルは地図上で誰でも閲覧可能なので、個人情報を守るためにあえて分離しています。
+
+> [!NOTE]
+> **2026-10-06 から `accounts` の権限は列ごとです。** `select` は上のベクトルと `last_seen_at` を除いた列、`insert` と `update` は元からの6列（`display_name`・`affiliation`・`bio`・`link_url`・`icon_id`・`avatar_path`）だけに付けています。`select *` は権限エラーになるので、列を名指しで読みます。
 
 ---
 
@@ -321,6 +327,7 @@ PRIMARY KEY (post_id, actor_id, kind)
 | **長さの制約** | 1文字以上500文字以下。投稿本文（30-140文字）より長く書けます |
 | **削除方式** | 論理削除（`deleted_at` に日時を入れる）。RLSポリシーで `deleted_at IS NULL` の行だけ閲覧可能にしています |
 | **他人のコメントは？** | 自分が書いたコメントだけ編集・削除できます（`auth.uid() = author_id` のRLSポリシー） |
+| **返信（`reply_to`）** | 返信先のコメントの ID。返信先が消えると `null` になります（`on delete set null`）。同じ投稿のコメントにしか返信できず、違うとトリガーが `23514`（`reply_to must be a comment on the same post`）で拒みます |
 
 ---
 
@@ -336,6 +343,24 @@ PRIMARY KEY (post_id, actor_id, kind)
 | `help` | 誰かが投稿に「手伝えるかも」した | 投稿の著者 |
 | `join` | 誰かが投稿に「参加したい」した | 投稿の著者 |
 | `comment` | 誰かが投稿にコメントを書いた | 投稿の著者 |
+| `reply` | 誰かが自分のコメントに返信した | 返信先のコメントの書き手（投稿の著者が別の人なら、著者には `comment` が届く。同じ人に2通は送らない） |
+| `connection` | 2人のあいだで最初の交流が起きた（`pair_interaction_count(a, b)` が1になった） | 2人の両方（その2人で1回だけ） |
+| `similar` | 似ている度合いが0.75以上の人が新しく来た | 似ている側（サーバーが作る。1日3件まで） |
+| `island` | 自分の島が合流・分割・名称変更・段の変化をした | 島の住人（サーバーが作る。1島1日1件）。`actor_id` は `null`、`island_id`・`event_id`・`payload`（名前・きっかけ）が入る |
+
+`actor_id` は `island` のために `null` を許すようになりました（2026-10-06）。
+
+**通知の分類と切り替え**：種類は5つの分類にまとめ、分類ごとにアプリ外（push）とアプリ内を切り替えられます（`notification_settings`。行がなければ両方オン）。
+
+| 分類 | 含む `type` |
+|---|---|
+| `reply` | `comment`・`reply` |
+| `reaction` | `like`・`help`・`join` |
+| `connection` | `connection` |
+| `similar` | `similar` |
+| `island` | `island` |
+
+アプリ内を切った分類は、未読の数と印にだけ効きます（一覧には残ります）。同じ投稿へのリアクションで、前のものから10分以内に続いたものは、読むときに1件にまとめます（RPC `notification_feed`。メモリ保存では `core/notifications.py` が同じ規則で動きます）。
 
 > [!TIP]
 > **自分の投稿に自分がリアクションしても通知は作られません。** トリガー内で `owner_id <> new.actor_id` をチェックしています。自分で自分に通知しても無意味なので。
@@ -388,6 +413,28 @@ PRIMARY KEY (post_id, actor_id, kind)
 > セルの更新は `on_post_energy_change` トリガーで自動化されています。投稿の追加・更新・削除のたびに、該当セルの `sum_energy` と `post_count` が自動で増減します。投稿が別のセルに移動した場合は、古いセルから引いて新しいセルに足す2ステップで処理されます。
 
 ---
+
+#### 🧭 2026-10-06 に足した表（マイグレーション `20261006000000_social_foundation.sql`）
+
+| 表 | 何を入れるか | 誰が読める・書ける |
+|---|---|---|
+| `notification_settings` | `account_id`・`category`（5分類）・`push`・`in_app`。主キーは `account_id`＋`category`。行がなければ両方オン | 本人だけ読む・作る・`push`/`in_app` を変える |
+| `push_subscriptions` | Web Push の購読先（送るのは段6から） | 本人だけ読む・作る・消す |
+| `islands_state` | 追跡している島：名前・段（0〜4）・成長点（累計・直近14日・見せる値）・投稿と書き手の ID・重心・ランドマーク・静かか | 誰でも読める。書くのはサーバーだけ |
+| `island_events` | 島の変化：`kind`・`cause`（200字まで）・`place`・`before`・`after` | 誰でも読める。書くのはサーバーだけ |
+| `island_runs` | 1行だけの表。島の追跡をどのサーバーが実行するかの取り合い（`last_run_at`） | ブラウザからは読めない |
+
+**RPC（DB の関数）**
+
+| 関数 | 呼べる人 | 何をするか |
+|---|---|---|
+| `interaction_events(since)` | `service_role` | 線と成長点の元になる交流（リアクション・コメント・返信）を1行ずつ返す。返信には `reply_author_id`。自分の投稿への自分の反応は含めない |
+| `profile_vectors()` | `service_role` | プロフィールの隠しベクトル |
+| `account_post_centroids()` | `service_role` | 1人ごとの投稿の平均 `vec_c` |
+| `claim_island_run(min_seconds)` | `service_role` | 前回から `min_seconds` 以上たっていれば `true` を返して時刻を進める（1台だけが追跡する） |
+| `notification_feed(limit_n)` | `authenticated` | 自分の通知を分類つきで返す。同じ投稿へのリアクションで10分以内に続いたものは1件にまとめ、`others` に残りの人数 |
+| `touch_last_seen()` | `authenticated` | 今回の来訪を記録し、前回の日時を返す（初回は `null`） |
+| `pair_interaction_count(a, b)` | トリガーの中 | 2人のあいだの交流の数（向きは問わない） |
 
 ### 2.3 テーブル間のリレーション（関係）を理解する
 
@@ -480,6 +527,12 @@ flowchart TD
     end
 ```
 
+**2026-10-06 に足したこと**
+
+- `on_reaction_change` と `on_comment_change` は、通知を作ったあと `pair_interaction_count(操作した人, 相手)` を数え、1（2人の最初の交流）なら `notify_new_connection` が2人の両方に `connection` を送ります。
+- `on_comment_change` は `reply_to` を確かめ（同じ投稿のコメントでなければ `23514`）、返信先の書き手に `reply`、投稿の著者が別の人なら著者に `comment` を送ります。
+- 新しい5つの表にも、ほかの表と同じ管理用トリガー（`check_map_maintenance`。地図の作り直し中は書き込みを止める）を付けています。
+
 ---
 
 ### 2.6 RLSポリシー一覧（誰が何をできるか）
@@ -507,6 +560,14 @@ flowchart TD
 | **reports** | INSERT | `auth.uid() = reporter_id` | 誰でも通報を送信可能 |
 | **reports** | SELECT | *(ポリシーなし)* | **一般ユーザーは通報を閲覧不可** |
 | **energy_cells** | SELECT | `USING (true)` | 誰でもセルデータを閲覧可能 |
+| **notification_settings** | SELECT / INSERT / UPDATE | `auth.uid() = account_id` | 自分の通知設定だけ |
+| **push_subscriptions** | SELECT / INSERT / DELETE | `auth.uid() = account_id` | 自分の購読先だけ |
+| **islands_state** | SELECT | `USING (true)` | 誰でも島の状態を閲覧可能（書くのはサーバーだけ） |
+| **island_events** | SELECT | `USING (true)` | 誰でも島の変化を閲覧可能（書くのはサーバーだけ） |
+| **island_runs** | — | 権限なし | ブラウザからは読めない |
+
+> [!NOTE]
+> `accounts` の SELECT は行では全員に開いていますが、**列の権限**でプロフィールのベクトルと `last_seen_at` を外しています（2.2 を参照）。
 
 ---
 
@@ -581,7 +642,12 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `GET` | `/api/neighbors` | ❌ 不要 | 近い投稿の取得 | プロフィールシートの「似ている人」表示 |
 | `GET` | `/api/pair` | ❌ 不要 | 2投稿の類似度 | 2人を選んだときの「似てる度」表示 |
 | `GET` | `/api/account/me` | ✅ 必要 | 自分のプロフィール取得 | ログイン直後のプロフィール確認 |
-| `PUT` | `/api/account/me` | ✅ 必要 | プロフィール更新 | 名前・所属・自己紹介の編集 |
+| `PUT` | `/api/account/me` | ✅ 必要 | プロフィール更新 | 名前・所属・自己紹介・話題・目標などの編集 |
+| `GET` | `/api/connections?person={id}` | ❌ 不要 | 人と人の線 | 地図に線を引く（`person` で1人に絞れる） |
+| `GET` | `/api/similar-people?account={id}` | △ どちらでも | 似ている人の上位5人 | `account` を省くとログイン中の本人 |
+| `GET` | `/api/changes?since={日時}&limit=50` | ❌ 不要 | 島の変化の記録 | 変化の一覧を出す |
+| `GET` | `/api/changes/digest` | ✅ 必要 | 留守中の変化（上位5件） | 久しぶりに来た人に見せる |
+| `GET` / `PUT` | `/api/notification-settings` | ✅ 必要 | 通知の切り替え | 分類ごとの push・アプリ内のオンオフ |
 
 ---
 
@@ -760,9 +826,135 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 | `post_count` | `integer` | この島の上に立っている投稿の数 |
 | `cluster_ids` | `integer[]` | この島に含まれるクラスタのID番号リスト |
 | `top_terms` | `string[]` | 島を特徴づけるキーワード上位（名前の元になった単語） |
+| `island_id` | `string` (UUID) | 追跡している島の ID（`islands_state.id`）。まだ記録されていない島には付かない |
+| `tier` / `tier_name` | `integer` / `string` | 町の段（0〜4）と名前（小屋・村・港町・町・都市） |
+| `score` | `number` | 見せている成長点（1回で縮むのは最大20%） |
+| `landmarks` | `string[]` | ランドマークの名前 |
 
 > [!NOTE]
 > 投稿が1件もない地域には島は存在しません。最初は海だけの地図で、人が投稿するにつれて島が生まれ、近い島同士がくっついて大陸になります。
+
+> [!NOTE]
+> **島の追跡（2026-10-06）**：`/api/islands` と `/api/changes` は、前回の追跡から10分以上たっていれば、裏のスレッドで島を追跡します（`claim_island_run(600)` で1台だけが実行）。投稿の重なりが小さい方の50%以上なら同じ島として ID を引き継ぎ、成長点・段・ランドマークを更新して、変化を `island_events` に書きます。
+
+---
+
+#### `GET /api/connections` — 人と人の線
+
+> **いつ使うか**: 地図に人と人の線を引くとき。線は2人だけでなく誰にでも見えるので、認証は要りません。  
+> **キャッシュ**: `Cache-Control: public, max-age=30`
+
+`?person={account_id}` を付けると、その人の線だけを返します。
+
+**レスポンス例** `200 OK`（値は架空）
+```json
+{
+  "connections": [
+    {
+      "a": "aaaaaaaa-...", "b": "bbbbbbbb-...",
+      "a_post": "0000...01", "b_post": "0000...07",
+      "points": 5, "strength": 4.612, "tier": 2, "count": 3,
+      "last_at": "2026-10-06T09:12:00+00:00",
+      "faint": false, "ongoing": true
+    }
+  ],
+  "since": "2026-10-06T00:00:00+00:00"
+}
+```
+
+| フィールド | 何を表しているか |
+|---|---|
+| `a` / `b` | 2人の ID。向きはなく、同じ2人は1行だけ |
+| `a_post` / `b_post` | 線の端。それぞれがこの2人のあいだでいちばん交流した投稿 |
+| `points` | 点の合計（リアクション1・メッセージ2・返信3）。減らない |
+| `strength` | 14日で半分に減る点。古い交流ほど小さい |
+| `tier` | 強さの段 1〜3（`strength` の境目 3・8、仮） |
+| `count` | 交流の回数 |
+| `faint` | 30日やりとりがないと `true`（細く薄く描く） |
+| `ongoing` | 14日のうち2日以上やりとりがあると `true` |
+| `since` | この日時より前の交流は数えない（`CONNECTIONS_SINCE`、仮） |
+
+---
+
+#### `GET /api/similar-people` — 似ている人
+
+> **いつ使うか**: 「似ている人」を出すとき。`?account={id}` を省くとログイン中の本人で計算します（どちらもないと `401`）。
+
+**レスポンス例** `200 OK`（値は架空）
+```json
+{
+  "people": [
+    {
+      "id": "cccccccc-...", "score": 0.82,
+      "parts": {"topics": 0.9, "goal": 0.7, "seeking_offering": 0.6, "posts": 0.8},
+      "shared_topics": ["キャンプ"],
+      "display_name": "third", "icon_id": "4", "avatar_path": null,
+      "topics": ["キャンプ", "珈琲"], "goal": "週末に山へ行く仲間を見つける"
+    }
+  ]
+}
+```
+
+`score` は 0〜1。重みは話題 0.35・目標 0.30・探している⇔手伝える 0.20・投稿 0.15（仮、`AFFINITY_WEIGHTS`）で、空の項目は外して残りで割り直します。上位5人まで。
+
+---
+
+#### `GET /api/changes` — 島の変化の記録
+
+> **いつ使うか**: 島に何が起きたかを新しい順に出すとき。`?since=` は ISO 形式の日時（不正なら `422`「since は日時で指定してください。」）、`?limit=` は1〜200（既定50）。
+
+**レスポンス例** `200 OK`（値は架空）
+```json
+{
+  "changes": [
+    {
+      "id": "…", "island_id": "…", "kind": "merge",
+      "cause": "あいだの投稿が増えて島がつながった",
+      "place": {"cx": 412.0, "cy": 598.5},
+      "before": {"islands": [{"name": "焚き火の島", "posts": 5, "people": 4, "tier": 1},
+                             {"name": "珈琲の島", "posts": 3, "people": 3, "tier": 0}]},
+      "after": {"name": "焚き火と珈琲の島", "posts": 9, "people": 7, "tier": 1},
+      "created_at": "2026-10-06T09:30:00+00:00"
+    }
+  ]
+}
+```
+
+| `kind` | いつ |
+|---|---|
+| `birth` | 島ができた |
+| `merge` | 2つ以上の島がつながった（`before.islands` に元の島） |
+| `split` | 島が分かれた（`after.islands` に分かれた先） |
+| `rename` | 名前が変わった |
+| `tier` | 段が上がった・下がった |
+| `quiet` | 14日間動きがない、または投稿がなくなった |
+| `landmark` | 目印が増えた・入れ替わった |
+
+---
+
+#### `GET /api/changes/digest` — 留守中の変化 🔒
+
+前回来たとき（`last_seen_at`、なければ14日前）以降の変化から、自分の島（`reason: "mine"`）→ つながった人の島（`"connected"`）→ 大きな変化（`"big"`：合流・分割・誕生・段）の順に上位5件を返します。**読むと今回の来訪が記録される**ので、次の一覧は今から始まります。
+
+```json
+{ "since": "2026-10-01T08:00:00+00:00", "changes": [ { "kind": "merge", "reason": "mine", "...": "..." } ] }
+```
+
+---
+
+#### `GET` / `PUT /api/notification-settings` — 通知の切り替え 🔒
+
+5つの分類（`reply`・`reaction`・`connection`・`similar`・`island`）ごとに、アプリ外（`push`）とアプリ内（`in_app`）を切り替えます。行がない分類は両方オンとして返します。
+
+```http
+PUT /api/notification-settings
+Authorization: Bearer eyJhbG...
+Content-Type: application/json
+
+{ "settings": [ { "category": "reaction", "push": false, "in_app": true } ] }
+```
+
+返り値は GET と同じ `{ "settings": [...5件], "categories": [...] }`。知らない分類は `422`「知らない通知の種類です: …」。
 
 ---
 
@@ -1092,6 +1284,13 @@ Content-Type: application/json
 | `link_url` | `string\|null` | 200文字以下 | 外部リンク（SNS、Webサイトなど） |
 | `icon_id` | `string\|null` | — | 絵文字アバターの番号。フロント側のEMOJI配列のインデックス |
 | `avatar_path` | `string\|null` | — | アップロード済みアバター画像のパス。設定すると `icon_id` より優先表示 |
+| `topics` | `string[]\|null` | 8個まで・各12字まで | 話題。全角半角をそろえ、重複を除いてから保存 |
+| `goal` | `string\|null` | 60文字以下 | 目標 |
+| `seeking` | `string\|null` | 60文字以下 | 探している相手 |
+| `offering` | `string\|null` | 60文字以下 | 手伝えること |
+
+> [!NOTE]
+> `topics`・`goal`・`seeking`・`offering` は保存のたびにサーバーが埋め込み、隠しベクトルも書き換えます。埋め込みに失敗しても文字は保存し、ベクトルだけ空にします（その項目は「似ている人」の計算から外れます）。
 
 **レスポンス例** `200 OK`
 ```json
@@ -1235,6 +1434,7 @@ GET /api/local/map?min_x=0&min_y=0&max_x=500&max_y=500&limit=100
 | `DELETE` | `/api/local/reactions?post_id={id}&kind={kind}` | ✅ | リアクションを取り消し |
 | `GET` | `/api/local/reactions/mine` | ✅ | 自分のリアクション一覧 |
 | `GET` | `/api/local/notifications` | ✅ | 通知一覧を表示 |
+| `GET` | `/api/local/notifications/feed?limit=50` | ✅ | まとめた通知一覧（`notification_feed` と同じ形）と未読数・設定 |
 | `POST` | `/api/local/notifications/read` | ✅ | 通知を既読にする |
 | `POST` | `/api/local/reports` | ✅ | 不適切コンテンツを通報 |
 
@@ -1255,6 +1455,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `post_id` | `string` (UUID) | 必須 | コメント先の投稿ID |
 | `body` | `string` | 1〜500文字 | コメント本文 |
+| `reply_to` | `string\|null` (UUID) | 任意 | 返信先のコメントID。同じ投稿のコメントでないと `422`「返信先のメッセージが見つかりませんでした。」 |
 
 ##### `POST /api/local/reactions` — リアクションの追加
 

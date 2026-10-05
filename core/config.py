@@ -191,3 +191,99 @@ MAP_POST_LIMIT = 800
 
 # How many neighbours the orbit view asks for.
 ORBIT_NEIGHBOR_COUNT = 24
+
+
+# ---------------------------------------------------------------------------
+# People layer (islands redesign, stage 1). Every number below is PROVISIONAL
+# (仮): chosen in the 2026-10-06 design, not measured on real use. They live
+# here so they can be tuned without touching the code that uses them.
+# ---------------------------------------------------------------------------
+
+# Profile fields. Topics are short words; the other three are one sentence.
+PROFILE_TOPIC_MAX = 8
+PROFILE_TOPIC_LENGTH = 12
+PROFILE_TEXT_LENGTH = 60
+PROFILE_TEXT_FIELDS = ("goal", "seeking", "offering")
+
+# How alike two people are. Topics and goal matter most (the user's request).
+# A part one of the two people left empty is dropped and the rest renormalised,
+# so an empty profile neither helps nor hurts. "seeking_offering" takes the
+# better of A.seeking vs B.offering and B.seeking vs A.offering.
+AFFINITY_WEIGHTS = {
+    "topics": 0.35,
+    "goal": 0.30,
+    "seeking_offering": 0.20,
+    "posts": 0.15,
+}
+# Profile vectors are compared in the same centred space as posts: the seed
+# corpus's dense mean is subtracted first (core/similarity.similarity_view).
+# Raw e5 cosine on short profile texts sits in a band too narrow to read -
+# measured 10/06 on 16 made-up texts: related pairs 0.89-0.95, unrelated
+# 0.87-0.92. Centred: related 0.26-0.64 (mean 0.50), unrelated 0.17-0.51
+# (mean 0.33), median of all pairs 0.25. The centred cosine is rescaled
+# linearly to 0..1 between these anchors (clipped).
+# 仮: 16 made-up texts is not real profiles; re-measure once people fill them in.
+# Gemini is NOT measured (未確認) and uses the same numbers until it is.
+PROFILE_COSINE_ANCHORS = {
+    "onnx": (0.25, 0.65),
+    "gemini": (0.25, 0.65),
+}
+SIMILAR_PEOPLE_COUNT = 5
+# A new profile this close to somebody tells them ("similar" notification).
+SIMILAR_NOTIFY_THRESHOLD = 0.75
+SIMILAR_NOTIFY_PER_DAY = 3
+
+# Connections: one line per pair of people, no direction.
+CONNECTION_POINTS = {"like": 1, "help": 1, "join": 1, "comment": 2, "reply": 3}
+CONNECTION_HALF_LIFE_DAYS = 14.0
+# Strength tiers 1..3 by decayed points: below the first bound is tier 1.
+CONNECTION_TIER_BOUNDS = (3.0, 8.0)
+# A line whose last interaction is older than this is drawn thin and faint. It
+# is removed only when the interactions themselves are undone.
+CONNECTION_FAINT_DAYS = 30
+# "Ongoing": interaction on at least this many distinct days within the window.
+CONNECTION_ONGOING_DAYS = 2
+CONNECTION_ONGOING_WINDOW_DAYS = 14
+# Interactions before the launch of public lines are not shown as lines: people
+# did them before they were told it would be visible.
+CONNECTIONS_SINCE = "2026-10-06T00:00:00+00:00"
+CONNECTION_CACHE_SECONDS = 30
+
+# Island growth. score = people*W + sqrt-per-person posts*W + interactions*W.
+GROWTH_WEIGHTS = {"people": 1.0, "posts": 0.6, "interactions": 0.8}
+# One actor counts once per post per day, and at most this many times per
+# island per day, so a burst of taps cannot build a city.
+GROWTH_DAILY_CAP = 5
+GROWTH_RECENT_DAYS = 14
+# The shown score may fall by at most this share per update.
+GROWTH_MAX_SHRINK = 0.20
+# 小屋・村・港町・町・都市. Lower bound of each tier.
+GROWTH_TIERS = ("小屋", "村", "港町", "町", "都市")
+GROWTH_TIER_BOUNDS = (0.0, 8.0, 20.0, 45.0, 90.0)
+# A tier is lost only when the score falls this far below its lower bound.
+GROWTH_TIER_HYSTERESIS = 0.20
+
+# Island tracking.
+ISLAND_MATCH_OVERLAP = 0.5        # share of the smaller island's posts
+ISLAND_RUN_MIN_SECONDS = 600      # run on map open, at most every 10 minutes
+ISLAND_QUIET_DAYS = 14
+AWAY_DIGEST_COUNT = 5
+# Landmarks by tier index: born with 1, 港町 2, 都市 3.
+LANDMARK_COUNT_BY_TIER = (1, 1, 2, 2, 3)
+LANDMARK_SWAP_DAYS = 3
+LANDMARK_CANDIDATES = (
+    "灯台", "風車", "時計塔", "図書館", "工房", "温室",
+    "天文台", "市場", "港の桟橋", "鍛冶場", "学び舎", "茶屋",
+    "劇場", "庭園", "畑", "釣り小屋", "画廊", "音楽堂",
+    "研究所", "パン屋", "診療所", "見張り台", "運動場", "広場",
+)
+
+# Notifications.
+NOTIFICATION_CATEGORIES = ("reply", "reaction", "connection", "similar", "island")
+NOTIFICATION_CATEGORY_OF = {
+    "like": "reaction", "help": "reaction", "join": "reaction",
+    "comment": "reply", "reply": "reply",
+    "connection": "connection", "similar": "similar", "island": "island",
+}
+REACTION_GROUP_MINUTES = 10
+ISLAND_NOTIFY_PER_DAY = 1

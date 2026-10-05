@@ -14,6 +14,11 @@ that cannot be done anywhere else:
                           Japanese tokenizer
   GET /api/neighbors      turning a cosine into 似てる度 needs the anchors
   GET /api/config         what the browser needs to draw the same ground
+  PUT /api/account/me     the four profile fields are embedded here, and the
+                          vectors never leave the server
+  GET /api/connections    one line per pair of people, from every interaction
+  GET /api/similar-people needs the hidden profile vectors
+  GET /api/changes        islands that remember: merges, splits, renames, tiers
 
 Everything at request time is a pure forward pass through frozen artifacts.
 Nothing here fits a vectorizer, retrains an encoder, or recomputes a layout, so
@@ -35,8 +40,9 @@ import secrets
 import threading
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -46,10 +52,21 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from core import affinity as people
 from core import auth
+from core import connections as lines
+from core import growth
+from core import island_tracking
+from core import notifications as notices
 from core.clustering import assign_cluster, name_group
 from core.config import (
+    AWAY_DIGEST_COUNT,
+    CONNECTION_CACHE_SECONDS,
+    CONNECTIONS_SINCE,
     ISLAND_COLORS,
+    ISLAND_NOTIFY_PER_DAY,
+    ISLAND_RUN_MIN_SECONDS,
+    LANDMARK_CANDIDATES,
     MAP_MAX,
     MAP_MIN,
     MAP_POST_LIMIT,
@@ -64,7 +81,15 @@ from core.config import (
     MOTIVATION_DEFAULT,
     MOTIVATION_MAX,
     MOTIVATION_MIN,
+    NOTIFICATION_CATEGORIES,
     ORBIT_NEIGHBOR_COUNT,
+    PROFILE_TEXT_FIELDS,
+    PROFILE_TEXT_LENGTH,
+    PROFILE_TOPIC_LENGTH,
+    PROFILE_TOPIC_MAX,
+    SIMILAR_NOTIFY_PER_DAY,
+    SIMILAR_NOTIFY_THRESHOLD,
+    SIMILAR_PEOPLE_COUNT,
     TAGS,
 )
 from core.encoder import load_encoder
@@ -107,6 +132,10 @@ ISLAND_CACHE_SECONDS = 60
 # Naming reads this many of the most energetic live posts. Past it the tail
 # contributes puddles that cannot carry a name anyway.
 NAMING_POST_LIMIT = 5000
+# Island tracking starts itself from /api/islands and /api/changes. The test
+# suite turns that off and calls track_islands() directly, so no background
+# thread is still writing when a test swaps the store.
+ISLAND_AUTO_TRACK = os.environ.get("ISLANDS_AUTO_TRACK", "1") == "1"
 
 _logger = logging.getLogger(__name__)
 
@@ -123,6 +152,15 @@ _rate_lock = threading.Lock()
 # than on every request.
 _islands_cache = {"stamp": 0.0, "value": [], "key": None}
 _islands_lock = threading.Lock()
+
+# Lines between people. In a deployment the browser writes reactions and
+# comments straight to Supabase, so the server cannot know when a line changes;
+# it re-reads at most every CONNECTION_CACHE_SECONDS instead.
+_connections_cache = {"stamp": 0.0, "value": None}
+_connections_lock = threading.Lock()
+# Held while one tracking step runs in this process. The database claim
+# (claim_island_run) is what keeps two instances apart.
+_island_run_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -289,6 +327,22 @@ class AccountPatch(BaseModel):
     link_url: str | None = None
     icon_id: str | None = None
     avatar_path: str | None = None
+    # The people layer. Only this server writes them: each is embedded on save
+    # and the vectors are what 似ている人 compares.
+    topics: list[str] | None = None
+    goal: str | None = None
+    seeking: str | None = None
+    offering: str | None = None
+
+
+class NotificationSetting(BaseModel):
+    category: str
+    push: bool
+    in_app: bool
+
+
+class NotificationSettings(BaseModel):
+    settings: list[NotificationSetting]
 
 
 # --------------------------------------------------------------------------
@@ -453,6 +507,256 @@ def invalidate_islands():
         _islands_cache["stamp"] = 0.0
 
 
+# --------------------------------------------------------------------------
+# people layer: lines, similar people, islands that remember
+# --------------------------------------------------------------------------
+
+def clean_topics(values):
+    """At most PROFILE_TOPIC_MAX distinct words, each 1..PROFILE_TOPIC_LENGTH long."""
+    out, seen = [], set()
+    for value in values or []:
+        word = sanitize(" ".join(str(value).split()))[:PROFILE_TOPIC_LENGTH].strip()
+        key = people.normalise_topic(word)
+        if not word or key in seen:
+            continue
+        seen.add(key)
+        out.append(word)
+        if len(out) >= PROFILE_TOPIC_MAX:
+            break
+    return out
+
+
+def clean_profile_text(value):
+    """One sentence: whitespace folded, contact details hidden, capped. Empty is None."""
+    if value is None:
+        return None
+    return sanitize(" ".join(str(value).split()))[:PROFILE_TEXT_LENGTH].strip() or None
+
+
+def dense_mean():
+    """The seed corpus mean that profile vectors are centred on, or None."""
+    return (state.get("cosine_centroid") or {}).get("dense_mean")
+
+
+def people_index():
+    """Everybody's profile fields, hidden vectors and post centroid, by id."""
+    store = state["store"]
+    centroids = store.post_centroids()
+    index = {}
+    for row in store.profile_vectors():
+        row["centroid"] = (centroids.get(row["id"]) or {}).get("centroid")
+        index[row["id"]] = row
+    return index
+
+
+def similar_people(account_id, limit=SIMILAR_PEOPLE_COUNT):
+    index = people_index()
+    me = index.get(account_id)
+    if me is None:
+        return []
+    return people.rank_similar(
+        me, list(index.values()), limit=limit,
+        dense_mean=dense_mean(), post_anchors=state.get("cosine_anchors"),
+    )
+
+
+def notify_similar(account_id):
+    """Tell the people a newly filled profile is close to.
+
+    Once per pair, ever, and at most SIMILAR_NOTIFY_PER_DAY a day for each
+    person told. The rows are written whatever the settings say: settings only
+    decide whether a row interrupts (push, badge), never whether it exists.
+    """
+    store = state["store"]
+    day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+    rows = []
+    for match in similar_people(account_id, limit=50):
+        if match["score"] < SIMILAR_NOTIFY_THRESHOLD:
+            break
+        earlier = store.recent_notifications("similar", None, recipient_id=match["id"])
+        if any(row.get("actor_id") == account_id for row in earlier):
+            continue
+        today = [row for row in earlier if notices.parse_time(row["created_at"]) >= day_ago]
+        if len(today) >= SIMILAR_NOTIFY_PER_DAY:
+            continue
+        rows.append({
+            "recipient_id": match["id"], "actor_id": account_id, "type": "similar",
+            "payload": {"score": match["score"], "shared_topics": match["shared_topics"]},
+        })
+    store.insert_notifications(rows)
+    return rows
+
+
+def connection_lines(force=False):
+    """Every line between two people, strongest first (cached briefly)."""
+    now = time.time()
+    with _connections_lock:
+        cached = _connections_cache["value"]
+        if cached is not None and not force and now - _connections_cache["stamp"] < CONNECTION_CACHE_SECONDS:
+            return cached
+    store = state["store"]
+    events = store.interaction_events(since=CONNECTIONS_SINCE)
+    # A line ends on each person's most-touched post; somebody whose posts the
+    # other never touched is drawn from their most energetic one.
+    fallback, best = {}, {}
+    for post in store.list_terms(limit=NAMING_POST_LIMIT):
+        author = post.get("author_id")
+        energy = float(post.get("energy") or 0.0)
+        if author and (author not in best or energy > best[author]):
+            best[author], fallback[author] = energy, post["id"]
+    value = lines.build(events, fallback_posts=fallback)
+    with _connections_lock:
+        _connections_cache.update({"stamp": now, "value": value})
+    return value
+
+
+def invalidate_connections():
+    with _connections_lock:
+        _connections_cache["stamp"] = 0.0
+
+
+def landmark_ranker(islands, posts_by_id):
+    """island -> LANDMARK_CANDIDATES ordered by closeness to the island's words.
+
+    One encode call for every island; the candidates are encoded once per
+    process. Both sides are centred on the seed mean, as profiles are.
+    """
+    model = state["model"]
+    texts = []
+    for island in islands:
+        counts = Counter()
+        for post_id in island.get("post_ids") or []:
+            counts.update(set((posts_by_id.get(post_id) or {}).get("terms") or []))
+        words = [island.get("name") or ""] + [word for word, _ in counts.most_common(8)]
+        texts.append("、".join(word for word in words if word) or "島")
+    if not texts:
+        return None
+    if state.get("landmark_vectors") is None:
+        state["landmark_vectors"] = np.asarray(
+            model.encode(list(LANDMARK_CANDIDATES), normalize_embeddings=True), dtype=float)
+    mean = dense_mean()
+
+    def unit(vector):
+        vector = np.asarray(people.centre(vector, mean), dtype=float)
+        norm = float(np.linalg.norm(vector))
+        return vector / norm if norm else vector
+
+    candidates = np.array([unit(row) for row in state["landmark_vectors"]])
+    ranked = {}
+    for island, vector in zip(islands, np.asarray(model.encode(texts, normalize_embeddings=True), dtype=float)):
+        scores = candidates @ unit(vector)
+        order = sorted(range(len(LANDMARK_CANDIDATES)), key=lambda k: (-float(scores[k]), k))
+        ranked[id(island)] = [LANDMARK_CANDIDATES[k] for k in order]
+    return lambda island: ranked.get(id(island))
+
+
+# Changes worth interrupting the people on the island for. Going quiet is in
+# the log but tells nobody.
+ISLAND_NOTIFY_KINDS = ("birth", "merge", "split", "rename", "tier", "landmark")
+
+
+def notify_islands(events, states, now):
+    """One 'island' notification per person per island per day at most."""
+    store = state["store"]
+    authors = {row["id"]: row.get("author_ids") or [] for row in states if row.get("active", True)}
+    sent = Counter(
+        (row["recipient_id"], row.get("island_id"))
+        for row in store.recent_notifications("island", now - timedelta(days=1))
+    )
+    rows = []
+    for event in events:
+        if event["kind"] not in ISLAND_NOTIFY_KINDS:
+            continue
+        for person in authors.get(event["island_id"], []):
+            key = (person, event["island_id"])
+            if sent[key] >= ISLAND_NOTIFY_PER_DAY:
+                continue
+            sent[key] += 1
+            name = (event.get("after") or {}).get("name") or (event.get("before") or {}).get("name")
+            rows.append({
+                "recipient_id": person, "actor_id": None, "type": "island",
+                "island_id": event["island_id"], "event_id": event["id"],
+                "payload": {"kind": event["kind"], "cause": event["cause"], "name": name},
+            })
+    store.insert_notifications(rows)
+    return rows
+
+
+def track_islands(now=None):
+    """One tracking step: match the live islands to the stored ones, save, notify.
+
+    The first step ever records every island as born but tells nobody: those
+    islands were there before anybody was watching.
+    """
+    store = state["store"]
+    now = now or datetime.now(timezone.utc)
+    named = live_islands(force=True)
+    posts_by_id = {post["id"]: post for post in store.list_terms(limit=NAMING_POST_LIMIT)}
+    events = store.interaction_events(since=None)
+    previous = store.island_states()
+    try:
+        ranker = landmark_ranker(named, posts_by_id)
+    except Exception:  # an embedding outage costs the landmarks, not the step
+        _logger.exception("landmark ranking failed")
+        ranker = None
+    result = island_tracking.update(previous, named, posts_by_id, events, now=now, rank_landmarks=ranker)
+    store.save_island_states(result["states"])
+    store.add_island_events(result["events"])
+    result["notifications"] = notify_islands(result["events"], result["states"], now) if previous else []
+    return result
+
+
+def maybe_track_islands():
+    """Start a tracking step in the background if this caller wins the claim."""
+    if not ISLAND_AUTO_TRACK or not _island_run_lock.acquire(blocking=False):
+        return False
+    try:
+        claimed = state["store"].claim_island_run(ISLAND_RUN_MIN_SECONDS)
+    except StoreError:
+        claimed = False
+    if not claimed:
+        _island_run_lock.release()
+        return False
+
+    def work():
+        try:
+            track_islands()
+        except Exception:
+            _logger.exception("island tracking failed")
+        finally:
+            _island_run_lock.release()
+
+    threading.Thread(target=work, name="island-tracking", daemon=True).start()
+    return True
+
+
+def with_tracked_state(payload):
+    """Live islands with the id, tier and landmarks of the island they continue."""
+    try:
+        states = state["store"].island_states()
+    except StoreError:
+        return payload
+    _links, identity = island_tracking.match(states, payload)
+    out = []
+    for index, island in enumerate(payload):
+        row = dict(island)
+        known = states[identity[index]] if index in identity else None
+        if known:
+            row.update({
+                "island_id": known["id"],
+                "tier": known.get("tier", 0),
+                "tier_name": growth.tier_name(known.get("tier", 0)),
+                "score": known.get("score_shown"),
+                "landmarks": [item["name"] for item in known.get("landmarks") or []],
+            })
+        out.append(row)
+    return out
+
+
+# Which changes count as big for somebody with no stake in the island.
+_DIGEST_WEIGHT = {"merge": 3, "split": 3, "birth": 2, "tier": 2, "rename": 1, "landmark": 1, "quiet": 0}
+
+
 def similarity_of(cosine):
     """A cosine as 似てる度, or None when this build cannot say."""
     anchors = state.get("cosine_anchors")
@@ -596,11 +900,132 @@ def health():
 
 @app.get("/api/islands")
 def islands(response: Response):
-    payload = live_islands()
+    maybe_track_islands()
+    payload = with_tracked_state(live_islands())
     # Everyone looking at the map wants the same answer, and it changes on a
     # timer rather than per viewer. Worth a CDN hop if one is ever put in front.
     response.headers["Cache-Control"] = "public, max-age=30"
     return {"islands": payload}
+
+
+@app.get("/api/connections")
+def connections(response: Response, person: str = ""):
+    """Lines between people. Public: a line is visible to everybody, not just the two."""
+    try:
+        rows = connection_lines()
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    if person:
+        rows = [row for row in rows if person in (row["a"], row["b"])]
+    response.headers["Cache-Control"] = f"public, max-age={CONNECTION_CACHE_SECONDS}"
+    return {"connections": rows, "since": CONNECTIONS_SINCE}
+
+
+@app.get("/api/similar-people")
+def similar_people_route(request: Request, account: str = ""):
+    """The people most like `account` (or the signed-in person), best first."""
+    account = account or current_user(request)
+    store = state["store"]
+    try:
+        ranked = similar_people(account)
+        out = []
+        for row in ranked:
+            person = store.get_account(row["id"]) or {}
+            out.append({
+                **row,
+                "display_name": person.get("display_name", ""),
+                "icon_id": person.get("icon_id", "0"),
+                "avatar_path": person.get("avatar_path"),
+                "topics": person.get("topics") or [],
+                "goal": person.get("goal"),
+            })
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    return {"people": out}
+
+
+def _parse_since(value):
+    if not value:
+        return None
+    try:
+        return notices.parse_time(value).isoformat()
+    except ValueError:
+        raise HTTPException(status_code=422, detail="since は日時で指定してください。")
+
+
+@app.get("/api/changes")
+def changes(since: str = "", limit: int = 50):
+    """What happened to the islands: place, cause and the counts before and after."""
+    maybe_track_islands()
+    limit = max(1, min(int(limit), 200))
+    try:
+        rows = state["store"].list_island_events(since=_parse_since(since), limit=limit)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    return {"changes": rows}
+
+
+@app.get("/api/changes/digest")
+def changes_digest(request: Request):
+    """While you were away: your islands first, then your people's, then big news.
+
+    Reading it records this visit, so the next digest starts from now.
+    """
+    user_id = current_user(request)
+    store = state["store"]
+    maybe_track_islands()
+    try:
+        previous = store.touch_last_seen(user_id)
+        start = previous or (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        rows = store.list_island_events(since=start, limit=500)
+        islands_by_id = {row["id"]: row for row in store.island_states(active_only=False)}
+        friends = lines.partners(connection_lines(), user_id)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+
+    picked = []
+    for row in rows:
+        authors = set((islands_by_id.get(row["island_id"]) or {}).get("author_ids") or [])
+        weight = _DIGEST_WEIGHT.get(row["kind"], 0)
+        if user_id in authors:
+            reason, rank = "mine", 0
+        elif authors & friends:
+            reason, rank = "connected", 1
+        elif weight >= 2:
+            reason, rank = "big", 2
+        else:
+            continue
+        picked.append((rank, -weight, row, reason))
+    picked.sort(key=lambda item: (item[0], item[1], -notices.parse_time(item[2]["created_at"]).timestamp()))
+    return {
+        "since": previous,
+        "changes": [{**row, "reason": reason} for _, _, row, reason in picked[:AWAY_DIGEST_COUNT]],
+    }
+
+
+@app.get("/api/notification-settings")
+def notification_settings(request: Request):
+    """Push and in-app switches for each of the five kinds. No row means on."""
+    user_id = current_user(request)
+    try:
+        rows = state["store"].get_notification_settings(user_id)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    return {"settings": notices.merge_settings(rows), "categories": list(NOTIFICATION_CATEGORIES)}
+
+
+@app.put("/api/notification-settings")
+def put_notification_settings(payload: NotificationSettings, request: Request):
+    user_id = current_user(request)
+    rows = [item.model_dump() for item in payload.settings]
+    unknown = [row["category"] for row in rows if row["category"] not in NOTIFICATION_CATEGORIES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"知らない通知の種類です: {', '.join(unknown)}")
+    try:
+        saved = state["store"].put_notification_settings(user_id, rows)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
+    return {"settings": notices.merge_settings(saved), "categories": list(NOTIFICATION_CATEGORIES)}
 
 
 @app.get("/api/map/bounds")
@@ -865,6 +1290,7 @@ class OtpVerify(BaseModel):
 class CommentCreate(BaseModel):
     post_id: str
     body: str
+    reply_to: str | None = None
 
 
 class ReactionChange(BaseModel):
@@ -995,9 +1421,13 @@ def local_add_comment(payload: CommentCreate, request: Request):
     if not body:
         raise HTTPException(status_code=422, detail="メッセージを入力してください。")
     try:
-        return state["store"].add_comment(payload.post_id, user_id, body)
-    except StoreError:
+        comment = state["store"].add_comment(payload.post_id, user_id, body, reply_to=payload.reply_to)
+    except StoreError as error:
+        if str(error) == "reply_to":
+            raise HTTPException(status_code=422, detail="返信先のメッセージが見つかりませんでした。")
         raise HTTPException(status_code=404, detail="投稿が見つかりませんでした。")
+    invalidate_connections()
+    return comment
 
 
 @app.delete("/api/local/comments/{comment_id}")
@@ -1006,6 +1436,7 @@ def local_delete_comment(comment_id: str, request: Request):
     user_id = current_user(request)
     if not state["store"].delete_comment(comment_id, user_id):
         raise HTTPException(status_code=403, detail="削除できませんでした。")
+    invalidate_connections()
     return {"ok": True}
 
 
@@ -1014,6 +1445,7 @@ def local_add_reaction(payload: ReactionChange, request: Request):
     require_local()
     user_id = current_user(request)
     created = state["store"].add_reaction(payload.post_id, user_id, payload.kind)
+    invalidate_connections()
     return {"ok": True, "created": created}
 
 
@@ -1021,7 +1453,9 @@ def local_add_reaction(payload: ReactionChange, request: Request):
 def local_remove_reaction(post_id: str, kind: str, request: Request):
     require_local()
     user_id = current_user(request)
-    return {"ok": state["store"].remove_reaction(post_id, user_id, kind)}
+    removed = state["store"].remove_reaction(post_id, user_id, kind)
+    invalidate_connections()
+    return {"ok": removed}
 
 
 @app.get("/api/local/reactions/mine")
@@ -1036,6 +1470,24 @@ def local_notifications(request: Request):
     require_local()
     user_id = current_user(request)
     return {"notifications": state["store"].list_notifications(user_id)}
+
+
+@app.get("/api/local/notifications/feed")
+def local_notification_feed(request: Request, limit: int = 50):
+    """notification_feed() for local mode: reactions grouped, settings applied.
+
+    `interrupts` is false for a kind switched off for in_app; such entries stay
+    in the list and only stop counting towards `unread`.
+    """
+    require_local()
+    user_id = current_user(request)
+    store = state["store"]
+    settings = notices.merge_settings(store.get_notification_settings(user_id))
+    feed = notices.group_feed(store.list_notifications(user_id, limit=500), max(1, min(int(limit), 100)))
+    for entry in feed:
+        entry["interrupts"] = notices.allows(settings, entry["type"], "in_app")
+    unread = sum(1 for entry in feed if entry["unread"] and entry["interrupts"])
+    return {"notifications": feed, "unread": unread, "settings": settings}
 
 
 @app.post("/api/local/notifications/read")
@@ -1131,10 +1583,35 @@ def account_update(payload: AccountPatch, request: Request):
             # Trimming to empty is the same request as clearing it.
             fields[key] = str(fields[key]).strip()[:cap] or None
 
+    store = state["store"]
+    touched = [key for key in people.VECTOR_FIELDS if key in fields]
+    if "topics" in fields:
+        fields["topics"] = clean_topics(fields["topics"])
+    for key in PROFILE_TEXT_FIELDS:
+        if key in fields:
+            fields[key] = clean_profile_text(fields[key])
     try:
-        return {"account": state["store"].upsert_account(user_id, fields)}
+        if touched:
+            current = store.get_account(user_id) or {}
+            merged = {key: fields[key] if key in fields else current.get(key) for key in people.VECTOR_FIELDS}
+            try:
+                # All four, in one call: unchanged texts are cache hits under
+                # Gemini, and a vector missed by an earlier outage is repaired.
+                fields.update(people.embed_profile(state["model"], merged))
+            except Exception:
+                # The words are saved anyway; a field without a vector is just
+                # left out of 似ている人 until the next save.
+                _logger.exception("profile embedding failed")
+                fields.update({f"vec_{key}": None for key in touched})
+        account = store.upsert_account(user_id, fields)
     except StoreError:
         raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
+    if touched and any(fields.get(f"vec_{key}") is not None for key in people.VECTOR_FIELDS):
+        try:
+            notify_similar(user_id)
+        except StoreError:
+            _logger.exception("similar-person notification failed")
+    return {"account": account}
 
 
 # --------------------------------------------------------------------------

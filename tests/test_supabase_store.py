@@ -29,14 +29,17 @@ from core.store import MemoryStore, StoreError, SupabaseStore  # noqa: E402
 SERVICE_KEY = "test-service-role-key"
 
 # table -> {id: row}
-TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notifications": {}}
+TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notifications": {},
+          "notification_settings": {}, "islands_state": {}, "island_events": {}}
 SEQUENCE = {"n": 0}
+ISLAND_RUN = {"at": None}
 
 
 def reset():
     for rows in TABLES.values():
         rows.clear()
     SEQUENCE["n"] = 0
+    ISLAND_RUN["at"] = None
 
 
 def stamp():
@@ -86,6 +89,11 @@ class FakePostgrest(BaseHTTPRequestHandler):
                 elif value.startswith("in."):
                     wanted = set(value[4:-1].split(","))
                     checks.append(lambda row, k=key, v=wanted: str(row.get(k)) in v)
+                elif value == "is.true":
+                    checks.append(lambda row, k=key: row.get(k) is True)
+                elif value.startswith("gte."):
+                    wanted = value[4:]
+                    checks.append(lambda row, k=key, v=wanted: str(row.get(k)) >= v)
         return lambda row: all(check(row) for check in checks)
 
     def _project(self, rows, select):
@@ -165,6 +173,12 @@ class FakePostgrest(BaseHTTPRequestHandler):
             return self._rpc(table, record)
 
         rows = TABLES[table]
+        select = parse_qs(parsed.query).get("select", ["*"])[0]
+
+        if isinstance(record, list):  # bulk insert / upsert
+            saved = [self._insert(table, rows, item, parsed, prefer) for item in record]
+            saved = [row for row in saved if row is not None]
+            return self._send(201, self._project(saved, select) if "representation" in prefer else None)
 
         # Upsert on a named conflict target: accounts on id, reactions on the
         # (post, actor, kind) triple. This is the behaviour the store leans on
@@ -176,7 +190,7 @@ class FakePostgrest(BaseHTTPRequestHandler):
                 if all(existing.get(key) == record.get(key) for key in keys):
                     if "merge-duplicates" in prefer:
                         existing.update(record)
-                        return self._send(200, [existing])
+                        return self._send(200, self._project([existing], select))
                     # ignore-duplicates: an empty body, not an error.
                     return self._send(201, [] if "representation" in prefer else None)
 
@@ -193,10 +207,72 @@ class FakePostgrest(BaseHTTPRequestHandler):
                       ("like_count", "help_count", "join_count", "comment_count")) * 5
             )
         rows[row["id"]] = row
-        select = parse_qs(parsed.query).get("select", ["*"])[0]
         self._send(201, self._project([row], select) if "representation" in prefer else None)
 
+    def _insert(self, table, rows, record, parsed, prefer):
+        """One row of a bulk POST, with the same upsert rule as a single one."""
+        conflict = parse_qs(parsed.query).get("on_conflict", [None])[0]
+        if conflict:
+            keys = conflict.split(",")
+            for existing in rows.values():
+                if all(existing.get(key) == record.get(key) for key in keys):
+                    if "merge-duplicates" in prefer:
+                        existing.update(record)
+                        return existing
+                    return None
+        row = dict(record)
+        row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("created_at", stamp())
+        rows[row["id"]] = row
+        return row
+
     def _rpc(self, name, args):
+        if name == "profile_vectors":
+            keys = ("id", "topics", "goal", "seeking", "offering",
+                    "vec_topics", "vec_goal", "vec_seeking", "vec_offering")
+            return self._send(200, [{key: row.get(key) for key in keys}
+                                    for row in TABLES["accounts"].values()])
+        if name == "account_post_centroids":
+            groups = {}
+            for row in TABLES["posts"].values():
+                if row.get("deleted_at") is None and row.get("vec_c") is not None:
+                    vector = [float(v) for v in str(row["vec_c"]).strip("[]").split(",")]
+                    groups.setdefault(row["author_id"], []).append(vector)
+            return self._send(200, [
+                {"author_id": author,
+                 "centroid": "[" + ",".join(str(sum(col) / len(vs)) for col in zip(*vs)) + "]",
+                 "post_count": len(vs)}
+                for author, vs in groups.items()
+            ])
+        if name == "interaction_events":
+            out = []
+            for row in TABLES["reactions"].values():
+                post = TABLES["posts"].get(row["post_id"]) or {}
+                if post.get("deleted_at") is None and row["actor_id"] != post.get("author_id") \
+                        and str(row.get("created_at")) >= args["since"]:
+                    out.append({"actor_id": row["actor_id"], "post_author_id": post.get("author_id"),
+                                "post_id": row["post_id"], "kind": row["kind"],
+                                "reply_author_id": None, "created_at": row["created_at"]})
+            for row in TABLES["comments"].values():
+                post = TABLES["posts"].get(row["post_id"]) or {}
+                parent = TABLES["comments"].get(row.get("reply_to")) or {}
+                if row.get("deleted_at") or post.get("deleted_at"):
+                    continue
+                if row["author_id"] == post.get("author_id") and \
+                        parent.get("author_id") in (None, row["author_id"]):
+                    continue
+                out.append({"actor_id": row["author_id"], "post_author_id": post.get("author_id"),
+                            "post_id": row["post_id"],
+                            "kind": "reply" if row.get("reply_to") else "comment",
+                            "reply_author_id": parent.get("author_id"),
+                            "created_at": row["created_at"]})
+            return self._send(200, out)
+        if name == "claim_island_run":
+            # The fake's clock is the stamp() sequence; one claim per test run is enough.
+            if ISLAND_RUN["at"] is not None:
+                return self._send(200, False)
+            ISLAND_RUN["at"] = stamp()
+            return self._send(200, True)
         if name == "map_posts":
             rows = [
                 row for row in TABLES["posts"].values()
@@ -517,6 +593,12 @@ def test_the_two_backends_agree(store):
         "add_comment", "list_comments", "delete_comment",
         "list_notifications", "mark_notifications_read", "unread_count",
         "add_report",
+        # people layer, islands and notification settings (social foundation)
+        "insert_notifications", "recent_notifications",
+        "get_notification_settings", "put_notification_settings",
+        "profile_vectors", "post_centroids", "interaction_events", "touch_last_seen",
+        "island_states", "save_island_states", "add_island_events", "list_island_events",
+        "claim_island_run",
     ]
     for method in surface:
         assert hasattr(memory, method), f"MemoryStore is missing {method}"
@@ -629,3 +711,78 @@ def test_error_message_does_not_leak_the_response_body(flaky, monkeypatch):
     message = str(caught.value)
     assert "internal detail" not in message
     assert "service unavailable" not in message
+
+
+# --------------------------------------------------------------------------
+# social foundation: profile vectors, replies, islands, settings
+# --------------------------------------------------------------------------
+
+def test_profile_vectors_are_written_as_text_and_never_returned(store):
+    """The four vectors go in as pgvector text and stay out of every account read."""
+    person = str(uuid.uuid4())
+    saved = store.upsert_account(person, {
+        "display_name": "ベクトル", "icon_id": "1", "topics": ["キャンプ"],
+        "goal": "山でテント泊", "vec_topics": [0.5, 0.25], "vec_goal": [1.0, 0.0],
+    })
+    assert not any(key.startswith("vec_") for key in saved)
+    assert TABLES["accounts"][person]["vec_topics"] == "[0.5,0.25]"
+    assert not any(key.startswith("vec_") for key in store.get_account(person))
+    row = next(r for r in store.profile_vectors() if r["id"] == person)
+    assert row["vec_topics"] == [0.5, 0.25]
+    assert row["vec_seeking"] is None
+    assert row["topics"] == ["キャンプ"]
+
+
+def test_a_reply_must_answer_a_comment_on_the_same_post(store):
+    author = account(store, "返信の人")
+    first = store.insert_post(sample(author))
+    second = store.insert_post(sample(author, body="別の投稿です。山の話をしましょう。"))
+    parent = store.add_comment(first["id"], author, "親のコメント")
+    reply = store.add_comment(first["id"], author, "返信", reply_to=parent["id"])
+    assert reply["reply_to"] == parent["id"]
+    with pytest.raises(StoreError):
+        store.add_comment(second["id"], author, "よその返信", reply_to=parent["id"])
+
+
+def test_interaction_events_and_centroids_come_from_rpc(store):
+    owner = account(store, "投稿主")
+    visitor = account(store, "訪問者")
+    post = store.insert_post(sample(owner))
+    store.add_reaction(post["id"], visitor, "like")
+    events = [e for e in store.interaction_events("2000-01-01T00:00:00Z") if e["post_id"] == post["id"]]
+    assert events and events[0]["actor_id"] == visitor and events[0]["post_author_id"] == owner
+    centroid = store.post_centroids()[owner]
+    assert centroid["post_count"] == 1 and len(centroid["centroid"]) == 8
+
+
+def test_notification_settings_round_trip(store):
+    person = account(store, "設定の人")
+    assert store.get_notification_settings(person) == []
+    store.put_notification_settings(person, [{"category": "reaction", "push": False, "in_app": True}])
+    rows = store.put_notification_settings(person, [{"category": "reaction", "push": True, "in_app": False}])
+    assert [(r["category"], r["push"], r["in_app"]) for r in rows] == [("reaction", True, False)]
+
+
+def test_island_state_and_events_round_trip(store):
+    island = str(uuid.uuid4())
+    store.save_island_states([{"id": island, "name": "キャンプ島", "tier": 1, "active": True,
+                               "post_ids": [], "author_ids": []}])
+    store.save_island_states([{"id": island, "name": "焚き火島", "tier": 2, "active": True,
+                               "post_ids": [], "author_ids": []}])
+    rows = [r for r in store.island_states() if r["id"] == island]
+    assert len(rows) == 1 and rows[0]["name"] == "焚き火島"
+    store.add_island_events([{"id": str(uuid.uuid4()), "island_id": island, "kind": "rename",
+                              "cause": "言葉が変わった", "place": {"cx": 1, "cy": 2},
+                              "before": {"name": "キャンプ島"}, "after": {"name": "焚き火島"},
+                              "created_at": "2026-10-06T00:00:00+00:00"}])
+    events = store.list_island_events(island_ids=[island])
+    assert [e["kind"] for e in events] == ["rename"]
+    assert store.list_island_events(island_ids=[]) == []
+    assert store.claim_island_run(600) is True
+    assert store.claim_island_run(600) is False
+
+
+def test_touch_last_seen_returns_the_previous_visit(store):
+    person = account(store, "訪問の人")
+    assert store.touch_last_seen(person) is None
+    assert store.touch_last_seen(person) is not None

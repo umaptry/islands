@@ -92,6 +92,19 @@ Storageの `post-images` は `image_path` / `avatar_path` から参照する。
 | Storage | 公開画像の読み取り、UID先頭のパスへの本人書き込み、最大1MiBと画像MIME |
 | map_runtime（追加） | active_versionとmaintenanceを公開読み取り。変更はserviceのみ |
 | embedding_cache（追加） | モデル契約+入力のSHA-256でキー化。生本文は保存しない。ベクトルの読み書きはserviceのみ |
+| accounts の人の層（2026-10-06） | 話題・目標・探している相手・手伝えることは公開読み取り、書くのは `PUT /api/account/me`（service）だけ。埋め込んだ `vec_*` と `last_seen_at` は列の権限で誰にも読ませない |
+| comments.reply_to（2026-10-06） | 同じ投稿のコメントへの返信。トリガーが返信先へ `reply`、著者へ `comment` |
+| notification_settings / push_subscriptions（2026-10-06） | 本人だけ。通知5分類ごとの push・アプリ内の切り替えと Web Push の購読先 |
+| islands_state / island_events / island_runs（2026-10-06） | 島の追跡の状態と変化の記録。公開読み取り、書くのは service だけ。island_runs は1台だけが追跡するための取り合い用 |
+
+人の層の計算（似ている人・人と人の線・島の成長点と追跡）は Python（`core/affinity.py`・
+`core/connections.py`・`core/growth.py`・`core/island_tracking.py`）だけで行い、SQL に
+同じ計算を写さない（2つの実装がずれないように）。DB は元の行を service だけが呼べる
+RPC（`interaction_events`・`profile_vectors`・`account_post_centroids`）で渡す。
+島の追跡は定期実行を使わず、`/api/islands`・`/api/changes` が呼ばれたときに
+`claim_island_run(600)` を取れた1台が裏のスレッドで実行する。通知のまとめ
+（10分以内のリアクションを1件に）は、本番は RPC `notification_feed`、メモリ保存は
+`core/notifications.py` で同じ規則にしている。
 
 正本DB変更は `supabase/migrations/`。`supabase/schema.sql` は初期スキーマの資料であり、
 追加マイグレーションを含まない。新規環境は `supabase db reset`、既存環境は適用履歴を

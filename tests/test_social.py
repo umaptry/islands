@@ -8,6 +8,10 @@ people and two devices.
 
 from conftest import BOOKKEEPING, CAMPING_A, CAMPING_B
 
+# What a tap or a message tells the author. The first exchange between two
+# people also sends both a "connection", which these tests are not about.
+TAPS = {"like", "help", "join", "comment", "reply"}
+
 
 # --------------------------------------------------------------------------
 # counters
@@ -88,9 +92,13 @@ def test_the_author_is_told_and_the_actor_is_not(people):
     bannai.comment(post["id"], "いいですね")
 
     inbox = akari.inbox()
-    assert {row["type"] for row in inbox} == {"like", "comment"}
+    assert {row["type"] for row in inbox} == {"like", "comment", "connection"}
     assert all(row["actor"]["display_name"] == "ばんない" for row in inbox)
-    assert bannai.inbox() == [], "the person who tapped does not get told about it"
+    # The first exchange between two people is a new line on the map, and both
+    # ends hear about that. The tap itself is still only the author's news.
+    assert [row["type"] for row in bannai.inbox()] == ["connection"], (
+        "the person who tapped does not get told about it"
+    )
 
 
 def test_reacting_to_your_own_post_notifies_nobody(people):
@@ -109,9 +117,9 @@ def test_undoing_an_unread_reaction_withdraws_the_notification(people):
     post = akari.post(CAMPING_A)
 
     bannai.react(post["id"], "join")
-    assert len(akari.unread()) == 1
+    assert len(akari.unread(TAPS)) == 1
     bannai.unreact(post["id"], "join")
-    assert akari.unread() == [], "an un-tapped reaction should not leave a ghost"
+    assert akari.unread(TAPS) == [], "an un-tapped reaction should not leave a ghost"
 
 
 def test_a_notification_already_read_survives_the_undo(people, fresh_client):
@@ -127,7 +135,7 @@ def test_a_notification_already_read_survives_the_undo(people, fresh_client):
     assert akari.unread() == []
 
     bannai.unreact(post["id"], "help")
-    assert len(akari.inbox()) == 1, "a read notification is history, not state"
+    assert len(akari.inbox(TAPS)) == 1, "a read notification is history, not state"
 
 
 def test_marking_all_read_clears_the_badge(people, fresh_client):
@@ -136,12 +144,12 @@ def test_marking_all_read_clears_the_badge(people, fresh_client):
     post = akari.post(CAMPING_A)
     for kind in ("like", "help", "join"):
         bannai.react(post["id"], kind)
-    assert len(akari.unread()) == 3
+    assert len(akari.unread(TAPS)) == 3
 
     response = fresh_client.post(
         "/api/local/notifications/read", json={"ids": None}, headers=akari.headers
     )
-    assert response.json()["updated"] == 3
+    assert response.json()["updated"] == 4, "three taps and the new connection"
     assert akari.unread() == []
 
 
@@ -153,8 +161,8 @@ def test_nobody_can_read_somebody_elses_inbox(people):
 
     # There is no parameter to ask for another person's inbox: the route reads
     # the id out of the token. This is the test that says so.
-    assert akari.inbox()
-    assert bannai.inbox() == []
+    assert akari.inbox(TAPS)
+    assert bannai.inbox(TAPS) == []
 
 
 # --------------------------------------------------------------------------

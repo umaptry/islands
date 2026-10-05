@@ -1,5 +1,18 @@
 # 実装状態
 
+## 2026-10-06 更新（islands 改修 段1：データの土台）
+
+**手元のみ・本番未反映。** マイグレーション `supabase/migrations/20261006000000_social_foundation.sql` は本番 DB に未適用、コミット・push もしていない。
+
+- プロフィールに話題・目標・探している相手・手伝えることを追加し、保存時に埋め込む（`PUT /api/account/me`）。似ている人の上位5人（`/api/similar-people`）。
+- 人と人の線（`/api/connections`）：交流1回で引かれ、同じ2人は1本、取り消すと消える。
+- 島の成長点と段、島の追跡と変化の記録（`/api/changes`・`/api/changes/digest`）。
+- メッセージへの返信（`reply_to`）、通知の種類 `reply`・`connection`・`similar`・`island`、5分類ごとの push・アプリ内の切り替え（`/api/notification-settings`）、リアクションのまとめ。
+- MemoryStore と SupabaseStore の両方に同じ操作を追加。通知画面は新しい種類の文言とアイコンだけ足した（線・島・設定の画面は段2以降）。
+- テスト：Python 173件（`tests/test_people_layer.py` を追加）と画面側5件が手元で通る。pgTAP `supabase/tests/04_social_foundation.sql` は手元に Docker がないため CI でだけ動き、**未実行**。
+- 重み・境目・期間・公開日（`CONNECTIONS_SINCE`）は仮。`core/config.py` に注釈つきで置いた。
+- `supabase/schema.sql` には写していない（正本は `supabase/migrations/`。[構成資料](system_architecture.md) の方針どおり）。
+
 ## 2026-09-09 更新
 
 Geminiの本番移行とユーザー依頼によるデータ初期化は実施済み。詳細は [運用手順](operations_runbook.md)。localhost参照の起動画面・登録後ガイド・初回投稿の残差を追加修正し、4幅の比較撮影と16件のブラウザ回帰に成功。差分と意図的に維持する実運用仕様は [デザイン監査](design_audit.md) の最新節を参照。
