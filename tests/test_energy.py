@@ -244,6 +244,34 @@ def test_two_landmasses_never_take_the_same_name():
     assert named[0]["name"] == "焚き火"
 
 
+def test_a_big_landmass_is_split_into_named_regions():
+    """Q29: 麺類島 holds a ラーメン地方 and an うどん地方, one per frozen region."""
+    noodles = [post(id=f"r{i}", x=i * 10, y=0, cluster_id=1, terms=["麺類", "ラーメン"])
+               for i in range(5)]
+    noodles += [post(id=f"u{i}", x=50 + i * 10, y=0, cluster_id=2, terms=["麺類", "うどん"])
+                for i in range(5)]
+    named = name_landmasses(noodles, {}, fake_name_group)
+    assert len(named) == 1
+    assert named[0]["name"] == "麺類"
+    labels = sorted(region["label"] for region in named[0]["regions"])
+    assert labels == ["うどん地方", "ラーメン地方"]
+    ramen = next(r for r in named[0]["regions"] if r["name"] == "ラーメン")
+    assert sorted(ramen["post_ids"]) == [f"r{i}" for i in range(5)]
+
+
+def test_a_small_or_single_region_landmass_has_no_regions():
+    small = name_landmasses([
+        post(id="a", x=0, y=0, cluster_id=1, terms=["焚き火"]),
+        post(id="b", x=30, y=0, cluster_id=2, terms=["焚き火"]),
+    ], {}, fake_name_group)
+    assert small[0]["regions"] == []
+    one = name_landmasses(
+        [post(id=f"p{i}", x=i * 10, y=0, cluster_id=1, terms=["焚き火"]) for i in range(10)],
+        {}, fake_name_group,
+    )
+    assert one[0]["regions"] == []
+
+
 # --------------------------------------------------------------------------
 # the numbers that are written down twice
 # --------------------------------------------------------------------------
@@ -334,3 +362,29 @@ def test_the_browser_does_not_hard_code_the_radius_formula():
         if "BIOME_THRESHOLD" in code:
             offenders.append(f"{path.name} (biomes)")
     assert not offenders, f"{offenders} re-implement islands' rule instead of reading it"
+
+
+def test_the_heading_is_one_word_and_the_rest_is_the_topic_line():
+    """「来週 / 海馬島」 read as two places. One word heads the island; the
+    other words and the head count go on the line under it."""
+    joined = lambda term_lists, idf, taken=(): "木工 / 組み立て / 塗装"
+    named = name_landmasses([
+        post(id="a", x=0, y=0, terms=["木工"], author_id="u1"),
+        post(id="b", x=30, y=0, terms=["木工"], author_id="u2"),
+        post(id="c", x=40, y=0, terms=["木工"], author_id="u2"),
+    ], {}, joined)
+    assert named[0]["name"] == "木工"
+    assert named[0]["label"] == "木工島"
+    assert named[0]["topics"] == ["組み立て", "塗装"]
+    assert named[0]["people"] == 2
+
+
+def test_one_letter_and_markup_fragments_never_head_an_island():
+    from core.clustering import nameable, name_group
+    assert not nameable("木")
+    assert not nameable("ul")
+    assert nameable("AI")
+    assert nameable("木工")
+    name = name_group([["ul", "来週", "海馬"], ["ul", "来週", "海馬"]], {})
+    assert name.split(" / ")[0] == "海馬"
+    assert "ul" not in name and "来週" not in name

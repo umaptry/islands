@@ -29,7 +29,7 @@ MAX_RANKED_TERMS = 20
 # every candidate term to score the pair semantically, which is right for a
 # once-per-build pass over 1,000 documents and far too slow to run while
 # somebody waits for their join to come back.
-LIVE_LABEL_TERMS = 2
+LIVE_LABEL_TERMS = 3
 PAIR_SEMANTIC_FLOOR = 0.28
 TRIPLE_SEMANTIC_FLOOR = 0.32
 TRIPLE_MARGIN = 0.015
@@ -45,6 +45,21 @@ def _near_duplicate(left, right):
     if reading_a and reading_a == reading_b:
         return True
     return SequenceMatcher(None, a, b).ratio() >= 0.82
+
+
+def nameable(term):
+    """Could this word head an island?
+
+    A single character (「物」「木」) and short lower-case Latin fragments ("ul",
+    "px" - markup and units that slip through tokenisation) say nothing to a
+    reader. Upper-case acronyms such as "AI" or "DIY" are kept.
+    """
+    text = display_term(term).strip()
+    if len(text) <= 1:
+        return False
+    if text.isascii() and len(text) <= 2 and not text.isupper():
+        return False
+    return True
 
 
 def name_group(term_lists, idf, taken=()):
@@ -69,7 +84,7 @@ def name_group(term_lists, idf, taken=()):
     document_frequency = Counter()
     for terms in lists:
         for term in set(terms):
-            if term and term not in DISPLAY_STOP_WORDS:
+            if term and term not in DISPLAY_STOP_WORDS and nameable(term):
                 document_frequency[term] += 1
     if not document_frequency:
         return ""

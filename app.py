@@ -401,7 +401,8 @@ def clean_body(raw):
     if len(text) < MIN_TEXT_LENGTH:
         raise HTTPException(
             status_code=422,
-            detail=f"本文は{MIN_TEXT_LENGTH}字以上でお願いします（現在{len(text)}字）。",
+            detail=("本文を書いてください。" if MIN_TEXT_LENGTH <= 1
+                    else f"本文は{MIN_TEXT_LENGTH}字以上でお願いします（現在{len(text)}字）。"),
         )
     return text
 
@@ -748,6 +749,7 @@ def with_tracked_state(payload):
                 "tier_name": growth.tier_name(known.get("tier", 0)),
                 "score": known.get("score_shown"),
                 "landmarks": [item["name"] for item in known.get("landmarks") or []],
+                "quiet": bool(known.get("quiet")),
             })
         out.append(row)
     return out

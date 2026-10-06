@@ -329,17 +329,17 @@ def test_a_deleted_post_leaves_the_map_but_not_the_conversation(people, fresh_cl
 def test_a_post_shorter_than_the_floor_is_refused(people, fresh_client):
     akari = people("a@example.com", "あかり")
     response = fresh_client.post(
-        "/api/posts", json={"body": "短い"}, headers=akari.headers
+        "/api/posts", json={"body": "  "}, headers=akari.headers
     )
     assert response.status_code == 422
 
 
 def test_a_post_is_capped_at_islands_limit(people, fresh_client):
-    """140 characters, from islands' requirements. Trimmed, not rejected."""
+    """60 characters (Q36). Trimmed, not rejected."""
     akari = people("a@example.com", "あかり")
     long_text = "焚き火とコーヒーの話をします。" * 30
     post = akari.post(long_text)
-    assert len(post["body"]) == 140
+    assert len(post["body"]) == 60
 
 
 def test_only_the_four_tags_survive(people):

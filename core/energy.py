@@ -26,6 +26,8 @@ from core.config import (
     ENERGY_RADIUS_SCALE,
     ENERGY_RADIUS_TRIM,
     PLOT_TIERS,
+    REGION_MIN_GROUP,
+    REGION_MIN_POSTS,
 )
 
 # Ordered low to high. The client walks the same list.
@@ -220,6 +222,7 @@ def name_landmasses(posts, idf, name_group):
     landmasses = detect_landmasses(posts)
     taken = []
     named = []
+    masses = []
     for mass in landmasses:
         term_lists = [post.get("terms") or [] for post in mass["posts"]]
         name = name_group(term_lists, idf, taken)
@@ -229,8 +232,15 @@ def name_landmasses(posts, idf, name_group):
             # of genres nobody has posted under.
             continue
         taken.append(name)
+        # One word heads the island; the rest are its topic line. Joining two
+        # words with "/" made headings like 「来週 / 海馬島」 that read as two
+        # places, and was the longest thing on the map.
+        words = [part.strip() for part in name.split("/") if part.strip()]
+        name = words[0]
         named.append({
             "name": name,
+            "topics": words[1:],
+            "people": len({post.get("author_id") for post in mass["posts"] if post.get("author_id")}),
             "label": f"{name}{terrain_word(mass['size'])}",
             "cx": mass["cx"],
             "cy": mass["cy"],
@@ -239,7 +249,49 @@ def name_landmasses(posts, idf, name_group):
             "cluster_id": mass["cluster_id"],
             "post_ids": [post["id"] for post in mass["posts"]],
         })
+        masses.append(mass)
+    # Regions second, once every landmass has its name: a 地方 must not take a
+    # word a whole island further down the list would have been called by.
+    for island, mass in zip(named, masses):
+        island["regions"] = _regions(mass, idf, name_group, taken)
     return named
+
+
+def _regions(mass, idf, name_group, taken):
+    """Named parts of one big landmass, one per frozen region it spans.
+
+    The landmass keeps its own name; these are the 地方 inside it. Nothing is
+    returned unless at least two parts qualify, because one 地方 covering the
+    whole island would only repeat the island's name in other words.
+    """
+    if mass["size"] < REGION_MIN_POSTS:
+        return []
+    groups = {}
+    for post in mass["posts"]:
+        groups.setdefault(int(post.get("cluster_id") or 0), []).append(post)
+    parts = [members for _, members in sorted(groups.items())
+             if len(members) >= REGION_MIN_GROUP]
+    if len(parts) < 2:
+        return []
+    regions = []
+    for members in sorted(parts, key=len, reverse=True):
+        name = name_group([post.get("terms") or [] for post in members], idf, taken)
+        if not name:
+            continue
+        name = next((part.strip() for part in name.split("/") if part.strip()), "")
+        if not name:
+            continue
+        taken.append(name)
+        weights = [max(total_energy(post), 1e-6) for post in members]
+        total = sum(weights)
+        regions.append({
+            "name": name,
+            "label": f"{name}地方",
+            "cx": round(sum(float(p["x"]) * w for p, w in zip(members, weights)) / total, 2),
+            "cy": round(sum(float(p["y"]) * w for p, w in zip(members, weights)) / total, 2),
+            "post_ids": [post["id"] for post in members],
+        })
+    return regions if len(regions) >= 2 else []
 
 
 def constants():

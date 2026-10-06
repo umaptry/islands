@@ -82,4 +82,6 @@ DISPLAY_STOP_WORDS = LABEL_ONLY_STOP_WORDS | {
     # 「来年 / 税理士島」 - 来年 is when, not what, and the island is about the
     # 税理士 half. Same argument as the counters above.
     "来年", "今年", "去年", "毎年", "今度", "最近", "将来", "今後", "当時", "学生時代",
+    # 「来週 / 海馬島」 reached production the same way 来年 once did.
+    "来週", "今週", "先週", "来月", "今月", "先月", "今日", "明日", "昨日", "週末", "今回", "前回",
 }

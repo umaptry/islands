@@ -162,9 +162,9 @@ def test_similarity_is_calibrated(loaded):
 
 def test_short_text_is_rejected(client):
     person = Person(client, "short@example.com", "短文")
-    response = client.post("/api/posts", json={"body": "短いです"}, headers=person.headers)
+    response = client.post("/api/posts", json={"body": "   "}, headers=person.headers)
     assert response.status_code == 422
-    assert "30" in response.json()["detail"]
+    assert "本文" in response.json()["detail"]
 
 
 def test_the_map_never_ships_a_vector(client):

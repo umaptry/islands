@@ -26,7 +26,7 @@ SOLDERING = "電子工作にはまっていて、基板を設計しています�
 # naming, on its own
 # --------------------------------------------------------------------------
 
-IDF = {"低山": 4.0, "山頂": 3.8, "コーヒー": 2.0, "基板": 4.2, "電子工作": 4.1, "家": 1.1}
+IDF = {"低山": 4.0, "山頂": 3.8, "コーヒー": 2.0, "基板": 4.2, "電子工作": 4.1, "家庭": 1.1, "家": 1.1}
 
 
 def test_a_word_the_group_shares_beats_a_rarer_one_offer():
@@ -44,7 +44,12 @@ def test_rarity_decides_the_order_when_nothing_is_shared():
     Both words are still used: a lone island named by one word reads worse than
     one named by two, even when the second word is ordinary.
     """
-    assert name_group([["基板", "家"]], IDF).split(" / ") == ["基板", "家"]
+    assert name_group([["基板", "家庭"]], IDF).split(" / ") == ["基板", "家庭"]
+
+
+def test_a_single_character_never_joins_a_name():
+    """「家」「物」 say nothing on their own, so they are left out of a name."""
+    assert name_group([["基板", "家"]], IDF) == "基板"
 
 
 def test_display_stop_words_never_become_a_name():

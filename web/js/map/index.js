@@ -16,14 +16,15 @@
 // orbit view re-places people by a number the server measured. Nothing is
 // re-projected client-side.
 
-import { config, glyphOf, interactionsOf, islandColor, radiusOf } from '../config.js';
+import { config, interactionsOf, islandColor, radiusOf } from '../config.js';
 import { drawFace } from '../avatars.js';
 import { matchesFilters, state, filtering } from '../state.js';
 import { clip } from '../ui.js';
 import {
-  INK, drawBirds, drawBoats, drawSeaMarks, drawSurf, hashId, islandPath, makeLabelSpace,
+  INK, REDUCED_MOTION, drawBirds, drawBoats, drawSeaMarks, hashId, islandPath, makeLabelSpace,
 } from './decor.js';
 import { detectLandmasses, membership } from './landmass.js';
+import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
 import { buildTerrain, gridTerrain } from './terrain.js';
 
 let canvas = null;
@@ -36,17 +37,62 @@ let started = 0;
 let onPick = () => {};
 let hits = [];
 
-// Below this zoom a post is drawn as islands' settlement glyph, above it as the
-// person's face. Zoomed out you want to see where the activity is; zoomed in you
-// want to see who. Two views of the same fact, and the switch is the thing that
-// lets a busy map stay readable.
-const FACE_ZOOM = 0.55;
+// Three distances, measured against the zoom that frames everything (Q57・Q59):
+//
+//   far   the whole map. Continents, their towns and names, a few faces each;
+//         your own posts glow. Tapping an island or your post flies you in.
+//   near  everybody's face where they wrote, with names where they fit.
+//   deep  bigger faces, the start of what they said, how much it was answered.
+//
+// Zoomed out you want to see where the activity is; zoomed in you want to see
+// who. Two views of the same fact, and the switch is what keeps a busy map
+// readable.
+const NEAR_AT = 1.7;
+const DEEP_AT = 4;
+
+function zoomLevel() {
+  const fit = state.camera.fit || state.camera.scale;
+  const z = state.camera.scale / fit;
+  return { z, level: z >= DEEP_AT ? 'deep' : z >= NEAR_AT ? 'near' : 'far' };
+}
+
+// The canvas runs under the search bar and the bottom controls. `frame` is how
+// much of it, top and bottom, they cover: the camera centres in what is left and
+// no name is put where it cannot be read.
+let frame = { top: 96, bottom: 120 };
+
+function insets() {
+  if (!canvas) return frame;
+  const box = canvas.getBoundingClientRect();
+  const rects = (selector) => [...document.querySelectorAll(selector)]
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.height > 0 && rect.width > 0);
+  const top = rects('.map-top').reduce((low, rect) => Math.max(low, rect.bottom - box.top + 8), 12);
+  const bottom = rects('.island-badge, .map-controls, .bottom-nav')
+    .reduce((high, rect) => Math.max(high, box.bottom - rect.top + 8), 12);
+  return { top: Math.min(top, height * 0.4), bottom: Math.min(bottom, height * 0.4) };
+}
+
+/** The controls floating over the map, in canvas px. Labels keep out of them
+ * so a name or a speech bubble is never half under the search bar. */
+function chromeBoxes() {
+  if (!canvas) return [];
+  const box = canvas.getBoundingClientRect();
+  return [...document.querySelectorAll('#map .search, #map .filter-button, #map .tabs, #islandBadge, #map .map-controls')]
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.height > 0 && rect.width > 0)
+    .map((rect) => ({
+      x: rect.left - box.left + rect.width / 2, y: rect.top - box.top + rect.height / 2,
+      w: rect.width + 8, h: rect.height + 8,
+    }));
+}
 
 export function initMap(element, { onSelect }) {
   canvas = element;
   ctx = canvas.getContext('2d');
   onPick = onSelect || (() => {});
   started = performance.now();
+  preloadSprites();
   resize();
   attachGestures();
   window.addEventListener('resize', resize);
@@ -69,7 +115,8 @@ export function resize() {
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (!state.camera.scale || state.camera.scale === 1) fitCamera();
+  frame = insets();
+  if (!state.camera.fit) fitCamera();
 }
 
 // ---------------------------------------------------------------- camera
@@ -89,16 +136,24 @@ export function fitCamera(posts = state.posts, extent = null) {
   const [minX, minY, maxX, maxY] = bounds;
   const spanX = Math.max(1, maxX - minX);
   const spanY = Math.max(1, maxY - minY);
-  // Room for the top bar, the island badge and the bottom nav.
-  const scale = Math.max(
-    0.05,
-    Math.min(1.6, (width * 0.9) / spanX, Math.max(120, height - 210) / spanY),
-  );
+  // Edge to edge across, and between the top bar and the bottom controls down:
+  // on a wide screen the land fills the width instead of floating in a band.
+  frame = insets();
+  const usableW = Math.max(120, width - 32);
+  const usableH = Math.max(120, height - frame.top - frame.bottom);
+  const scale = Math.max(0.05, Math.min(1.6, usableW / spanX, usableH / spanY));
   state.camera = {
     scale,
+    fit: scale,
     x: width / 2 - ((minX + maxX) / 2) * scale,
-    y: (height - 60) / 2 - ((minY + maxY) / 2) * scale,
+    y: frame.top + usableH / 2 - ((minY + maxY) / 2) * scale,
   };
+}
+
+/** How far in and out a gesture may go, relative to the fitted view. */
+function clampScale(value) {
+  const fit = state.camera.fit || state.camera.scale;
+  return Math.max(Math.min(0.12, fit * 0.5), Math.min(value, Math.max(6, fit * 8)));
 }
 
 function seedBounds() {
@@ -176,6 +231,60 @@ export function focusOn(post, { lift = 0.34 } = {}) {
   requestAnimationFrame(step);
 }
 
+let tween = 0;
+
+/** Fly the camera to a world point at a new zoom (Q57: tap, and it comes closer).
+ *
+ * The zoom changes geometrically and the point slides linearly to its spot, so
+ * the ground neither lurches nor drifts sideways on the way. Any touch stops it
+ * where it is. Reduced motion jumps straight there.
+ */
+export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, then } = {}) {
+  cancelAnimationFrame(tween);
+  frame = insets();
+  const from = { ...state.camera };
+  const to = clampScale(targetScale);
+  const anchorX = width / 2;
+  const anchorY = frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
+  const start = toWorld(anchorX, anchorY);
+  const duration = REDUCED_MOTION ? 0 : 480;
+  const began = performance.now();
+  const step = (now) => {
+    const t = duration ? Math.min(1, (now - began) / duration) : 1;
+    const k = 1 - (1 - t) ** 3;
+    const scale = from.scale * (to / from.scale) ** k;
+    const wx = start.x + (worldX - start.x) * k;
+    const wy = start.y + (worldY - start.y) * k;
+    state.camera.scale = scale;
+    state.camera.x = anchorX - wx * scale;
+    state.camera.y = anchorY - wy * scale;
+    if (t < 1) {
+      tween = requestAnimationFrame(step);
+      return;
+    }
+    tween = 0;
+    onViewportChange();
+    if (then) then();
+  };
+  tween = requestAnimationFrame(step);
+}
+
+/** Open an island up: frame its posts at the near distance. */
+function zoomToIsland(island) {
+  const members = (island.post_ids || []).map((id) => state.postsById.get(id)).filter(Boolean);
+  const xs = members.length ? members.map((post) => post.x) : [island.cx];
+  const ys = members.length ? members.map((post) => post.y) : [island.cy];
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const fit = state.camera.fit || state.camera.scale;
+  const usableH = Math.max(120, height - frame.top - frame.bottom);
+  const room = Math.min((width - 64) / (maxX - minX + 40), (usableH - 90) / (maxY - minY + 40));
+  const target = Math.max(fit * 2.2, Math.min(fit * 3.6, room));
+  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, target, { lift: 0.55 });
+}
+
 // ---------------------------------------------------------------- gestures
 
 let onViewportChange = () => {};
@@ -193,6 +302,7 @@ function attachGestures() {
   };
 
   canvas.addEventListener('pointerdown', (event) => {
+    cancelAnimationFrame(tween);
     canvas.setPointerCapture(event.pointerId);
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     dragged = false;
@@ -248,6 +358,7 @@ function attachGestures() {
 
   canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
+    cancelAnimationFrame(tween);
     const rect = canvas.getBoundingClientRect();
     const factor = Math.exp(-event.deltaY * 0.0015);
     zoomAround(
@@ -263,7 +374,7 @@ function zoomAround(point, requested, absolute = false) {
   const cx = absolute ? point.x - rect.left : point.x;
   const cy = absolute ? point.y - rect.top : point.y;
   const old = state.camera.scale;
-  const next = Math.max(0.12, Math.min(requested, 6));
+  const next = clampScale(requested);
   if (next === old) return;
   const localX = (cx - state.camera.x) / old;
   const localY = (cy - state.camera.y) / old;
@@ -280,10 +391,21 @@ function pick(event) {
   // pile is the one the finger meant.
   for (let i = hits.length - 1; i >= 0; i -= 1) {
     const hit = hits[i];
-    if (Math.hypot(hit.x - x, hit.y - y) <= hit.r) {
+    const inside = hit.box
+      ? x >= hit.box.left && x <= hit.box.right && y >= hit.box.top && y <= hit.box.bottom
+      : Math.hypot(hit.x - x, hit.y - y) <= hit.r;
+    if (!inside) continue;
+    if (hit.island) {
+      zoomToIsland(hit.island);
+    } else if (hit.approach) {
+      // Your own post from far away: come in close first, then open it.
+      const fit = state.camera.fit || state.camera.scale;
+      const { post } = hit;
+      zoomTo(post.x, post.y, fit * 2.6, { lift: 0.4, then: () => onPick(post) });
+    } else {
       onPick(hit.post);
-      return;
     }
+    return;
   }
   onPick(null);
 }
@@ -324,10 +446,23 @@ function render() {
 
 // ---------------------------------------------------------------- map view
 
+// Settlement sprite size by growth tier (小屋 → 都市), far view, CSS px.
+const TIER_SIZES = [28, 32, 36, 42, 48];
+// Where up to three landmarks stand around the settlement, in settlement sizes:
+// behind, then front-left, then front-right.
+const LANDMARK_SPOTS = [[0.2, -0.4], [-0.8, 0.14], [0.82, 0.16]];
+const OUTLINE = '#4a3426';
+const MINE = '#ff8a1f';
+const LABEL_FONT = '700 13px system-ui, sans-serif';
+const SMALL_FONT = '600 11px system-ui, sans-serif';
+
 function renderMap(time) {
   const view = { sea: seaBox(), toScreen, width, height };
   const { scale } = state.camera;
+  const { z, level } = zoomLevel();
+  const far = level === 'far';
   const meId = state.account ? state.account.id : null;
+  const ceiling = frame.top + 10;
 
   // The seed corpus is NOT drawn. It used to be a field of dots, which looked
   // like a second kind of island while meaning something entirely different -
@@ -338,10 +473,13 @@ function renderMap(time) {
     if (!matchesFilters(post)) return;
     const point = toScreen(post.x, post.y);
     if (point.x < -80 || point.x > width + 80 || point.y < -80 || point.y > height + 80) return;
-    visible.push({ post, point, mine: post.author_id === meId, dim: !matchesFilters(post) });
+    visible.push({ post, point, mine: Boolean(meId) && post.author_id === meId });
   });
+  const visibleIds = new Set(visible.map(({ post }) => post.id));
 
-  // Keep the map calm; the posts and terrain carry its visual hierarchy.
+  // Water first: its marks and boats sit under the land.
+  drawSeaMarks(ctx, view, time);
+  drawBoats(ctx, view, time);
 
   // The ground. Built from every post the client holds, not just the ones on
   // screen, so panning does not make a coastline appear out of nothing.
@@ -363,7 +501,6 @@ function renderMap(time) {
     // upscaling turns a coastline into a staircase.
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.96;
     ctx.drawImage(
       terrain.canvas, origin.x, origin.y,
       (terrain.width / terrain.scale) * scale,
@@ -372,183 +509,432 @@ function renderMap(time) {
     ctx.restore();
   }
 
+  // Where each island's settlement stands. Placed before the trees so the trees
+  // can keep out of the way.
+  const grow = far ? 1 : Math.min(1.5, Math.sqrt(z / NEAR_AT) * 1.2);
+  const places = state.islands.map((island) => {
+    const members = new Set(island.post_ids || []);
+    if (filtering() && ![...members].some((id) => visibleIds.has(id))) return null;
+    const spot = toScreen(island.cx, island.cy);
+    if (spot.x < -160 || spot.x > width + 160 || spot.y < -160 || spot.y > height + 160) return null;
+    const tier = Math.max(0, Math.min(TIER_SPRITES.length - 1, Number(island.tier) || 0));
+    // A quiet island keeps its buildings, a size smaller and with the colour
+    // let out of them.
+    const size = Math.min(72, TIER_SIZES[tier] * grow * (island.quiet ? 0.85 : 1));
+    const at = far ? { x: spot.x, y: spot.y } : besideFaces(spot, size, members, visible);
+    return { island, members, tier, size, x: at.x, foot: at.y + size * 0.3 };
+  }).filter(Boolean);
 
-  const showFaces = false;
-  const markerSize = Math.max(15, Math.min(30, 22 * Math.max(scale, 0.6)));
+  if (terrain && terrain.trees) drawTrees(terrain.trees, places, far ? [] : visible, far);
+  // Your posts glow from under the buildings, so the town stays readable.
+  if (far) glowMine(visible, time);
 
-  // Surf first for every post, then the markers: drawing each ring immediately
-  // before its own marker would let a later ring cover an earlier face wherever
-  // two posts land close together.
+  // Settlements and their landmarks, back to front.
+  places.sort((a, b) => a.foot - b.foot).forEach((place) => {
+    const { island, size, x, foot } = place;
+    const calm = Boolean(island.quiet);
+    place.marks = (island.landmarks || []).slice(0, LANDMARK_SPOTS.length).map((name, index) => ({
+      name,
+      sprite: landmarkSprite(name),
+      x: x + LANDMARK_SPOTS[index][0] * size,
+      foot: foot + LANDMARK_SPOTS[index][1] * size,
+    })).filter((mark) => mark.sprite);
+    const pieces = [...place.marks, { main: true, x, foot }].sort((a, b) => a.foot - b.foot);
+    pieces.forEach((piece) => {
+      const box = piece.main
+        ? drawSprite(ctx, TIER_SPRITES[place.tier], piece.x, piece.foot, size, { calm })
+        : drawSprite(ctx, piece.sprite, piece.x, piece.foot, size * 0.72, { calm });
+      if (piece.main) place.box = box;
+      else piece.box = box;
+    });
+    place.box = place.box || { left: x - size / 2, right: x + size / 2, top: foot - size, bottom: foot };
+  });
 
   const claim = makeLabelSpace();
+  chromeBoxes().forEach((box) => claim.block(box.x, box.y, box.w, box.h));
   const labels = [];
+  const label = (text, x, y, font, extra = {}) => labels.push({ text, x, y, font, ...extra });
+  const keepOnScreen = (x, w) => Math.max(w / 2 + 8, Math.min(width - w / 2 - 8, x));
 
-  // Landmass names claim their space before anything else. They are the
-  // headline: each one is built from the posts underneath it.
-  //
-  // A name never disappears - a region losing its label as the map fills up is
-  // a bug this view has had before. But it does MOVE. Sitting the label a fixed
-  // distance above the centre put it inside its own island once that island got
-  // big, and two neighbouring names drew straight through each other. So the
-  // preferred spot is clear of the island's own coastline, and a name that
-  // cannot have it steps further out until it finds room.
+  // Island names claim their space before anything else: they are the
+  // headline. A name never disappears, but it moves - and it moves along its
+  // own island, never off into the sea, and never up under the search bar.
+  const face = level === 'deep' ? 30 : 20;
   ctx.save();
-  ctx.font = '700 13px system-ui, sans-serif';
-  state.islands.forEach((island) => {
-    if (filtering() && !visible.some(({ post }) => island.post_ids?.includes(post.id))) return;
-    const spot = toScreen(island.cx, island.cy);
-    if (spot.x < -120 || spot.x > width + 120) return;
-    if (spot.y < -80 || spot.y > height + 80) return;
-
+  places.forEach((place) => {
+    const { island, box } = place;
+    if (box.bottom < ceiling - 4) return;
+    ctx.font = LABEL_FONT;
     const textWidth = ctx.measureText(island.label).width;
-    // Keep the whole name on screen: an edge label clipped in half is worse
-    // than one nudged inwards.
-    const half = textWidth / 2;
-    const x = Math.max(half + 8, Math.min(width - half - 8, spot.x));
-    const lift = islandLift(island) + 16;
-
-    let y = spot.y - lift;
-    // Above first, then below, then progressively further out on both sides.
-    const tries = [0, lift * 2, -18, lift * 2 + 18, -36, lift * 2 + 36, -54];
-    for (const offset of tries) {
-      y = spot.y - lift + offset;
-      if (claim(x, y, textWidth, 15)) break;
+    const x = keepOnScreen(place.x, textWidth);
+    // Zoomed in, a line of people and topics hangs under the name: the pair
+    // stands clear of the town and of the faces as one block.
+    const under = far ? 0 : 18;
+    let anchor = box.top - 10 - under;
+    if (!far) {
+      // Zoomed in, the name rides above the island's highest face, so it is
+      // over the people it names rather than over whoever happens to be next.
+      const tops = visible.filter(({ post }) => place.members.has(post.id))
+        .map(({ point }) => point.y - face / 2 - (level === 'deep' ? 26 : 0) - 12 - under);
+      if (tops.length) anchor = Math.min(anchor, Math.min(...tops));
     }
-    labels.push({ text: island.label, x, y, color: islandColor(island.cluster_id) });
+    let y = Math.max(ceiling, anchor);
+    for (const offset of [0, -16, -32, 16, 32]) {
+      // The controls hold their own space in `claim`, so beside them (a wide
+      // screen) a name may rise to the top edge.
+      const candidate = Math.max(14, anchor + offset);
+      if (claim(x, candidate, textWidth, 15)) { y = candidate; break; }
+    }
+    place.labelBox = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 10, bottom: y + 10 };
+    label(island.label, x, y, LABEL_FONT);
+
+    if (!far) {
+      // Under the name: how many people, and what else they talk about.
+      const topics = (island.topics || []).slice(0, 2);
+      const line = [`${island.people || place.members.size}人`, ...topics].join('・');
+      ctx.font = SMALL_FONT;
+      const lineWidth = ctx.measureText(line).width;
+      if (claim(x, y + 17, lineWidth, 12)) label(line, keepOnScreen(x, lineWidth), y + 17, SMALL_FONT, { soft: true });
+    }
   });
   ctx.restore();
 
-  // You come next: your own name is never the one that gives way.
-  const mine = visible.find((entry) => entry.mine && !entry.dim);
-  if (mine) {
-    ctx.save();
-    ctx.font = '600 11px system-ui, sans-serif';
-    const below = mine.point.y + markerSize * 0.7 + 12;
-    claim(mine.point.x, below - 4, ctx.measureText(clip(mine.post.display_name, 6)).width, 13);
-    ctx.restore();
+  if (far) {
+    drawCrowds(places, claim, meId);
+    // Islands answer a tap by opening up; yours are on top of that.
+    places.forEach((place) => {
+      const { box, labelBox } = place;
+      const around = labelBox ? {
+        left: Math.min(box.left, labelBox.left), right: Math.max(box.right, labelBox.right),
+        top: Math.min(box.top, labelBox.top), bottom: box.bottom + 20,
+      } : { ...box, bottom: box.bottom + 20 };
+      hits.push({ box: around, island: place.island });
+    });
+    drawMineFar(visible, places, claim);
+  } else {
+    drawFaces(visible, claim, level, time);
+    if (level === 'near') landmarkNames(places, claim, label);
+    regionNames(places, claim, label);
   }
 
-  // The post whose sheet is open. islands swapped its glyph for 📍 so you could
-  // see, without closing the panel, which speck on the map you were reading.
-  const selectedId = state.selected ? state.selected.id : null;
-
-  visible.forEach(({ post, point, mine: isMe, dim }) => {
-    ctx.save();
-    if (dim) ctx.globalAlpha = 0.22;
-    const accent = islandColor(post.cluster_id);
-    const isSelected = post.id === selectedId;
-
-    if (isMe && !dim) {
-      const pulse = 1 + Math.sin(time * 1.9) * 0.09;
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255,255,255,.8)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, (markerSize * 0.62 + 7) * pulse, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    if (showFaces) {
-      drawFace(ctx, post.icon_id, point.x, point.y, markerSize, accent);
-      // Zoomed in the face is the marker, so 📍 would cover the thing you came
-      // to look at. A ring in the landmass colour says the same thing over it.
-      if (isSelected) selectionRing(ctx, point.x, point.y, markerSize * 0.62 + 4, accent);
-    } else if (isSelected) {
-      drawPin(ctx, point.x, point.y, markerSize);
-    } else {
-      drawGlyph(ctx, post, point.x, point.y, markerSize);
-    }
-
-    // Reaction tally next to a busy post, so "this is where things are
-    // happening" survives being zoomed out past the faces.
-    const busy = interactionsOf(post);
-    if (busy >= 5 && !dim) {
-      ctx.font = '600 9px system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.lineWidth = 3;
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = INK.halo;
-      ctx.fillStyle = INK.label;
-      const text = String(busy);
-      const at = point.x + markerSize * 0.42;
-      ctx.strokeText(text, at, point.y - markerSize * 0.3);
-      ctx.fillText(text, at, point.y - markerSize * 0.3);
-    }
-
-    if (showFaces && !dim) {
-      ctx.font = '600 11px system-ui, sans-serif';
-      const label = clip(post.display_name, 6);
-      const below = point.y + markerSize * 0.7 + 12;
-      if (isMe || claim(point.x, below - 4, ctx.measureText(label).width, 13)) {
-        ctx.textAlign = 'center';
-        ctx.lineWidth = 3;
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = INK.halo;
-        ctx.strokeText(label, point.x, below);
-        ctx.fillStyle = INK.label;
-        ctx.fillText(label, point.x, below);
-      }
-    }
-    ctx.restore();
-
-    if (!dim) {
-      hits.push({ x: point.x, y: point.y, r: Math.max(20, markerSize * 0.7), post });
-    }
-  });
+  drawBirds(ctx, view, time);
 
   // Names last, so nothing can bury them. Positions were resolved above, before
   // anything else could take the space.
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '700 13px system-ui, sans-serif';
-  ctx.lineWidth = 4.5;
   ctx.lineJoin = 'round';
-  labels.forEach((label) => {
+  labels.forEach((entry) => {
+    ctx.font = entry.font;
+    ctx.lineWidth = entry.font === LABEL_FONT ? 4.5 : 3.5;
     ctx.strokeStyle = INK.halo;
-    ctx.strokeText(label.text, label.x, label.y);
-    ctx.fillStyle = INK.label;
-    ctx.fillText(label.text, label.x, label.y);
+    ctx.strokeText(entry.text, entry.x, entry.y);
+    ctx.fillStyle = entry.soft ? 'rgba(255,255,255,.9)' : INK.label;
+    ctx.fillText(entry.text, entry.x, entry.y);
   });
   ctx.restore();
 }
 
-/** How far this landmass's ground reaches from its centre, in screen pixels.
+/** Zoomed in, the town steps aside for the people.
  *
- * The label has to clear the island's own coastline, and a big island's
- * coastline is a long way out: the busiest post here reaches 74 world units,
- * which at a typical zoom is most of a phone's width. A fixed offset put the
- * name inside the land it was naming.
- *
- * Measured from the posts near the centre rather than from a stored radius,
- * because a landmass is a union of overlapping cones and no single number
- * describes it. Cheap: a handful of islands against one viewport of posts.
+ * An island with one post has its centre on that post, so the town and the
+ * face would stack. Try the centre, then either side, then above and below,
+ * and take the first spot that leaves every face of the island clear - or, if
+ * none does, the one that leaves the most room.
  */
-function islandLift(island) {
-  let reach = 0;
-  state.posts.forEach((post) => {
-    const radius = radiusOf(post);
-    const distance = Math.hypot(post.x - island.cx, post.y - island.cy);
-    // Only posts whose own ground touches the centre belong to this landmass
-    // for the purpose of measuring it.
-    if (distance <= radius * 1.35) reach = Math.max(reach, distance + radius);
+function besideFaces(spot, size, members, visible) {
+  const faces = visible.filter(({ post }) => members.has(post.id)).map(({ point }) => point);
+  if (!faces.length) return spot;
+  const tries = [[0, 0], [-1, 0.1], [1, 0.1], [0, -0.9], [0, 0.85], [-1.1, -0.6], [1.1, -0.6]];
+  const want = size * 0.55 + 16;
+  let best = spot;
+  let bestRoom = -1;
+  for (const [dx, dy] of tries) {
+    const x = spot.x + dx * size;
+    const y = spot.y + dy * size;
+    const room = Math.min(...faces.map((point) => Math.hypot(point.x - x, point.y - (y - size * 0.2))));
+    if (room >= want) return { x, y };
+    if (room > bestRoom) { best = { x, y }; bestRoom = room; }
+  }
+  return best;
+}
+
+/** Trees, bushes and rocks from the terrain's scatter, kept off the
+ * settlements and out from under faces. Zoomed out, every other one. */
+function drawTrees(trees, places, posts, thin) {
+  const base = Math.max(9, Math.min(24, state.camera.scale * 11));
+  trees.forEach((tree) => {
+    if (thin && tree.k < 1) return;
+    const p = toScreen(tree.x, tree.y);
+    if (p.x < -30 || p.x > width + 30 || p.y < -30 || p.y > height + 40) return;
+    const size = base * tree.k * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
+    const foot = p.y + size * 0.35;
+    const covered = places.some((place) => Math.abs(p.x - place.x) < place.size * 1.45
+      && foot > place.foot - place.size * 1.15 && foot < place.foot + place.size * 0.55);
+    if (covered) return;
+    if (posts.some(({ point }) => Math.abs(point.x - p.x) < 15 && Math.abs(point.y - p.y) < 18)) return;
+    drawSprite(ctx, tree.name, p.x, foot, size);
   });
-  return Math.max(24, reach * state.camera.scale);
+}
+
+/** A white disc with the person's face, outlined like the buildings. */
+function faceBadge(iconId, x, y, size, { ring = OUTLINE, glow = 0 } = {}) {
+  ctx.save();
+  if (glow > 0) {
+    ctx.shadowColor = 'rgba(255, 138, 31, .9)';
+    ctx.shadowBlur = glow;
+  }
+  ctx.beginPath();
+  ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+  ctx.fillStyle = '#fffaf0';
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = ring === OUTLINE ? Math.max(1.4, size * 0.07) : Math.max(2.2, size * 0.12);
+  ctx.strokeStyle = ring;
+  ctx.stroke();
+  ctx.restore();
+  drawFace(ctx, iconId, x, y, size * 0.74, ring);
+}
+
+/** Who is on each island, zoomed out: a few faces and the head count. */
+function drawCrowds(places, claim, meId) {
+  const size = 16;
+  const step = 11;
+  places.forEach((place) => {
+    const authors = new Map();
+    place.members.forEach((id) => {
+      const post = state.postsById.get(id);
+      if (!post || authors.has(post.author_id)) return;
+      authors.set(post.author_id, post);
+    });
+    const people = [...authors.values()]
+      .sort((a, b) => (b.author_id === meId) - (a.author_id === meId))
+      .slice(0, 4);
+    if (!people.length) return;
+    ctx.save();
+    ctx.font = '700 11px system-ui, sans-serif';
+    const count = `${place.island.people || authors.size}人`;
+    const countWidth = ctx.measureText(count).width;
+    const rowWidth = (people.length - 1) * step + size + 4 + countWidth;
+    const y = place.box.bottom + 11;
+    const left = place.x - rowWidth / 2;
+    if (!claim(place.x, y, rowWidth, size + 2)) { ctx.restore(); return; }
+    people.slice().reverse().forEach((post, index) => {
+      const at = left + size / 2 + (people.length - 1 - index) * step;
+      faceBadge(post.icon_id, at, y, size, { ring: post.author_id === meId ? MINE : OUTLINE });
+    });
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = INK.halo;
+    const textX = left + (people.length - 1) * step + size + 4;
+    ctx.strokeText(count, textX, y + 0.5);
+    ctx.fillStyle = INK.label;
+    ctx.fillText(count, textX, y + 0.5);
+    ctx.restore();
+  });
+}
+
+/** A warm glow on the ground under each of your posts (Q57). */
+function glowMine(visible, time) {
+  const pulse = REDUCED_MOTION ? 1 : 1 + Math.sin(time * 2.2) * 0.18;
+  visible.forEach(({ point, mine }) => {
+    if (!mine) return;
+    ctx.save();
+    const glow = ctx.createRadialGradient(point.x, point.y, 4, point.x, point.y, 28 * pulse);
+    glow.addColorStop(0, 'rgba(255, 170, 60, .85)');
+    glow.addColorStop(1, 'rgba(255, 170, 60, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 28 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+/** Your posts, zoomed out: a tap flies you to them. Your face goes on the post
+ * only where it would not sit on a town - over a town, the orange face in the
+ * crowd row already says you are there. */
+function drawMineFar(visible, places, claim) {
+  const selectedId = state.selected ? state.selected.id : null;
+  const onTown = (point) => places.some(({ box }) => box
+    && point.x > box.left - 6 && point.x < box.right + 6 && point.y > box.top - 6 && point.y < box.bottom + 6);
+  visible.forEach(({ post, point, mine }) => {
+    if (post.id === selectedId) {
+      drawPin(ctx, point.x, point.y, 22);
+      hits.push({ x: point.x, y: point.y, r: 20, post });
+      return;
+    }
+    if (!mine) return;
+    if (!onTown(point)) {
+      faceBadge(post.icon_id, point.x, point.y, 22, { ring: MINE, glow: 8 });
+      claim(point.x, point.y, 24, 24);
+    }
+    hits.push({ x: point.x, y: point.y, r: 22, post, approach: true });
+  });
+}
+
+/** Zoomed in: everybody's face where they wrote, names where they fit.
+ *
+ * Room is handed out in order - you, then the people closest to you, then the
+ * busiest - and whoever does not get room is drawn smaller and unnamed rather
+ * than not at all. Paint runs the other way, so the first in line ends on top
+ * and the finger finds them first.
+ */
+function drawFaces(visible, claim, level, time) {
+  const deep = level === 'deep';
+  const full = deep ? 30 : 20;
+  const close = new Set(state.neighbors.map((person) => person.id));
+  const selectedId = state.selected ? state.selected.id : null;
+  const ranked = visible.map((entry) => ({
+    ...entry,
+    rank: entry.mine ? 0 : close.has(entry.post.id) ? 1 : 2,
+    busy: interactionsOf(entry.post),
+  })).sort((a, b) => a.rank - b.rank || b.busy - a.busy);
+
+  ctx.save();
+  ranked.forEach((entry) => {
+    const { point, post } = entry;
+    const room = claim(point.x, point.y, full + 2, full + 2) || entry.mine;
+    entry.size = room ? full : Math.round(full * 0.65);
+    if (!room) return;
+    ctx.font = SMALL_FONT;
+    const name = clip(post.display_name, 6);
+    const nameY = point.y + full / 2 + 10;
+    if (claim(point.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
+      entry.name = name;
+      entry.nameY = nameY;
+    }
+    if (deep) {
+      ctx.font = '500 11px system-ui, sans-serif';
+      const text = clip(post.body, 14);
+      const bubbleWidth = ctx.measureText(text).width + 14;
+      const bubbleY = point.y - full / 2 - 15;
+      // Slid back inside the screen edge; the tail still points at the face.
+      const bubbleX = Math.max(bubbleWidth / 2 + 6, Math.min(width - bubbleWidth / 2 - 6, point.x));
+      if (Math.abs(bubbleX - point.x) < bubbleWidth / 2 - 8 && claim(bubbleX, bubbleY, bubbleWidth, 20)) {
+        entry.bubble = { text, width: bubbleWidth, y: bubbleY, x: bubbleX };
+      }
+    }
+  });
+  ctx.restore();
+
+  ranked.slice().reverse().forEach(({ post, point, mine, size, name, nameY, bubble, busy }) => {
+    if (mine) {
+      const pulse = REDUCED_MOTION ? 1 : 1 + Math.sin(time * 2.2) * 0.12;
+      ctx.save();
+      const glow = ctx.createRadialGradient(point.x, point.y, size * 0.3, point.x, point.y, size * pulse);
+      glow.addColorStop(0, 'rgba(255, 170, 60, .7)');
+      glow.addColorStop(1, 'rgba(255, 170, 60, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, size * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    faceBadge(post.icon_id, point.x, point.y, size, { ring: mine ? MINE : OUTLINE });
+    if (post.id === selectedId) selectionRing(ctx, point.x, point.y, size / 2 + 4, islandColor(post.cluster_id));
+
+    // How much it has been answered: always when deep, only when busy at near.
+    if (busy > 0 && (level === 'deep' || busy >= 5)) countChip(point.x + size * 0.42, point.y - size * 0.42, busy);
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    if (name) {
+      ctx.font = SMALL_FONT;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = INK.halo;
+      ctx.strokeText(name, point.x, nameY);
+      ctx.fillStyle = INK.label;
+      ctx.fillText(name, point.x, nameY);
+    }
+    if (bubble) speechBubble(point.x, bubble);
+    ctx.restore();
+
+    hits.push({ x: point.x, y: point.y, r: Math.max(18, size * 0.7), post });
+  });
+}
+
+function countChip(x, y, count) {
+  const text = count > 99 ? '99+' : String(count);
+  ctx.save();
+  ctx.font = '700 9px system-ui, sans-serif';
+  const w = Math.max(14, ctx.measureText(text).width + 7);
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - 7, w, 14, 7);
+  ctx.fillStyle = MINE;
+  ctx.fill();
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = '#fffaf0';
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y + 0.5);
+  ctx.restore();
+}
+
+function speechBubble(tail, { text, width: w, y, x = tail }) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - 10, w, 20, 8);
+  ctx.moveTo(tail - 4, y + 10);
+  ctx.lineTo(tail, y + 15);
+  ctx.lineTo(tail + 4, y + 10);
+  ctx.fillStyle = '#fffaf0';
+  ctx.fill();
+  ctx.lineWidth = 1.3;
+  ctx.strokeStyle = OUTLINE;
+  ctx.stroke();
+  ctx.font = '500 11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#3b2a1f';
+  ctx.fillText(text, x, y + 0.5);
+  ctx.restore();
+}
+
+/** Landmark names under their buildings, at the middle distance only: further
+ * out they would crowd the island names, further in the posts need the room. */
+function landmarkNames(places, claim, label) {
+  ctx.save();
+  ctx.font = '600 10px system-ui, sans-serif';
+  places.forEach((place) => {
+    (place.marks || []).forEach((mark) => {
+      if (!mark.box) return;
+      const y = mark.box.bottom + 7;
+      if (claim(mark.x, y, ctx.measureText(mark.name).width, 12)) {
+        label(mark.name, mark.x, y, '600 10px system-ui, sans-serif', { soft: true });
+      }
+    });
+  });
+  ctx.restore();
+}
+
+/** 地方 inside a large island, where there is room for them. */
+function regionNames(places, claim, label) {
+  const font = '600 11px system-ui, sans-serif';
+  ctx.save();
+  ctx.font = font;
+  places.forEach((place) => {
+    (place.island.regions || []).forEach((region) => {
+      const spot = toScreen(region.cx, region.cy);
+      if (spot.x < 0 || spot.x > width || spot.y < frame.top || spot.y > height - frame.bottom) return;
+      const y = spot.y + 26;
+      if (claim(spot.x, y, ctx.measureText(region.label).width, 13)) {
+        label(region.label, spot.x, y, font, { soft: true });
+      }
+    });
+  });
+  ctx.restore();
 }
 
 const EMOJI_STACK =
   'system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-
-/** islands' staged settlement icon, drawn as the marker when zoomed out. */
-function drawGlyph(ctx, post, x, y, size) {
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = `${Math.max(11, Math.round(size * 0.8))}px ${EMOJI_STACK}`;
-  ctx.fillText(glyphOf(post), x, y);
-  ctx.restore();
-}
 
 /** islands' marker for the post that is open. Bigger than the glyph it hides,
  * because the point of it is to be findable from across the screen. */

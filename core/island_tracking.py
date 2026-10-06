@@ -41,6 +41,10 @@ CAUSES = {
 }
 
 
+def _heading(name):
+    return str(name or "").split("/")[0].strip()
+
+
 def _place(island):
     return {"cx": island.get("cx"), "cy": island.get("cy")}
 
@@ -221,7 +225,9 @@ def update(previous, current, posts_by_id, events, now=None, rank_landmarks=None
                    {"islands": [{"name": p.get("name"), "posts": len(p.get("post_ids") or [])} for p in pieces]})
         if old is None and split_from is None and not merged_from:
             record(island_id, "birth", "birth", place, {}, after)
-        if old is not None and old.get("name") != state["name"]:
+        # Names stored before the topic line existed were "A / B"; only the
+        # heading counts, so that change alone is not a rename.
+        if old is not None and _heading(old.get("name")) != _heading(state["name"]):
             record(island_id, "rename", "rename", place, {"name": old.get("name")}, {"name": state["name"]})
         if old is not None and old.get("tier", 0) != tier:
             cause = "tier_up" if tier > old.get("tier", 0) else "tier_down"

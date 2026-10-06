@@ -253,7 +253,7 @@ export function drawSurf(ctx, x, y, radius, id, time) {
  */
 export function makeLabelSpace() {
   const taken = [];
-  return function claim(x, y, textWidth, textHeight) {
+  function claim(x, y, textWidth, textHeight) {
     const left = x - textWidth / 2 - 2;
     const right = x + textWidth / 2 + 2;
     const top = y - textHeight / 2 - 1;
@@ -266,5 +266,11 @@ export function makeLabelSpace() {
     }
     taken.push({ left, right, top, bottom });
     return true;
+  }
+  // Space that is simply not available (the controls over the map), however
+  // much it overlaps what is already reserved.
+  claim.block = (x, y, w, h) => {
+    taken.push({ left: x - w / 2, right: x + w / 2, top: y - h / 2, bottom: y + h / 2 });
   };
+  return claim;
 }

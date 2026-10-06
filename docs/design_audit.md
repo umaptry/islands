@@ -36,7 +36,7 @@ PNG、同梱デザイン画像、以前の production build を比較基準に�
 | ナビ | `src/components/common/BottomNav.tsx` | 64px、28px線画、視覚上はアイコンのみ。compose/editでも表示 | `icons.js`, `router.js`。読み上げ名とaria-currentを保持 |
 | PC投稿パネル | `src/components/domain/MapApp.tsx` | 768px以上は左上16px、400px、最大80vh、非モーダル、チャットを初期表示 | `screens/map.js`, `ui.js`, CSS。背後の地図・ナビ操作はブラウザ検証待ち |
 | モバイルパネル | 同上 | 50/90dvh、入力を下端に配置、Escapeとフォーカス管理 | visualViewport対応を追加。実機キーボード、横画面、safe areaは未検証 |
-| 投稿 | `src/app/post/page.tsx` | 本文→文字数→スライダー→画像→タグ。リングを隠し30～140字を簡潔に案内 | `screens/compose.js`。画面往復の下書き、送信再試行キーを保持 |
+| 投稿 | `src/app/post/page.tsx` | 本文→文字数→スライダー→画像→タグ。リングを隠し1～60字を簡潔に案内 | `screens/compose.js`。画面往復の下書き、送信再試行キーを保持 |
 | 投稿カード | `src/components/domain/PostCard.tsx` | 著者→タグ→本文→熱量→実画像→反応。casual/hardcore維持 | `components/postcard.js`。類似度は後段の開閉式補足、画像全体へのリンク |
 | 地図 | `src/components/domain/MapApp.tsx` | 単色バイオームと拠点表示。顔・船・鳥などの地図装飾を抑制 | `map/index.js`, `map/terrain.js`。意味座標はサーバー由来のまま |
 | プロフィール | `src/app/profile/page.tsx`, `[userId]/page.tsx`, `edit/page.tsx` | 3タブ、実件数、共通リアクション、本人メール読み取り表示 | `screens/profile.js`。協働は反応の集計と説明。プロフィール編集の下書き保持は未実装 |

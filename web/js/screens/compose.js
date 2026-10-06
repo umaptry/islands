@@ -50,12 +50,13 @@ function paintImage(url) {
 function paintCounter() {
   const { body_min: min, body_max: max } = config().limits;
   const length = $('composeBody').value.trim().length;
-  const ratio = Math.min(1, length / min);
+  // No floor to reach any more (Q36), so the ring fills towards the cap.
+  const ratio = Math.min(1, length / (min > 1 ? min : max));
   const ring = $('composeCounter').querySelector('.value');
   ring.style.strokeDashoffset = String(56.5 * (1 - ratio));
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
-  $('composeCounterText').textContent = `${length}/${max}${length < min ? `（${min}文字から）` : ''}`;
+  $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
   $('composeSubmit').disabled = submitting || length < min || length > max;
 }
 
@@ -161,7 +162,7 @@ export function setupCompose() {
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
         ? 'ためしに１つ\n投稿してみましょう。'
-        : '取り組みや活動内容を30〜140文字で書いてください。';
+        : `取り組みや活動内容を${config().limits.body_max}文字までで書いてください。`;
 
       body.value = draft?.body ?? (editing ? editing.body : '');
       $('composeMotivation').value = editing

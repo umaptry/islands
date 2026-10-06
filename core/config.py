@@ -80,14 +80,14 @@ OVERLAP_EPSILON = 0.5
 
 # Post rules.
 #
-# 140 is islands' limit on a post; 30 is the floor the embedding needs. Below 30
-# characters the sparse block is mostly empty and two unrelated one-liners land
-# on top of each other, which is the one thing the map must not do.
+# 60 and no floor (Q36, 2026-10-07): a post is a quick line, not an essay. The
+# old floor of 30 kept the embedding's sparse block from being mostly empty; a
+# very short post now leans on OVERLAP_EPSILON to stay off its neighbours.
 #
 # There is no MAX_USERS any more. It existed because anybody with the URL could
 # fill the map and the only brake was a number; accounts are the brake now.
-MIN_TEXT_LENGTH = 30
-MAX_TEXT_LENGTH = 140
+MIN_TEXT_LENGTH = 1
+MAX_TEXT_LENGTH = 60
 MAX_NAME_LENGTH = 16
 MAX_COMMENT_LENGTH = 500
 MAX_AFFILIATION_LENGTH = 32
@@ -158,8 +158,8 @@ BIOME_THRESHOLDS = {
 
 # Drawn on the client; defined here so the server and the browser cannot drift.
 BIOME_COLORS = {
-    "sea": "#2FA6FF",
-    "shallow": "#4BB9FF",
+    "sea": "#1F8FE8",
+    "shallow": "#63CDF9",
     "desert": "#E6CF9B",
     "savanna": "#C8B676",
     "plains": "#81C784",
@@ -178,6 +178,12 @@ PLOT_TIERS = (
 # A landmass with this many posts is a continent rather than an island. Only
 # affects the word printed after the name.
 CONTINENT_MIN_POSTS = 50
+
+# Regions inside one landmass (Q29: 麺類島 holding a ラーメン地方 and an うどん地方).
+# A landmass this big is split by the frozen k-means region its posts sit in, and
+# each group with enough posts gets its own name. Both numbers are provisional.
+REGION_MIN_POSTS = 8
+REGION_MIN_GROUP = 3
 
 # Must match the literal 20.0 in supabase/schema.sql (energy_cell_apply and
 # map_cells). A generated column and an index depend on it there, and neither

@@ -62,7 +62,7 @@ create table if not exists public.accounts (
 create table if not exists public.posts (
   id            uuid primary key default gen_random_uuid(),
   author_id     uuid not null references public.accounts (id) on delete cascade,
-  body          text not null check (length(body) between 30 and 140),
+  body          text not null check (length(body) between 1 and 60),
   tags          text[] not null default '{}'::text[]
                   check (tags <@ array[
                     '気軽に話しかけて', '助けてほしい', '参加者募集中', '仲間募集中'
