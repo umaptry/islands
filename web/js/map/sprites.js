@@ -23,6 +23,9 @@ const LANDMARK_FILES = {
 
 export const landmarkSprite = (name) => LANDMARK_FILES[name] || null;
 
+// What travels on the lines between people (lines.js).
+const VEHICLES = ['boat_row', 'boat_sail', 'ferry', 'balloon', 'walker_a', 'walker_b'];
+
 const images = new Map();
 
 function image(name) {
@@ -40,7 +43,7 @@ function image(name) {
 
 /** Start loading what the first frame will want, so it is not drawn bare. */
 export function preloadSprites() {
-  [...TIER_SPRITES, 'tree', 'pine', 'bush', 'rock', 'gull_up', 'gull_down'].forEach(image);
+  [...TIER_SPRITES, 'tree', 'pine', 'bush', 'rock', 'gull_up', 'gull_down', ...VEHICLES].forEach(image);
 }
 
 /** Draw a sprite standing on (x, foot): `size` is its longer side in CSS px.

@@ -25,6 +25,9 @@ export const state = {
   myPosts: [],
   neighbors: [],          // orbit ranking for my active post
   activePostId: null,     // which of my posts the orbit is centred on
+  connections: [],        // lines between people, /api/connections
+  similar: [],            // the people most like me, /api/similar-people
+  selectedSimilar: null,  // { author, people } for the selected post's author
 };
 
 export function subscribe(listener) {

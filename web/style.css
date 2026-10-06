@@ -477,6 +477,7 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   background: rgba(255, 255, 255, .93); color: var(--sea-ink);
   border-radius: 999px; padding: 8px 15px; font-size: 13px;
   box-shadow: var(--shadow); z-index: 4; max-width: calc(100% - 110px);
+  width: max-content; /* left: 50% alone would cap it at half the screen */
 }
 .island-swatch { width: 10px; height: 10px; border-radius: 999px; flex: none; }
 
@@ -766,13 +767,17 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .toast {
   position: fixed; left: 50%; transform: translate(-50%, 20px);
   bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 18px);
-  z-index: 70; max-width: min(88vw, 420px);
+  z-index: 70; max-width: min(88vw, 420px); width: max-content;
   background: rgba(14, 36, 60, .95); color: #fff;
   padding: 11px 18px; border-radius: 999px; font-size: 13px;
   opacity: 0; pointer-events: none;
   transition: opacity .22s var(--ease), transform .22s var(--ease);
 }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
+/* On the map the island badge sits where the toast would; stand above it. */
+body:has(#islandBadge:not([hidden])) .toast {
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 62px);
+}
 
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 80;

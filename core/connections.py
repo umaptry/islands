@@ -25,6 +25,7 @@ from core.config import (
     CONNECTION_ONGOING_WINDOW_DAYS,
     CONNECTION_POINTS,
     CONNECTION_TIER_BOUNDS,
+    CONNECTION_WEEK_DAYS,
 )
 from core.notifications import parse_time
 
@@ -81,13 +82,15 @@ def build(events, now=None, fallback_posts=None):
             if pair is None:
                 pair = pairs[key] = {
                     "points": 0, "strength": 0.0, "count": 0, "last": stamp,
-                    "days": set(), "posts": defaultdict(lambda: defaultdict(int)),
+                    "days": set(), "week": 0, "posts": defaultdict(lambda: defaultdict(int)),
                 }
             pair["points"] += points
             pair["strength"] += points * math.pow(0.5, age_days / half_life)
             pair["count"] += 1
             pair["last"] = max(pair["last"], stamp)
             pair["days"].add(stamp.date())
+            if age_days <= CONNECTION_WEEK_DAYS:
+                pair["week"] += 1
             if owner in key:
                 pair["posts"][owner][post_id] += 1
 
@@ -108,6 +111,7 @@ def build(events, now=None, fallback_posts=None):
             "strength": round(pair["strength"], 3),
             "tier": tier_of(pair["strength"]),
             "count": pair["count"],
+            "week": pair["week"],
             "last_at": pair["last"].isoformat(),
             "faint": idle_days > CONNECTION_FAINT_DAYS,
             "ongoing": recent_days >= CONNECTION_ONGOING_DAYS,

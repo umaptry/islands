@@ -250,6 +250,8 @@ CONNECTION_FAINT_DAYS = 30
 # "Ongoing": interaction on at least this many distinct days within the window.
 CONNECTION_ONGOING_DAYS = 2
 CONNECTION_ONGOING_WINDOW_DAYS = 14
+# "Aさん と Bさん　この1週間で8回": the count a tap on a vehicle shows.
+CONNECTION_WEEK_DAYS = 7
 # Interactions before the launch of public lines are not shown as lines: people
 # did them before they were told it would be visible.
 CONNECTIONS_SINCE = "2026-10-06T00:00:00+00:00"

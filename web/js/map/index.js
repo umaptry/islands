@@ -19,11 +19,12 @@
 import { config, interactionsOf, islandColor, radiusOf } from '../config.js';
 import { drawFace } from '../avatars.js';
 import { matchesFilters, state, filtering } from '../state.js';
-import { clip } from '../ui.js';
+import { clip, toast } from '../ui.js';
 import {
   INK, REDUCED_MOTION, drawBirds, drawBoats, drawSeaMarks, hashId, islandPath, makeLabelSpace,
 } from './decor.js';
 import { detectLandmasses, membership } from './landmass.js';
+import { drawGuide, drawHints, drawLines, drawVehicles, homeOf } from './lines.js';
 import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
 import { buildTerrain, gridTerrain } from './terrain.js';
 
@@ -397,6 +398,15 @@ function pick(event) {
     if (!inside) continue;
     if (hit.island) {
       zoomToIsland(hit.island);
+    } else if (hit.vehicle) {
+      // Who the boat is carrying between, and how often lately.
+      const row = hit.vehicle;
+      const often = row.week > 0 ? `この1週間で${row.week}回` : `これまでに${row.count}回`;
+      toast(`${clip(row.a_name, 10)}さん と ${clip(row.b_name, 10)}さん　${often}`);
+    } else if (hit.guide) {
+      // Q53: follow the gull to whoever it was flying to.
+      const fit = state.camera.fit || state.camera.scale;
+      zoomTo(hit.guide.x, hit.guide.y, Math.max(state.camera.scale, fit * 2.6), { lift: 0.5 });
     } else if (hit.approach) {
       // Your own post from far away: come in close first, then open it.
       const fit = state.camera.fit || state.camera.scale;
@@ -526,6 +536,18 @@ function renderMap(time) {
   }).filter(Boolean);
 
   if (terrain && terrain.trees) drawTrees(terrain.trees, places, far ? [] : visible, far);
+
+  // Lines between people run over the ground and under the towns and faces;
+  // what travels on them goes over the towns (段3).
+  const lineView = {
+    rows: state.connections, islands: state.islands, toScreen, width, height, far, level, meId,
+    landOf: (postId) => landIndex().get(postId) || null,
+    span: config().world.max - config().world.min, phone: width < 700,
+    home: meId ? homeOf(state.myPosts) : null, similar: meId ? state.similar : [],
+    selected: state.selected, selectedSimilar: state.selectedSimilar,
+  };
+  const linePlan = drawLines(ctx, lineView);
+  drawHints(ctx, lineView);
   // Your posts glow from under the buildings, so the town stays readable.
   if (far) glowMine(visible, time);
 
@@ -549,6 +571,7 @@ function renderMap(time) {
     });
     place.box = place.box || { left: x - size / 2, right: x + size / 2, top: foot - size, bottom: foot };
   });
+  hits.push(...drawVehicles(ctx, lineView, linePlan, time));
 
   const claim = makeLabelSpace();
   chromeBoxes().forEach((box) => claim.block(box.x, box.y, box.w, box.h));
@@ -618,6 +641,8 @@ function renderMap(time) {
   }
 
   drawBirds(ctx, view, time);
+  const guide = drawGuide(ctx, lineView, time, (iconId, x, y, size) => faceBadge(iconId, x, y, size, { ring: MINE }));
+  if (guide) hits.push(guide);
 
   // Names last, so nothing can bury them. Positions were resolved above, before
   // anything else could take the space.
@@ -1172,4 +1197,15 @@ export function invalidateOrbit() {
 export function landmassOf(postId) {
   const masses = detectLandmasses(state.posts);
   return membership(masses).get(postId) || null;
+}
+
+// Per frame the lines only ask which land a post is on, so the answer is kept
+// until the posts in view are replaced (an energy change in place can leave it
+// a little stale, which at worst picks a boat for a walker).
+let landCache = { posts: null, index: new Map() };
+function landIndex() {
+  if (landCache.posts !== state.posts) {
+    landCache = { posts: state.posts, index: membership(detectLandmasses(state.posts)) };
+  }
+  return landCache.index;
 }

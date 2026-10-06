@@ -113,6 +113,61 @@ export async function refreshIslands() {
   }
 }
 
+/** Lines between people (段3). Public, and cached by the server for a while. */
+export async function refreshConnections() {
+  try {
+    const result = await api.get('/api/connections', { auth: false });
+    state.connections = result.connections || [];
+  } catch {
+    /* keep the lines already drawn */
+  }
+}
+
+let similarFetched = { account: null, at: 0 };
+
+/** The people most like me: where my dotted lines go. Slow to change, so at
+ * most every five minutes. */
+export async function refreshSimilar({ force = false } = {}) {
+  const me = state.account ? state.account.id : null;
+  if (!me) {
+    state.similar = [];
+    return;
+  }
+  if (!force && similarFetched.account === me && Date.now() - similarFetched.at < 300000) return;
+  try {
+    const result = await api.get(`/api/similar-people?account=${encodeURIComponent(me)}`, { auth: false });
+    state.similar = result.people || [];
+    similarFetched = { account: me, at: Date.now() };
+  } catch {
+    /* no dotted lines this time */
+  }
+}
+
+const similarOf = new Map();
+
+/** The selected post's author's alike people, for their dotted lines. */
+async function loadSelectedSimilar(post) {
+  const author = post && post.author_id;
+  if (!author || (state.account && author === state.account.id)) {
+    state.selectedSimilar = null;
+    return;
+  }
+  const cached = similarOf.get(author);
+  if (cached && Date.now() - cached.at < 300000) {
+    state.selectedSimilar = { author, people: cached.people };
+    return;
+  }
+  try {
+    const result = await api.get(`/api/similar-people?account=${encodeURIComponent(author)}`, { auth: false });
+    similarOf.set(author, { at: Date.now(), people: result.people || [] });
+    if (state.selected && state.selected.author_id === author) {
+      state.selectedSimilar = { author, people: result.people || [] };
+    }
+  } catch {
+    state.selectedSimilar = null;
+  }
+}
+
 export async function refreshMyReactions() {
   if (!state.account) return;
   try {
@@ -282,6 +337,7 @@ export async function openPost(postId) {
     if (activeChat) activeChat.destroy();
     activeChat = null;
     state.selected = null;
+    state.selectedSimilar = null;
   } });
   sheetEvents = new AbortController();
   clear(body).append(el('p', { className: 'sheet-loading', text: '読み込み中…' }));
@@ -302,6 +358,7 @@ export async function openPost(postId) {
     return;
   }
   state.selected = post;
+  loadSelectedSimilar(post);
   await renderSheet(post, generation);
 }
 
@@ -512,7 +569,7 @@ function startPolling() {
     // A backgrounded tab should not keep polling; it catches up on visibility.
     if (document.hidden || document.querySelector('.screen.active').id !== 'map') return;
     await refreshMap();
-    await Promise.all([refreshIslands(), refreshMyReactions()]);
+    await Promise.all([refreshIslands(), refreshMyReactions(), refreshConnections(), refreshSimilar()]);
     if (state.view === 'orbit') await refreshNeighbors();
   }, POLL_MS);
 
@@ -544,13 +601,17 @@ export function setupMapScreen() {
         onCameraSettled(() => refreshMap());
         const ok = await refreshMap({ fitFirst: true });
         if (!ok) toast('地図を読み込めませんでした。再試行しています…');
-        await Promise.all([refreshIslands(), refreshMyPosts(), refreshMyReactions()]);
+        await Promise.all([
+          refreshIslands(), refreshMyPosts(), refreshMyReactions(), refreshConnections(), refreshSimilar(),
+        ]);
         await refreshNeighbors();
         startPolling();
       } else {
         resize();
         await refreshMap();
         refreshIslands();
+        refreshConnections();
+        refreshSimilar();
       }
       paintBadge();
       if (restorePost && activeScreen() === 'map') {

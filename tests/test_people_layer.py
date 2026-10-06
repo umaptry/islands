@@ -187,6 +187,40 @@ def test_a_reaction_draws_a_line_and_taking_it_back_removes_it(people, app_modul
     assert lines_now(c) == []
 
 
+def test_a_line_carries_where_both_ends_stand_and_who_they_are(people, app_module):
+    """The map draws a line, and the tap on its boat, from the row alone (stage 3)."""
+    akari = people("a@example.com", "あかり")
+    bannai = people("b@example.com", "ばんない")
+    post = akari.post(CAMPING_A)
+    own = bannai.post(SOLDERING)
+    bannai.react(post["id"], "like")
+    bannai.comment(post["id"], "いいですね")
+
+    [row] = lines_now(akari.client)
+    side = {row["a"]: "a", row["b"]: "b"}
+    a, b = side[akari.id], side[bannai.id]
+    assert row[f"{a}_post"] == post["id"]
+    assert row[f"{b}_post"] == own["id"], "bannai's line end is their own post"
+    assert row[f"{a}_at"] == [pytest.approx(post["x"]), pytest.approx(post["y"])]
+    assert row[f"{b}_at"] == [pytest.approx(own["x"]), pytest.approx(own["y"])]
+    assert (row[f"{a}_name"], row[f"{b}_name"]) == ("あかり", "ばんない")
+    assert row["week"] == 2
+
+
+def test_a_similar_person_comes_with_the_post_the_dotted_line_goes_to(people, app_module):
+    me = people("me@example.com", "わたし")
+    near = people("near@example.com", "ちかい")
+    put_profile(me.client, me, **CAMPER)
+    put_profile(me.client, near, topics=["キャンプ", "アウトドア", "焚き火"],
+                goal="テント泊に慣れて山で一晩過ごしたい")
+    own = near.post(CAMPING_A)
+
+    [first] = me.client.get("/api/similar-people", headers=me.headers).json()["people"]
+    assert first["id"] == near.id
+    assert first["post"]["id"] == own["id"]
+    assert (first["post"]["x"], first["post"]["y"]) == (pytest.approx(own["x"]), pytest.approx(own["y"]))
+
+
 def test_a_comment_draws_a_line_and_deleting_it_removes_it(people, app_module):
     akari = people("a@example.com", "あかり")
     bannai = people("b@example.com", "ばんない")
@@ -464,6 +498,9 @@ def test_connections_points_decay_tiers_and_faint_lines():
     assert connections.build([event("a", "a", "p1")], now=NOW) == []
     many = [event("b", "a", f"p{i}", "comment") for i in range(5)]
     assert connections.build(many, now=NOW)[0]["tier"] == 3
+
+    week = [event("b", "a", "p1", days=d) for d in (0, 3, 6.9, 8, 20)]
+    assert connections.build(week, now=NOW)[0]["week"] == 3, "only the last seven days count"
 
 
 def test_a_reply_to_your_own_comment_thread_counts_once():

@@ -588,6 +588,20 @@ def notify_similar(account_id):
     return rows
 
 
+def home_posts():
+    """(post id -> {x, y}, author -> their most energetic live post)."""
+    where, best = {}, {}
+    for post in state["store"].list_terms(limit=NAMING_POST_LIMIT):
+        if post.get("x") is None or post.get("y") is None:
+            continue
+        where[post["id"]] = {"x": float(post["x"]), "y": float(post["y"])}
+        author = post.get("author_id")
+        energy = float(post.get("energy") or 0.0)
+        if author and (author not in best or energy > best[author]["energy"]):
+            best[author] = {"id": post["id"], "energy": energy, **where[post["id"]]}
+    return where, best
+
+
 def connection_lines(force=False):
     """Every line between two people, strongest first (cached briefly)."""
     now = time.time()
@@ -599,13 +613,19 @@ def connection_lines(force=False):
     events = store.interaction_events(since=CONNECTIONS_SINCE)
     # A line ends on each person's most-touched post; somebody whose posts the
     # other never touched is drawn from their most energetic one.
-    fallback, best = {}, {}
-    for post in store.list_terms(limit=NAMING_POST_LIMIT):
-        author = post.get("author_id")
-        energy = float(post.get("energy") or 0.0)
-        if author and (author not in best or energy > best[author]):
-            best[author], fallback[author] = energy, post["id"]
-    value = lines.build(events, fallback_posts=fallback)
+    where, best = home_posts()
+    value = lines.build(events, fallback_posts={author: post["id"] for author, post in best.items()})
+    # The map draws a line from these alone: where both ends stand, and who the
+    # two are for the tap on a boat. Posts the map has not loaded yet still
+    # have a place, so a line does not wait for the viewport to reach it.
+    names = {row["id"]: row for row in store.list_accounts(sorted({p for row in value for p in (row["a"], row["b"])}))}
+    for row in value:
+        for side in ("a", "b"):
+            spot = where.get(row[f"{side}_post"])
+            person = names.get(row[side]) or {}
+            row[f"{side}_at"] = [spot["x"], spot["y"]] if spot else None
+            row[f"{side}_name"] = person.get("display_name", "")
+            row[f"{side}_icon"] = person.get("icon_id", "0")
     with _connections_lock:
         _connections_cache.update({"stamp": now, "value": value})
     return value
@@ -930,9 +950,12 @@ def similar_people_route(request: Request, account: str = ""):
     store = state["store"]
     try:
         ranked = similar_people(account)
+        # Where each of them stands on the map: the dotted line goes there.
+        _, best = home_posts() if ranked else ({}, {})
         out = []
         for row in ranked:
             person = store.get_account(row["id"]) or {}
+            home = best.get(row["id"])
             out.append({
                 **row,
                 "display_name": person.get("display_name", ""),
@@ -940,6 +963,7 @@ def similar_people_route(request: Request, account: str = ""):
                 "avatar_path": person.get("avatar_path"),
                 "topics": person.get("topics") or [],
                 "goal": person.get("goal"),
+                "post": {"id": home["id"], "x": home["x"], "y": home["y"]} if home else None,
             })
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
