@@ -645,6 +645,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `PUT` | `/api/account/me` | ✅ 必要 | プロフィール更新 | 名前・所属・自己紹介・話題・目標などの編集 |
 | `GET` | `/api/connections?person={id}` | ❌ 不要 | 人と人の線 | 地図に線を引く（`person` で1人に絞れる） |
 | `GET` | `/api/similar-people?account={id}` | △ どちらでも | 似ている人の上位5人 | `account` を省くとログイン中の本人 |
+| `GET` | `/api/people/{id}/card?viewer={id}` | △ どちらでも | 人の札 | 地図で人を選んだときの札（共通点と声かけの一言つき） |
 | `GET` | `/api/changes?since={日時}&limit=50` | ❌ 不要 | 島の変化の記録 | 変化の一覧を出す |
 | `GET` | `/api/changes/digest` | ✅ 必要 | 留守中の変化（上位5件） | 久しぶりに来た人に見せる |
 | `GET` / `PUT` | `/api/notification-settings` | ✅ 必要 | 通知の切り替え | 分類ごとの push・アプリ内のオンオフ |
@@ -895,6 +896,9 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
       "shared_topics": ["キャンプ"],
       "display_name": "third", "icon_id": "4", "avatar_path": null,
       "topics": ["キャンプ", "珈琲"], "goal": "週末に山へ行く仲間を見つける",
+      "island": "焚き火山島",
+      "reasons": [{"kind": "island", "text": "同じ焚き火山島にいます"},
+                  {"kind": "topics", "text": "共通の話題「キャンプ」"}],
       "post": {"id": "0000...09", "x": 812.0, "y": 233.6}
     }
   ]
@@ -902,6 +906,32 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 ```
 
 `score` は 0〜1。重みは話題 0.35・目標 0.30・探している⇔手伝える 0.20・投稿 0.15（仮、`AFFINITY_WEIGHTS`）で、空の項目は外して残りで割り直します。上位5人まで。`post` はその人のいちばん元気な投稿と場所で、地図の点線と案内のカモメの行き先に使います（投稿がなければ `null`）。
+
+`reasons` は提案の理由（最大3つ・強い順、`INTRO_REASON_COUNT`）。どの人にも必ず1つは付けます（基準 `INTRO_PART_THRESHOLD`＝0.5（仮）を超える項目がなければ「話題が少し近いです」のように弱い言い方で1つ）。`kind` は `island`（同じ島に投稿がある）・`topics`（同じ話題を書いた）・`seeking`（相手が、自分の探していることを手伝えそう）・`offering`（相手が、自分の手伝えることを探している）・`goal`・`posts`。`island` はその人の投稿がいちばん多い島の名前（なければ `null`）。
+
+---
+
+#### `GET /api/people/{id}/card` — 人の札
+
+> **いつ使うか**: 地図で人を選んだときの札。見る人はログイン中の本人、またはログインなしなら `?viewer={id}`（`/api/similar-people` の `account` と同じ公開の問い）。見る人がいないとき・自分自身のときは `reasons` が空、`opener` が `null`。知らない人は `404`。
+
+```json
+{
+  "person": {"id": "…", "display_name": "みお", "icon_id": "3", "avatar_path": null,
+             "affiliation": null, "bio": "週末は山にいます。", "link_url": null,
+             "topics": ["キャンプ"], "goal": "…", "seeking": "冬の寝袋選び", "offering": "焚き火のこつ"},
+  "island": "焚き火山島",
+  "post_count": 4,
+  "latest_post": {"id": "…", "body": "…", "x": 812.0, "y": 233.6, "created_at": "…", "like_count": 2, "comment_count": 1},
+  "connections": [{"id": "…", "display_name": "けんた", "icon_id": "5", "avatar_path": null}],
+  "connection_count": 7,
+  "connected": false,
+  "reasons": [{"kind": "topics", "text": "共通の話題「キャンプ」"}],
+  "opener": "私も「キャンプ」が好きです。最近はどんなことをしていますか？"
+}
+```
+
+`connections` は線の強い順に最大5人（`PERSON_CARD_CONNECTIONS`）、`connection_count` は全部の数。`opener` は声かけの一言で、理由ごとのひな形から作ります（AI で文を作ることはしません）。画面ではコメント欄の候補として入れ、送る前に書き直せます。
 
 ---
 
@@ -943,8 +973,14 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 前回来たとき（`last_seen_at`、なければ14日前）以降の変化から、自分の島（`reason: "mine"`）→ つながった人の島（`"connected"`）→ 大きな変化（`"big"`：合流・分割・誕生・段）の順に上位5件を返します。**読むと今回の来訪が記録される**ので、次の一覧は今から始まります。
 
 ```json
-{ "since": "2026-10-01T08:00:00+00:00", "changes": [ { "kind": "merge", "reason": "mine", "...": "..." } ] }
+{ "since": "2026-10-01T08:00:00+00:00", "changes": [ {
+  "kind": "merge", "reason": "mine", "...": "...",
+  "people": [{"id": "…", "display_name": "みお", "icon_id": "3", "avatar_path": null}],
+  "people_role": "interaction"
+} ] }
 ```
+
+`people` は変化のきっかけの人（最大2人・`DIGEST_CONTRIBUTORS`、自分は入れない）。その島の投稿へのいいね・コメント・返信を、変化の時刻までで多い順に数えます（`people_role: "interaction"`）。誰も交流していなければ、その島に投稿した人です（`"posts"`）。
 
 ---
 

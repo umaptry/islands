@@ -235,6 +235,15 @@ PROFILE_COSINE_ANCHORS = {
     "gemini": (0.25, 0.65),
 }
 SIMILAR_PEOPLE_COUNT = 5
+# Reasons shown with a suggested person (core/introductions.py). A part counts
+# as a reason from this score up (0..1, the same scale as AFFINITY parts).
+# 仮: chosen by eye on made-up profiles, not measured.
+INTRO_PART_THRESHOLD = 0.5
+INTRO_REASON_COUNT = 3
+# A person's card lists this many of the people they have a line with.
+PERSON_CARD_CONNECTIONS = 5
+# The away digest names this many people behind each change.
+DIGEST_CONTRIBUTORS = 2
 # A new profile this close to somebody tells them ("similar" notification).
 SIMILAR_NOTIFY_THRESHOLD = 0.75
 SIMILAR_NOTIFY_PER_DAY = 3

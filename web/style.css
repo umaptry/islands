@@ -666,6 +666,122 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 }
 .chat-send:disabled { background: var(--surface-3); color: var(--ink-3); }
 
+/* Replies (段4): a quiet 返信 beside the name, the line answered above the text. */
+.chat-reply { font-size: 11px; font-weight: 700; color: var(--ink-3); padding: 0 2px; }
+.chat-reply:hover, .chat-reply:focus-visible { color: var(--sea); }
+.chat-quote {
+  margin: 3px 0 1px; padding: 3px 9px; border-radius: 8px;
+  background: var(--surface-2); color: var(--ink-3); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-compose { background: var(--surface); }
+.chat-reply-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px 0 16px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--ink-2);
+}
+.chat-reply-bar:not([hidden]) + .chat-input-row { border-top: 0; padding-top: 7px; }
+.chat-reply-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-reply-close { width: 28px; height: 28px; flex: none; border-radius: 999px; color: var(--ink-3); font-size: 13px; }
+
+/* ---------------------------------------------------------------- meeting people (段4) */
+
+.map-people {
+  position: absolute; left: 14px;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px);
+  z-index: 4;
+}
+.sheet-open .map-people { visibility: hidden; }
+.people-button {
+  position: relative; height: 50px; min-width: 50px; padding: 0 7px;
+  border-radius: 999px; background: var(--surface); color: var(--sea-ink);
+  box-shadow: var(--shadow); font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.people-button:active { transform: scale(.96); }
+.people-label { display: none; }
+.people-count {
+  position: absolute; top: -3px; right: -3px;
+  min-width: 19px; height: 19px; padding: 0 4px; border-radius: 999px;
+  background: var(--sea); color: #fff; font-size: 11px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--surface);
+}
+.face-stack { display: inline-flex; flex: none; }
+.face-stack .avatar { box-shadow: 0 0 0 2px var(--surface); }
+.face-stack .avatar + .avatar { margin-left: -8px; }
+
+.digest-pill {
+  pointer-events: auto; display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 14px; border-radius: 999px;
+  background: rgba(255, 255, 255, .94); color: var(--sea-ink);
+  font-size: 12.5px; font-weight: 700; box-shadow: var(--shadow);
+}
+.digest-pill::before {
+  content: ''; width: 8px; height: 8px; border-radius: 999px;
+  box-shadow: 0 0 0 2px #ff8a1f; background: #fff;
+}
+
+.meet-title { margin: 2px 40px 6px 2px; font-size: 15px; font-weight: 700; }
+.meet-back { padding: 2px 2px 8px; font-size: 12.5px; font-weight: 700; color: var(--sea); }
+
+.person-row, .change-row {
+  display: flex; width: 100%; text-align: left;
+  padding: 9px 2px; border-bottom: 1px solid var(--line);
+}
+.person-row:last-child, .change-row:last-child { border-bottom: 0; }
+.person-row { align-items: center; gap: 11px; }
+.person-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.person-row-name { font-size: 14px; font-weight: 700; }
+.person-row-reason {
+  font-size: 12.5px; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.person-row-island { font-size: 11px; color: var(--ink-3); }
+
+.person-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.person-head-text { min-width: 0; }
+.person-name { font-size: 16px; font-weight: 700; }
+.person-meta { font-size: 12px; color: var(--ink-3); }
+.reason-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.reason-chip {
+  padding: 4px 10px; border-radius: 999px;
+  background: #fff1e3; color: #9a4a00; font-size: 12px; font-weight: 700;
+}
+.person-bio { margin: 0 0 10px; font-size: 13.5px; line-height: 1.65; word-break: break-word; }
+.person-wants {
+  display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
+  margin: 0 0 10px; font-size: 13px; line-height: 1.55;
+}
+.person-wants dt { color: var(--ink-3); font-size: 12px; }
+.person-wants dd { margin: 0; word-break: break-word; }
+.person-latest {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  margin-bottom: 10px; padding: 9px 12px; border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.person-latest-label { font-size: 11px; color: var(--ink-3); }
+.person-latest-body { font-size: 14px; line-height: 1.6; word-break: break-word; }
+.person-links { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); min-width: 0; }
+.person-links-label { color: var(--ink-3); flex: none; }
+.person-links-names { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.person-actions {
+  display: flex; gap: 8px;
+  padding: 10px 14px max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--surface);
+}
+.person-actions .btn { flex: 1; min-height: 42px; font-size: 14px; box-shadow: none; background: var(--sea); color: #fff; }
+.person-actions .person-like { background: var(--surface-2); color: var(--ink-2); border: 0; }
+.person-actions .person-like.on { background: #e6f1fc; color: var(--sea); }
+
+.change-row { flex-direction: column; gap: 3px; }
+.change-row.seen { opacity: .55; }
+.change-top { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-3); }
+.change-tag { font-weight: 700; color: #9a4a00; }
+.change-text { font-size: 14px; font-weight: 700; line-height: 1.5; }
+.change-people { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); }
+.change-numbers { font-size: 12px; color: var(--ink-3); }
+
 /* ---------------------------------------------------------------- notifications */
 
 .unread-badge {
@@ -814,6 +930,9 @@ body:has(#islandBadge:not([hidden])) .toast {
   .sheet-thread { border-top: 1px solid var(--line); max-height: 40dvh; overflow-y: auto; }
   .bottom-nav { border-top: 1px solid var(--line); }
   .map-top { padding-top: 16px; }
+  .people-button { padding: 0 16px 0 10px; }
+  .people-label { display: inline; }
+  .people-count { display: none; }
   .slide-art { width: 220px; }
 }
 

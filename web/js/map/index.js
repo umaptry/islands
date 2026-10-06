@@ -24,6 +24,7 @@ import {
   INK, REDUCED_MOTION, drawBirds, drawBoats, drawSeaMarks, hashId, islandPath, makeLabelSpace,
 } from './decor.js';
 import { detectLandmasses, membership } from './landmass.js';
+import { orbitTag } from '../meet-text.js';
 import { drawGuide, drawHints, drawLines, drawVehicles, homeOf } from './lines.js';
 import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
 import { buildTerrain, gridTerrain } from './terrain.js';
@@ -69,7 +70,7 @@ function insets() {
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0);
   const top = rects('.map-top').reduce((low, rect) => Math.max(low, rect.bottom - box.top + 8), 12);
-  const bottom = rects('.island-badge, .map-controls, .bottom-nav')
+  const bottom = rects('.island-badge, .map-controls, .map-people, .bottom-nav')
     .reduce((high, rect) => Math.max(high, box.bottom - rect.top + 8), 12);
   return { top: Math.min(top, height * 0.4), bottom: Math.min(bottom, height * 0.4) };
 }
@@ -79,7 +80,7 @@ function insets() {
 function chromeBoxes() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #map .tabs, #islandBadge, #map .map-controls')]
+  return [...document.querySelectorAll('#map .search, #map .filter-button, #map .tabs, #mapDigest, #islandBadge, #map .map-controls, #mapPeople')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -544,7 +545,7 @@ function renderMap(time) {
     landOf: (postId) => landIndex().get(postId) || null,
     span: config().world.max - config().world.min, phone: width < 700,
     home: meId ? homeOf(state.myPosts) : null, similar: meId ? state.similar : [],
-    selected: state.selected, selectedSimilar: state.selectedSimilar,
+    selected: state.selected, selectedSimilar: state.selectedSimilar, focus: state.focusPerson,
   };
   const linePlan = drawLines(ctx, lineView);
   drawHints(ctx, lineView);
@@ -643,6 +644,7 @@ function renderMap(time) {
   drawBirds(ctx, view, time);
   const guide = drawGuide(ctx, lineView, time, (iconId, x, y, size) => faceBadge(iconId, x, y, size, { ring: MINE }));
   if (guide) hits.push(guide);
+  drawChangeMarks(time);
 
   // Names last, so nothing can bury them. Positions were resolved above, before
   // anything else could take the space.
@@ -973,6 +975,31 @@ function drawPin(ctx, x, y, size) {
 }
 
 /** A ring in the landmass colour, on a white backing so it reads over water. */
+/** Where something changed while you were away (段4): a ring that breathes
+ * until you look at it from the list. */
+function drawChangeMarks(time) {
+  const marks = state.changeMarks || [];
+  if (!marks.length) return;
+  const breathe = REDUCED_MOTION ? 0 : (Math.sin(time * 2) + 1) / 2;
+  ctx.save();
+  marks.forEach((mark) => {
+    const point = toScreen(mark.x, mark.y);
+    if (point.x < -40 || point.y < -40 || point.x > width + 40 || point.y > height + 40) return;
+    const radius = 20 + breathe * 6;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.strokeStyle = MINE;
+    ctx.globalAlpha = 0.65 + (1 - breathe) * 0.35;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+  ctx.restore();
+}
+
 function selectionRing(ctx, x, y, radius, accent) {
   ctx.save();
   ctx.beginPath();
@@ -1010,6 +1037,8 @@ function postsRegion() {
 
 const RING_RANKS = [0.25, 0.5, 0.75];
 const SELF_SIZE = 56;
+// Where beside a face a common-point label may sit, best first.
+const ORBIT_LABEL_SPOTS = ['out', 'in', 'above'];
 
 let orbitCache = { key: '', placed: [], size: 0 };
 
@@ -1022,6 +1051,9 @@ function orbitLayout(neighbors) {
   const centreX = width / 2;
   const centreY = height / 2 - 24;
   const maxRadius = Math.min(width, height) * 0.42;
+  // A tall phone has room above and below: stretch the rings into ovals so the
+  // people spread out instead of piling up across the narrow width.
+  const stretch = Math.max(1, Math.min(1.5, (height * 0.34) / maxRadius));
 
   const placed = neighbors.map((person) => {
     // Radius from 似てる度, angle from the real bearing on the map. The ring is
@@ -1036,31 +1068,35 @@ function orbitLayout(neighbors) {
     return { person, radius, angle, size };
   });
 
-  relaxAngles(placed);
-  orbitCache = { key, placed, size, centreX, centreY };
+  relaxAngles(placed, stretch);
+  orbitCache = { key, placed, size, centreX, centreY, stretch };
   return orbitCache;
 }
 
-/** Push apart anybody whose discs would overlap, keeping their radii.
+/** Push apart anybody whose face, name and 似てる度 would overlap, keeping
+ * their radii.
  *
  * The radius is the measurement and must not move. The angle is a convenience,
- * so it is the angle that gives.
+ * so it is the angle that gives. Each person is a box taller than it is wide,
+ * because the name and the percentage sit under the face.
  */
-function relaxAngles(placed) {
-  for (let pass = 0; pass < 60; pass += 1) {
+function relaxAngles(placed, stretch = 1) {
+  for (let pass = 0; pass < 120; pass += 1) {
     let moved = false;
     for (let i = 0; i < placed.length; i += 1) {
       for (let j = i + 1; j < placed.length; j += 1) {
         const a = placed[i];
         const b = placed[j];
         const ax = Math.cos(a.angle) * a.radius;
-        const ay = Math.sin(a.angle) * a.radius;
+        const ay = Math.sin(a.angle) * a.radius * stretch;
         const bx = Math.cos(b.angle) * b.radius;
-        const by = Math.sin(b.angle) * b.radius;
-        const gap = Math.hypot(ax - bx, ay - by);
-        const want = (a.size + b.size) * 0.62;
-        if (gap >= want || gap === 0) continue;
-        const push = 0.06 * (1 - gap / want);
+        const by = Math.sin(b.angle) * b.radius * stretch;
+        const wantX = (a.size + b.size) * 0.66;
+        const wantY = (a.size + b.size) * 0.86;
+        const dx = Math.abs(ax - bx);
+        const dy = Math.abs(ay - by);
+        if (dx >= wantX || dy >= wantY || (dx === 0 && dy === 0)) continue;
+        const push = 0.05 * Math.min(1 - dx / wantX, 1 - dy / wantY) + 0.004;
         const direction = Math.sign(
           ((a.angle - b.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI,
         ) || 1;
@@ -1082,6 +1118,7 @@ function renderOrbit(time) {
     return matchesFilters({ ...post, body: person.body, tags: person.tags });
   });
   const layout = orbitLayout(neighbors);
+  const { stretch } = layout;
   const centreX = width / 2;
   const centreY = height / 2 - 24;
 
@@ -1095,32 +1132,49 @@ function renderOrbit(time) {
   RING_RANKS.forEach((rank) => {
     const radius = SELF_SIZE * 0.9 + rank * (maxRadius - SELF_SIZE * 0.9);
     ctx.beginPath();
-    ctx.arc(centreX, centreY, radius, 0, Math.PI * 2);
+    ctx.ellipse(centreX, centreY, radius, radius * stretch, 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(255,255,255,.5)';
     ctx.font = '10px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${Math.round((1 - rank) * 100)}%`, centreX, centreY - radius - 4);
+    ctx.fillText(`${Math.round((1 - rank) * 100)}%`, centreX, centreY - radius * stretch - 4);
     ctx.setLineDash([3, 6]);
   });
   ctx.restore();
 
   const me = state.postsById.get(state.activePostId);
+  // The people the AI thinks are most like you get the map's orange dotted
+  // line and, halfway along it, what you have in common (段4).
+  const alike = new Map((state.similar || []).map((person) => [person.id, person]));
+  const commons = [];
+  const taken = []; // faces and names, so the common points never cover them
 
   layout.placed.forEach(({ person, radius, angle, size }) => {
     const x = centreX + Math.cos(angle) * radius;
-    const y = centreY + Math.sin(angle) * radius;
+    const y = centreY + Math.sin(angle) * radius * stretch;
     const accent = islandColor(person.cluster_id);
+    const known = person.author_id ? alike.get(person.author_id) : null;
 
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,.30)';
-    ctx.lineWidth = 1;
+    if (known) {
+      ctx.strokeStyle = MINE;
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.setLineDash([1, 6]);
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,.30)';
+      ctx.lineWidth = 1;
+    }
     ctx.beginPath();
     ctx.moveTo(centreX, centreY);
     ctx.lineTo(x, y);
     ctx.stroke();
     ctx.restore();
+    // Every face of a person is a candidate place for their one label.
+    const common = known ? orbitTag(known.reasons) : '';
+    if (common) commons.push({ author: person.author_id, text: common, x, y, size });
+    taken.push({ left: x - size * 0.5, right: x + size * 0.5, top: y - size * 0.5, bottom: y + size * 0.72 + 16 });
 
     const post = state.postsById.get(person.id) || person;
     ctx.save();
@@ -1160,6 +1214,39 @@ function renderOrbit(time) {
 
     hits.push({ x, y, r: size * 0.8, post: { ...post, ...person } });
   });
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 10.5px system-ui, sans-serif';
+  // You in the middle, too, and then each label that still has room.
+  taken.push({ left: centreX - SELF_SIZE * 0.6, right: centreX + SELF_SIZE * 0.6,
+    top: centreY - SELF_SIZE * 0.6, bottom: centreY + SELF_SIZE * 0.6 });
+  const labelled = new Set();
+  const clashes = (box) => taken.some((other) => box.left < other.right && box.right > other.left
+    && box.top < other.bottom && box.bottom > other.top);
+  // One label per person, beside one of their faces: the outer side first,
+  // then the inner side, then above. A spot that would cover anybody's face
+  // or name is skipped, and a person with no free spot goes without.
+  ORBIT_LABEL_SPOTS.forEach((spot) => commons.forEach((common) => {
+    if (labelled.has(common.author)) return;
+    const w = ctx.measureText(common.text).width + 12;
+    const outward = common.x >= centreX ? 1 : -1;
+    const side = common.size * 0.5 + 2 + w / 2;
+    const x = spot === 'above' ? common.x : common.x + (spot === 'out' ? outward : -outward) * side;
+    const y = spot === 'above' ? common.y - common.size * 0.5 - 11 : common.y;
+    const box = { left: x - w / 2, right: x + w / 2, top: y - 9, bottom: y + 9 };
+    if (box.left < 4 || box.right > width - 4 || clashes(box)) return;
+    labelled.add(common.author);
+    taken.push(box);
+    ctx.fillStyle = 'rgba(255,255,255,.94)';
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - 9, w, 18, 9);
+    ctx.fill();
+    ctx.fillStyle = '#9a4a00';
+    ctx.fillText(common.text, x, y + 0.5);
+  }));
+  ctx.restore();
 
   // You, in the middle.
   ctx.save();

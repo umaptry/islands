@@ -28,6 +28,8 @@ export const state = {
   connections: [],        // lines between people, /api/connections
   similar: [],            // the people most like me, /api/similar-people
   selectedSimilar: null,  // { author, people } for the selected post's author
+  focusPerson: null,      // the similar person whose card is open (段4)
+  changeMarks: [],        // unseen away-digest places, { id, x, y } in world units
 };
 
 export function subscribe(listener) {

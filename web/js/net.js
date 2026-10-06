@@ -155,18 +155,18 @@ const supabaseBackend = {
   async listComments(postId) {
     const rows = await restCall('comments', {
       params: {
-        select: `id,post_id,author_id,body,created_at,${ACCOUNT_EMBED}`,
+        select: `id,post_id,author_id,body,reply_to,created_at,${ACCOUNT_EMBED}`,
         post_id: `eq.${postId}`, deleted_at: 'is.null', order: 'created_at.asc',
       },
     });
     return rows.map((row) => flatten(row, 'author'));
   },
-  async addComment(postId, body) {
+  async addComment(postId, body, replyTo = null) {
     const rows = await restCall('comments', {
       method: 'POST',
-      params: { select: `id,post_id,author_id,body,created_at,${ACCOUNT_EMBED}` },
+      params: { select: `id,post_id,author_id,body,reply_to,created_at,${ACCOUNT_EMBED}` },
       prefer: 'return=representation',
-      body: { post_id: postId, author_id: session.userId(), body },
+      body: { post_id: postId, author_id: session.userId(), body, ...(replyTo ? { reply_to: replyTo } : {}) },
     });
     return flatten(rows[0], 'author');
   },
@@ -282,7 +282,8 @@ const localBackend = {
   }),
   listComments: async (postId) =>
     (await api.get(`/api/local/comments?post=${encodeURIComponent(postId)}`)).comments,
-  addComment: (postId, body) => api.post('/api/local/comments', { post_id: postId, body }),
+  addComment: (postId, body, replyTo = null) =>
+    api.post('/api/local/comments', { post_id: postId, body, ...(replyTo ? { reply_to: replyTo } : {}) }),
   deleteComment: async (commentId) => {
     await api.del(`/api/local/comments/${commentId}`);
     return true;

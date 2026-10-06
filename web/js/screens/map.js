@@ -17,6 +17,7 @@ import {
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
 import { chatInput, postChat } from '../components/chat.js';
+import { loadDigest, paintMarks, paintPeople, setupMeet } from './meet.js';
 import {
   fitCamera, focusOn, initMap, invalidateOrbit, landmassOf, onCameraSettled, resize, viewport,
 } from '../map/index.js';
@@ -31,6 +32,7 @@ let restorePost = null;
 let mapRequest = 0;
 let filterTimer = 0;
 let mapError = false;
+let pendingDraft = '';
 
 function paintMapStatus() {
   const status = $('mapStatus');
@@ -131,6 +133,7 @@ export async function refreshSimilar({ force = false } = {}) {
   const me = state.account ? state.account.id : null;
   if (!me) {
     state.similar = [];
+    paintPeople();
     return;
   }
   if (!force && similarFetched.account === me && Date.now() - similarFetched.at < 300000) return;
@@ -138,6 +141,7 @@ export async function refreshSimilar({ force = false } = {}) {
     const result = await api.get(`/api/similar-people?account=${encodeURIComponent(me)}`, { auth: false });
     state.similar = result.people || [];
     similarFetched = { account: me, at: Date.now() };
+    paintPeople();
   } catch {
     /* no dotted lines this time */
   }
@@ -215,6 +219,8 @@ async function refreshNeighbors() {
 // ---------------------------------------------------------------- chrome
 
 function paintBadge() {
+  paintPeople();
+  paintMarks();
   const badge = $('islandBadge');
   const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
   if (state.view !== 'map' || !mine) {
@@ -326,11 +332,14 @@ function setupChrome() {
 
 // ---------------------------------------------------------------- sheet
 
-export async function openPost(postId) {
+/** Open a post's sheet. `draft` starts the message input with a first line
+ * (Q44, from a person card); `expand` opens the sheet at full height. */
+export async function openPost(postId, { draft = '', expand = false } = {}) {
   if (sheetOpen()) closeSheet();
   const generation = ++selectionGeneration;
   let post = state.postsById.get(postId);
-  const body = openSheet({ onClose: () => {
+  pendingDraft = draft;
+  const body = openSheet({ expanded: expand, onClose: () => {
     selectionGeneration += 1;
     sheetEvents?.abort();
     sheetEvents = null;
@@ -440,13 +449,19 @@ function paintThread(post, container) {
     }));
     return;
   }
+  let input = null;
   activeChat = postChat(post.id, {
     onCountChange: (count) => upsertPost({ id: post.id, comment_count: count }),
+    onReply: (comment) => input?.replyTo(comment),
   });
   container.append(el('div', { className: 'section-label', text: 'メッセージ' }), activeChat.node);
   if (state.account) {
     const chat = activeChat;
-    $('sheetFoot').append(chatInput(post.id, { onSent: () => chat.refresh() }));
+    // The suggested first line is offered once; a repaint does not bring it back.
+    const draft = pendingDraft;
+    pendingDraft = '';
+    input = chatInput(post.id, { onSent: () => chat.refresh(), draft });
+    $('sheetFoot').append(input.node);
   } else {
     $('sheetFoot').append(el('button', {
       className: 'btn btn-block',
@@ -584,6 +599,7 @@ function startPolling() {
 
 export function setupMapScreen() {
   setupChrome();
+  setupMeet({ openPost, react });
   setupSheetGesture();
   paintFilterPanel();
   paintFilterCount();
@@ -614,6 +630,8 @@ export function setupMapScreen() {
         refreshSimilar();
       }
       paintBadge();
+      // Not awaited: the map is already up, and the pill can arrive a moment later.
+      loadDigest();
       if (restorePost && activeScreen() === 'map') {
         const postId = restorePost;
         restorePost = null;

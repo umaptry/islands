@@ -301,7 +301,7 @@ function pairsOf(rows) {
  * that already shares a real line keeps only the real one.
  */
 export function drawHints(ctx, view) {
-  const { rows, toScreen, width, height, meId, home, similar, selected, selectedSimilar } = view;
+  const { rows, toScreen, width, height, meId, home, similar, selected, selectedSimilar, focus } = view;
   const pairs = pairsOf(rows);
   const sets = [];
   if (meId && home) sets.push({ owner: meId, from: home, people: similar });
@@ -315,7 +315,10 @@ export function drawHints(ctx, view) {
       const shape = arc(toScreen(from.x, from.y), toScreen(person.post.x, person.post.y),
         hashId(`${owner}|${person.id}`), 0.12);
       if (shape.length < 8 || !onScreen(shape, width, height)) return;
-      stroke(ctx, shape, { color: MINE, width: 2, alpha: 0.9, dash: [1, 6] });
+      // The person whose card is open (段4) stands out; the rest step back.
+      const style = !focus ? { width: 2, alpha: 0.9 }
+        : person.id === focus ? { width: 3.5, alpha: 1 } : { width: 2, alpha: 0.4 };
+      stroke(ctx, shape, { color: MINE, ...style, dash: [1, 6] });
     });
   });
 }

@@ -10,11 +10,11 @@
 import { config } from '../config.js';
 import { data } from '../net.js';
 import { state } from '../state.js';
-import { avatar, clear, confirmAction, el, timeAgo, toast } from '../ui.js';
+import { avatar, clear, clip, confirmAction, el, timeAgo, toast } from '../ui.js';
 
 const POLL_MS = 5000;
 
-export function postChat(postId, { onCountChange } = {}) {
+export function postChat(postId, { onCountChange, onReply } = {}) {
   const list = el('div', { className: 'chat-list' });
   const wrap = el('div', { className: 'chat' }, list);
   let timer = 0;
@@ -46,6 +46,7 @@ export function postChat(postId, { onCountChange } = {}) {
       }));
       return;
     }
+    const byId = new Map(comments.map((comment) => [comment.id, comment]));
     comments.forEach((comment) => {
       const author = comment.author || {};
       const mine = state.account && author.id === state.account.id;
@@ -55,13 +56,34 @@ export function postChat(postId, { onCountChange } = {}) {
           el('div', { className: 'chat-meta' },
             el('span', { className: 'chat-name', text: author.display_name || '' }),
             el('span', { className: 'chat-time', text: timeAgo(comment.created_at) }),
+            replyButton(comment, mine),
           ),
+          quote(comment, byId),
           el('p', { className: 'chat-text', text: comment.body }),
         ),
         action(comment, mine),
       ));
     });
     if (atBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  }
+
+  /** A reply shows one line of what it answers; a withdrawn message says so. */
+  function quote(comment, byId) {
+    if (!comment.reply_to) return null;
+    const parent = byId.get(comment.reply_to);
+    if (!parent) return el('p', { className: 'chat-quote gone', text: '元のメッセージは削除されました' });
+    return el('p', { className: 'chat-quote',
+      text: `${parent.author?.display_name || ''}：${clip(parent.body, 28)}` });
+  }
+
+  function replyButton(comment, mine) {
+    if (!state.account || !onReply || mine) return null;
+    return el('button', {
+      className: 'chat-reply',
+      attrs: { type: 'button', 'aria-label': `${comment.author?.display_name || ''}さんに返信` },
+      text: '返信',
+      on: { click: () => onReply(comment) },
+    });
   }
 
   /** The one thing you can do to a message: take yours back, or report theirs.
@@ -131,7 +153,9 @@ export function postChat(postId, { onCountChange } = {}) {
   return { node: wrap, refresh, destroy };
 }
 
-export function chatInput(postId, { onSent } = {}) {
+/** The input under a thread. `draft` starts it with a first line to send or
+ * rewrite (Q44); replyTo(comment) makes the next message an answer to one. */
+export function chatInput(postId, { onSent, draft = '' } = {}) {
   const limit = config().limits.comment_max;
   const field = el('input', {
     className: 'chat-input',
@@ -145,6 +169,38 @@ export function chatInput(postId, { onSent } = {}) {
     attrs: { type: 'button', 'aria-label': '送信', disabled: true },
     text: '➤',
   });
+
+  const barText = el('span', { className: 'chat-reply-text' });
+  const barClose = el('button', {
+    className: 'chat-reply-close',
+    attrs: { type: 'button', 'aria-label': '取り消す' },
+    text: '×',
+  });
+  const bar = el('div', { className: 'chat-reply-bar', attrs: { hidden: true } }, barText, barClose);
+  let answering = null;   // the comment the next message replies to
+  let drafted = false;    // the field holds the suggested first line
+
+  function showBar(text) {
+    barText.textContent = text;
+    bar.hidden = !text;
+  }
+  barClose.addEventListener('click', () => {
+    if (drafted) field.value = '';
+    answering = null;
+    drafted = false;
+    showBar('');
+    sync();
+    field.focus();
+  });
+
+  function replyTo(comment) {
+    answering = comment;
+    if (drafted) field.value = '';
+    drafted = false;
+    showBar(`${comment.author?.display_name || ''}さんへ返信`);
+    sync();
+    field.focus();
+  }
 
   const sync = () => { send.disabled = !field.value.trim(); };
   field.addEventListener('input', sync);
@@ -169,11 +225,16 @@ export function chatInput(postId, { onSent } = {}) {
     // Cleared before the request, not after: a slow network should not make it
     // look as though the tap did nothing, and a failure puts the text back.
     field.value = '';
+    const answer = answering;
+    answering = null;
+    drafted = false;
+    showBar('');
     try {
-      await data.addComment(postId, body);
+      await data.addComment(postId, body, answer?.id || null);
       if (onSent) onSent();
     } catch (error) {
       field.value = body;
+      if (answer) replyTo(answer);
       toast(error.message);
     } finally {
       sending = false;
@@ -181,5 +242,13 @@ export function chatInput(postId, { onSent } = {}) {
     }
   }
 
-  return el('div', { className: 'chat-input-row' }, field, send);
+  if (draft) {
+    field.value = draft;
+    drafted = true;
+    showBar('声かけの候補です。直して送れます');
+    sync();
+  }
+
+  const node = el('div', { className: 'chat-compose' }, bar, el('div', { className: 'chat-input-row' }, field, send));
+  return { node, replyTo, focus: () => field.focus() };
 }

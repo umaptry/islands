@@ -56,6 +56,7 @@ from core import affinity as people
 from core import auth
 from core import connections as lines
 from core import growth
+from core import introductions
 from core import island_tracking
 from core import notifications as notices
 from core.clustering import assign_cluster, name_group
@@ -63,6 +64,7 @@ from core.config import (
     AWAY_DIGEST_COUNT,
     CONNECTION_CACHE_SECONDS,
     CONNECTIONS_SINCE,
+    DIGEST_CONTRIBUTORS,
     ISLAND_COLORS,
     ISLAND_NOTIFY_PER_DAY,
     ISLAND_RUN_MIN_SECONDS,
@@ -83,6 +85,7 @@ from core.config import (
     MOTIVATION_MIN,
     NOTIFICATION_CATEGORIES,
     ORBIT_NEIGHBOR_COUNT,
+    PERSON_CARD_CONNECTIONS,
     PROFILE_TEXT_FIELDS,
     PROFILE_TEXT_LENGTH,
     PROFILE_TOPIC_LENGTH,
@@ -358,6 +361,15 @@ def current_user(request):
     return user_id
 
 
+def optional_user(request):
+    """The account id behind this request, or None when nobody is signed in."""
+    try:
+        user_id, _claims = auth.identify(request)
+    except auth.AuthError:
+        return None
+    return user_id
+
+
 def check_rate_limit(key):
     if RATE_LIMIT_OFF:
         return True
@@ -550,8 +562,8 @@ def people_index():
     return index
 
 
-def similar_people(account_id, limit=SIMILAR_PEOPLE_COUNT):
-    index = people_index()
+def similar_people(account_id, limit=SIMILAR_PEOPLE_COUNT, index=None):
+    index = index if index is not None else people_index()
     me = index.get(account_id)
     if me is None:
         return []
@@ -588,10 +600,12 @@ def notify_similar(account_id):
     return rows
 
 
-def home_posts():
+def home_posts(posts=None):
     """(post id -> {x, y}, author -> their most energetic live post)."""
     where, best = {}, {}
-    for post in state["store"].list_terms(limit=NAMING_POST_LIMIT):
+    if posts is None:
+        posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+    for post in posts:
         if post.get("x") is None or post.get("y") is None:
             continue
         where[post["id"]] = {"x": float(post["x"]), "y": float(post["y"])}
@@ -600,6 +614,43 @@ def home_posts():
         if author and (author not in best or energy > best[author]["energy"]):
             best[author] = {"id": post["id"], "energy": energy, **where[post["id"]]}
     return where, best
+
+
+def islands_by_author(posts=None):
+    """author -> labels of the islands their posts stand on, most posts first."""
+    if posts is None:
+        posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+    author_of = {post["id"]: post.get("author_id") for post in posts}
+    counts = defaultdict(Counter)
+    for island in live_islands():
+        for post_id in island.get("post_ids") or []:
+            author = author_of.get(post_id)
+            if author:
+                counts[author][island.get("label") or island.get("name")] += 1
+    return {author: [label for label, _ in counter.most_common()] for author, counter in counts.items()}
+
+
+def introduce(viewer_id, other_id, index, places, ranked=None):
+    """Why `viewer_id` might want to meet `other_id`, and a first line to say.
+
+    index: people_index(); places: islands_by_author(); ranked: the
+    affinity() row already worked out for this pair, if there is one.
+    """
+    me, other = index.get(viewer_id), index.get(other_id)
+    if me is None or other is None:
+        return {"reasons": [], "opener": introductions.opener([], {})}
+    if ranked is None:
+        ranked = people.affinity(me, other, dense_mean=dense_mean(),
+                                 post_anchors=state.get("cosine_anchors")) or {}
+    seeking, offering = people.directions(me, other, dense_mean=dense_mean())
+    mine = places.get(viewer_id) or []
+    shared_islands = [label for label in places.get(other_id) or [] if label in mine]
+    shared_topics = ranked.get("shared_topics") or []
+    found = introductions.reasons(
+        me, other, ranked.get("parts") or {}, seeking=seeking, offering=offering,
+        shared_islands=shared_islands, shared_topics=shared_topics,
+    )
+    return {"reasons": found, "opener": introductions.opener(found, other, shared_topics)}
 
 
 def connection_lines(force=False):
@@ -949,13 +1000,19 @@ def similar_people_route(request: Request, account: str = ""):
     account = account or current_user(request)
     store = state["store"]
     try:
-        ranked = similar_people(account)
+        index = people_index()
+        ranked = similar_people(account, index=index)
         # Where each of them stands on the map: the dotted line goes there.
-        _, best = home_posts() if ranked else ({}, {})
+        posts = store.list_terms(limit=NAMING_POST_LIMIT) if ranked else []
+        _, best = home_posts(posts)
+        places = islands_by_author(posts) if ranked else {}
+        accounts = {row["id"]: row for row in store.list_accounts([row["id"] for row in ranked])}
         out = []
         for row in ranked:
-            person = store.get_account(row["id"]) or {}
+            person = accounts.get(row["id"]) or {}
             home = best.get(row["id"])
+            # Q15: a suggestion is never shown without the reason for it.
+            intro = introduce(account, row["id"], index, places, ranked=row)
             out.append({
                 **row,
                 "display_name": person.get("display_name", ""),
@@ -963,11 +1020,62 @@ def similar_people_route(request: Request, account: str = ""):
                 "avatar_path": person.get("avatar_path"),
                 "topics": person.get("topics") or [],
                 "goal": person.get("goal"),
+                "island": (places.get(row["id"]) or [None])[0],
+                "reasons": intro["reasons"],
                 "post": {"id": home["id"], "x": home["x"], "y": home["y"]} if home else None,
             })
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     return {"people": out}
+
+
+@app.get("/api/people/{person_id}/card")
+def person_card(person_id: str, request: Request, viewer: str = ""):
+    """One person, as the map's person card shows them.
+
+    Who they are, their latest post, up to PERSON_CARD_CONNECTIONS of the
+    people they have a line with, and - when somebody is looking (signed in,
+    or `viewer`, the same public question /api/similar-people answers) - what
+    the two have in common and a first line to say.
+    """
+    viewer = optional_user(request) or viewer or None
+    store = state["store"]
+    try:
+        person = store.get_account(person_id)
+        if not person:
+            raise HTTPException(status_code=404, detail="見つかりませんでした。")
+        own = store.posts_by_author(person_id)
+        places = islands_by_author()
+        rows = [row for row in connection_lines() if person_id in (row["a"], row["b"])]
+        partner_ids = [row["b"] if row["a"] == person_id else row["a"] for row in rows]
+        shown = partner_ids[:PERSON_CARD_CONNECTIONS]
+        partners = {row["id"]: row for row in store.list_accounts(shown)}
+        intro = None
+        if viewer and viewer != person_id:
+            intro = introduce(viewer, person_id, people_index(), places)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+
+    latest = own[0] if own else None
+    return {
+        "person": {key: person.get(key) for key in (
+            "id", "display_name", "icon_id", "avatar_path", "affiliation", "bio", "link_url",
+            "topics", "goal", "seeking", "offering")},
+        "island": (places.get(person_id) or [None])[0],
+        "post_count": len(own),
+        "latest_post": {key: latest.get(key) for key in (
+            "id", "body", "x", "y", "created_at", "like_count", "comment_count")} if latest else None,
+        "connections": [{
+            "id": partner,
+            "display_name": (partners.get(partner) or {}).get("display_name", ""),
+            "icon_id": (partners.get(partner) or {}).get("icon_id", "0"),
+            "avatar_path": (partners.get(partner) or {}).get("avatar_path"),
+        } for partner in shown],
+        "connection_count": len(rows),
+        "connected": bool(viewer) and viewer in partner_ids,
+        "reasons": intro["reasons"] if intro else [],
+        "opener": intro["opener"] if intro else None,
+    }
 
 
 def _parse_since(value):
@@ -1006,6 +1114,9 @@ def changes_digest(request: Request):
         rows = store.list_island_events(since=start, limit=500)
         islands_by_id = {row["id"]: row for row in store.island_states(active_only=False)}
         friends = lines.partners(connection_lines(), user_id)
+        # What led up to the changes: interactions from a while before them.
+        lead_in = (notices.parse_time(start) - timedelta(days=14)).isoformat()
+        events = store.interaction_events(since=lead_in)
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
 
@@ -1023,9 +1134,43 @@ def changes_digest(request: Request):
             continue
         picked.append((rank, -weight, row, reason))
     picked.sort(key=lambda item: (item[0], item[1], -notices.parse_time(item[2]["created_at"]).timestamp()))
+    picked = picked[:AWAY_DIGEST_COUNT]
+
+    # The people behind each change: whose likes and comments on the island's
+    # posts led up to it or, with none, who posted there.
+    behind = {}
+    for _, _, row, _ in picked:
+        island = islands_by_id.get(row["island_id"]) or {}
+        found = introductions.contributors(
+            island.get("post_ids"), events, before=notices.parse_time(row["created_at"]),
+            exclude={user_id}, limit=DIGEST_CONTRIBUTORS,
+        )
+        role = "interaction"
+        if not found:
+            found = [person for person in island.get("author_ids") or [] if person != user_id]
+            found, role = found[:DIGEST_CONTRIBUTORS], "posts"
+        behind[row["id"]] = (found, role)
+    try:
+        names = {row["id"]: row for row in store.list_accounts(
+            sorted({person for found, _ in behind.values() for person in found}))}
+    except StoreError:
+        names = {}
+
+    def who(row):
+        found, role = behind.get(row["id"], ([], "posts"))
+        return {
+            "people": [{
+                "id": person,
+                "display_name": names[person].get("display_name", ""),
+                "icon_id": names[person].get("icon_id", "0"),
+                "avatar_path": names[person].get("avatar_path"),
+            } for person in found if person in names],
+            "people_role": role,
+        }
+
     return {
         "since": previous,
-        "changes": [{**row, "reason": reason} for _, _, row, reason in picked[:AWAY_DIGEST_COUNT]],
+        "changes": [{**row, "reason": reason, **who(row)} for _, _, row, reason in picked],
     }
 
 

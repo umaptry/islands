@@ -123,12 +123,8 @@ def affinity(a, b, profile_anchor=None, post_anchors=None, weights=None, dense_m
         "topics": _rescale(_cosine(a.get("vec_topics"), b.get("vec_topics"), dense_mean), anchors),
         "goal": _rescale(_cosine(a.get("vec_goal"), b.get("vec_goal"), dense_mean), anchors),
     }
-    directions = [
-        _rescale(_cosine(a.get("vec_seeking"), b.get("vec_offering"), dense_mean), anchors),
-        _rescale(_cosine(b.get("vec_seeking"), a.get("vec_offering"), dense_mean), anchors),
-    ]
-    directions = [value for value in directions if value is not None]
-    parts["seeking_offering"] = max(directions) if directions else None
+    either = [value for value in directions(a, b, anchors, dense_mean) if value is not None]
+    parts["seeking_offering"] = max(either) if either else None
     post_cosine = _cosine(a.get("centroid"), b.get("centroid"))
     if post_cosine is not None and post_anchors is not None:
         parts["posts"] = cosine_percent(post_cosine, post_anchors) / 100.0
@@ -147,6 +143,19 @@ def affinity(a, b, profile_anchor=None, post_anchors=None, weights=None, dense_m
             "shared_topics": shared}
 
 
+def directions(a, b, profile_anchor=None, dense_mean=None):
+    """(how well b offers what a seeks, how well a offers what b seeks), each 0..1 or None.
+
+    affinity() keeps only the better of the two; a reason in words needs to
+    know which way round it was (core/introductions.py).
+    """
+    anchors = profile_anchor or profile_anchors()
+    return (
+        _rescale(_cosine(a.get("vec_seeking"), b.get("vec_offering"), dense_mean), anchors),
+        _rescale(_cosine(b.get("vec_seeking"), a.get("vec_offering"), dense_mean), anchors),
+    )
+
+
 def rank_similar(me, people, limit=SIMILAR_PEOPLE_COUNT, **kwargs):
     """The `limit` people most like `me`, best first. `people` includes anybody."""
     ranked = []
@@ -161,5 +170,5 @@ def rank_similar(me, people, limit=SIMILAR_PEOPLE_COUNT, **kwargs):
     return ranked[:limit]
 
 
-__all__ = ["VECTOR_FIELDS", "affinity", "centre", "embed_profile", "normalise_topic",
+__all__ = ["VECTOR_FIELDS", "affinity", "centre", "directions", "embed_profile", "normalise_topic",
            "profile_anchors", "profile_texts", "rank_similar"]
