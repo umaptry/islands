@@ -20,9 +20,10 @@ create table if not exists public.post_views (
 );
 
 alter table public.post_views enable row level security;
--- No policies: with RLS on and nothing granted, the browser can neither read
--- nor write. The server writes with its own key after checking the viewer is
--- not the author.
+-- One policy that lets nobody in: the browser can neither read nor write. The
+-- server writes with its own key (which skips RLS) after checking the viewer
+-- is not the author.
+create policy post_views_none on public.post_views for all using (false) with check (false);
 revoke all on public.post_views from anon, authenticated;
 
 create or replace function public.post_view_counts(author uuid)
