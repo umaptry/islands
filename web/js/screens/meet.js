@@ -11,6 +11,7 @@ import {
 } from '../ui.js';
 import { focusOn } from '../map/index.js';
 import { describeChange, digestLabel, personMeta, reasonLine } from '../meet-text.js';
+import { isOpen } from '../components/postcard.js';
 
 const SEEN_KEY = 'islands.seenChanges';
 let hooks = { openPost: () => {}, react: async () => {} };
@@ -77,6 +78,18 @@ export function paintPeople() {
   );
 }
 
+/** Q45: someone whose newest post on the map says "talk to me". */
+function welcomes(personId) {
+  const posts = (state.posts || []).filter((post) => post.author_id === personId);
+  if (!posts.length) return false;
+  const newest = posts.reduce((a, b) => (String(a.created_at) > String(b.created_at) ? a : b));
+  return isOpen(newest);
+}
+
+function openBadge() {
+  return el('span', { className: 'tag-badge open', text: '💬 話しかけていいよ' });
+}
+
 function openPeople() {
   const { body } = meetSheet();
   state.focusPerson = null;
@@ -90,7 +103,9 @@ function openPeople() {
     },
     avatar(person, 40),
     el('span', { className: 'person-row-text' },
-      el('span', { className: 'person-row-name', text: person.display_name || '名前なし' }),
+      el('span', { className: 'person-row-name' },
+        person.display_name || '名前なし',
+        welcomes(person.id) ? el('span', { className: 'open-dot', text: '💬', attrs: { title: '話しかけていいよ' } }) : null),
       el('span', { className: 'person-row-reason', text: reasonLine(person) }),
       // The island on its own line unless the reason already names it.
       person.island && !reasonLine(person).includes(person.island)
@@ -138,6 +153,7 @@ function paintCard(body, card) {
     el('div', { className: 'person-head-text' },
       el('div', { className: 'person-name', text: person.display_name || '名前なし' }),
       el('div', { className: 'person-meta', text: personMeta(card) }),
+      isOpen(latest) ? openBadge() : null,
     ),
   ));
   if (card.reasons?.length) {

@@ -11,6 +11,7 @@ import { config } from '../config.js';
 import { data } from '../net.js';
 import { state } from '../state.js';
 import { avatar, clear, clip, confirmAction, el, timeAgo, toast } from '../ui.js';
+import { buzz } from '../feedback.js';
 
 const POLL_MS = 5000;
 
@@ -231,6 +232,8 @@ export function chatInput(postId, { onSent, draft = '' } = {}) {
     showBar('');
     try {
       await data.addComment(postId, body, answer?.id || null);
+      buzz('tap');
+      toast('送信しました');
       if (onSent) onSent();
     } catch (error) {
       field.value = body;

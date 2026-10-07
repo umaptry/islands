@@ -436,6 +436,17 @@ PRIMARY KEY (post_id, actor_id, kind)
 | `touch_last_seen()` | `authenticated` | 今回の来訪を記録し、前回の日時を返す（初回は `null`） |
 | `pair_interaction_count(a, b)` | トリガーの中 | 2人のあいだの交流の数（向きは問わない） |
 
+#### 👣 2026-10-08 に足した表（マイグレーション `20261008000000_post_views_and_preview.sql`・段5）
+
+| 表 | 何を入れるか | 誰が読める・書ける |
+|---|---|---|
+| `post_views` | 投稿を開いた人：`post_id`・`viewer`（アカウント ID か、ログインしていないブラウザの `anon:` で始まる鍵）。主キーは `post_id`＋`viewer`（同じ人は1回だけ数える） | ブラウザからは読めない・書けない。書くのはサーバーだけ（書いた本人の閲覧は数えない） |
+
+| 関数 | 呼べる人 | 何をするか |
+|---|---|---|
+| `post_view_counts(author)` | `service_role` | その人の消していない投稿ごとの見られた数。誰が見たかは返さない（Q35） |
+| `nearest_to_vector(origin, k)` | `service_role` | 保存していない文のベクトル（文字の形 `"[0.1,…]"`）に近い投稿 `k` 件（最大100）。例文のお試し（Q40）で使う |
+
 ### 2.3 テーブル間のリレーション（関係）を理解する
 
 ER図の線の読み方を、具体的なシナリオで説明します。
@@ -649,6 +660,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `GET` | `/api/changes?since={日時}&limit=50` | ❌ 不要 | 島の変化の記録 | 変化の一覧を出す |
 | `GET` | `/api/changes/digest` | ✅ 必要 | 留守中の変化（上位5件） | 久しぶりに来た人に見せる |
 | `GET` / `PUT` | `/api/notification-settings` | ✅ 必要 | 通知の切り替え | 分類ごとの push・アプリ内のオンオフ |
+| `POST` | `/api/posts/preview` | ✅ 必要 | 例文のお試し（保存しない） | 最初の投稿の練習で「この文ならここに立つ」を見せる |
+| `POST` | `/api/posts/{id}/view` | △ どちらでも | 見られた数を1つ記録 | 他の人の投稿を開いたとき |
+| `GET` | `/api/me/views` | ✅ 必要 | 自分の投稿ごとの見られた数 | 自分の投稿の札に「N人が見ました」 |
 
 ---
 
@@ -736,6 +750,9 @@ Host: localhost:7860
 | `limits` | `object` | 入力フォームのバリデーションに使う上限値。サーバーとフロントで一致させる必要がある |
 | `similarity.measured_in` | `string` | 類似度の計算方式。`"448d-cosine"` = 448次元コサイン類似度 |
 | `similarity.floor` / `ceiling` | `number\|null` | コサイン値を「似てる度 0〜100%」に変換するための校正パラメータ |
+| `open_tag` | `string` | 「話しかけていいよ」の切り替えが付けるタグ（`tags[0]`＝「気軽に話しかけて」）。Q45 |
+| `weekly_prompt` | `{key, text, until}` | 今週のお題（Q37）。月曜0時（日本時間）に替わる。`key` は `"2026-W41"` の形、`until` は次に替わる日時（UTC） |
+| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文） |
 
 ---
 
@@ -922,7 +939,7 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
              "topics": ["キャンプ"], "goal": "…", "seeking": "冬の寝袋選び", "offering": "焚き火のこつ"},
   "island": "焚き火山島",
   "post_count": 4,
-  "latest_post": {"id": "…", "body": "…", "x": 812.0, "y": 233.6, "created_at": "…", "like_count": 2, "comment_count": 1},
+  "latest_post": {"id": "…", "body": "…", "tags": ["気軽に話しかけて"], "x": 812.0, "y": 233.6, "created_at": "…", "like_count": 2, "comment_count": 1},
   "connections": [{"id": "…", "display_name": "けんた", "icon_id": "5", "avatar_path": null}],
   "connection_count": 7,
   "connected": false,
@@ -1253,6 +1270,48 @@ Authorization: Bearer eyJhbG...
 ```json
 { "ok": true }
 ```
+
+---
+
+#### `POST /api/posts/preview` — 例文のお試し（保存しない）🔒
+
+> **いつ使うか**: 最初の投稿の練習（Q40）。例文を選ぶと「この文ならここに立ちます」を見せる。
+> **何が起きるか**: 文を地図の位置に置いて、島と近い人（最大3人）を返す。**何も保存しない**ので、同じ例文の投稿が地図に増えない。島は半径40（仮）以内でいちばん近い投稿の島。なければ `null`（海の上）。
+
+**リクエスト例**
+```json
+{ "body": "週末に近所を走っています。一緒に走れる人がいたらうれしいです" }
+```
+
+**レスポンス例** `200 OK`
+```json
+{ "body": "…", "x": 512.3, "y": 401.8, "cluster_id": 4, "terms": ["走る", "週末"],
+  "island": { "id": "…", "name": "ランニング島" },
+  "neighbors": [ { "id": "…", "display_name": "みお", "similarity": 0.62, "…": "…" } ],
+  "saved": false }
+```
+
+ログインなしは `401`、空の文は `422`、続けて呼びすぎると `429`。
+
+---
+
+#### `POST /api/posts/{post_id}/view` — 見られた数を1つ記録
+
+> **いつ使うか**: 他の人の投稿の札を開いたとき（Q35）。
+> **何が起きるか**: ログイン中ならアカウント、ログインなしなら本文の `viewer`（`anon:` ＋16〜64桁の16進。ブラウザが自分で作って覚えておく）を1人として数える。同じ人が何度開いても1回。書いた本人は数えない。
+
+**リクエスト例**（ログインなし）
+```json
+{ "viewer": "anon:3f9a0c1d2e4b5a6978c1d2e3f4a5b6c7" }
+```
+
+**レスポンス例** `200 OK` → `{ "counted": true }`（本人・消えた投稿・保存の失敗は `false`）。鍵の形が違えば `422`、投稿の ID の形が違えば `404`。
+
+---
+
+#### `GET /api/me/views` — 自分の投稿ごとの見られた数 🔒
+
+> **何が返るか**: `{ "views": { "<投稿のID>": 3, … } }`。自分の投稿だけ。だれが見たかは返さない（Q35・Q46。返事しなくても気まずくないように、数は本人にしか見せない）。
 
 ---
 

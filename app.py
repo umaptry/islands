@@ -33,6 +33,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import pickle
 import re
@@ -60,8 +61,12 @@ from core import introductions
 from core import island_tracking
 from core import notifications as notices
 from core.clustering import assign_cluster, name_group
+from core.prompts import weekly_prompt
 from core.config import (
     AWAY_DIGEST_COUNT,
+    EXAMPLE_POSTS,
+    PREVIEW_ISLAND_RADIUS,
+    PREVIEW_NEIGHBORS,
     CONNECTION_CACHE_SECONDS,
     CONNECTIONS_SINCE,
     DIGEST_CONTRIBUTORS,
@@ -310,6 +315,15 @@ class PostCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     motivation: int = MOTIVATION_DEFAULT
     image_path: str | None = None
+
+
+class PostPreview(BaseModel):
+    body: str = Field(min_length=1)
+
+
+class PostView(BaseModel):
+    # A signed-out browser's own random key; ignored when signed in.
+    viewer: str | None = None
 
 
 class PostPatch(BaseModel):
@@ -845,11 +859,16 @@ def neighbors_for(post_id, terms, limit):
     is a 2-D shadow of that space and this build's own gate records that only
     34% of true neighbours survive the projection.
     """
-    store = state["store"]
     try:
-        ranked = store.nearest_posts(post_id, limit)
+        ranked = state["store"].nearest_posts(post_id, limit)
     except StoreError:
         return []
+    return neighbor_rows(ranked, terms)
+
+
+def neighbor_rows(ranked, terms):
+    """[(post_id, cosine)] -> the rows the reveal and the orbit print."""
+    store = state["store"]
     out = []
     for other_id, cosine in ranked:
         try:
@@ -915,6 +934,11 @@ def config():
         "world": {"min": MAP_MIN, "max": MAP_MAX, "seed_bounds": state["seed_bounds"]},
         "energy": energy_constants(),
         "tags": list(TAGS),
+        # Q45: the tag that says "話しかけていいよ". Named so the browser can
+        # give it its own switch instead of finding it by its wording.
+        "open_tag": TAGS[0],
+        "weekly_prompt": weekly_prompt(),
+        "example_posts": list(EXAMPLE_POSTS),
         "island_colors": list(ISLAND_COLORS),
         "limits": {
             "body_min": MIN_TEXT_LENGTH,
@@ -1064,7 +1088,7 @@ def person_card(person_id: str, request: Request, viewer: str = ""):
         "island": (places.get(person_id) or [None])[0],
         "post_count": len(own),
         "latest_post": {key: latest.get(key) for key in (
-            "id", "body", "x", "y", "created_at", "like_count", "comment_count")} if latest else None,
+            "id", "body", "tags", "x", "y", "created_at", "like_count", "comment_count")} if latest else None,
         "connections": [{
             "id": partner,
             "display_name": (partners.get(partner) or {}).get("display_name", ""),
@@ -1313,6 +1337,90 @@ def create_post(payload: PostCreate, request: Request):
         "island": island_of(row["id"]),
         "neighbors": neighbors_for(row["id"], terms, NEIGHBOR_COUNT),
     }
+
+
+def preview_island(x, y):
+    """The named landmass a point would stand on: that of the nearest saved
+    post, if it is close enough to share its ground. Otherwise open water."""
+    radius = PREVIEW_ISLAND_RADIUS
+    try:
+        nearby = state["store"].map_posts(x - radius, y - radius, x + radius, y + radius, 200)
+    except StoreError:
+        return None
+    best, best_d = None, radius
+    for row in nearby:
+        d = math.hypot(float(row["x"]) - x, float(row["y"]) - y)
+        if d <= best_d:
+            best, best_d = row, d
+    return island_of(best["id"]) if best else None
+
+
+@app.post("/api/posts/preview")
+def preview_post(payload: PostPreview, request: Request):
+    """Where a text WOULD stand, without saving it (Q40's tryout).
+
+    The first post is made by choosing an example sentence. Saving those would
+    fill the map with the same few sentences, so this places one, says which
+    island and who is near, and keeps nothing.
+    """
+    user_id = current_user(request)
+    body = clean_body(payload.body)
+    if not check_rate_limit(f"preview:{user_id}"):
+        raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
+    x, y, cluster_id, terms, _vector, centred = project(body)
+    try:
+        ranked = state["store"].nearest_to_vector([float(v) for v in centred], PREVIEW_NEIGHBORS)
+    except StoreError:
+        ranked = []
+    return {
+        "body": body,
+        "x": x,
+        "y": y,
+        "cluster_id": cluster_id,
+        "terms": terms,
+        "island": preview_island(x, y),
+        "neighbors": neighbor_rows(ranked, terms),
+        "saved": False,
+    }
+
+
+_ANON_VIEWER = re.compile(r"^anon:[0-9a-f]{16,64}$")
+
+
+@app.post("/api/posts/{post_id}/view")
+def record_view(post_id: str, payload: PostView, request: Request):
+    """One footprint (Q35). Each viewer counts once per post; the author never.
+
+    Signed in, the viewer is the account. Signed out, it is a random key the
+    browser keeps, which is good enough for "about how many people saw this"
+    and is all Q35 asks for: the number, never who.
+    """
+    try:
+        uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="見つかりませんでした。")
+    viewer = optional_user(request)
+    if not viewer:
+        viewer = (payload.viewer or "").strip().lower()
+        if not _ANON_VIEWER.match(viewer):
+            raise HTTPException(status_code=422, detail="閲覧者のキーが不正です。")
+    try:
+        counted = state["store"].record_view(post_id, viewer)
+    except StoreError:
+        # A lost footprint is not worth an error on somebody else's screen.
+        counted = False
+    return {"counted": counted}
+
+
+@app.get("/api/me/views")
+def my_views(request: Request):
+    """How many people opened each of my posts. Only ever my own (Q35, Q46)."""
+    user_id = current_user(request)
+    try:
+        views = state["store"].view_counts(user_id)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    return {"views": views}
 
 
 @app.patch("/api/posts/{post_id}")

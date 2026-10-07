@@ -28,6 +28,7 @@ import { orbitTag } from '../meet-text.js';
 import { drawGuide, drawHints, drawLines, drawVehicles, homeOf } from './lines.js';
 import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
 import { buildTerrain, gridTerrain } from './terrain.js';
+import { buzz } from '../feedback.js';
 
 let canvas = null;
 let ctx = null;
@@ -80,7 +81,7 @@ function insets() {
 function chromeBoxes() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #map .tabs, #mapDigest, #islandBadge, #map .map-controls, #mapPeople')]
+  return [...document.querySelectorAll('#map .search, #map .filter-button, #map .tabs, #mapDigest, #trialBanner, #islandBadge, #map .map-controls, #mapPeople, #mapStatus')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -219,6 +220,11 @@ export function focusOn(post, { lift = 0.34 } = {}) {
   const { scale } = state.camera;
   const targetX = width / 2 - post.x * scale;
   const targetY = height * lift - post.y * scale;
+  if (REDUCED_MOTION) {
+    state.camera.x = targetX;
+    state.camera.y = targetY;
+    return;
+  }
   const ease = 0.17;
   const step = () => {
     state.camera.x += (targetX - state.camera.x) * ease;
@@ -287,7 +293,91 @@ function zoomToIsland(island) {
   zoomTo((minX + maxX) / 2, (minY + maxY) / 2, target, { lift: 0.55 });
 }
 
+// ---------------------------------------------------------------- answers
+
+// A ring that spreads from where something just happened (item 20): a post
+// landing, an island opening, a reaction, a new line to somebody. It is drawn
+// in world units so it stays on its spot while the camera moves.
+const RIPPLE_MS = { big: 1400, small: 760 };
+
+export function ripple(x, y, { big = false, color = MINE } = {}) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const now = performance.now();
+  state.ripples = state.ripples.filter((ring) => now - ring.at < RIPPLE_MS[ring.big ? 'big' : 'small']);
+  state.ripples.push({ x, y, at: now, big, color });
+}
+
+// The island just opened keeps its name lit for a moment, so the eye knows
+// which of the names on screen it was.
+let emphasis = { id: null, until: 0 };
+
+function islandKey(island) {
+  return island.island_id || island.label;
+}
+
+function openIsland(island) {
+  emphasis = { id: islandKey(island), until: performance.now() + 1800 };
+  ripple(island.cx, island.cy, { color: islandColor(island.cluster_id) });
+  buzz('island');
+  zoomToIsland(island);
+}
+
 // ---------------------------------------------------------------- gestures
+
+// A flick keeps the map moving and slows it down; letting go past the edge of
+// the world pulls it back. Both stop the moment a finger lands again.
+let glide = 0;
+const FRICTION = 0.0045;   // per ms: how quickly a flick runs out
+const MIN_FLICK = 0.25;    // px per ms below which letting go just stops
+
+/** How far the camera is outside the world, in screen px, per axis. */
+function overshoot() {
+  const [minX, minY, maxX, maxY] = seedBounds();
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  // The middle of the screen may wander a fifth of the world past its edge.
+  const centre = toWorld(width / 2, frame.top + (height - frame.top - frame.bottom) / 2);
+  const outX = centre.x < minX - spanX * 0.2 ? centre.x - (minX - spanX * 0.2)
+    : centre.x > maxX + spanX * 0.2 ? centre.x - (maxX + spanX * 0.2) : 0;
+  const outY = centre.y < minY - spanY * 0.2 ? centre.y - (minY - spanY * 0.2)
+    : centre.y > maxY + spanY * 0.2 ? centre.y - (maxY + spanY * 0.2) : 0;
+  return { x: outX * state.camera.scale, y: outY * state.camera.scale };
+}
+
+function stopGlide() {
+  cancelAnimationFrame(glide);
+  glide = 0;
+}
+
+function coast(velocity, done) {
+  stopGlide();
+  let vx = REDUCED_MOTION ? 0 : velocity.x;
+  let vy = REDUCED_MOTION ? 0 : velocity.y;
+  if (Math.hypot(vx, vy) < MIN_FLICK) { vx = 0; vy = 0; }
+  let last = performance.now();
+  const step = (now) => {
+    const dt = Math.min(48, Math.max(0, now - last));
+    last = now;
+    const decay = Math.exp(-FRICTION * dt);
+    state.camera.x += vx * dt;
+    state.camera.y += vy * dt;
+    vx *= decay;
+    vy *= decay;
+    // Past the edge: a spring back, and the flick loses its pull outward.
+    const out = state.view === 'map' ? overshoot() : { x: 0, y: 0 };
+    const spring = REDUCED_MOTION ? 1 : Math.min(1, dt * 0.012);
+    if (out.x) { state.camera.x += out.x * spring; vx *= 0.6; }
+    if (out.y) { state.camera.y += out.y * spring; vy *= 0.6; }
+    const moving = Math.hypot(vx, vy) > 0.02 || Math.abs(out.x) > 0.5 || Math.abs(out.y) > 0.5;
+    if (moving) {
+      glide = requestAnimationFrame(step);
+      return;
+    }
+    glide = 0;
+    done();
+  };
+  glide = requestAnimationFrame(step);
+}
 
 let onViewportChange = () => {};
 export function onCameraSettled(handler) { onViewportChange = handler; }
@@ -297,6 +387,8 @@ function attachGestures() {
   let pinch = null;
   let dragged = false;
   let settle = 0;
+  // The last few moves, to measure the speed of a flick when the finger lifts.
+  let track = [];
 
   const settled = () => {
     clearTimeout(settle);
@@ -305,6 +397,8 @@ function attachGestures() {
 
   canvas.addEventListener('pointerdown', (event) => {
     cancelAnimationFrame(tween);
+    stopGlide();
+    track = [];
     canvas.setPointerCapture(event.pointerId);
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     dragged = false;
@@ -330,6 +424,9 @@ function attachGestures() {
       if (Math.abs(dx) + Math.abs(dy) > 3) dragged = true;
       state.camera.x += dx;
       state.camera.y += dy;
+      const now = performance.now();
+      track.push({ x: next.x, y: next.y, at: now });
+      track = track.filter((move) => now - move.at < 100);
       settled();
       return;
     }
@@ -350,17 +447,31 @@ function attachGestures() {
     const had = pointers.delete(event.pointerId);
     if (pointers.size < 2) pinch = null;
     if (!had) return;
-    if (pointers.size === 0 && !dragged) pick(event);
+    if (pointers.size > 0) { track = []; return; }
+    if (!dragged) { pick(event); return; }
+    // Speed over the last tenth of a second; a finger that stopped before
+    // lifting has no flick left in it.
+    const now = performance.now();
+    const first = track[0];
+    const last = track[track.length - 1];
+    const span = first && last ? last.at - first.at : 0;
+    const still = !last || now - last.at > 60;
+    const velocity = span > 0 && !still
+      ? { x: (last.x - first.x) / span, y: (last.y - first.y) / span } : { x: 0, y: 0 };
+    track = [];
+    coast(velocity, () => onViewportChange());
   };
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', (event) => {
     pointers.delete(event.pointerId);
     pinch = null;
+    track = [];
   });
 
   canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     cancelAnimationFrame(tween);
+    stopGlide();
     const rect = canvas.getBoundingClientRect();
     const factor = Math.exp(-event.deltaY * 0.0015);
     zoomAround(
@@ -398,7 +509,9 @@ function pick(event) {
       : Math.hypot(hit.x - x, hit.y - y) <= hit.r;
     if (!inside) continue;
     if (hit.island) {
-      zoomToIsland(hit.island);
+      openIsland(hit.island);
+    } else if (hit.trial) {
+      toast('お試しの場所です。ほかの人には見えていません');
     } else if (hit.vehicle) {
       // Who the boat is carrying between, and how often lately.
       const row = hit.vehicle;
@@ -610,7 +723,8 @@ function renderMap(time) {
       if (claim(x, candidate, textWidth, 15)) { y = candidate; break; }
     }
     place.labelBox = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 10, bottom: y + 10 };
-    label(island.label, x, y, LABEL_FONT);
+    const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
+    label(island.label, x, y, LABEL_FONT, lit ? { lit: islandColor(island.cluster_id), width: textWidth } : {});
 
     if (!far) {
       // Under the name: how many people, and what else they talk about.
@@ -645,6 +759,8 @@ function renderMap(time) {
   const guide = drawGuide(ctx, lineView, time, (iconId, x, y, size) => faceBadge(iconId, x, y, size, { ring: MINE }));
   if (guide) hits.push(guide);
   drawChangeMarks(time);
+  drawTrial(time);
+  drawRipples();
 
   // Names last, so nothing can bury them. Positions were resolved above, before
   // anything else could take the space.
@@ -653,6 +769,7 @@ function renderMap(time) {
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   labels.forEach((entry) => {
+    if (entry.lit) litPill(entry);
     ctx.font = entry.font;
     ctx.lineWidth = entry.font === LABEL_FONT ? 4.5 : 3.5;
     ctx.strokeStyle = INK.halo;
@@ -863,6 +980,7 @@ function drawFaces(visible, claim, level, time) {
     }
     faceBadge(post.icon_id, point.x, point.y, size, { ring: mine ? MINE : OUTLINE });
     if (post.id === selectedId) selectionRing(ctx, point.x, point.y, size / 2 + 4, islandColor(post.cluster_id));
+    if (isOpen(post)) openMark(point.x - size * 0.42, point.y - size * 0.42, level === 'deep');
 
     // How much it has been answered: always when deep, only when busy at near.
     if (busy > 0 && (level === 'deep' || busy >= 5)) countChip(point.x + size * 0.42, point.y - size * 0.42, busy);
@@ -974,7 +1092,113 @@ function drawPin(ctx, x, y, size) {
   ctx.restore();
 }
 
-/** A ring in the landmass colour, on a white backing so it reads over water. */
+/** Whether the writer said "talk to me" on this post (Q45). */
+function isOpen(post) {
+  const tag = config().open_tag;
+  return Boolean(tag) && Array.isArray(post.tags) && post.tags.includes(tag);
+}
+
+const OPEN_GREEN = '#2f9e5b';
+
+/** A small green speech bubble on the face: "you may talk to me". */
+function openMark(x, y, deep) {
+  const r = deep ? 8 : 6.5;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.moveTo(x - r * 0.55, y + r * 0.6);
+  ctx.lineTo(x - r * 0.9, y + r * 1.25);
+  ctx.lineTo(x + r * 0.05, y + r * 0.85);
+  ctx.fillStyle = OPEN_GREEN;
+  ctx.fill();
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = '#fffaf0';
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  for (const dx of [-0.42, 0, 0.42]) {
+    ctx.beginPath();
+    ctx.arc(x + dx * r, y, r * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** Behind an island name that was just tapped: a white pill in its colour. */
+function litPill(entry) {
+  const w = entry.width + 18;
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(entry.x - w / 2, entry.y - 12, w, 24, 12);
+  ctx.fillStyle = 'rgba(255,250,240,.94)';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = entry.lit;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** The tryout (Q40): where the example sentence would stand, seen by you only. */
+function drawTrial(time) {
+  const trial = state.trialPost;
+  if (!trial) return;
+  const point = toScreen(trial.x, trial.y);
+  if (point.x < -60 || point.y < -60 || point.x > width + 60 || point.y > height + 60) return;
+  const breathe = REDUCED_MOTION ? 0.5 : (Math.sin(time * 2.4) + 1) / 2;
+  const size = 34;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, size / 2 + 6 + breathe * 4, 0, Math.PI * 2);
+  ctx.setLineDash([5, 4]);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = MINE;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.75;
+  faceBadge(trial.icon_id, point.x, point.y, size, { ring: MINE });
+  ctx.globalAlpha = 1;
+  ctx.font = '700 11px system-ui, sans-serif';
+  const text = 'お試し';
+  const w = ctx.measureText(text).width + 14;
+  const y = point.y + size / 2 + 16;
+  ctx.beginPath();
+  ctx.roundRect(point.x - w / 2, y - 9, w, 18, 9);
+  ctx.fillStyle = MINE;
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, point.x, y + 0.5);
+  ctx.restore();
+  hits.push({ x: point.x, y: point.y, r: 26, trial: true });
+}
+
+/** Rings spreading from where something just happened. With less motion, a
+ * single still ring that fades instead. */
+function drawRipples() {
+  if (!state.ripples.length) return;
+  const now = performance.now();
+  state.ripples = state.ripples.filter((ring) => now - ring.at < RIPPLE_MS[ring.big ? 'big' : 'small']);
+  ctx.save();
+  state.ripples.forEach((ring) => {
+    const point = toScreen(ring.x, ring.y);
+    const life = (now - ring.at) / RIPPLE_MS[ring.big ? 'big' : 'small'];
+    const reach = ring.big ? 70 : 34;
+    const count = ring.big && !REDUCED_MOTION ? 3 : 1;
+    for (let i = 0; i < count; i += 1) {
+      const t = REDUCED_MOTION ? 0.45 : life - i * 0.18;
+      if (t <= 0 || t >= 1) continue;
+      const eased = 1 - (1 - t) * (1 - t);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 10 + eased * reach, 0, Math.PI * 2);
+      ctx.globalAlpha = REDUCED_MOTION ? (1 - life) * 0.8 : (1 - t) * 0.85;
+      ctx.lineWidth = ring.big ? 3 : 2.2;
+      ctx.strokeStyle = ring.color;
+      ctx.stroke();
+    }
+  });
+  ctx.restore();
+}
+
 /** Where something changed while you were away (段4): a ring that breathes
  * until you look at it from the list. */
 function drawChangeMarks(time) {

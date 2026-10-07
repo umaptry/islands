@@ -9,9 +9,17 @@
 // accumulated velocity: a backgrounded tab, a resize or a dropped frame cannot
 // drift the fleet or leave a bird somewhere it should not be.
 
-export const REDUCED_MOTION = Boolean(
+export const SYSTEM_REDUCED_MOTION = Boolean(
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
 );
+
+// A live binding, not a constant: 「動きを減らす」 in the settings changes it
+// without a reload, and every module that imported it sees the new value.
+export let REDUCED_MOTION = SYSTEM_REDUCED_MOTION;
+
+export function setReducedMotion(on) {
+  REDUCED_MOTION = Boolean(on);
+}
 
 export const INK = {
   seaMark: 'rgba(255, 255, 255, .17)',

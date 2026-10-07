@@ -199,9 +199,21 @@
   <div class="scroller">
     <p class="lede" id="composeLede">やってきたこと・やってみたいことを書いてください。<br>この文章だけで、地図の中のどこに立つかが決まります。</p>
 
+    <div class="examples" id="composeExamples" hidden>
+      <div class="examples-head">例文で試す<span class="examples-note">保存されません</span></div>
+      <div class="examples-list" id="composeExampleList"></div>
+      <div class="examples-or">または、自分の言葉で</div>
+    </div>
+
+    <div class="weekly-prompt" id="composePrompt" hidden>
+      <span class="weekly-label">今週のお題</span>
+      <span class="weekly-text" id="composePromptText"></span>
+      <button class="btn btn-small btn-outline" id="composePromptUse" type="button">このお題で書く</button>
+    </div>
+
     <div class="field">
       <textarea class="textarea" id="composeBody"
-        placeholder="取り組みや活動内容（最大140文字）"></textarea>
+        placeholder="取り組みや活動内容（最大60文字）"></textarea>
       <div class="counter-row">
         <div class="counter" id="composeCounter">
           <svg class="ring" viewBox="0 0 24 24">
@@ -225,7 +237,17 @@
       </div>
     </div>
 
-    <div class="field">
+    <div class="field compose-open">
+      <label class="switch-row">
+        <span class="switch-text">
+          <span class="switch-title">💬 話しかけていいよ</span>
+          <span class="switch-note">はじめての人からの声かけも歓迎、の印が付きます</span>
+        </span>
+        <input type="checkbox" class="switch" id="composeOpen">
+      </label>
+    </div>
+
+    <div class="field compose-tags">
       <div class="checks" id="composeTags"></div>
     </div>
 
@@ -266,6 +288,7 @@
   <div class="scroller" id="revealBody"></div>
   <div class="form-footer">
     <button class="btn btn-block" id="revealToMap">地図を見る</button>
+    <button class="btn btn-quiet btn-block" id="revealWrite" hidden>自分の言葉で書く</button>
   </div>
 </section>
 
@@ -292,6 +315,11 @@
       <button class="tab" data-view="orbit" role="tab">まわりの人</button>
     </div>
     <button class="digest-pill" id="mapDigest" type="button" hidden></button>
+    <div class="trial-banner" id="trialBanner" hidden>
+      <span class="trial-text">お試しの場所です。あなたにだけ見えています</span>
+      <button class="btn btn-small" id="trialWrite" type="button">自分の言葉で書く</button>
+      <button class="icon-button trial-close" id="trialClose" type="button" aria-label="お試しを消す">✕</button>
+    </div>
   </div>
 
   <div class="island-badge" id="islandBadge" hidden>
@@ -305,7 +333,10 @@
   <div class="map-controls">
     <button class="round-button" id="mapRecenter" aria-label="自分の島に戻る">📍</button>
   </div>
-  <div class="map-status" id="mapStatus" role="status" hidden></div>
+  <div class="map-status" id="mapStatus" role="status" hidden>
+    <span id="mapStatusText"></span>
+    <button class="btn btn-small btn-outline" id="mapRetry" type="button" hidden>もう一度</button>
+  </div>
 </section>
 
 <!-- ============ 8. notifications ============ -->
@@ -363,6 +394,30 @@
       <span class="label-text">メールアドレス</span>
       <input class="input" id="editEmail" type="email" readonly aria-readonly="true">
     </label>
+    <div class="field feedback-settings">
+      <span class="label-text">音と動き</span>
+      <label class="switch-row">
+        <span class="switch-text">
+          <span class="switch-title">音</span>
+          <span class="switch-note">投稿したとき・つながったとき・通知が届いたときだけ、小さく鳴ります</span>
+        </span>
+        <input type="checkbox" class="switch" id="setSound">
+      </label>
+      <label class="switch-row">
+        <span class="switch-text">
+          <span class="switch-title">振動</span>
+          <span class="switch-note" id="setVibrateNote">押したときなどに短く震えます</span>
+        </span>
+        <input type="checkbox" class="switch" id="setVibrate">
+      </label>
+      <label class="switch-row">
+        <span class="switch-text">
+          <span class="switch-title">動きを減らす</span>
+          <span class="switch-note">地図の波紋や揺れを止めます</span>
+        </span>
+        <input type="checkbox" class="switch" id="setReduceMotion">
+      </label>
+    </div>
     <div class="error" id="editError" role="alert"></div>
     <button class="btn btn-quiet btn-block" id="editSignOut">ログアウト</button>
   </div>
@@ -397,6 +452,10 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<button class="arrival" id="arrival" type="button" hidden>
+  <span class="arrival-icon" id="arrivalIcon" aria-hidden="true">🔔</span>
+  <span class="arrival-text" id="arrivalText"></span>
+</button>
 <div class="version-notice" id="mapVersionNotice" role="status" hidden>
   地図が更新されました。入力中の内容を保存して再読み込みしてください。
   <button class="btn btn-small" id="mapVersionReload">再読み込み</button>

@@ -12,6 +12,7 @@ import { onboardingStep } from './onboarding.js';
 import { route, screen, setGuard, show, startRouter } from './router.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
+import { setupFeedback } from './feedback.js';
 import { setupAuth, setupGuidance, setupIntro, setupProfileSetup } from './screens/auth.js';
 import { setupCompose, setupReveal } from './screens/compose.js';
 import { setupMapScreen, refreshMyPosts } from './screens/map.js';
@@ -63,6 +64,7 @@ async function boot() {
     return;
   }
 
+  setupFeedback();
   setupIntro();
   setupIcons();
   document.addEventListener('map:version-changed', () => {

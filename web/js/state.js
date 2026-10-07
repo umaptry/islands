@@ -30,6 +30,9 @@ export const state = {
   selectedSimilar: null,  // { author, people } for the selected post's author
   focusPerson: null,      // the similar person whose card is open (段4)
   changeMarks: [],        // unseen away-digest places, { id, x, y } in world units
+  trialPost: null,        // the first-post tryout, never saved (段5 Q40)
+  myViews: {},            // post id -> how many people opened it (Q35)
+  ripples: [],            // { x, y, at, size, color } rings that answer an action
 };
 
 export function subscribe(listener) {

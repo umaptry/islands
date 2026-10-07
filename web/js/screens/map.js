@@ -19,8 +19,13 @@ import { postCard } from '../components/postcard.js';
 import { chatInput, postChat } from '../components/chat.js';
 import { loadDigest, paintMarks, paintPeople, setupMeet } from './meet.js';
 import {
-  fitCamera, focusOn, initMap, invalidateOrbit, landmassOf, onCameraSettled, resize, viewport,
+  fitCamera, focusOn, initMap, invalidateOrbit, landmassOf, onCameraSettled, resize, ripple, viewport,
 } from '../map/index.js';
+import { buzz, viewerKey } from '../feedback.js';
+
+const VIEWS_MS = 60000;
+const viewed = new Set();   // posts already counted in this visit (Q35)
+let viewsAt = 0;
 
 const POLL_MS = 15000;
 let pollTimer = 0;
@@ -39,7 +44,8 @@ function paintMapStatus() {
   const filtering = state.filters.query || state.filters.tags.length;
   const terrainNote = state.saturated && state.terrainGrid ? '・地形は表示範囲のみ' : '';
   status.hidden = !mapError && !filtering && state.posts.length > 0 && !terrainNote;
-  status.textContent = mapError ? '地図を更新できませんでした。接続を確認してください。'
+  $('mapRetry').hidden = !mapError;
+  $('mapStatusText').textContent = mapError ? '地図を更新できませんでした。接続を確認してください。'
     : filtering ? `${state.posts.filter(matchesFilters).length}件表示・検索対象は読み込み済みの範囲です${terrainNote}`
     : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
     : 'まだ投稿がありません。最初の投稿で島をつくりましょう。';
@@ -51,6 +57,17 @@ function filtersChanged() {
   clearTimeout(filterTimer);
   state.terrainGrid = null;
   if (state.saturated) filterTimer = setTimeout(() => refreshMap(), 250);
+}
+
+/** Q40: the tried-out sentence, standing on the map for this browser only. */
+function paintTrial() {
+  $('trialBanner').hidden = !state.trialPost;
+}
+
+export async function showTrial() {
+  if (!await navigate('#/map')) return;
+  paintTrial();
+  if (state.trialPost) focusOn(state.trialPost, { lift: 0.45 });
 }
 
 export async function openOnMap(postId) {
@@ -183,6 +200,28 @@ export async function refreshMyReactions() {
   }
 }
 
+/** How many people have seen each of my posts. Only ever my own (Q35). */
+export async function refreshMyViews({ force = false } = {}) {
+  if (!state.account) return;
+  if (!force && Date.now() - viewsAt < VIEWS_MS) return;
+  viewsAt = Date.now();
+  try {
+    const result = await api.get('/api/me/views');
+    state.myViews = result.views || {};
+    notify('views');
+  } catch {
+    viewsAt = 0;   // try again next time rather than waiting a minute
+  }
+}
+
+/** One footprint, once per post per visit, never on my own post. */
+function recordView(post) {
+  if (viewed.has(post.id) || post.author_id === state.account?.id) return;
+  viewed.add(post.id);
+  api.post(`/api/posts/${post.id}/view`, { viewer: state.account ? null : viewerKey() })
+    .catch(() => viewed.delete(post.id));
+}
+
 export async function refreshMyPosts() {
   if (!state.account) return;
   try {
@@ -307,6 +346,25 @@ function setupChrome() {
     });
   });
 
+  $('mapRetry').addEventListener('click', async () => {
+    $('mapRetry').disabled = true;
+    const ok = await refreshMap();
+    $('mapRetry').disabled = false;
+    if (ok) {
+      refreshIslands();
+      toast('地図を更新しました');
+    } else {
+      buzz('error');
+      toast('まだつながりません。少し待ってからもう一度お試しください。');
+    }
+  });
+  $('trialWrite').addEventListener('click', () => navigate('#/post'));
+  $('trialClose').addEventListener('click', () => {
+    state.trialPost = null;
+    paintTrial();
+    toast('お試しを消しました');
+  });
+
   $('mapRecenter').addEventListener('click', () => {
     const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
     // islands' version of this button dispatched a resize event and hoped. It
@@ -367,6 +425,7 @@ export async function openPost(postId, { draft = '', expand = false } = {}) {
     return;
   }
   state.selected = post;
+  recordView(post);
   loadSelectedSimilar(post);
   await renderSheet(post, generation);
 }
@@ -487,6 +546,10 @@ export async function react(postId, kind) {
   // back rather than leaving the button lying about what happened.
   if (on) state.reactions.delete(reactionKey(postId, kind));
   else state.reactions.add(reactionKey(postId, kind));
+  if (!on) {
+    buzz('react');
+    if (Number.isFinite(Number(post.x))) ripple(Number(post.x), Number(post.y), { color: islandColor(post.cluster_id) });
+  }
   // A MINIMAL patch, not a spread of the whole row. Spreading would carry the
   // server's `energy` along with it, and upsertPost can only tell that the
   // energy is now stale by seeing that the patch moved a count without
@@ -630,6 +693,8 @@ export function setupMapScreen() {
         refreshSimilar();
       }
       paintBadge();
+      paintTrial();
+      refreshMyViews();
       // Not awaited: the map is already up, and the pill can arrive a moment later.
       loadDigest();
       if (restorePost && activeScreen() === 'map') {

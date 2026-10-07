@@ -167,6 +167,7 @@ class MemoryStore:
         self._islands = {}
         self._island_events = {}
         self._island_run_at = None
+        self._views = set()         # (post_id, viewer)
         self._lock = threading.RLock()
 
     # -- accounts ----------------------------------------------------------
@@ -307,17 +308,25 @@ class MemoryStore:
             return [self._joined(row) for row in self._live()]
 
     def nearest_posts(self, post_id, k):
-        import numpy as np
-
         with self._lock:
             origin = self._posts.get(post_id)
             if not origin or origin.get("deleted_at"):
                 return []
-            rows = [row for row in self._live() if row["id"] != post_id]
             mine = origin.get("vec_c")
         if mine is None:
             return []
-        mine = np.asarray(mine, dtype=float)
+        return self._nearest(mine, k, skip=post_id)
+
+    def nearest_to_vector(self, vector, k):
+        """Neighbours of a text that was never saved (the first-post tryout)."""
+        return self._nearest(vector, k)
+
+    def _nearest(self, origin, k, skip=None):
+        import numpy as np
+
+        with self._lock:
+            rows = [row for row in self._live() if row["id"] != skip]
+        mine = np.asarray(origin, dtype=float)
         scored = []
         for row in rows:
             other = row.get("vec_c")
@@ -338,6 +347,28 @@ class MemoryStore:
             if post_id == b:
                 return cosine
         return None
+
+    # -- footprints (Q35): a count, never a list ------------------------------
+
+    def record_view(self, post_id, viewer):
+        """Count one viewer once. The author never counts. False when skipped."""
+        with self._lock:
+            row = self._posts.get(post_id)
+            if not row or row.get("deleted_at") or row["author_id"] == viewer:
+                return False
+            self._views.add((post_id, viewer))
+            return True
+
+    def view_counts(self, author_id):
+        """{post_id: views} for the author's live posts that someone opened."""
+        with self._lock:
+            mine = {pid for pid, row in self._posts.items()
+                    if row["author_id"] == author_id and not row.get("deleted_at")}
+            counts = {}
+            for post_id, _viewer in self._views:
+                if post_id in mine:
+                    counts[post_id] = counts.get(post_id, 0) + 1
+        return counts
 
     # -- reactions ---------------------------------------------------------
 
@@ -947,6 +978,28 @@ class SupabaseStore:
     def pair_similarity(self, a, b):
         value = self._rpc("pair_similarity", {"a": a, "b": b}, label="似てる度の計算")
         return float(value) if isinstance(value, (int, float)) else None
+
+    def nearest_to_vector(self, vector, k):
+        text = "[" + ",".join(f"{float(value):.6f}" for value in vector) + "]"
+        rows = self._rpc("nearest_to_vector", {"origin": text, "k": k}, label="近い人の検索")
+        return [(row["id"], float(row["cosine"])) for row in rows]
+
+    # -- footprints (Q35) -----------------------------------------------------
+
+    def record_view(self, post_id, viewer):
+        rows = self._get(POSTS, {"select": "author_id", "id": f"eq.{post_id}",
+                                 "deleted_at": "is.null", "limit": "1"}, label="投稿の確認")
+        if not rows or rows[0]["author_id"] == viewer:
+            return False
+        self._send("POST", "post_views", label="見られた数の記録",
+                   headers={"Prefer": "return=minimal,resolution=ignore-duplicates"},
+                   params={"on_conflict": "post_id,viewer"},
+                   json={"post_id": post_id, "viewer": viewer})
+        return True
+
+    def view_counts(self, author_id):
+        rows = self._rpc("post_view_counts", {"author": author_id}, label="見られた数の読み込み")
+        return {row["post_id"]: int(row["views"]) for row in rows}
 
     # -- reactions / comments / notifications ------------------------------
     #

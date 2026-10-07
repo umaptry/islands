@@ -6,10 +6,16 @@
 // here too - in islands both of its items were an alert() saying the feature
 // did not exist.
 //
+// Stage 5 added the "talk to me" badge (Q45), shown first and in green, and
+// for the author alone, how many people have seen the post (Q35). Nobody else
+// ever sees that number, and there is no "seen but not answered" anywhere:
+// a reply that does not come should not feel like one that was refused (Q46).
+//
 // What is added is the pair of lines かさなり can say and islands could not:
 // how alike two posts are, measured in the 448 dimensions before the map
 // flattened them, and which words the two people actually share.
 
+import { config } from '../config.js';
 import { data } from '../net.js';
 import { hasReacted, state, subscribe } from '../state.js';
 import { avatar, clip, el, motivationColor, timeAgo } from '../ui.js';
@@ -27,6 +33,7 @@ subscribe(() => {
     const post = state.postsById.get(card.dataset.postId) || state.myPosts.find((p) => p.id === card.dataset.postId);
     if (!post) return;
     card.querySelectorAll('[data-count]').forEach((node) => { node.textContent = post[node.dataset.count] || 0; });
+    card.querySelectorAll('[data-views]').forEach((node) => paintViews(node, post.id));
     card.querySelectorAll('[data-reaction]').forEach((node) => {
       const on = hasReacted(post.id, node.dataset.reaction);
       node.classList.toggle('on', on);
@@ -81,8 +88,12 @@ export function postCard(post, options = {}) {
 
   // --- tags -------------------------------------------------------------
   if ((post.tags || []).length) {
+    const open = config().open_tag;
+    const tags = post.tags.includes(open) ? [open, ...post.tags.filter((tag) => tag !== open)] : post.tags;
     card.append(el('div', { className: 'post-tags' },
-      post.tags.map((tag) => el('span', { className: 'tag-badge', text: tag })),
+      tags.map((tag) => (tag === open
+        ? el('span', { className: 'tag-badge open', text: '💬 話しかけていいよ' })
+        : el('span', { className: 'tag-badge', text: tag }))),
     ));
   }
 
@@ -105,6 +116,11 @@ export function postCard(post, options = {}) {
 
   // --- footer -----------------------------------------------------------
   if (!options.compact) card.append(footer(post, options));
+  if (mine) {
+    const views = el('p', { className: 'post-views', attrs: { 'data-views': '' } });
+    paintViews(views, post.id);
+    card.append(views);
+  }
   if (options.similarity && typeof options.similarity.similarity === 'number') {
     const detail = el('details', { className: 'similarity-details' },
       el('summary', { text: `似てる度 ${options.similarity.similarity}%・共通点を見る` }), similarityBlock(options.similarity));
@@ -112,6 +128,18 @@ export function postCard(post, options = {}) {
   }
 
   return card;
+}
+
+/** Only ever on your own post, and only once somebody has looked. */
+function paintViews(node, postId) {
+  const count = state.myViews?.[postId] || 0;
+  node.hidden = count < 1;
+  node.textContent = `👣 ${count}人が見ました`;
+}
+
+/** Whether a post says "talk to me" (Q45). */
+export function isOpen(post) {
+  return Boolean(post?.tags?.includes(config().open_tag));
 }
 
 function menu(post, options) {
@@ -243,6 +271,11 @@ function footer(post, options) {
 
     button.addEventListener('click', async () => {
       if (!options.onReact) return;
+      if (!hasReacted(post.id, reaction.kind) && state.account) {
+        button.classList.remove('pop');
+        void button.offsetWidth;
+        button.classList.add('pop');
+      }
       button.disabled = true;
       try {
         await options.onReact(reaction.kind);

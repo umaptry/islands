@@ -11,9 +11,10 @@ import { session } from '../session.js';
 import { navigate, screen } from '../router.js';
 import { state, removePost } from '../state.js';
 import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
-import { react, openOnMap as openMapPost } from './map.js';
+import { react, openOnMap as openMapPost, refreshMyViews } from './map.js';
 import { postCard } from '../components/postcard.js';
 import { setupAvatarField } from './auth.js';
+import { buzz, canBuzz, feedbackSettings, setFeedback, sound } from '../feedback.js';
 
 let editDraft = null;
 
@@ -140,6 +141,7 @@ async function renderMe() {
     return;
   }
   body.append(header(state.account, { own: true }));
+  refreshMyViews();
 
   let posts = state.myPosts;
   try {
@@ -237,9 +239,25 @@ export function setupProfileEdit() {
     }
   });
 
+  // Sound and buzz (item 21): they change the moment they are switched, with
+  // a sample of what was just turned on, so nobody has to save to find out.
+  $('setSound').addEventListener('change', (event) => {
+    setFeedback({ sound: event.target.checked });
+    if (event.target.checked) sound('notify');
+  });
+  $('setVibrate').addEventListener('change', (event) => {
+    setFeedback({ vibrate: event.target.checked });
+    if (event.target.checked) buzz('tap');
+  });
+  $('setReduceMotion').addEventListener('change', (event) => {
+    setFeedback({ reduceMotion: event.target.checked });
+  });
+
   $('editSignOut').addEventListener('click', () => {
     session.signOut();
     state.account = null;
+    state.myViews = {};
+    state.trialPost = null;
     state.myPosts = [];
     state.activePostId = null;
     state.reactions = new Set();
@@ -271,6 +289,14 @@ export function setupProfileEdit() {
       }
       $('editEmail').value = session.email() || '';
       $('editError').textContent = '';
+      const settings = feedbackSettings();
+      $('setSound').checked = settings.sound;
+      $('setVibrate').checked = settings.vibrate && canBuzz;
+      $('setVibrate').disabled = !canBuzz;
+      $('setVibrateNote').textContent = canBuzz
+        ? '押したときなどに短く震えます'
+        : 'この端末のブラウザは振動に対応していません（iPhone など）';
+      $('setReduceMotion').checked = settings.reduceMotion;
     },
   });
 }

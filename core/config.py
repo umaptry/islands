@@ -304,3 +304,41 @@ NOTIFICATION_CATEGORY_OF = {
 }
 REACTION_GROUP_MINUTES = 10
 ISLAND_NOTIFY_PER_DAY = 1
+
+
+# ---------------------------------------------------------------------------
+# 段5: things that make the first and the next post easier to write.
+# ---------------------------------------------------------------------------
+
+# Q37: post whenever you like, plus one gentle prompt a week. The week turns
+# over on Monday 00:00 Japan time, and the list is walked in order by ISO week
+# number so everybody sees the same prompt. 仮: written by Claude Code on
+# 2026-10-07, to be replaced by the founder's own list.
+WEEKLY_PROMPTS = (
+    "最近はじめたこと",
+    "今週うれしかったこと",
+    "人にすすめたいお気に入り",
+    "いま少し困っていること",
+    "だれかと一緒にやってみたいこと",
+    "週末の過ごし方",
+    "最近おどろいたこと",
+    "前から気になっている場所",
+)
+PROMPT_UTC_OFFSET_HOURS = 9
+
+# Q40: the first post is made by choosing one of these. It is placed to show
+# where it would stand and is never saved, so the map does not fill up with
+# the same sentence. Spread over different topics on purpose, so the tryout
+# lands on different islands. 仮: written by Claude Code on 2026-10-07.
+EXAMPLE_POSTS = (
+    "週末に近所を走っています。一緒に走れる人がいたらうれしいです",
+    "仕事でデータ分析を始めました。勉強のコツを知りたいです",
+    "最近パン作りにはまっています。おすすめの粉を教えてください",
+    "子育てと仕事の両立で悩み中。同じような人と話したいです",
+    "地域のお祭りを手伝ってくれる仲間を探しています",
+    "読んだ本の感想を話せる人がほしいです",
+)
+# How far (map units) the nearest saved post may be for the tryout to count as
+# standing on that post's island. 仮: about one landmass radius at 50 energy.
+PREVIEW_ISLAND_RADIUS = 40.0
+PREVIEW_NEIGHBORS = 3

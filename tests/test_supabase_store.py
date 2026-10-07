@@ -30,7 +30,8 @@ SERVICE_KEY = "test-service-role-key"
 
 # table -> {id: row}
 TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notifications": {},
-          "notification_settings": {}, "islands_state": {}, "island_events": {}}
+          "notification_settings": {}, "islands_state": {}, "island_events": {},
+          "post_views": {}}
 SEQUENCE = {"n": 0}
 ISLAND_RUN = {"at": None}
 
@@ -304,6 +305,19 @@ class FakePostgrest(BaseHTTPRequestHandler):
             return self._send(
                 200, _cosine(TABLES["posts"].get(args["a"]), TABLES["posts"].get(args["b"]))
             )
+        if name == "nearest_to_vector":
+            origin = {"vec_c": args["origin"]}
+            out = [{"id": row["id"], "cosine": _cosine(origin, row)}
+                   for row in TABLES["posts"].values() if not row.get("deleted_at")]
+            out.sort(key=lambda item: -item["cosine"])
+            return self._send(200, out[: min(max(int(args.get("k", 5)), 1), 100)])
+        if name == "post_view_counts":
+            counts = {}
+            for row in TABLES["post_views"].values():
+                post = TABLES["posts"].get(row["post_id"]) or {}
+                if post.get("author_id") == args["author"] and not post.get("deleted_at"):
+                    counts[row["post_id"]] = counts.get(row["post_id"], 0) + 1
+            return self._send(200, [{"post_id": k, "views": v} for k, v in counts.items()])
         if name == "map_cells":
             return self._send(200, [])
         return self._send(404, {"message": f"no function {name}"})
@@ -599,6 +613,8 @@ def test_the_two_backends_agree(store):
         "profile_vectors", "post_centroids", "interaction_events", "touch_last_seen",
         "island_states", "save_island_states", "add_island_events", "list_island_events",
         "claim_island_run",
+        # 段5: footprints as a number, and placing a sentence without saving it
+        "record_view", "view_counts", "nearest_to_vector",
     ]
     for method in surface:
         assert hasattr(memory, method), f"MemoryStore is missing {method}"
@@ -786,3 +802,35 @@ def test_touch_last_seen_returns_the_previous_visit(store):
     person = account(store, "訪問の人")
     assert store.touch_last_seen(person) is None
     assert store.touch_last_seen(person) is not None
+
+
+# --------------------------------------------------------------------------
+# 段5: footprints (Q35) and the example-sentence tryout (Q40)
+# --------------------------------------------------------------------------
+
+def test_views_count_each_viewer_once_and_never_the_author(store):
+    author = account(store, "見られる人")
+    reader = account(store, "見る人")
+    post = store.insert_post(sample(author))["id"]
+    assert store.record_view(post, reader) is True
+    assert store.record_view(post, reader) is True  # a repeat is quietly ignored
+    assert store.record_view(post, "anon:0123456789abcdef") is True
+    assert store.record_view(post, author) is False
+    assert store.view_counts(author) == {post: 2}
+    assert store.view_counts(reader) == {}
+
+
+def test_a_deleted_post_takes_no_views(store):
+    author = account(store, "消す人")
+    post = store.insert_post(sample(author))["id"]
+    store.soft_delete_post(post, author)
+    assert store.record_view(post, "anon:fedcba9876543210") is False
+    assert store.record_view(str(uuid.uuid4()), "anon:fedcba9876543210") is False
+
+
+def test_nearest_to_vector_sends_the_text_form(store):
+    author = account(store, "近い人")
+    near = store.insert_post(dict(sample(author), vec_c="[" + ",".join(["0.9"] * 8) + "]"))["id"]
+    ranked = store.nearest_to_vector([1.0] * 8, 1)
+    assert ranked[0][0] == near
+    assert isinstance(ranked[0][1], float)

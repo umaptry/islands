@@ -1034,3 +1034,114 @@ body:has(#islandBadge:not([hidden])) .toast {
   .sheet { bottom: auto; }
   .sheet-open .bottom-nav { visibility: visible; }
 }
+
+/* ---------------------------------------------------------------- stage 5: small answers to every action */
+
+/* Q40: try an example sentence first. */
+.examples { margin-bottom: 18px; }
+.examples-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+.examples-note { font-size: 11px; font-weight: 400; color: var(--on-sea-3); }
+.examples-list { display: flex; flex-direction: column; gap: 6px; }
+.example {
+  width: 100%; text-align: left; padding: 10px 14px; border-radius: 10px;
+  background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .4);
+  color: #fff; font-size: 14px; line-height: 1.5;
+}
+.example:active { background: rgba(255, 255, 255, .28); }
+.examples-or { margin-top: 14px; font-size: 12px; color: var(--on-sea-2); text-align: center; }
+#compose.first-post .examples + .field { margin-top: 0; }
+#compose.first-post .field:has(.slider),
+#compose.first-post .field:has(.image-row),
+#compose.first-post .compose-tags { display: none; }
+
+/* Q37: this week's prompt. */
+.weekly-prompt {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  margin-bottom: 10px; padding: 9px 12px; border-radius: 10px;
+  background: rgba(255, 255, 255, .14); color: #fff;
+}
+.weekly-label { font-size: 11px; font-weight: 700; color: var(--on-sea-2); flex: none; }
+.weekly-text { font-size: 13.5px; font-weight: 700; flex: 1 1 160px; min-width: 0; }
+.weekly-prompt .btn-small { min-height: 30px; padding: 0 12px; font-size: 12px; }
+.weekly-prompt.used .btn-small { display: none; }
+
+/* On/off switches: "talk to me" (Q45) and the sound settings (item 21). */
+#compose .scroller > .compose-open { order: 4; margin-bottom: 8px; }
+.switch-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
+.switch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.switch-title { font-size: 14px; font-weight: 700; color: #fff; }
+.switch-note { font-size: 11.5px; line-height: 1.5; color: var(--on-sea-2); }
+input.switch {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 0;
+  width: 46px; height: 28px; border-radius: 999px; position: relative; cursor: pointer;
+  background: rgba(255, 255, 255, .28); border: 1px solid rgba(255, 255, 255, .55);
+  transition: background .18s var(--ease);
+}
+input.switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px;
+  border-radius: 999px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  transition: transform .18s var(--ease);
+}
+input.switch:checked { background: #2f9e5b; border-color: #2f9e5b; }
+input.switch:checked::after { transform: translateX(18px); }
+input.switch:disabled { opacity: .45; cursor: not-allowed; }
+.feedback-settings { margin-top: 8px; }
+.feedback-settings .switch-row + .switch-row { border-top: 1px solid rgba(255, 255, 255, .2); }
+
+/* The tried-out sentence: on the reveal screen and over the map. */
+.trial-note {
+  white-space: pre-line; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px;
+  background: rgba(255, 255, 255, .14); color: #fff; font-size: 13px; line-height: 1.6;
+}
+.trial-banner {
+  pointer-events: auto; display: flex; align-items: center; gap: 8px;
+  width: 100%; max-width: 520px; padding: 6px 6px 6px 14px; border-radius: 14px;
+  background: rgba(255, 255, 255, .95); color: var(--sea-ink); box-shadow: var(--shadow);
+}
+.trial-text { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; line-height: 1.4; }
+.trial-banner .btn-small { flex: none; min-height: 32px; padding: 0 12px; font-size: 12px; background: var(--sea); color: #fff; box-shadow: none; }
+.trial-close { flex: none; width: 32px; height: 32px; font-size: 14px; color: var(--ink-3); }
+.trial-close:hover { background: var(--surface-2); }
+
+/* A map that did not load says so, with a way to try again. */
+.map-status { display: flex; align-items: center; gap: 10px; width: max-content; }
+.map-status .btn-outline { flex: none; min-height: 30px; padding: 0 12px; font-size: 12px; color: var(--sea); border-color: var(--sea); }
+
+/* Something arrived while the app was open. */
+.arrival {
+  position: fixed; left: 50%; z-index: 71;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px);
+  transform: translate(-50%, 16px); opacity: 0;
+  display: flex; align-items: center; gap: 10px;
+  width: max-content; max-width: min(92vw, 520px);
+  padding: 10px 16px 10px 12px; border-radius: 14px;
+  background: #fff; color: var(--ink); box-shadow: var(--shadow);
+  font-size: 13px; font-weight: 700; text-align: left;
+  transition: opacity .22s var(--ease), transform .22s var(--ease);
+}
+.arrival.on { opacity: 1; transform: translate(-50%, 0); }
+.arrival-icon { flex: none; font-size: 18px; line-height: 1; }
+.arrival-text { min-width: 0; line-height: 1.45; }
+body:has(#islandBadge:not([hidden])) .arrival { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 76px); }
+
+/* Post cards: "talk to me" (Q45), views for the author only (Q35), a pop on reacting. */
+.tag-badge.open { color: #fff; background: #2f9e5b; font-weight: 700; }
+.person-head-text .tag-badge.open { display: inline-block; margin-top: 4px; border-radius: 999px; }
+.open-dot { margin-left: 6px; font-size: 12px; }
+.post-views { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-3); }
+.post-action.pop .post-action-icon { animation: action-pop .36s var(--ease); }
+@keyframes action-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.45); }
+  100% { transform: scale(1); }
+}
+
+html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after {
+  animation: none !important; transition: none !important;
+}
+
+/* Japanese lines break between phrases, not one character before the end. */
+.example, .trial-note, .trial-text, .switch-note, .arrival-text, .map-status, .examples-note {
+  word-break: auto-phrase; text-wrap: pretty;
+}
+.arrival-more { white-space: nowrap; }

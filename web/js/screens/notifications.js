@@ -7,11 +7,17 @@
 // laptop agree, and nothing you did yourself ever appears.
 
 import { data } from '../net.js';
-import { navigate, screen } from '../router.js';
+import { activeScreen, navigate, screen } from '../router.js';
 import { state } from '../state.js';
 import { openOnMap } from './map.js';
 import { icon } from '../icons.js';
-import { $, avatar, clear, el, timeAgo } from '../ui.js';
+import { moment } from '../feedback.js';
+import { $, avatar, clear, clip, el, timeAgo } from '../ui.js';
+
+const ARRIVAL_MS = 5000;
+let seenIds = null;        // ids already known, so only new rows announce themselves
+let seenFor = null;        // whose ids they are
+let arrivalTimer = 0;
 
 const KINDS = {
   like: { icon: '♥', tone: 'like', text: 'あなたの投稿に「いいね」しました。' },
@@ -53,6 +59,43 @@ export async function refreshNotifications() {
   }
   state.unread = state.notifications.filter((row) => !row.read_at).length;
   paintBadge();
+  announce(state.notifications);
+}
+
+/**
+ * Something new arrived while the app was open: a band near the bottom, a
+ * quiet sound and a buzz (items 20 and 21). The first load after signing in
+ * only learns what is already there - a pile of old news is not an arrival.
+ */
+function announce(rows) {
+  const ids = new Set(rows.map((row) => row.id));
+  const fresh = seenIds && seenFor === state.account.id
+    ? rows.filter((row) => !row.read_at && !seenIds.has(row.id))
+    : [];
+  seenIds = ids;
+  seenFor = state.account.id;
+  if (!fresh.length) return;
+  if (activeScreen() === 'notifications') paintList();
+  const row = fresh[0];
+  const kind = KINDS[row.type] || KINDS.like;
+  moment(fresh.some((entry) => entry.type === 'connection') ? 'connect' : 'notify');
+  if (activeScreen() === 'notifications') return;
+  $('arrivalIcon').textContent = kind.icon;
+  const text = $('arrivalText');
+  text.textContent = clip(`${headline(row)}　${message(row, kind)}`, 38);
+  if (fresh.length > 1) text.append(el('span', { className: 'arrival-more', text: `（ほか${fresh.length - 1}件）` }));
+  const band = $('arrival');
+  band.hidden = false;
+  requestAnimationFrame(() => band.classList.add('on'));
+  clearTimeout(arrivalTimer);
+  arrivalTimer = setTimeout(hideArrival, ARRIVAL_MS);
+}
+
+function hideArrival() {
+  const band = $('arrival');
+  band.classList.remove('on');
+  clearTimeout(arrivalTimer);
+  arrivalTimer = setTimeout(() => { band.hidden = true; }, 250);
 }
 
 export function paintBadge() {
@@ -117,6 +160,10 @@ async function open(row) {
 }
 
 export function setupNotifications() {
+  $('arrival').addEventListener('click', () => {
+    hideArrival();
+    navigate('#/notifications');
+  });
   $('notifReadAll').addEventListener('click', async () => {
     const unread = state.notifications.filter((row) => !row.read_at);
     const stamp = new Date().toISOString();

@@ -5,6 +5,12 @@
 // the "this is being placed" animation, and the reveal that tells you which
 // island you landed on and who is nearest.
 //
+// Stage 5 added the small things around writing: a prompt for the week (Q37),
+// a "talk to me" switch that is really the first tag (Q45), and the first post
+// made by tapping an example sentence. The example is placed but never saved
+// (Q40): it stands on the map as a ghost only this browser sees, until the
+// person writes in their own words or closes it.
+//
 // The image is downscaled and re-encoded in the browser before it is uploaded
 // (see image.js). A 4MB phone photo would be the single biggest thing this app
 // ever moves, and nobody looking at a card in a bottom sheet needs 4032 pixels.
@@ -17,7 +23,11 @@ import { state, upsertPost } from '../state.js';
 import { setOnboardingStep } from '../onboarding.js';
 import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
 import { postRow } from '../components/postcard.js';
-import { openOnMap } from './map.js';
+import { buzz, moment } from '../feedback.js';
+import { ripple } from '../map/index.js';
+import { openOnMap, showTrial } from './map.js';
+
+const OPEN_KEY = 'islands.openDefault';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -70,12 +80,32 @@ function paintMotivation() {
 }
 
 function selectedTags() {
-  return $$('#composeTags .check.on').map((node) => node.dataset.tag);
+  const tags = $$('#composeTags .check.on').map((node) => node.dataset.tag);
+  return $('composeOpen').checked ? [config().open_tag, ...tags] : tags;
+}
+
+/** The last choice of "talk to me", so it need not be set on every post. */
+function openByDefault() {
+  try {
+    return localStorage.getItem(OPEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function rememberOpen(on) {
+  try {
+    localStorage.setItem(OPEN_KEY, on ? '1' : '0');
+  } catch {
+    // Not remembered; the switch still works for this post.
+  }
 }
 
 function paintTags(selected = []) {
   const box = clear($('composeTags'));
-  config().tags.forEach((tag) => {
+  const open = config().open_tag;
+  $('composeOpen').checked = selected.includes(open);
+  config().tags.filter((tag) => tag !== open).forEach((tag) => {
     const node = el('button', {
       className: `check${selected.includes(tag) ? ' on' : ''}`,
       attrs: { type: 'button', role: 'checkbox', 'aria-checked': selected.includes(tag) },
@@ -92,11 +122,41 @@ function paintTags(selected = []) {
   });
 }
 
+function paintPrompt(show) {
+  const prompt = config().weekly_prompt;
+  $('composePrompt').hidden = !show || !prompt?.text;
+  $('composePrompt').classList.remove('used');
+  $('composePromptText').textContent = prompt?.text || '';
+  $('composeBody').placeholder = `取り組みや活動内容（最大${config().limits.body_max}文字）`;
+}
+
+function paintExamples(show) {
+  $('composeExamples').hidden = !show;
+  const list = clear($('composeExampleList'));
+  if (!show) return;
+  (config().example_posts || []).forEach((text) => {
+    const button = el('button', { className: 'example', attrs: { type: 'button' }, text });
+    button.addEventListener('click', () => tryExample(text));
+    list.append(button);
+  });
+}
+
 export function setupCompose() {
   const body = $('composeBody');
   $('composeTags').closest('.field').before($('composeImageBtn').closest('.field'));
   body.addEventListener('input', paintCounter);
   $('composeMotivation').addEventListener('input', paintMotivation);
+  $('composeOpen').addEventListener('change', (event) => {
+    rememberOpen(event.target.checked);
+    buzz('tap');
+  });
+  $('composePromptUse').addEventListener('click', () => {
+    const text = config().weekly_prompt?.text;
+    if (!text) return;
+    body.placeholder = `お題：${text}`;
+    $('composePrompt').classList.add('used');
+    body.focus();
+  });
 
   $('composeBack').addEventListener('click', () => {
     navigate(editing ? '#/me' : '#/map');
@@ -168,7 +228,9 @@ export function setupCompose() {
       $('composeMotivation').value = editing
         ? editing.motivation
         : config().limits.motivation_default;
-      paintTags(editing ? (editing.tags || []) : []);
+      paintTags(editing ? (editing.tags || []) : openByDefault() ? [config().open_tag] : []);
+      paintPrompt(!editing && !firstPost);
+      paintExamples(firstPost && !editing);
       imagePath = editing ? (editing.image_path || null) : null;
       paintImage(imagePath ? data.imageUrl(imagePath) : null);
       if (draft) {
@@ -221,9 +283,11 @@ async function submit() {
 
     const result = await runPlacement(payload);
     setOnboardingStep(null);
+    state.trialPost = null;
     drafts.delete(draftKey);
     draftKey = '';
-    if (firstPost) await openOnMap(result.id);
+    moment('post');
+    if (firstPost) await landOnMap(result);
     else showReveal(result);
   } catch (error) {
     $('composeError').textContent = error.message;
@@ -235,8 +299,37 @@ async function submit() {
   }
 }
 
+/** Open the new post on the map, with a ripple where it landed. */
+async function landOnMap(result) {
+  await openOnMap(result.id);
+  ripple(result.x, result.y, { big: true });
+}
+
+/** Q40: an example sentence, placed for a look and not kept. */
+async function tryExample(text) {
+  if (submitting) return;
+  submitting = true;
+  $('composeError').textContent = '';
+  buzz('tap');
+  try {
+    const result = await runPlacement({ body: text }, { tryout: true });
+    state.trialPost = {
+      x: result.x, y: result.y, body: text,
+      icon_id: state.account?.icon_id, island: result.island,
+    };
+    setOnboardingStep(null);
+    showReveal(result, { trial: true });
+  } catch (error) {
+    $('composeError').textContent = error.message;
+    show('compose');
+  } finally {
+    submitting = false;
+    paintCounter();
+  }
+}
+
 /** The placing animation, and the request it is covering. */
-async function runPlacement(payload) {
+async function runPlacement(payload, { tryout = false } = {}) {
   show('computing');
   const steps = $$('.step');
   steps.forEach((step) => step.classList.remove('on', 'done'));
@@ -251,14 +344,20 @@ async function runPlacement(payload) {
 
   const started = performance.now();
   try {
-    const fingerprint = JSON.stringify(payload);
-    if (requestBody !== fingerprint) { requestKey = crypto.randomUUID(); requestBody = fingerprint; }
-    const result = await api.post('/api/posts', payload, { headers: { 'Idempotency-Key': requestKey } });
+    let result;
+    if (tryout) {
+      result = await api.post('/api/posts/preview', payload);
+    } else {
+      const fingerprint = JSON.stringify(payload);
+      if (requestBody !== fingerprint) { requestKey = crypto.randomUUID(); requestBody = fingerprint; }
+      result = await api.post('/api/posts', payload, { headers: { 'Idempotency-Key': requestKey } });
+    }
     // Let the animation finish, so the reveal never flashes past. The wait is
     // capped by how long the request actually took, not added to it.
     const elapsed = performance.now() - started;
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, 1800 - elapsed)));
     steps.forEach((step) => { step.classList.remove('on'); step.classList.add('done'); });
+    if (tryout) return result;
     upsertPost(result);
     state.myPosts = state.myPosts.filter((post) => post.id !== result.id).concat(result);
     state.activePostId = result.id;
@@ -271,14 +370,24 @@ async function runPlacement(payload) {
 // ---------------------------------------------------------------- reveal
 
 let revealTarget = null;
+let revealTrial = false;
 
-function showReveal(result) {
+function showReveal(result, { trial = false } = {}) {
   revealTarget = result;
+  revealTrial = trial;
   const island = result.island;
   $('revealIsland').textContent = island ? island.label : 'まだ名前のない島';
   $('revealIsland').style.color = island ? islandColor(island.cluster_id) : '';
+  document.querySelector('#reveal .reveal-title').textContent = trial ? 'お試し：この文なら、ここに立ちます' : 'あなたの島';
+  $('revealWrite').hidden = !trial;
 
   const container = clear($('revealBody'));
+  if (trial) {
+    container.append(el('p', {
+      className: 'trial-note',
+      text: `「${result.body}」\nこの文は保存していません。地図では、あなたにだけ見えます。`,
+    }));
+  }
   if (!result.neighbors || !result.neighbors.length) {
     container.append(el('p', {
       className: 'empty-note',
@@ -308,9 +417,11 @@ function showReveal(result) {
 
 export function setupReveal() {
   $('revealToMap').addEventListener('click', () => {
-    if (revealTarget) openOnMap(revealTarget.id);
+    if (revealTrial) showTrial();
+    else if (revealTarget) landOnMap(revealTarget);
     else navigate('#/map');
   });
+  $('revealWrite').addEventListener('click', () => navigate('#/post'));
   screen('reveal', {});
   screen('computing', {});
 }
