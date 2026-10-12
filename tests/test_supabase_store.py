@@ -15,6 +15,7 @@ import json
 import sys
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -31,7 +32,7 @@ SERVICE_KEY = "test-service-role-key"
 # table -> {id: row}
 TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notifications": {},
           "notification_settings": {}, "islands_state": {}, "island_events": {},
-          "post_views": {}}
+          "post_views": {}, "push_config": {}, "push_subscriptions": {}, "push_presence": {}}
 SEQUENCE = {"n": 0}
 ISLAND_RUN = {"at": None}
 
@@ -41,11 +42,20 @@ def reset():
         rows.clear()
     SEQUENCE["n"] = 0
     ISLAND_RUN["at"] = None
+    empty_push_config()
+
+
+def empty_push_config():
+    """The one row the migration inserts, with no keys yet."""
+    TABLES["push_config"].clear()
+    TABLES["push_config"]["true"] = {"id": "true", "singleton": True, "vapid_public": None,
+                                     "vapid_private": None, "dispatch_url": None}
 
 
 def stamp():
     SEQUENCE["n"] += 1
-    return f"2026-01-01T00:00:{SEQUENCE['n']:02d}Z"
+    n = SEQUENCE["n"]  # a real clock: seconds roll over into minutes past 59
+    return f"2026-01-01T{n // 3600:02d}:{n // 60 % 60:02d}:{n % 60:02d}Z"
 
 
 class FakePostgrest(BaseHTTPRequestHandler):
@@ -84,7 +94,7 @@ class FakePostgrest(BaseHTTPRequestHandler):
             for value in values:
                 if value.startswith("eq."):
                     wanted = value[3:]
-                    checks.append(lambda row, k=key, v=wanted: str(row.get(k)) == v)
+                    checks.append(lambda row, k=key, v=wanted: _text(row.get(k)) == v)
                 elif value == "is.null":
                     checks.append(lambda row, k=key: row.get(k) is None)
                 elif value.startswith("in."):
@@ -92,9 +102,13 @@ class FakePostgrest(BaseHTTPRequestHandler):
                     checks.append(lambda row, k=key, v=wanted: str(row.get(k)) in v)
                 elif value == "is.true":
                     checks.append(lambda row, k=key: row.get(k) is True)
-                elif value.startswith("gte."):
-                    wanted = value[4:]
-                    checks.append(lambda row, k=key, v=wanted: str(row.get(k)) >= v)
+                else:
+                    # gte./gt./lt. on timestamps: the store always writes one ISO
+                    # form, so comparing the text orders them. NULL matches none.
+                    op, _, wanted = value.partition(".")
+                    compare = {"gte": str.__ge__, "gt": str.__gt__, "lt": str.__lt__}[op]
+                    checks.append(lambda row, k=key, v=wanted, c=compare:
+                                  row.get(k) is not None and c(str(row.get(k)), v))
         return lambda row: all(check(row) for check in checks)
 
     def _project(self, rows, select):
@@ -345,6 +359,13 @@ class FakePostgrest(BaseHTTPRequestHandler):
         for row in matched:
             del rows[row["id"]]
         self._send(200, matched)
+
+
+def _text(value):
+    """A column value the way it reads in a PostgREST filter (true, not True)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _cosine(a, b):
@@ -615,6 +636,10 @@ def test_the_two_backends_agree(store):
         "claim_island_run",
         # 段5: footprints as a number, and placing a sentence without saving it
         "record_view", "view_counts", "nearest_to_vector",
+        # 段6: web push, presence and who to tell
+        "notification_settings_for", "get_push_config", "save_push_keys",
+        "claim_pending_pushes", "push_subscriptions", "save_push_subscription",
+        "delete_push_subscription", "mark_active", "active_accounts", "recent_visitors",
     ]
     for method in surface:
         assert hasattr(memory, method), f"MemoryStore is missing {method}"
@@ -834,3 +859,105 @@ def test_nearest_to_vector_sends_the_text_form(store):
     ranked = store.nearest_to_vector([1.0] * 8, 1)
     assert ranked[0][0] == near
     assert isinstance(ranked[0][1], float)
+
+
+# --------------------------------------------------------------------------
+# 段6: web push keys, the dispatcher's claim, subscriptions and presence
+# --------------------------------------------------------------------------
+
+def test_push_keys_are_written_once(store):
+    empty_push_config()
+    assert store.get_push_config()["vapid_private"] is None
+    first = store.save_push_keys("pub-1", "priv-1")
+    assert (first["vapid_public"], first["vapid_private"]) == ("pub-1", "priv-1")
+    # A second server racing the first keeps the pair that landed.
+    second = store.save_push_keys("pub-2", "priv-2")
+    assert (second["vapid_public"], second["vapid_private"]) == ("pub-1", "priv-1")
+    assert store.get_push_config()["vapid_public"] == "pub-1"
+
+
+def test_claiming_pushes_takes_each_row_once(store):
+    store.claim_pending_pushes()  # whatever earlier tests left behind
+    person = account(store, "通知を待つ人")
+    store.insert_notifications([{"recipient_id": person, "type": "similar"}])
+    claimed = store.claim_pending_pushes()
+    assert [row["recipient_id"] for row in claimed] == [person]
+    assert claimed[0]["type"] == "similar"
+    assert store.claim_pending_pushes() == []
+
+
+def test_a_subscription_moves_with_its_endpoint_and_can_be_dropped(store):
+    alice = account(store, "購読A")
+    bob = account(store, "購読B")
+    endpoint = f"https://fcm.googleapis.com/fcm/send/{uuid.uuid4()}"
+    saved = store.save_push_subscription(alice, endpoint, "p256", "auth", "test-agent")
+    assert saved["account_id"] == alice
+    # The same browser signing in as Bob takes the row over rather than adding one.
+    store.save_push_subscription(bob, endpoint, "p256-b", "auth-b")
+    assert store.push_subscriptions([alice]) == []
+    rows = store.push_subscriptions([bob])
+    assert [(row["endpoint"], row["p256dh"]) for row in rows] == [(endpoint, "p256-b")]
+    assert store.delete_push_subscription(endpoint, alice) is False  # not Alice's any more
+    assert store.delete_push_subscription(endpoint, bob) is True
+    assert store.push_subscriptions([bob]) == []
+    assert store.push_subscriptions([]) == []
+
+
+def test_presence_is_capped_and_can_be_cleared(store):
+    person = account(store, "見ている人")
+    other = account(store, "見ていない人")
+    store.mark_active(person, 3600)
+    assert store.active_accounts([person, other]) == {person}
+    row = next(r for r in TABLES["push_presence"].values() if r["account_id"] == person)
+    until = datetime.fromisoformat(row["active_until"])
+    assert until - datetime.now(timezone.utc) <= timedelta(seconds=121)
+    store.mark_active(person, 0)
+    assert store.active_accounts([person, other]) == set()
+    assert store.active_accounts([]) == set()
+
+
+def test_recent_visitors_only_names_those_who_came(store):
+    came = account(store, "来た人")
+    stayed_away = account(store, "来ない人")
+    store.touch_last_seen(came)
+    since = datetime.now(timezone.utc) - timedelta(days=14)
+    assert store.recent_visitors([came, stayed_away], since) == {came}
+    later = datetime.now(timezone.utc) + timedelta(days=1)
+    assert store.recent_visitors([came], later) == set()
+    assert store.recent_visitors([], since) == set()
+
+
+def test_long_id_lists_are_asked_in_slices(store):
+    came = account(store, "大勢の中の人")
+    store.touch_last_seen(came)
+    crowd = [str(uuid.uuid4()) for _ in range(400)] + [came]
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    assert store.recent_visitors(crowd, since) == {came}
+
+
+def test_settings_for_many_people_at_once(store):
+    quiet = account(store, "外は切る人")
+    plain = account(store, "設定なしの人")
+    store.put_notification_settings(quiet, [{"category": "reaction", "push": False, "in_app": True}])
+    settings = store.notification_settings_for([quiet, plain])
+    assert list(settings) == [quiet]
+    assert [(r["category"], r["push"], r["in_app"]) for r in settings[quiet]] == [
+        ("reaction", False, True)]
+    assert store.notification_settings_for([]) == {}
+
+
+def test_memory_store_wakes_the_dispatcher_except_for_quiet_posts():
+    memory = MemoryStore()
+    calls = []
+    memory.on_notify = lambda: calls.append(1)
+    person = memory.upsert_account(str(uuid.uuid4()), {"display_name": "手元", "icon_id": "1"})["id"]
+    memory.insert_notifications([{"recipient_id": person, "type": "quiet_post"}])
+    assert calls == []
+    memory.insert_notifications([{"recipient_id": person, "type": "similar"}])
+    assert calls == [1]
+    # Both rows are still claimed (the dispatcher drops quiet_post itself),
+    # and the rows look the same as the database's: no pushed_at column.
+    claimed = memory.claim_pending_pushes()
+    assert [row["type"] for row in claimed] == ["quiet_post", "similar"]
+    assert "pushed_at" not in claimed[0]
+    assert memory.claim_pending_pushes() == []

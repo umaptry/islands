@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "islands",
+  "short_name": "islands",
+  "description": "書いた一言だけで地図の上に島ができる。近くにいる人ほど、似た話をしている。",
+  "lang": "ja",
+  "start_url": "/#/map",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#2FA6FF",
+  "background_color": "#2FA6FF",
+  "icons": [
+    { "src": "/static/img/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/img/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/img/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

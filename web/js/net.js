@@ -16,6 +16,7 @@
 
 import { config, isLocal } from './config.js';
 import { session } from './session.js';
+import { attachActors } from './notify-rules.js';
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -24,7 +25,9 @@ export class ApiError extends Error {
   }
 }
 
-async function request(url, { method = 'GET', body, headers = {}, auth = true, raw } = {}) {
+// keepalive lets a request outlive the page: "no longer on screen" is said as
+// the tab closes, and without it the browser would drop it on the floor.
+async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive } = {}) {
   const merged = { accept: 'application/json', ...headers };
   if (auth) {
     const token = await session.accessToken();
@@ -38,6 +41,7 @@ async function request(url, { method = 'GET', body, headers = {}, auth = true, r
       method,
       headers: merged,
       body: raw ? body : (body === undefined ? undefined : JSON.stringify(body)),
+      ...(keepalive ? { keepalive: true } : {}),
     });
   } catch {
     throw new ApiError('接続できませんでした。通信環境をご確認ください。', 0);
@@ -79,15 +83,15 @@ function rest(path, params) {
   return `${url}/rest/v1/${path}${query}`;
 }
 
-async function restCall(path, { params, method = 'GET', body, prefer } = {}) {
+async function restCall(path, { params, method = 'GET', body, prefer, keepalive } = {}) {
   const { anon_key: key } = config().supabase;
   const headers = { apikey: key };
   if (prefer) headers.prefer = prefer;
-  return request(rest(path, params), { method, body, headers });
+  return request(rest(path, params), { method, body, headers, keepalive });
 }
 
-const rpc = (name, args) =>
-  restCall(`rpc/${name}`, { method: 'POST', body: args });
+const rpc = (name, args, options) =>
+  restCall(`rpc/${name}`, { method: 'POST', body: args, ...options });
 
 const ACCOUNT_EMBED = 'accounts(id,display_name,icon_id,avatar_path)';
 // Posts also reach accounts through reactions and comments, so name the key.
@@ -203,17 +207,20 @@ const supabaseBackend = {
     });
     return true;
   },
-  async listNotifications() {
-    const rows = await restCall('notifications', {
-      params: {
-        select: 'id,recipient_id,actor_id,post_id,comment_id,type,payload,created_at,read_at,'
-          + 'accounts!notifications_actor_id_fkey(id,display_name,icon_id,avatar_path)',
-        recipient_id: `eq.${session.userId()}`,
-        order: 'created_at.desc',
-        limit: '100',
-      },
-    });
-    return rows.map((row) => flatten(row, 'actor'));
+  /** Reactions to one post within ten minutes as one entry (item 22). */
+  async listNotificationFeed(limit = 50) {
+    const rows = await rpc('notification_feed', { limit_n: limit });
+    const actorIds = [...new Set(rows.map((row) => row.actor_id).filter(Boolean))];
+    const accounts = actorIds.length
+      ? await restCall('accounts', {
+        params: { select: 'id,display_name,icon_id,avatar_path', id: `in.(${actorIds.join(',')})` },
+      })
+      : [];
+    return attachActors(rows, accounts);
+  },
+  /** The app is on screen for `seconds` (0: it is not), so nothing is pushed meanwhile. */
+  async markActive(seconds, { keepalive = false } = {}) {
+    await rpc('mark_active', { seconds }, { keepalive });
   },
   async markNotificationsRead(ids) {
     const params = { recipient_id: `eq.${session.userId()}`, read_at: 'is.null' };
@@ -298,7 +305,11 @@ const localBackend = {
     await api.del(`/api/local/reactions?${params}`);
     return true;
   },
-  listNotifications: async () => (await api.get('/api/local/notifications')).notifications,
+  listNotificationFeed: async (limit = 50) =>
+    (await api.get(`/api/local/notifications/feed?limit=${limit}`)).notifications,
+  markActive: async (seconds, { keepalive = false } = {}) => {
+    await request('/api/local/presence', { method: 'POST', body: { seconds }, keepalive });
+  },
   markNotificationsRead: (ids) =>
     api.post('/api/local/notifications/read', { ids: ids && ids.length ? ids : null }),
   report: ({ postId, commentId, reason }) =>

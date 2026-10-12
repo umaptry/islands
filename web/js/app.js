@@ -9,7 +9,9 @@ import { api } from './net.js';
 import { session } from './session.js';
 import { state } from './state.js';
 import { onboardingStep } from './onboarding.js';
-import { route, screen, setGuard, show, startRouter } from './router.js';
+import { navigate, route, screen, setGuard, show, startRouter } from './router.js';
+import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
+import { setupPush, syncPush } from './push.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
 import { setupFeedback } from './feedback.js';
@@ -81,6 +83,8 @@ async function boot() {
   setupMapScreen();
   setupNotifications();
   setupProfile();
+  setupRealtime({ onArrive: refreshNotifications });
+  setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   screen('booting', {});
 
   // An OAuth round trip comes back with the token in the fragment, which is
@@ -125,9 +129,10 @@ async function boot() {
   // The timer is unconditional: refreshNotifications() returns immediately when
   // nobody is signed in, and starting it only for a session that already
   // existed meant somebody who signed in on this page load never got a badge
-  // until they reloaded.
+  // until they reloaded. With the Realtime channel joined it rests: new rows
+  // arrive by themselves (段6).
   setInterval(() => {
-    if (!document.hidden && state.account) refreshNotifications();
+    if (!document.hidden && state.account && !realtimeLive()) refreshNotifications();
     if (!document.hidden) checkMapVersion().catch(() => {});
   }, NOTIFY_MS);
   if (state.account) {
@@ -135,13 +140,28 @@ async function boot() {
     refreshNotifications();
   }
   paintBadge();
+  syncRealtime();
+  syncPush();
+
+  // Back from another app or tab: catch up now, and find out whether a phone
+  // froze the socket while it was away.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (state.account) refreshNotifications();
+    syncRealtime({ probe: true });
+  });
 
   session.onChange(() => {
     if (!session.signedIn()) {
       state.account = null;
       state.unread = 0;
+      state.notifications = [];
+      state.notifySettings = null;
       paintBadge();
     }
+    // Also rings on every token refresh; both only act when the person changed.
+    syncRealtime();
+    syncPush();
   });
 }
 boot();

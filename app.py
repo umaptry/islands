@@ -19,6 +19,8 @@ that cannot be done anywhere else:
   GET /api/connections    one line per pair of people, from every interaction
   GET /api/similar-people needs the hidden profile vectors
   GET /api/changes        islands that remember: merges, splits, renames, tiers
+  POST /api/push/*        Web Push needs the VAPID private key, and the server
+                          is the one that POSTs to a subscription's endpoint
 
 Everything at request time is a pure forward pass through frozen artifacts.
 Nothing here fits a vectorizer, retrains an encoder, or recomputes a layout, so
@@ -45,7 +47,9 @@ from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
+import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
@@ -60,6 +64,8 @@ from core import growth
 from core import introductions
 from core import island_tracking
 from core import notifications as notices
+from core import quiet
+from core import webpush
 from core.clustering import assign_cluster, name_group
 from core.prompts import weekly_prompt
 from core.config import (
@@ -88,6 +94,7 @@ from core.config import (
     MOTIVATION_DEFAULT,
     MOTIVATION_MAX,
     MOTIVATION_MIN,
+    NEVER_PUSHED,
     NOTIFICATION_CATEGORIES,
     ORBIT_NEIGHBOR_COUNT,
     PERSON_CARD_CONNECTIONS,
@@ -95,6 +102,12 @@ from core.config import (
     PROFILE_TEXT_LENGTH,
     PROFILE_TOPIC_LENGTH,
     PROFILE_TOPIC_MAX,
+    PRESENCE_HOLD_SECONDS,
+    PRESENCE_PING_SECONDS,
+    PUSH_FRESH_MINUTES,
+    PUSH_TTL_SECONDS,
+    QUIET_POST_MAX_DAYS,
+    QUIET_POST_VISIT_DAYS,
     SIMILAR_NOTIFY_PER_DAY,
     SIMILAR_NOTIFY_THRESHOLD,
     SIMILAR_PEOPLE_COUNT,
@@ -144,6 +157,11 @@ NAMING_POST_LIMIT = 5000
 # suite turns that off and calls track_islands() directly, so no background
 # thread is still writing when a test swaps the store.
 ISLAND_AUTO_TRACK = os.environ.get("ISLANDS_AUTO_TRACK", "1") == "1"
+# Likewise for Web Push: tests call dispatch_pushes() themselves.
+PUSH_AUTO = os.environ.get("ISLANDS_AUTO_PUSH", "1") == "1"
+# A burst of pokes runs the dispatcher at most once per this many seconds.
+PUSH_MIN_GAP_SECONDS = 1.0
+PUSH_URL = "/#/notifications"
 
 _logger = logging.getLogger(__name__)
 
@@ -169,6 +187,12 @@ _connections_lock = threading.Lock()
 # Held while one tracking step runs in this process. The database claim
 # (claim_island_run) is what keeps two instances apart.
 _island_run_lock = threading.Lock()
+# One push dispatcher per process. A poke while it runs asks for one more pass
+# instead of starting a second thread; claim_pending_pushes() is what keeps two
+# processes from sending the same row.
+_push_lock = threading.Lock()
+_push_state = {"running": False, "again": False}
+_push_keys = {"store": None, "pair": None, "dispatch_url": None}
 
 
 # --------------------------------------------------------------------------
@@ -244,6 +268,12 @@ async def lifespan(_app):
         raise RuntimeError("Production Gemini requires MAP_RUNTIME_CHECK=1 and the model-runtime migration")
     state["images"] = {}
     state["otp"] = {}
+    if PUSH_AUTO:
+        if hasattr(state["store"], "on_notify"):
+            state["store"].on_notify = poke_push_dispatch
+        # Whatever arrived while this server was asleep: fresh rows go out,
+        # older ones are marked and dropped.
+        poke_push_dispatch()
 
     if state["local_mode"]:
         # Easy to miss otherwise: the app works perfectly, and then a restart
@@ -292,7 +322,11 @@ def runtime_status():
 
 @app.middleware("http")
 async def map_runtime_guard(request, call_next):
-    protected = request.url.path.startswith('/api/') and request.url.path not in ('/api/health', '/api/config')
+    path = request.url.path
+    # /api/push/* touches no map data, and the dispatch poke comes from the
+    # database after every notification: no runtime lookup for those.
+    protected = (path.startswith('/api/') and path not in ('/api/health', '/api/config')
+                 and not path.startswith('/api/push/'))
     if protected and state.get("manifest"):
         from starlette.concurrency import run_in_threadpool
         try:
@@ -360,6 +394,25 @@ class NotificationSetting(BaseModel):
 
 class NotificationSettings(BaseModel):
     settings: list[NotificationSetting]
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(max_length=200)
+    auth: str = Field(max_length=100)
+
+
+class PushSubscribe(BaseModel):
+    # PushSubscription.toJSON(); expirationTime is ignored.
+    endpoint: str = Field(max_length=1000)
+    keys: PushSubscriptionKeys
+
+
+class PushUnsubscribe(BaseModel):
+    endpoint: str = Field(max_length=1000)
+
+
+class Presence(BaseModel):
+    seconds: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -809,10 +862,202 @@ def maybe_track_islands():
             track_islands()
         except Exception:
             _logger.exception("island tracking failed")
+        try:
+            notify_quiet_posts()
+        except Exception:
+            _logger.exception("quiet posts failed")
         finally:
             _island_run_lock.release()
 
     threading.Thread(target=work, name="island-tracking", daemon=True).start()
+    return True
+
+
+def notify_quiet_posts(now=None):
+    """Q34: show posts nobody has answered to a few people nearby, in the app only.
+
+    Runs with the island step, so at most every ISLAND_RUN_MIN_SECONDS.
+    """
+    store = state["store"]
+    now = now or datetime.now(timezone.utc)
+    earlier = store.recent_notifications("quiet_post", now - timedelta(days=QUIET_POST_MAX_DAYS + 1))
+    found = quiet.candidates(store.list_terms(limit=NAMING_POST_LIMIT), live_islands(), now,
+                             already={row.get("post_id") for row in earlier})
+    if not found:
+        return []
+    everyone = {person for item in found for person in item["people"]}
+    visitors = store.recent_visitors(everyone, now - timedelta(days=QUIET_POST_VISIT_DAYS))
+    day_ago = now - timedelta(days=1)
+    told = [row["recipient_id"] for row in earlier if notices.parse_time(row["created_at"]) >= day_ago]
+    rows = quiet.choose(found, visitors, told)
+    store.insert_notifications(rows)
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Web Push: outside the app, a few seconds after the row is written
+# --------------------------------------------------------------------------
+#
+# Every insert into notifications pokes POST /api/push/dispatch (a pg_net
+# trigger in a deployment, MemoryStore.on_notify locally). The poke carries
+# nothing: the dispatcher claims the rows nobody has pushed yet, so a forged
+# poke can only send what was already due, early.
+
+# What the lock screen says. No message text: the screen may be on a desk.
+PUSH_TEXT = {
+    "like": "あなたの投稿に「いいね」しました。",
+    "help": "あなたの投稿に「手伝えるかも」と反応しました。",
+    "join": "あなたの投稿に「参加」と反応しました。",
+    "comment": "あなたの投稿にメッセージを送りました。",
+    "reply": "あなたのメッセージに返信しました。",
+    "connection": "初めてやりとりしました。地図に線が引かれます。",
+    "similar": "話題や目標が近い人が参加しました。",
+    "island": "島が変わりました。",
+}
+PUSH_GROUP_TEXT = "あなたの投稿に反応しました。"
+
+
+def push_keys():
+    """(public, private) VAPID pair, made and stored the first time it is needed.
+
+    None when the stored pair does not fit together: that is somebody's edit to
+    fix by hand, and overwriting it would cut off every browser subscribed to it.
+    """
+    store = state["store"]
+    with _push_lock:
+        if _push_keys["store"] is store and _push_keys["pair"]:
+            return _push_keys["pair"]
+    row = store.get_push_config()
+    if not row.get("vapid_private"):
+        public, private = webpush.new_keys()
+        row = store.save_push_keys(public, private)
+    public, private = row.get("vapid_public"), row.get("vapid_private")
+    if not (public and private and webpush.keys_match(public, private)):
+        _logger.error("push_config holds a VAPID pair that does not match; push is off")
+        return None
+    with _push_lock:
+        _push_keys.update({"store": store, "pair": (public, private),
+                           "dispatch_url": row.get("dispatch_url")})
+    return public, private
+
+
+def push_subject():
+    """The VAPID contact: PUSH_SUBJECT, else this deployment's own address."""
+    configured = os.environ.get("PUSH_SUBJECT", "").strip()
+    if configured:
+        return configured
+    parts = urlsplit(_push_keys.get("dispatch_url") or "")
+    if parts.scheme == "https" and parts.netloc:
+        return f"https://{parts.netloc}"
+    return "https://localhost"
+
+
+def push_message(entry):
+    """One notification_feed() entry as the text a lock screen shows."""
+    payload = entry.get("payload") or {}
+    if entry["type"] == "island":
+        title = f"島「{payload['name']}」" if payload.get("name") else "島"
+        body = f"{payload['cause']}。" if payload.get("cause") else PUSH_TEXT["island"]
+    else:
+        first = (entry["actors"][0] if entry["actors"] else None) or {}
+        title = first.get("display_name") or "だれか"
+        if entry["others"]:
+            title = f"{title} ほか{entry['others']}人"
+        body = PUSH_GROUP_TEXT if entry["others"] else PUSH_TEXT.get(entry["type"], PUSH_GROUP_TEXT)
+    # Reactions to one post share a tag, so "A ほか2人" replaces "A" on the
+    # device instead of stacking. Everything else stands alone.
+    if entry["category"] == "reaction" and entry.get("post_id"):
+        tag = f"reaction-{entry['post_id']}"
+    else:
+        tag = f"{entry['type']}-{entry['id']}"
+    return {"title": title, "body": body, "tag": tag, "url": PUSH_URL,
+            "kind": entry["category"], "at": entry["created_at"]}
+
+
+def dispatch_pushes(now=None, client=None):
+    """Push every notification not pushed yet. Returns a Counter of outcomes.
+
+    Skipped: types that stay in the app (NEVER_PUSHED), rows older than
+    PUSH_FRESH_MINUTES (a server that slept should not wake everybody with old
+    news), people with the app on screen (the band shows it there), and kinds
+    switched off for push.
+    """
+    store = state["store"]
+    now = now or datetime.now(timezone.utc)
+    fresh = now - timedelta(minutes=PUSH_FRESH_MINUTES)
+    rows = [row for row in store.claim_pending_pushes()
+            if row["type"] not in NEVER_PUSHED and notices.parse_time(row["created_at"]) >= fresh]
+    tally = Counter()
+    if not rows:
+        return tally
+    recipients = {row["recipient_id"] for row in rows}
+    recipients -= store.active_accounts(recipients)
+    settings = store.notification_settings_for(recipients)
+    rows = [row for row in rows if row["recipient_id"] in recipients and notices.allows(
+        notices.merge_settings(settings.get(row["recipient_id"])), row["type"], "push")]
+    targets = defaultdict(list)
+    for subscription in store.push_subscriptions({row["recipient_id"] for row in rows}):
+        targets[subscription["account_id"]].append(subscription)
+    claimed = defaultdict(set)
+    for row in rows:
+        if targets.get(row["recipient_id"]):
+            claimed[row["recipient_id"]].add(row["id"])
+    if not claimed:
+        return tally
+    keys = push_keys()
+    if keys is None:
+        tally["no_keys"] += sum(len(ids) for ids in claimed.values())
+        return tally
+    subject = push_subject()
+    own_client = client is None
+    client = client or httpx.Client()
+    try:
+        for recipient, ids in claimed.items():
+            # The feed is grouped the way the app lists it, so the push says
+            # what the list will say when it is opened.
+            feed = notices.group_feed(store.list_notifications(recipient, limit=100), limit=100)
+            messages = [push_message(entry) for entry in reversed(feed) if ids.intersection(entry["ids"])]
+            for subscription in targets[recipient]:
+                for message in messages:
+                    outcome = webpush.send(
+                        subscription, message, public_b64u=keys[0], private_b64u=keys[1],
+                        subject=subject, ttl=PUSH_TTL_SECONDS,
+                        topic=webpush.topic_for(message["tag"]), client=client)
+                    tally[outcome] += 1
+                    if outcome == "gone":
+                        store.delete_push_subscription(subscription["endpoint"])
+                        break
+    finally:
+        if own_client:
+            client.close()
+    return tally
+
+
+def _push_loop():
+    while True:
+        started = time.monotonic()
+        try:
+            dispatch_pushes()
+        except Exception:
+            _logger.exception("push dispatch failed")
+        with _push_lock:
+            if not _push_state["again"]:
+                _push_state["running"] = False
+                return
+            _push_state["again"] = False
+        time.sleep(max(0.0, PUSH_MIN_GAP_SECONDS - (time.monotonic() - started)))
+
+
+def poke_push_dispatch():
+    """Wake the dispatcher. Never blocks: MemoryStore calls it holding its lock."""
+    if not PUSH_AUTO:
+        return False
+    with _push_lock:
+        if _push_state["running"]:
+            _push_state["again"] = True
+            return False
+        _push_state["running"] = True
+    threading.Thread(target=_push_loop, name="push-dispatch", daemon=True).start()
     return True
 
 
@@ -957,7 +1202,18 @@ def config():
             "floor": anchors.get("cosine_floor"),
             "ceiling": anchors.get("cosine_ceiling"),
         },
+        "push": {"public_key": push_public_key(), "presence_seconds": PRESENCE_PING_SECONDS,
+                 "presence_hold": PRESENCE_HOLD_SECONDS},
     }
+
+
+def push_public_key():
+    """The VAPID public key browsers subscribe with, or None when push is off."""
+    try:
+        pair = push_keys()
+    except StoreError:
+        return None
+    return pair[0] if pair else None
 
 
 @app.get("/api/health")
@@ -1221,6 +1477,51 @@ def put_notification_settings(payload: NotificationSettings, request: Request):
     except StoreError:
         raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
     return {"settings": notices.merge_settings(saved), "categories": list(NOTIFICATION_CATEGORIES)}
+
+
+def _decoded(value):
+    try:
+        return webpush.unb64u(value)
+    except ValueError:
+        return b""
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(payload: PushSubscribe, request: Request):
+    """Remember this browser as somewhere to push to.
+
+    Only the server writes subscriptions: it is the one that will POST to the
+    endpoint, so it checks the endpoint belongs to a known push service first.
+    """
+    user_id = current_user(request)
+    key = _decoded(payload.keys.p256dh)
+    if (not webpush.allowed_endpoint(payload.endpoint) or len(key) != 65 or key[:1] != b"\x04"
+            or len(_decoded(payload.keys.auth)) != 16):
+        raise HTTPException(status_code=422, detail="この端末の通知の登録は使えません。")
+    agent = (request.headers.get("user-agent") or "")[:300] or None
+    try:
+        state["store"].save_push_subscription(user_id, payload.endpoint, payload.keys.p256dh,
+                                              payload.keys.auth, agent)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="通知の登録に失敗しました。もう一度お試しください。")
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(payload: PushUnsubscribe, request: Request):
+    user_id = current_user(request)
+    try:
+        removed = state["store"].delete_push_subscription(payload.endpoint, user_id)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="通知の解除に失敗しました。もう一度お試しください。")
+    return {"removed": removed}
+
+
+@app.post("/api/push/dispatch", status_code=202)
+def push_dispatch():
+    """The database's poke after an insert into notifications. Carries nothing."""
+    poke_push_dispatch()
+    return {"ok": True}
 
 
 @app.get("/api/map/bounds")
@@ -1769,6 +2070,15 @@ def local_notification_feed(request: Request, limit: int = 50):
     return {"notifications": feed, "unread": unread, "settings": settings}
 
 
+@app.post("/api/local/presence")
+def local_presence(payload: Presence, request: Request):
+    """mark_active() for local mode: the app is on screen for `seconds`, 0 clears it."""
+    require_local()
+    user_id = current_user(request)
+    state["store"].mark_active(user_id, max(0, min(int(payload.seconds), 120)))
+    return {"ok": True}
+
+
 @app.post("/api/local/notifications/read")
 def local_mark_read(payload: ReadRequest, request: Request):
     require_local()
@@ -1913,6 +2223,18 @@ def how():
 @app.get("/docs")
 def docs_page():
     return FileResponse(WEB / "docs.html", headers=NO_CACHE)
+
+
+@app.get("/sw.js")
+def service_worker():
+    # Served from the root so its scope is the whole app.
+    return FileResponse(WEB / "sw.js", media_type="text/javascript", headers=NO_CACHE)
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest():
+    return FileResponse(WEB / "manifest.webmanifest", media_type="application/manifest+json",
+                        headers=NO_CACHE)
 
 
 class RevalidatingStatics(StaticFiles):

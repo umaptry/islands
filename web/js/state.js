@@ -16,8 +16,9 @@ export const state = {
   saturated: false,
   islands: [],            // named landmasses from /api/islands
   reactions: new Set(),   // "postId:kind" for everything I have reacted to
-  notifications: [],
-  unread: 0,
+  notifications: [],      // the grouped feed, newest first (段6)
+  unread: 0,              // unread entries whose kind may interrupt
+  notifySettings: null,   // { category: { push, in_app } } for the five kinds
   selected: null,         // the post the sheet is showing
   view: 'map',            // 'map' | 'orbit'
   filters: { query: '', tags: [] },
