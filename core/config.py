@@ -301,9 +301,31 @@ NOTIFICATION_CATEGORY_OF = {
     "like": "reaction", "help": "reaction", "join": "reaction",
     "comment": "reply", "reply": "reply",
     "connection": "connection", "similar": "similar", "island": "island",
+    # Q34: a post nobody has answered yet, shown to people nearby. A
+    # recommendation like similar, and never pushed (see NEVER_PUSHED).
+    "quiet_post": "similar",
 }
+# Types that stay inside the app whatever the settings say.
+NEVER_PUSHED = frozenset({"quiet_post"})
 REACTION_GROUP_MINUTES = 10
 ISLAND_NOTIFY_PER_DAY = 1
+
+# Q34 quiet posts (all provisional). A post with no like/help/join/comment
+# between these ages is shown, in the app only, to a few people who stand
+# near it and still come by. Nobody is told the post went unanswered.
+QUIET_POST_MIN_HOURS = 24
+QUIET_POST_MAX_DAYS = 7
+QUIET_POST_NEAR_ISLANDS = 2       # besides the post's own island
+QUIET_POST_PER_POST = 3
+QUIET_POST_VISIT_DAYS = 14
+QUIET_POST_CANDIDATES = 20        # nearest people checked for a recent visit
+QUIET_POST_PER_DAY = 1            # per person told
+
+# Web push (段6).
+PUSH_FRESH_MINUTES = 10           # older rows are marked sent but not pushed
+PUSH_TTL_SECONDS = 24 * 3600
+PRESENCE_PING_SECONDS = 30        # the page says "on screen" this often
+PRESENCE_HOLD_SECONDS = 75        # ...and each ping lasts this long
 
 
 # ---------------------------------------------------------------------------

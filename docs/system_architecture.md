@@ -53,6 +53,32 @@ flowchart LR
 FastAPIは `core/auth.py` でJWTを検証してから、service権限で計算結果を保存する。
 公開configに配るのは公開キーだけ。serviceキー、Geminiキー、投稿vecは配信しない。
 
+### 通知が届くまで（段6・2026-10-09）
+
+```mermaid
+flowchart LR
+  T[DBトリガー 反応・コメント・つながり] -->|INSERT| N[(notifications)]
+  F[FastAPI 似た人・島の変化・静かな投稿] -->|INSERT| N
+  N -->|文ごとに1回 pg_net 中身なし| D[FastAPI /api/push/dispatch]
+  D -->|pushed_at を付けて取り出す| N
+  D -->|VAPID署名・暗号化| P[push の会社 FCM・Apple・Mozilla・Windows]
+  P --> W[端末の service worker sw.js]
+  N -->|Realtime 本人の行だけ| B[開いているアプリ 帯]
+  B -->|30秒ごと mark_active| R[(push_presence)]
+  D -.->|画面にいる人は送らない| R
+```
+
+- 送る処理はトリガーの呼び出しを合図にするだけで、呼び出しは何も運ばない。サーバーが
+  `pushed_at` の空いた行を1回の UPDATE で取り出すので、2台が同じ行を送らず、偽の呼び出しも害がない。
+- 送らないもの：`quiet_post`（アプリの中だけ）・10分より古い行・`push_presence` が生きている人・
+  push を切った分類。404/410 を返した購読は消す。
+- VAPID の鍵は `push_config` にサーバーが初回に作る（環境変数を増やさない）。トリガーの送り先
+  `dispatch_url` は本番だけに入れる。空なら何も送らない。
+- アプリを開いている間は Realtime（`notifications_read` の方針で本人の行だけ）で即時に帯を出す。
+  つながらないとき・ローカルでは30秒ごとの確認に戻る。ローカルの push は `MemoryStore.on_notify` が起こす。
+- 画面の判定・帯・一覧のまとめ方は `web/js/notify-rules.js`、購読は `web/js/push.js`、
+  暗号化（RFC 8291）と送信は `core/webpush.py`（追加の依存なし。`cryptography` と `httpx`）。
+
 ## DBと権限
 
 ```mermaid
@@ -94,7 +120,8 @@ Storageの `post-images` は `image_path` / `avatar_path` から参照する。
 | embedding_cache（追加） | モデル契約+入力のSHA-256でキー化。生本文は保存しない。ベクトルの読み書きはserviceのみ |
 | accounts の人の層（2026-10-06） | 話題・目標・探している相手・手伝えることは公開読み取り、書くのは `PUT /api/account/me`（service）だけ。埋め込んだ `vec_*` と `last_seen_at` は列の権限で誰にも読ませない |
 | comments.reply_to（2026-10-06） | 同じ投稿のコメントへの返信。トリガーが返信先へ `reply`、著者へ `comment` |
-| notification_settings / push_subscriptions（2026-10-06） | 本人だけ。通知5分類ごとの push・アプリ内の切り替えと Web Push の購読先 |
+| notification_settings / push_subscriptions（2026-10-06） | 本人だけ。通知5分類ごとの push・アプリ内の切り替えと Web Push の購読先。購読を作るのはサーバーだけ（2026-10-09 から。届け先のホストを確かめてから保存） |
+| notifications.pushed_at / push_config / push_presence（2026-10-09） | push の済み印（利用者は変えられない）、VAPID の鍵と送り先（service だけ）、画面に出ている人（service だけ。本人は RPC `mark_active` で最大120秒） |
 | islands_state / island_events / island_runs（2026-10-06） | 島の追跡の状態と変化の記録。公開読み取り、書くのは service だけ。island_runs は1台だけが追跡するための取り合い用 |
 
 人の層の計算（似ている人・人と人の線・島の成長点と追跡）は Python（`core/affinity.py`・

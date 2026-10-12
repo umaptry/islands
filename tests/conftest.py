@@ -24,6 +24,8 @@ os.environ["KOTOBA_DISABLE_RATE_LIMIT"] = "1"
 # Tests call track_islands() themselves; a background step would still be
 # writing to the store a test has already swapped out.
 os.environ["ISLANDS_AUTO_TRACK"] = "0"
+# Same for Web Push: tests call dispatch_pushes() and never reach a push service.
+os.environ["ISLANDS_AUTO_PUSH"] = "0"
 
 pytest.importorskip("fastapi")
 

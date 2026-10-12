@@ -8,13 +8,16 @@
 
 import { data, api } from '../net.js';
 import { session } from '../session.js';
-import { navigate, screen } from '../router.js';
+import { activeScreen, navigate, screen } from '../router.js';
 import { state, removePost } from '../state.js';
 import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
 import { react, openOnMap as openMapPost, refreshMyViews } from './map.js';
 import { postCard } from '../components/postcard.js';
 import { setupAvatarField } from './auth.js';
 import { buzz, canBuzz, feedbackSettings, setFeedback, sound } from '../feedback.js';
+import { CATEGORIES, defaultSettings, iosOtherBrowser, mergeSettings, settingsRows } from '../notify-rules.js';
+import { disablePush, enablePush, forgetDevice, pushStatus } from '../push.js';
+import { loadNotifySettings, useNotifySettings } from './notifications.js';
 
 let editDraft = null;
 
@@ -253,7 +256,14 @@ export function setupProfileEdit() {
     setFeedback({ reduceMotion: event.target.checked });
   });
 
-  $('editSignOut').addEventListener('click', () => {
+  setupNotifyFields();
+
+  $('editSignOut').addEventListener('click', async () => {
+    // While still signed in: the next person on this device must not get
+    // this one's notifications.
+    $('editSignOut').disabled = true;
+    await forgetDevice();
+    $('editSignOut').disabled = false;
     session.signOut();
     state.account = null;
     state.myViews = {};
@@ -266,6 +276,7 @@ export function setupProfileEdit() {
 
   screen('profileEdit', {
     leave() {
+      flushNotifySettings();
       editDraft = {
         name: $('editName').value,
         affiliation: $('editAffiliation').value,
@@ -273,9 +284,10 @@ export function setupProfileEdit() {
         link: $('editLink').value,
       };
     },
-    enter() {
+    enter(params, query) {
       const account = state.account || {};
       avatarField.reset(account);
+      enterNotifyFields({ scroll: Boolean(query && query.has('notify')) });
       if (editDraft) {
         $('editName').value = editDraft.name;
         $('editAffiliation').value = editDraft.affiliation;
@@ -299,6 +311,148 @@ export function setupProfileEdit() {
       $('setReduceMotion').checked = settings.reduceMotion;
     },
   });
+}
+
+// ---------------------------------------------------------------- notifications (段6)
+//
+// Two separate things. Whether THIS device is told anything (a browser
+// subscription, so it lives here and is answered by push.js), and which kinds
+// are worth telling about at all (one row per kind on the server, shared by
+// every device the person uses). Switches save the moment they move, like the
+// sound settings above.
+
+const SAVE_WAIT_MS = 400;
+
+const DEVICE_TEXT = {
+  on: 'この端末に届きます',
+  off: 'この端末には届きません',
+  blocked: 'この端末では通知が止められています',
+  'ios-install': 'iPhone・iPad は、ホーム画面に追加すると届きます',
+  'ios-old': 'iOS 16.4 以降で届きます',
+  unsupported: 'このブラウザは端末への通知に対応していません',
+};
+
+const DEVICE_NOTE = {
+  blocked: 'ブラウザのサイトの設定（iPhone は 設定 → 通知 → islands）で通知を許可すると、受け取れます。',
+  'ios-old': '設定 → 一般 → ソフトウェアアップデート から更新できます。アプリの中の通知には届きます。',
+  unsupported: 'アプリの中の通知（ベル）には届きます。',
+};
+
+let deviceStatus = null;
+let saveTimer = 0;
+let edits = 0;             // switch moves so far; a reply to an older save is ignored
+
+function paintDevice(status) {
+  deviceStatus = status;
+  const button = $('notifyDeviceButton');
+  $('notifyDeviceText').textContent = DEVICE_TEXT[status] || DEVICE_TEXT.unsupported;
+  button.hidden = status !== 'on' && status !== 'off';
+  button.textContent = status === 'on' ? 'やめる' : '受け取る';
+  button.classList.toggle('btn-quiet', status === 'on');
+  let note = DEVICE_NOTE[status] || '';
+  if (status === 'ios-install' && iosOtherBrowser(navigator.userAgent)) {
+    note = 'このブラウザからは追加できないことがあります。Safari で開いてから追加してください。';
+  }
+  $('notifyDeviceNote').textContent = note;
+  $('notifyDeviceNote').hidden = !note;
+  $('iosSteps').hidden = status !== 'ios-install';
+  $('iosStepsNote').hidden = status !== 'ios-install';
+}
+
+function kindSwitches() {
+  return [...$('notifyKinds').querySelectorAll('input.switch')];
+}
+
+function paintKinds(settings) {
+  kindSwitches().forEach((input) => {
+    input.checked = Boolean(settings[input.dataset.category]?.[input.dataset.channel]);
+  });
+}
+
+async function saveKinds() {
+  saveTimer = 0;
+  const asked = edits;
+  try {
+    const result = await api.put('/api/notification-settings', { settings: settingsRows(state.notifySettings) });
+    if (asked === edits) useNotifySettings(result.settings);
+  } catch {
+    if (asked !== edits) return;
+    toast('通知の設定を保存できませんでした。もう一度お試しください。');
+    paintKinds(await loadNotifySettings({ force: true }));
+  }
+}
+
+function kindChanged() {
+  const settings = mergeSettings(state.notifySettings);
+  kindSwitches().forEach((input) => {
+    settings[input.dataset.category][input.dataset.channel] = input.checked;
+  });
+  edits += 1;
+  // The badge and band follow at once; the server a moment later, in one go.
+  useNotifySettings(settings);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveKinds, SAVE_WAIT_MS);
+}
+
+function flushNotifySettings() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveKinds();
+}
+
+function setupNotifyFields() {
+  const kinds = clear($('notifyKinds'));
+  kinds.append(el('div', { className: 'notify-head', attrs: { 'aria-hidden': 'true' } },
+    el('span'), el('span', { text: '端末' }), el('span', { text: 'アプリ内' })));
+  CATEGORIES.forEach(({ id, title, note }) => {
+    const toggle = (channel, label) => el('input', {
+      className: 'switch',
+      type: 'checkbox',
+      attrs: { 'data-category': id, 'data-channel': channel, 'aria-label': `${title}：${label}` },
+      on: { change: kindChanged },
+    });
+    kinds.append(el('div', { className: 'notify-row' },
+      el('span', { className: 'switch-text' },
+        el('span', { className: 'switch-title', text: title }),
+        el('span', { className: 'switch-note', text: note })),
+      toggle('push', '端末に届ける'),
+      toggle('in_app', 'アプリ内で知らせる')));
+  });
+
+  $('notifyDeviceButton').addEventListener('click', async () => {
+    const button = $('notifyDeviceButton');
+    button.disabled = true;
+    try {
+      // enablePush asks for permission before anything else is awaited: an
+      // iPhone only shows the question in direct answer to this tap.
+      const next = deviceStatus === 'on' ? await disablePush() : await enablePush();
+      paintDevice(next);
+      if (next === 'on') {
+        toast('この端末に通知が届くようになりました。');
+        sound('notify');
+      }
+    } catch {
+      toast('この端末を登録できませんでした。もう一度お試しください。');
+      paintDevice(await pushStatus());
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  // Back from the browser's or the phone's settings: the answer may have changed.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && activeScreen() === 'profileEdit') pushStatus().then(paintDevice);
+  });
+}
+
+function enterNotifyFields({ scroll }) {
+  paintKinds(state.notifySettings || defaultSettings());
+  loadNotifySettings().then((settings) => {
+    if (!saveTimer) paintKinds(settings);
+  });
+  if (deviceStatus) paintDevice(deviceStatus);
+  pushStatus().then(paintDevice);
+  if (scroll) requestAnimationFrame(() => $('notifySettings').scrollIntoView({ block: 'start' }));
 }
 
 // ---------------------------------------------------------------- other people

@@ -347,6 +347,7 @@ PRIMARY KEY (post_id, actor_id, kind)
 | `connection` | 2人のあいだで最初の交流が起きた（`pair_interaction_count(a, b)` が1になった） | 2人の両方（その2人で1回だけ） |
 | `similar` | 似ている度合いが0.75以上の人が新しく来た | 似ている側（サーバーが作る。1日3件まで） |
 | `island` | 自分の島が合流・分割・名称変更・段の変化をした | 島の住人（サーバーが作る。1島1日1件）。`actor_id` は `null`、`island_id`・`event_id`・`payload`（名前・きっかけ）が入る |
+| `quiet_post` | 24時間〜7日たっても反応のない投稿があった（Q34・2026-10-09） | 同じ島か近い2島に投稿している人のうち、14日以内に来た人から近い順に3人まで（サーバーが作る。1人1日1件・1投稿1回）。**アプリの中だけ**で push しない。`actor_id` は投稿の著者。文言は「近くの島に、話が合いそうな投稿があります。」で、反応がないとは書かない。著者には何も届かない |
 
 `actor_id` は `island` のために `null` を許すようになりました（2026-10-06）。
 
@@ -357,10 +358,10 @@ PRIMARY KEY (post_id, actor_id, kind)
 | `reply` | `comment`・`reply` |
 | `reaction` | `like`・`help`・`join` |
 | `connection` | `connection` |
-| `similar` | `similar` |
+| `similar` | `similar`・`quiet_post`（おすすめ。push は分類の設定に関係なく送らない） |
 | `island` | `island` |
 
-アプリ内を切った分類は、未読の数と印にだけ効きます（一覧には残ります）。同じ投稿へのリアクションで、前のものから10分以内に続いたものは、読むときに1件にまとめます（RPC `notification_feed`。メモリ保存では `core/notifications.py` が同じ規則で動きます）。
+アプリ内を切った分類は、未読の数と印にだけ効きます（一覧には残ります）。push を切った分類は、アプリを閉じているときの端末の通知を出しません（§ push の口）。同じ投稿へのリアクションで、前のものから10分以内に続いたものは、読むときに1件にまとめます（RPC `notification_feed`。メモリ保存では `core/notifications.py` が同じ規則で動きます）。
 
 > [!TIP]
 > **自分の投稿に自分がリアクションしても通知は作られません。** トリガー内で `owner_id <> new.actor_id` をチェックしています。自分で自分に通知しても無意味なので。
@@ -419,7 +420,7 @@ PRIMARY KEY (post_id, actor_id, kind)
 | 表 | 何を入れるか | 誰が読める・書ける |
 |---|---|---|
 | `notification_settings` | `account_id`・`category`（5分類）・`push`・`in_app`。主キーは `account_id`＋`category`。行がなければ両方オン | 本人だけ読む・作る・`push`/`in_app` を変える |
-| `push_subscriptions` | Web Push の購読先（送るのは段6から） | 本人だけ読む・作る・消す |
+| `push_subscriptions` | Web Push の購読先：`endpoint`・`p256dh`・`auth`・`user_agent` | 本人だけ読む・消す。作るのはサーバーだけ（`POST /api/push/subscribe` が届け先を確かめてから。2026-10-09 にブラウザの INSERT を外した） |
 | `islands_state` | 追跡している島：名前・段（0〜4）・成長点（累計・直近14日・見せる値）・投稿と書き手の ID・重心・ランドマーク・静かか | 誰でも読める。書くのはサーバーだけ |
 | `island_events` | 島の変化：`kind`・`cause`（200字まで）・`place`・`before`・`after` | 誰でも読める。書くのはサーバーだけ |
 | `island_runs` | 1行だけの表。島の追跡をどのサーバーが実行するかの取り合い（`last_run_at`） | ブラウザからは読めない |
@@ -446,6 +447,23 @@ PRIMARY KEY (post_id, actor_id, kind)
 |---|---|---|
 | `post_view_counts(author)` | `service_role` | その人の消していない投稿ごとの見られた数。誰が見たかは返さない（Q35） |
 | `nearest_to_vector(origin, k)` | `service_role` | 保存していない文のベクトル（文字の形 `"[0.1,…]"`）に近い投稿 `k` 件（最大100）。例文のお試し（Q40）で使う |
+
+#### 📮 2026-10-09 に足した表（マイグレーション `20261009000000_push.sql`・段6）
+
+| 表・列 | 何を入れるか | 誰が読める・書ける |
+|---|---|---|
+| `notifications.pushed_at` | サーバーが push を「扱った」時刻（送った・送らないと決めた、のどちらでも入る）。`null` が未処理で、部分索引 `notifications_push_pending_idx` で探す。前からある行は `created_at` で埋めた（昔の通知を送らないため） | 本人は読めるが変えられない（列の権限。変えると 42501） |
+| `notifications.type` | `quiet_post` を足した | — |
+| `push_config` | 1行だけ（`singleton`）。VAPID の鍵（`vapid_public`・`vapid_private`。サーバーが初めて要るときに作って入れる）と `dispatch_url`（`https://` だけ。本番だけに入れる。空ならトリガーは何もしない） | `service_role` だけ（方針は「誰も入れない」） |
+| `push_presence` | 画面にアプリを出している人：`account_id`・`active_until`。この時刻までは push せず、アプリの中の帯だけにする | `service_role` だけ。本人は `mark_active` を通してだけ書く |
+
+| 関数・トリガー | 呼べる人 | 何をするか |
+|---|---|---|
+| `mark_active(seconds)` | `authenticated` | 「これから `seconds` 秒は画面に出している」。最大120秒。0以下なら行を消す（画面を離れた） |
+| トリガー `notifications_push` | `notifications` への INSERT の文ごとに1回 | `push_config.dispatch_url` へ中身のない POST を pg_net で送る（`POST /api/push/dispatch`）。`quiet_post` だけの文では送らない。失敗しても通知の書き込みは止めない |
+| `notification_feed(limit_n)` | `authenticated` | 作り直した。`quiet_post` は分類 `similar` に並ぶ（ほかは前と同じ） |
+
+`notifications` を Realtime（変更をブラウザへすぐ流す仕組み）の publication に足しました。届くのは `notifications_read` の方針で読める本人の行だけです。
 
 ### 2.3 テーブル間のリレーション（関係）を理解する
 
@@ -572,7 +590,9 @@ flowchart TD
 | **reports** | SELECT | *(ポリシーなし)* | **一般ユーザーは通報を閲覧不可** |
 | **energy_cells** | SELECT | `USING (true)` | 誰でもセルデータを閲覧可能 |
 | **notification_settings** | SELECT / INSERT / UPDATE | `auth.uid() = account_id` | 自分の通知設定だけ |
-| **push_subscriptions** | SELECT / INSERT / DELETE | `auth.uid() = account_id` | 自分の購読先だけ |
+| **push_subscriptions** | SELECT / DELETE | `auth.uid() = account_id` | 自分の購読先だけ。作るのはサーバーだけ（2026-10-09 に INSERT を外した） |
+| **push_config** | — | 権限なし | VAPID の鍵と送り先。ブラウザからは読めない |
+| **push_presence** | — | 権限なし | 画面に出ている人。書くのは `mark_active` だけ |
 | **islands_state** | SELECT | `USING (true)` | 誰でも島の状態を閲覧可能（書くのはサーバーだけ） |
 | **island_events** | SELECT | `USING (true)` | 誰でも島の変化を閲覧可能（書くのはサーバーだけ） |
 | **island_runs** | — | 権限なし | ブラウザからは読めない |
@@ -663,6 +683,10 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `POST` | `/api/posts/preview` | ✅ 必要 | 例文のお試し（保存しない） | 最初の投稿の練習で「この文ならここに立つ」を見せる |
 | `POST` | `/api/posts/{id}/view` | △ どちらでも | 見られた数を1つ記録 | 他の人の投稿を開いたとき |
 | `GET` | `/api/me/views` | ✅ 必要 | 自分の投稿ごとの見られた数 | 自分の投稿の札に「N人が見ました」 |
+| `POST` | `/api/push/subscribe` | ✅ 必要 | この端末を push の届け先にする | 設定の「受け取る」を押したとき |
+| `POST` | `/api/push/unsubscribe` | ✅ 必要 | この端末を届け先から外す | 設定の「やめる」を押したとき |
+| `POST` | `/api/push/dispatch` | ❌ 不要 | 未送信の通知を push する（中身なし） | DB のトリガーが通知の INSERT のたびに呼ぶ |
+| `GET` | `/sw.js`・`/manifest.webmanifest` | ❌ 不要 | service worker とアプリの説明書 | ブラウザが push とホーム画面への追加に使う |
 
 ---
 
@@ -730,6 +754,11 @@ Host: localhost:7860
     "measured_in": "448d-cosine",
     "floor": 0.12,
     "ceiling": 0.85
+  },
+  "push": {
+    "public_key": "BNc…（VAPID の公開鍵）",
+    "presence_seconds": 30,
+    "presence_hold": 75
   }
 }
 ```
@@ -753,6 +782,8 @@ Host: localhost:7860
 | `open_tag` | `string` | 「話しかけていいよ」の切り替えが付けるタグ（`tags[0]`＝「気軽に話しかけて」）。Q45 |
 | `weekly_prompt` | `{key, text, until}` | 今週のお題（Q37）。月曜0時（日本時間）に替わる。`key` は `"2026-W41"` の形、`until` は次に替わる日時（UTC） |
 | `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文） |
+| `push.public_key` | `string\|null` | ブラウザが push を購読するときの VAPID 公開鍵。`null` なら push は使えない（設定の欄は「このブラウザは端末への通知に対応していません」と出し、ベルの通知だけになる） |
+| `push.presence_seconds` / `presence_hold` | `number` | 画面に出ている間、`presence_seconds`（30秒）ごとに「あと `presence_hold`（75秒）は画面にいる」と伝える（`mark_active`）。その間サーバーは push しない |
 
 ---
 
@@ -1013,7 +1044,67 @@ Content-Type: application/json
 { "settings": [ { "category": "reaction", "push": false, "in_app": true } ] }
 ```
 
-返り値は GET と同じ `{ "settings": [...5件], "categories": [...] }`。知らない分類は `422`「知らない通知の種類です: …」。
+返り値は GET と同じ形です。`settings` は分類を鍵にした辞書で、送らなかった分類も今の値で入ります。知らない分類は `422`「知らない通知の種類です: …」。
+
+```json
+{
+  "settings": {
+    "reply":      { "push": true,  "in_app": true },
+    "reaction":   { "push": false, "in_app": true },
+    "connection": { "push": true,  "in_app": true },
+    "similar":    { "push": true,  "in_app": true },
+    "island":     { "push": true,  "in_app": true }
+  },
+  "categories": ["reply", "reaction", "connection", "similar", "island"]
+}
+```
+
+---
+
+#### `POST /api/push/subscribe` — この端末を push の届け先にする 🔒
+
+ブラウザの `PushManager.subscribe()` が返した購読をそのまま送ります。サーバーは保存する前に届け先を確かめます（ブラウザが直接 `push_subscriptions` に書けないのはこのため）。
+
+```http
+POST /api/push/subscribe
+Authorization: Bearer eyJhbG...
+Content-Type: application/json
+
+{ "endpoint": "https://fcm.googleapis.com/fcm/send/…",
+  "keys": { "p256dh": "BOr…（65バイトを base64url）", "auth": "q1…（16バイト）" } }
+```
+
+| 確かめること | 違えば |
+|---|---|
+| `endpoint` が `https`・ポート443で、ホストが push の会社のもの（`fcm.googleapis.com`・`updates.push.services.mozilla.com`・`*.push.apple.com`・`*.notify.windows.com`） | `422`「この端末の通知の登録は使えません。」 |
+| `p256dh` が65バイトで先頭が `0x04`、`auth` が16バイト | 同上 |
+
+返り値は `{ "ok": true }`。同じ `endpoint` は上書きします（`user_agent` も300字まで残す）。
+
+#### `POST /api/push/unsubscribe` — この端末を届け先から外す 🔒
+
+`{ "endpoint": "…" }` を送ると、本人の行だけを消して `{ "removed": true | false }` を返します。
+
+#### `POST /api/push/dispatch` — 未送信の通知を push する
+
+DB のトリガー `notifications_push`（ローカルでは `MemoryStore.on_notify`）が、通知の INSERT のたびに中身なしで呼びます。返り値は `202 {"ok": true}` で、送るのは裏のスレッドです。**呼び出しには何も載っていない**ので、誰が呼んでも「もう送るはずだったものを少し早く送る」以上のことは起きません。続けて呼ばれても、送る処理は1秒に1回まで（`PUSH_MIN_GAP_SECONDS`）。サーバーが起きたときにも1回まわります。
+
+送る流れと、送らないもの：
+
+1. `pushed_at` が `null` の行を1回の UPDATE でまとめて取り、印を付ける（2台が同じ行を送らない）。
+2. 次の行は送らずに終わりにする：`quiet_post`（`NEVER_PUSHED`・アプリの中だけ）、10分（`PUSH_FRESH_MINUTES`）より古い行、**画面にアプリを出している人**（`push_presence`。帯で見せる）、push を切った分類。
+3. 届け先ごとに、通知の一覧と同じまとめ方（10分以内の反応は1件）で文にして送る。
+
+| 項目 | 中身 |
+|---|---|
+| 題 | 相手の名前（まとめたときは「A ほか2人」）。島の変化は「島「名前」」 |
+| 本文 | 種類ごとの決まった文（例：「あなたの投稿に「手伝えるかも」と反応しました。」）。メッセージの本文は出さない（画面が人に見えるかもしれないので）。島の変化はきっかけの文 |
+| `tag` | 反応は `reaction-<投稿ID>`（端末の上で前の通知を置き換える）、ほかは `<type>-<ID>` |
+| 押したとき | `/#/notifications` を開く（開いている窓があればそこへ移る） |
+| 保管 | push の会社に24時間（`PUSH_TTL_SECONDS`）。端末が切れていても、その間に戻れば届く |
+| 届かない宛先 | push の会社が 404・410 を返したら、その購読を消す |
+
+VAPID（送り手の名札）の鍵は `push_config` にサーバーが初めて要るときに作ります。連絡先（`subject`）は環境変数 `PUSH_SUBJECT`、なければ `dispatch_url` の `https://` のホスト名です。鍵の対が合わないときは push を止め、ログに残します（上書きすると今の購読が全部切れるため）。
 
 ---
 
@@ -1537,6 +1628,7 @@ GET /api/local/map?min_x=0&min_y=0&max_x=500&max_y=500&limit=100
 | `GET` | `/api/local/notifications` | ✅ | 通知一覧を表示 |
 | `GET` | `/api/local/notifications/feed?limit=50` | ✅ | まとめた通知一覧（`notification_feed` と同じ形）と未読数・設定 |
 | `POST` | `/api/local/notifications/read` | ✅ | 通知を既読にする |
+| `POST` | `/api/local/presence` | ✅ | 「画面に出している」を伝える（本番の RPC `mark_active` の代わり） |
 | `POST` | `/api/local/reports` | ✅ | 不適切コンテンツを通報 |
 
 ##### `POST /api/local/comments` — コメントの投稿
@@ -1595,6 +1687,13 @@ Content-Type: application/json
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `ids` | `string[]` \| `null` | 既読にする通知IDの配列。`null` にすると**全通知を既読**にする |
+
+##### `POST /api/local/presence` — 画面に出しているかを伝える
+
+`{ "seconds": 75 }` を送ると、その秒数（最大120）のあいだ push を止めます。`0` で「画面を離れた」。返り値は `{ "ok": true }`。ブラウザは画面に出ている間30秒ごとに送り、隠れたときに `0` を送ります。
+
+> [!NOTE]
+> ローカルでは Supabase Realtime がないので、アプリの中の通知は30秒ごとの確認で届きます。push はローカルでも動きます（`MemoryStore.on_notify` が送る処理を起こす。止めるには `ISLANDS_AUTO_PUSH=0`）。
 
 ---
 

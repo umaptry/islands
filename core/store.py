@@ -51,6 +51,9 @@ REPORTS = "reports"
 NOTIFICATION_SETTINGS = "notification_settings"
 ISLANDS_STATE = "islands_state"
 ISLAND_EVENTS = "island_events"
+PUSH_CONFIG = "push_config"
+PUSH_SUBSCRIPTIONS = "push_subscriptions"
+PUSH_PRESENCE = "push_presence"
 REQUEST_TIMEOUT = 10.0
 
 # A dropped connection or a 502 from the PostgREST front end is routine and
@@ -85,6 +88,13 @@ ISLAND_STATE_COLUMNS = ("id,name,label,tier,score_total,score_recent,score_shown
                         "author_ids,cx,cy,landmarks,challenger,quiet,active,last_activity_at,"
                         "created_at,updated_at")
 ISLAND_EVENT_COLUMNS = "id,island_id,kind,cause,place,before,after,created_at"
+PUSH_CONFIG_COLUMNS = "vapid_public,vapid_private,dispatch_url"
+PUSH_SUBSCRIPTION_COLUMNS = "id,account_id,endpoint,p256dh,auth,user_agent,created_at"
+# mark_active() caps a claim at this many seconds; a stuck tab cannot silence
+# pushes for longer.
+PRESENCE_MAX_SECONDS = 120
+# ids per in.(...) filter: keeps each request line well under proxy limits.
+IN_BATCH = 150
 
 
 def _now():
@@ -95,6 +105,12 @@ def _stamp(value):
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _batches(ids):
+    """Distinct ids, sorted, in slices of IN_BATCH."""
+    ids = sorted(set(ids))
+    return [ids[start:start + IN_BATCH] for start in range(0, len(ids), IN_BATCH)]
 
 
 def _since(value):
@@ -168,7 +184,14 @@ class MemoryStore:
         self._island_events = {}
         self._island_run_at = None
         self._views = set()         # (post_id, viewer)
+        self._push_pending = []     # notification ids not yet taken by the dispatcher
+        self._push_config = {"vapid_public": None, "vapid_private": None, "dispatch_url": None}
+        self._push_subscriptions = {}  # endpoint -> row
+        self._presence = {}         # account_id -> datetime the app is on screen until
         self._lock = threading.RLock()
+        # Stands in for the database trigger that pokes /api/push/dispatch.
+        # Called with the lock held, so it must only raise a flag and return.
+        self.on_notify = None
 
     # -- accounts ----------------------------------------------------------
 
@@ -500,6 +523,10 @@ class MemoryStore:
             "read_at": None,
         }
         self._notifications[row["id"]] = row
+        self._push_pending.append(row["id"])
+        # quiet_post stays in the app (Q34), as poke_push_dispatch() skips it.
+        if kind != "quiet_post" and self.on_notify is not None:
+            self.on_notify()
         return row
 
     def _pair_interaction_count(self, a, b):
@@ -605,6 +632,89 @@ class MemoryStore:
                     "updated_at": _now(),
                 }
         return self.get_notification_settings(account_id)
+
+    def notification_settings_for(self, account_ids):
+        """{account_id: [setting rows]} for everybody about to be told something."""
+        wanted = set(account_ids)
+        out = {}
+        with self._lock:
+            for (owner, _), row in self._settings.items():
+                if owner in wanted:
+                    out.setdefault(owner, []).append(dict(row))
+        return out
+
+    # -- web push (段6) ------------------------------------------------------
+
+    def get_push_config(self):
+        with self._lock:
+            return dict(self._push_config)
+
+    def save_push_keys(self, public, private):
+        """Store a VAPID pair unless one is already there; return what is stored.
+
+        Two servers making a pair at once both get the one that landed first.
+        """
+        with self._lock:
+            if not self._push_config["vapid_private"]:
+                self._push_config.update({"vapid_public": public, "vapid_private": private})
+            return dict(self._push_config)
+
+    def claim_pending_pushes(self):
+        """Take every notification the dispatcher has not seen yet, oldest first."""
+        with self._lock:
+            rows = [dict(self._notifications[i]) for i in self._push_pending
+                    if i in self._notifications]
+            self._push_pending.clear()
+        rows.sort(key=lambda row: row["created_at"])
+        return rows
+
+    def push_subscriptions(self, account_ids):
+        wanted = set(account_ids)
+        with self._lock:
+            return [dict(row) for row in self._push_subscriptions.values()
+                    if row["account_id"] in wanted]
+
+    def save_push_subscription(self, account_id, endpoint, p256dh, auth, user_agent=None):
+        """One row per endpoint: a browser that signs in as somebody else moves over."""
+        with self._lock:
+            row = self._push_subscriptions.get(endpoint) or {
+                "id": str(uuid.uuid4()), "endpoint": endpoint, "created_at": _now(),
+            }
+            row.update({"account_id": account_id, "p256dh": p256dh, "auth": auth,
+                        "user_agent": user_agent})
+            self._push_subscriptions[endpoint] = row
+            return dict(row)
+
+    def delete_push_subscription(self, endpoint, account_id=None):
+        with self._lock:
+            row = self._push_subscriptions.get(endpoint)
+            if row is None or (account_id is not None and row["account_id"] != account_id):
+                return False
+            del self._push_subscriptions[endpoint]
+            return True
+
+    def mark_active(self, account_id, seconds):
+        """mark_active() for the local shim: on screen for `seconds`, 0 clears it."""
+        with self._lock:
+            if seconds <= 0:
+                self._presence.pop(account_id, None)
+            else:
+                self._presence[account_id] = (datetime.now(timezone.utc)
+                                              + timedelta(seconds=min(seconds, PRESENCE_MAX_SECONDS)))
+
+    def active_accounts(self, account_ids):
+        """Those of `account_ids` who have the app on screen right now."""
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            return {account for account in account_ids
+                    if account in self._presence and self._presence[account] > now}
+
+    def recent_visitors(self, account_ids, since):
+        """Those of `account_ids` who opened the app at or after `since`."""
+        start = _stamp(_since(since))
+        with self._lock:
+            return {account for account in account_ids
+                    if account in self._last_seen and _stamp(self._last_seen[account]) >= start}
 
     # -- people layer --------------------------------------------------------
 
@@ -1130,6 +1240,113 @@ class SupabaseStore:
                        "updated_at": _now()} for row in rows],
             )
         return self.get_notification_settings(account_id)
+
+    def notification_settings_for(self, account_ids):
+        out = {}
+        for ids in _batches(account_ids):
+            for row in self._get(NOTIFICATION_SETTINGS, {
+                "select": "account_id,category,push,in_app,updated_at",
+                "account_id": f"in.({','.join(ids)})",
+            }, label="通知設定の読み込み"):
+                out.setdefault(row["account_id"], []).append(row)
+        return out
+
+    # -- web push (段6) ------------------------------------------------------
+    #
+    # push_config and push_presence are closed to everybody but this key. The
+    # database pokes /api/push/dispatch after each insert into notifications;
+    # the dispatcher then claims the rows itself, so a forged poke sends
+    # nothing that was not already due.
+
+    def get_push_config(self):
+        rows = self._get(PUSH_CONFIG, {"select": PUSH_CONFIG_COLUMNS, "singleton": "eq.true"},
+                         label="通知の鍵の読み込み")
+        if not rows:
+            return {key: None for key in PUSH_CONFIG_COLUMNS.split(",")}
+        return rows[0]
+
+    def save_push_keys(self, public, private):
+        # Only fills an empty slot: the first pair written is the one everybody keeps.
+        response = self._send(
+            "PATCH", PUSH_CONFIG, label="通知の鍵の保存",
+            headers={"Prefer": "return=representation"},
+            params={"singleton": "eq.true", "vapid_private": "is.null",
+                    "select": PUSH_CONFIG_COLUMNS},
+            json={"vapid_public": public, "vapid_private": private, "updated_at": _now()},
+        )
+        rows = response.json()
+        return rows[0] if rows else self.get_push_config()
+
+    def claim_pending_pushes(self):
+        # One UPDATE ... WHERE pushed_at IS NULL: two dispatchers never take the same row.
+        response = self._send(
+            "PATCH", NOTIFICATIONS, label="送る通知の取り出し",
+            headers={"Prefer": "return=representation"},
+            params={"pushed_at": "is.null", "select": NOTIFICATION_COLUMNS},
+            json={"pushed_at": _now()},
+        )
+        rows = response.json()
+        rows.sort(key=lambda row: _stamp(row["created_at"]))
+        return rows
+
+    def push_subscriptions(self, account_ids):
+        rows = []
+        for ids in _batches(account_ids):
+            rows.extend(self._get(PUSH_SUBSCRIPTIONS, {
+                "select": PUSH_SUBSCRIPTION_COLUMNS, "account_id": f"in.({','.join(ids)})",
+            }, label="通知の送り先の読み込み"))
+        return rows
+
+    def save_push_subscription(self, account_id, endpoint, p256dh, auth, user_agent=None):
+        response = self._send(
+            "POST", PUSH_SUBSCRIPTIONS, label="通知の送り先の保存",
+            headers={"Prefer": "return=representation,resolution=merge-duplicates"},
+            params={"on_conflict": "endpoint", "select": PUSH_SUBSCRIPTION_COLUMNS},
+            json={"account_id": account_id, "endpoint": endpoint, "p256dh": p256dh,
+                  "auth": auth, "user_agent": user_agent},
+        )
+        return response.json()[0]
+
+    def delete_push_subscription(self, endpoint, account_id=None):
+        params = {"endpoint": f"eq.{endpoint}"}
+        if account_id is not None:
+            params["account_id"] = f"eq.{account_id}"
+        response = self._send(
+            "DELETE", PUSH_SUBSCRIPTIONS, label="通知の送り先の削除",
+            headers={"Prefer": "return=representation"}, params=params,
+        )
+        return bool(response.json())
+
+    def mark_active(self, account_id, seconds):
+        # The browser calls the mark_active() RPC itself; this is for the server.
+        if seconds <= 0:
+            self._send("DELETE", PUSH_PRESENCE, label="表示中の記録",
+                       headers={"Prefer": "return=minimal"},
+                       params={"account_id": f"eq.{account_id}"})
+            return
+        until = datetime.now(timezone.utc) + timedelta(seconds=min(seconds, PRESENCE_MAX_SECONDS))
+        self._send("POST", PUSH_PRESENCE, label="表示中の記録",
+                   headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
+                   params={"on_conflict": "account_id"},
+                   json={"account_id": account_id, "active_until": until.isoformat()})
+
+    def active_accounts(self, account_ids):
+        found = set()
+        for ids in _batches(account_ids):
+            found.update(row["account_id"] for row in self._get(PUSH_PRESENCE, {
+                "select": "account_id", "account_id": f"in.({','.join(ids)})",
+                "active_until": f"gt.{_now()}",
+            }, label="表示中の確認"))
+        return found
+
+    def recent_visitors(self, account_ids, since):
+        found = set()
+        for ids in _batches(account_ids):
+            found.update(row["id"] for row in self._get(ACCOUNTS, {
+                "select": "id", "id": f"in.({','.join(ids)})",
+                "last_seen_at": f"gte.{_since(since)}",
+            }, label="訪問の確認"))
+        return found
 
     # -- people layer --------------------------------------------------------
 

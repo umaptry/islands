@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#2FA6FF">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/img/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="islands">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>islands — 好きが集う、新たな世界がここに。</title>
 <meta name="description" content="書いた一言だけで地図の上に島ができる。近くにいる人ほど、似た話をしている。">
 <link rel="stylesheet" href="/static/style.css">
@@ -345,6 +351,7 @@
     <h2 class="screen-title">通知</h2>
     <span class="unread-badge" id="notifUnreadBadge" hidden></span>
     <button class="btn btn-small btn-quiet" id="notifReadAll" hidden>すべて既読</button>
+    <button class="btn btn-small btn-quiet" id="notifSettings" type="button">設定</button>
   </div>
   <div class="scroller" id="notifList"></div>
 </section>
@@ -417,6 +424,33 @@
         </span>
         <input type="checkbox" class="switch" id="setReduceMotion">
       </label>
+    </div>
+    <div class="field notify-settings" id="notifySettings">
+      <span class="label-text">通知</span>
+      <div class="notify-device" id="notifyDevice">
+        <div class="notify-device-row">
+          <span class="notify-device-text" id="notifyDeviceText" role="status">確認しています…</span>
+          <button class="btn btn-small" id="notifyDeviceButton" type="button" hidden>受け取る</button>
+        </div>
+        <p class="notify-device-note" id="notifyDeviceNote" hidden></p>
+        <ol class="ios-steps" id="iosSteps" hidden>
+          <li class="ios-step">
+            <svg class="ios-step-art" viewBox="0 0 48 48" aria-hidden="true"><rect x="12" y="18" width="24" height="22" rx="4" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 6v22M17 13l7-7 7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="ios-step-text"><b>共有</b>を押す</span>
+          </li>
+          <li class="ios-step">
+            <svg class="ios-step-art" viewBox="0 0 48 48" aria-hidden="true"><rect x="9" y="9" width="30" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 16v16M16 24h16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+            <span class="ios-step-text"><span class="phrase"><b>ホーム画面に追加</b></span><span class="phrase">を選ぶ</span></span>
+          </li>
+          <li class="ios-step">
+            <img class="ios-step-icon" src="/static/img/icons/icon-192.png" alt="" width="40" height="40">
+            <span class="ios-step-text"><span class="phrase">ホーム画面から</span><span class="phrase">開いて<b>受け取る</b></span></span>
+          </li>
+        </ol>
+        <p class="notify-device-note" id="iosStepsNote" hidden>共有は画面の下か上、または「…」の中にあります。</p>
+      </div>
+      <div class="notify-kinds" id="notifyKinds" role="group" aria-label="通知の種類"></div>
+      <p class="switch-note notify-foot">アプリを開いている間は端末には届かず、画面の下に出ます。</p>
     </div>
     <div class="error" id="editError" role="alert"></div>
     <button class="btn btn-quiet btn-block" id="editSignOut">ログアウト</button>

@@ -1,5 +1,15 @@
 # 実装状態
 
+## 2026-10-07 更新（islands 改修 段6：通知・枝 stage6-notify）
+
+**手元のみ・本番未反映。** マイグレーション `supabase/migrations/20261009000000_push.sql` は本番 DB に未適用。コミット・push もしていない。本番で push を動かすには、適用のあと `push_config.dispatch_url` に本番の `https://…/api/push/dispatch` を1行入れる。
+
+- Web Push（`/api/push/subscribe`・`unsubscribe`・`dispatch`、`core/webpush.py`、`web/sw.js`、`web/manifest.webmanifest`、アイコン）。画面に出ている間は送らない（`mark_active`）。
+- アプリ内は Supabase Realtime で即時、だめなら30秒（`web/js/realtime.js`）。通知の設定の欄（端末で受け取る・5分類×端末／アプリ内）と iPhone の追加手順の図。
+- Q34 近くの静かな投稿（`core/quiet.py`・種類 `quiet_post`・アプリの中だけ・1日1件）。
+- 確かめ：Python 250件・画面側45件が手元で通る。PC の Chrome で本物の push が FCM 経由で約6秒で届き、画面に出ている間は届かないことを確認。390・1366 幅で設定の欄を撮影。
+- **未確認**：pgTAP `supabase/tests/07_push.sql`（CI でだけ動く）、本番のトリガー（pg_net）と Realtime、通知を押したときの動き、iPhone・Android の実機（段7）。
+
 ## 2026-10-06 更新（islands 改修 段1：データの土台）
 
 **手元のみ・本番未反映。** マイグレーション `supabase/migrations/20261006000000_social_foundation.sql` は本番 DB に未適用、コミット・push もしていない。
