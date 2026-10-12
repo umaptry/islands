@@ -227,7 +227,7 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .counter.done { color: #fff; }
 .counter.over .ring .value, .counter.over { stroke: #ffd0c6; color: #ffd0c6; }
 
-/* ---------------------------------------------------------------- intro */
+/* ---------------------------------------------------------------- guidance slides */
 
 .brand { font-size: 30px; font-weight: 800; padding: 28px 20px 0; letter-spacing: -.01em; }
 .brand-inline { font-size: 27px; font-weight: 800; margin: 4px 0 26px; }
@@ -266,27 +266,13 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .dev-code-label { font-size: 12px; font-weight: 700; }
 .dev-code-value { font-size: 22px; letter-spacing: .16em; }
 
-/* The アイコン field: the current face, the two photo buttons, then the grid.
- * Picking an emoji clears the photo, so the two halves are one control and are
- * stacked rather than put side by side as alternatives. */
+/* The アイコン field: the current face and the photo buttons. */
 .avatar-row {
   display: flex; align-items: center; gap: 14px; margin-bottom: 14px;
 }
 .avatar-slot { flex: none; display: flex; }
 .avatar-slot .avatar { box-shadow: 0 0 0 3px rgba(255, 255, 255, .55); }
 .avatar-actions { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
-
-.icon-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
-  gap: 9px;
-}
-.icon-cell {
-  aspect-ratio: 1; border-radius: 999px; font-size: 22px;
-  display: flex; align-items: center; justify-content: center;
-  border: 2px solid transparent;
-  transition: transform .12s var(--ease), border-color .12s var(--ease);
-}
-.icon-cell.on { border-color: #fff; transform: scale(1.06); }
 
 /* ---------------------------------------------------------------- compose */
 
@@ -374,7 +360,11 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 
 .reveal-head { text-align: center; padding: 44px 20px 6px; }
 .reveal-title { font-size: 13px; color: var(--on-sea-3); letter-spacing: .08em; }
-.reveal-island { font-size: 27px; font-weight: 800; margin-top: 6px; color: #fff; }
+.reveal-island { font-size: 27px; font-weight: 800; margin-top: 6px; color: var(--on-sea); overflow-wrap: anywhere; }
+.reveal-swatch {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  margin-right: 10px; vertical-align: middle; border: 2px solid rgba(255, 255, 255, .85);
+}
 
 .appear { opacity: 0; animation: rise .45s var(--ease) forwards; }
 @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
@@ -392,11 +382,8 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   font-size: 12px; color: var(--on-sea-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.list-row-score { font-size: 19px; font-weight: 800; }
-.list-row-score small { font-size: 11px; margin-left: 1px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chips.indent { padding: 0 4px 14px 56px; margin-top: -4px; }
 .chip {
   background: rgba(255, 255, 255, .2); border: 1px solid rgba(255, 255, 255, .3);
   color: var(--on-sea); font-size: 12px; font-weight: 700;
@@ -458,18 +445,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 }
 .filter-tag.on { background: #e2f0ff; color: var(--sea-ink); border-color: #b9dcff; }
 
-.tabs {
-  display: inline-flex; gap: 3px; padding: 3px; border-radius: 999px;
-  background: rgba(255, 255, 255, .2); border: 1px solid rgba(255, 255, 255, .42);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  pointer-events: auto;
-}
-.tab {
-  padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 700;
-  color: rgba(255, 255, 255, .85);
-}
-.tab.on { background: #fff; color: var(--sea-ink); }
-
 .island-badge {
   position: absolute; left: 50%; transform: translateX(-50%);
   bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px);
@@ -485,7 +460,15 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   position: absolute; right: 14px;
   bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px);
   z-index: 4;
+  display: flex; flex-direction: column; gap: 10px;
 }
+.participant-stop {
+  pointer-events: auto; display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px;
+  background: #ff7251; color: #fff; font-size: 12.5px; font-weight: 800;
+  box-shadow: var(--shadow);
+}
+.participant-stop:active { transform: scale(.96); }
 
 /* ---------------------------------------------------------------- post card */
 
@@ -533,9 +516,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .motivation-labels {
   display: flex; justify-content: space-between;
   margin-top: 8px; font-size: 11px; font-weight: 700; color: var(--ink-3);
-}
-.motivation-sub {
-  display: block; font-size: .625rem; font-weight: normal; opacity: .6;
 }
 
 .post-image { margin-top: 13px; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-3); }
@@ -684,29 +664,8 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .chat-reply-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-reply-close { width: 28px; height: 28px; flex: none; border-radius: 999px; color: var(--ink-3); font-size: 13px; }
 
-/* ---------------------------------------------------------------- meeting people (段4) */
+/* ---------------------------------------------------------------- what changed while away (段4) */
 
-.map-people {
-  position: absolute; left: 14px;
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px);
-  z-index: 4;
-}
-.sheet-open .map-people { visibility: hidden; }
-.people-button {
-  position: relative; height: 50px; min-width: 50px; padding: 0 7px;
-  border-radius: 999px; background: var(--surface); color: var(--sea-ink);
-  box-shadow: var(--shadow); font-size: 13px; font-weight: 700;
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-}
-.people-button:active { transform: scale(.96); }
-.people-label { display: none; }
-.people-count {
-  position: absolute; top: -3px; right: -3px;
-  min-width: 19px; height: 19px; padding: 0 4px; border-radius: 999px;
-  background: var(--sea); color: #fff; font-size: 11px; font-weight: 800;
-  display: flex; align-items: center; justify-content: center;
-  border: 2px solid var(--surface);
-}
 .face-stack { display: inline-flex; flex: none; }
 .face-stack .avatar { box-shadow: 0 0 0 2px var(--surface); }
 .face-stack .avatar + .avatar { margin-left: -8px; }
@@ -723,57 +682,11 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 }
 
 .meet-title { margin: 2px 40px 6px 2px; font-size: 15px; font-weight: 700; }
-.meet-back { padding: 2px 2px 8px; font-size: 12.5px; font-weight: 700; color: var(--sea); }
-
-.person-row, .change-row {
+.change-row {
   display: flex; width: 100%; text-align: left;
   padding: 9px 2px; border-bottom: 1px solid var(--line);
 }
-.person-row:last-child, .change-row:last-child { border-bottom: 0; }
-.person-row { align-items: center; gap: 11px; }
-.person-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.person-row-name { font-size: 14px; font-weight: 700; }
-.person-row-reason {
-  font-size: 12.5px; color: var(--ink-2);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.person-row-island { font-size: 11px; color: var(--ink-3); }
-
-.person-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.person-head-text { min-width: 0; }
-.person-name { font-size: 16px; font-weight: 700; }
-.person-meta { font-size: 12px; color: var(--ink-3); }
-.reason-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-.reason-chip {
-  padding: 4px 10px; border-radius: 999px;
-  background: #fff1e3; color: #9a4a00; font-size: 12px; font-weight: 700;
-}
-.person-bio { margin: 0 0 10px; font-size: 13.5px; line-height: 1.65; word-break: break-word; }
-.person-wants {
-  display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
-  margin: 0 0 10px; font-size: 13px; line-height: 1.55;
-}
-.person-wants dt { color: var(--ink-3); font-size: 12px; }
-.person-wants dd { margin: 0; word-break: break-word; }
-.person-latest {
-  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
-  margin-bottom: 10px; padding: 9px 12px; border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-.person-latest-label { font-size: 11px; color: var(--ink-3); }
-.person-latest-body { font-size: 14px; line-height: 1.6; word-break: break-word; }
-.person-links { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); min-width: 0; }
-.person-links-label { color: var(--ink-3); flex: none; }
-.person-links-names { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.person-actions {
-  display: flex; gap: 8px;
-  padding: 10px 14px max(10px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line); background: var(--surface);
-}
-.person-actions .btn { flex: 1; min-height: 42px; font-size: 14px; box-shadow: none; background: var(--sea); color: #fff; }
-.person-actions .person-like { background: var(--surface-2); color: var(--ink-2); border: 0; }
-.person-actions .person-like.on { background: #e6f1fc; color: var(--sea); }
-
+.change-row:last-child { border-bottom: 0; }
 .change-row { flex-direction: column; gap: 3px; }
 .change-row.seen { opacity: .55; }
 .change-top { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-3); }
@@ -915,7 +828,8 @@ body:has(#islandBadge:not([hidden])) .toast {
 
 /* ---------------------------------------------------------------- wider screens */
 
-@media (min-width: 768px) {
+/* The side panel needs height too: a phone held sideways (844x390) keeps the sheet from below. */
+@media (min-width: 768px) and (min-height: 500px) {
   .sheet {
     left: 16px; right: auto; top: 16px; bottom: auto;
     width: 400px; max-height: 80dvh; height: auto;
@@ -928,11 +842,10 @@ body:has(#islandBadge:not([hidden])) .toast {
   .sheet-grip { display: none; }
   .sheet-scroll { padding-top: 16px; }
   .sheet-thread { border-top: 1px solid var(--line); max-height: 40dvh; overflow-y: auto; }
+}
+@media (min-width: 768px) {
   .bottom-nav { border-top: 1px solid var(--line); }
   .map-top { padding-top: 16px; }
-  .people-button { padding: 0 16px 0 10px; }
-  .people-label { display: inline; }
-  .people-count { display: none; }
   .slide-art { width: 220px; }
 }
 
@@ -958,17 +871,17 @@ body:has(#islandBadge:not([hidden])) .toast {
 .check.on { background: transparent; }
 .check-box { width: 24px; height: 24px; border: 2px solid #fff; border-radius: 6px; }
 .check-label { font-size: 14px; }
-.nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.nav-label { font-size: 10px; font-weight: 700; line-height: 1; margin-top: 3px; }
 .nav-icon { display: flex; }
 .nav-item.on svg { stroke-width: 2.5; }
-.nav-item { min-height: 48px; }
+.nav-item { min-height: 48px; gap: 0; }
 .search-icon, .post-action-icon, .notif-icon { display: inline-flex; align-items: center; justify-content: center; }
 .search-row { max-width: 512px; }
 .search, .filter-button { height: 40px; }
 .post-card { padding: 16px; border-radius: 12px; box-shadow: 0 4px 6px rgb(0 0 0 / .1); }
 .post-body { font-size: 14px; line-height: 1.625; }
 .tag-badge { color: var(--sea); background: #eff6ff; font-size: 12px; padding: 2px 8px; }
-.post-actions { border: 0; padding-top: 8px; gap: 4px; justify-content: space-between; }
+.post-actions { border: 0; padding-top: 8px; gap: 8px; justify-content: space-between; flex-wrap: nowrap; }
 .post-action { padding: 6px 2px; min-height: 40px; border-radius: 6px; gap: 4px; }
 .post-action-label { font-size: 12px; font-weight: 400; white-space: nowrap; }
 .post-action.like .post-action-label { display: none; }
@@ -978,7 +891,7 @@ body:has(#islandBadge:not([hidden])) .toast {
 .similarity-details summary { cursor: pointer; padding: 8px 0; }
 .similarity-details .similarity { margin-top: 8px; }
 .profile-tabs { border-top: 1px solid rgb(255 255 255 / .3); }
-.map-status { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); background: rgb(255 255 255 / .94); color: #374151; border-radius: 8px; padding: 8px 12px; font-size: 12px; z-index: 8; }
+.map-status { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); background: rgb(255 255 255 / .94); color: #374151; border-radius: 8px; padding: 8px 12px; font-size: 12px; z-index: 4; }
 .sheet { bottom: var(--keyboard-inset, 0px); }
 .sheet:not(.full) .sheet-scroll { overscroll-behavior: contain; }
 .sheet-open .bottom-nav { visibility: hidden; }
@@ -991,17 +904,6 @@ body:has(#islandBadge:not([hidden])) .toast {
 .landing .btn { margin-top: 16px; }
 .landing .returning { margin-top: 44px; font-weight: bold; }
 .version-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 12px; background: white; color: #173047; box-shadow: var(--shadow); text-align: center; font-size: 13px; }
-/* Registration guidance follows the running Downloads/islands reference. */
-#guidance { overflow-y: auto; justify-content: safe center; padding: 48px 24px 112px; }
-#guidance .guidance-pages { flex: none; width: 100%; max-width: 464px; margin: 0 auto; overflow: visible; }
-#guidanceTrack { display: block; transform: none; }
-#guidance .slide { width: 100%; padding: 0; display: block; text-align: left; }
-#guidance h2 { font-size: 20px; line-height: 1.625; margin: 0 0 24px; }
-#guidance .slide p { font-size: 16px; font-weight: 500; line-height: 1.625; margin: 0 0 24px; }
-#guidance .nav-row { width: 100%; max-width: 464px; padding: 0; margin: 32px auto 0; display: flex; flex-direction: column-reverse; gap: 12px; }
-#guidanceNext { width: 100%; background: rgb(255 255 255 / .4); color: white; border: 0; }
-#guidanceBack { position: absolute; top: 16px; left: 24px; width: auto; min-height: 40px; padding: 8px 12px; border: 0; }
-#guidanceDots { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 #compose.first-post .topbar-inline { display: none; }
 #compose.first-post .scroller { flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px 80px; overflow: visible; }
 #compose.first-post { overflow-y: auto; }
@@ -1030,7 +932,7 @@ body:has(#islandBadge:not([hidden])) .toast {
 .profile-affiliation { display: inline; margin-right: 8px; font-size: 16px; color: white; }
 .profile-tabs { gap: 32px; }
 .profile-tab-label { font-size: 14px; }
-@media (min-width: 768px) {
+@media (min-width: 768px) and (min-height: 500px) {
   .sheet { bottom: auto; }
   .sheet-open .bottom-nav { visibility: visible; }
 }
@@ -1050,9 +952,6 @@ body:has(#islandBadge:not([hidden])) .toast {
 .example:active { background: rgba(255, 255, 255, .28); }
 .examples-or { margin-top: 14px; font-size: 12px; color: var(--on-sea-2); text-align: center; }
 #compose.first-post .examples + .field { margin-top: 0; }
-#compose.first-post .field:has(.slider),
-#compose.first-post .field:has(.image-row),
-#compose.first-post .compose-tags { display: none; }
 
 /* Q37: this week's prompt. */
 .weekly-prompt {
@@ -1066,7 +965,6 @@ body:has(#islandBadge:not([hidden])) .toast {
 .weekly-prompt.used .btn-small { display: none; }
 
 /* On/off switches: "talk to me" (Q45) and the sound settings (item 21). */
-#compose .scroller > .compose-open { order: 4; margin-bottom: 8px; }
 .switch-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
 .switch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .switch-title { font-size: 14px; font-weight: 700; color: #fff; }
@@ -1163,9 +1061,6 @@ input.switch:disabled { opacity: .45; cursor: not-allowed; }
 body:has(#islandBadge:not([hidden])) .arrival { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 76px); }
 
 /* Post cards: "talk to me" (Q45), views for the author only (Q35), a pop on reacting. */
-.tag-badge.open { color: #fff; background: #2f9e5b; font-weight: 700; }
-.person-head-text .tag-badge.open { display: inline-block; margin-top: 4px; border-radius: 999px; }
-.open-dot { margin-left: 6px; font-size: 12px; }
 .post-views { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-3); }
 .post-action.pop .post-action-icon { animation: action-pop .36s var(--ease); }
 @keyframes action-pop {
@@ -1187,3 +1082,131 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .notify-device-text { text-wrap: balance; }
 .ios-step-text .phrase { display: inline-block; }
 .arrival-more { white-space: nowrap; }
+
+
+/* ---------------------------------------------------------------- モック② alignment (2026-10-12) */
+
+/* Registration: the 「または」 line under the sign-in providers, the passcode's
+ * second line, and the icon-photo step. */
+.landing .divider { margin: 20px 0 0; }
+.lede-sub { margin-top: -10px; font-size: 12px; color: var(--on-sea-3); word-break: break-all; }
+.avatar-pick { display: flex; flex-direction: column; align-items: center; gap: 18px; margin: 12px 0 28px; }
+.avatar-slot-large .avatar { box-shadow: 0 0 0 4px rgba(255, 255, 255, .6); }
+.avatar-pick .avatar-actions { justify-content: center; }
+.avatar-row .avatar-actions { flex-direction: column; align-items: flex-start; }
+
+/* The silhouette that stands in for a missing photo. */
+.avatar svg { display: block; }
+
+/* Compose: 必須 marks, the HeatObject, a slider that stays blank until used. */
+.field-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+.required {
+  font-size: 10px; font-weight: 500; line-height: 1; padding: 3px 6px; border-radius: 4px;
+  background: rgba(239, 68, 68, .9); color: #fff;
+}
+.compose-heat { margin-bottom: 12px; }
+.heat-stage { display: flex; justify-content: center; align-items: flex-end; height: 112px; margin-bottom: 12px; }
+.heat-object { display: flex; align-items: flex-end; justify-content: center; pointer-events: none; user-select: none; }
+.slider.untouched .slider-fill, .slider.untouched .slider-handle { display: none; }
+#compose .slider { padding-top: 0; }
+#compose .slider-track { margin-top: 4px; }
+
+/* Post card: comment + like left, 手伝えるかも + 参加 right; the participants
+ * button right under them, and kept in view while the sheet is half open. */
+.post-actions-group { display: flex; align-items: center; gap: 14px; }
+.post-actions-group.right { margin-left: auto; gap: 10px; }
+.post-actions-group .post-action { padding-left: 4px; padding-right: 4px; }
+.post-footer { margin-top: 0; }
+.post-participants-button {
+  display: block; width: 100%; margin-top: 6px; padding: 9px 12px; border-radius: 999px;
+  background: #eff6ff; color: var(--sea); font-size: 12px; font-weight: 700;
+}
+.post-participants-button:hover { background: #dbeafe; }
+@media (max-width: 767px) {
+  .sheet:not(.full) .post-footer {
+    position: sticky; bottom: 0; z-index: 1; background: var(--surface);
+    margin: 0 -4px; padding: 0 4px 2px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
+  }
+}
+
+/* Notifications and profile, nearer the mock. */
+.empty-icon { display: flex; justify-content: center; opacity: .7; }
+.empty-panel .empty-icon + p { margin-top: 10px; }
+.profile-edit-button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(255, 255, 255, .2); color: #fff; font-size: 12px; font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+}
+.profile-edit-button:hover { background: rgba(255, 255, 255, .3); }
+.profile-link { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; color: rgba(255, 255, 255, .8); font-weight: 500; }
+.profile-link span { text-decoration: none; }
+.profile-tab { opacity: .8; }
+.profile-tab-count { font-size: 16px; font-weight: 700; }
+
+/* Small finishing touches found on the 390px and 1366px screenshots. */
+.lede, .empty-sub, .empty-panel p { word-break: auto-phrase; text-wrap: pretty; }
+#auth .auth-step .btn-quiet { margin-top: 12px; }
+#setup .scroller { display: flex; flex-direction: column; justify-content: center; }
+#setup .screen-title { text-align: center; }
+#setup .lede { text-align: center; }
+.unread-badge { background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; margin-left: 0; }
+.topbar-inline .unread-badge { flex: none; }
+
+/* ---------------------------------------------------------------- final check fixes (2026-10-12) */
+
+/* 「動きを減らす」: animations are off, so what fades in must start visible. */
+html.reduce-motion .appear { opacity: 1; transform: none; }
+
+/* The two buttons on 「あなたの島」 are not glued together. */
+#reveal .form-footer { display: flex; flex-direction: column; gap: 10px; }
+#reveal .form-footer .btn { margin: 0; }
+
+/* Long unbroken names, affiliations and links stay inside the screen. */
+.profile-name, .profile-affiliation, .profile-link span { overflow-wrap: anywhere; min-width: 0; }
+.profile-link { max-width: 100%; }
+
+/* Narrow phones (320px): the reaction row wraps or tightens instead of spilling out. */
+@media (max-width: 340px) {
+  .post-actions { flex-wrap: wrap; gap: 4px 6px; }
+  .post-actions-group { gap: 6px; }
+  .post-actions-group.right { gap: 4px; }
+  .post-action-label { font-size: 11px; }
+}
+
+/* ---------------------------------------------------------------- re-check fixes (2026-10-12, 3) */
+
+/* Short screens (a phone held sideways): the entrance, the guidance slides and the photo
+   step start at the top and scroll, instead of being centred and cut off. */
+.landing { overflow-y: auto; justify-content: safe center; }
+#setup .scroller { justify-content: safe center; }
+.slides { align-items: safe center; overflow-x: hidden; overflow-y: auto; }
+@media (max-height: 500px) {
+  .landing .scroller { padding-top: 20px; padding-bottom: 20px; }
+  .landing h1 { margin-bottom: 16px; }
+  .landing .returning { margin-top: 20px; }
+  .slide-art { width: 96px; margin-bottom: 6px; }
+  .dots { padding: 10px 0 8px; }
+}
+
+/* A long unbroken bio or URL stays on screen. */
+.profile-bio { overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+
+/* Headings and chat details keep their shape; the long parts are what wrap. */
+.topbar-inline .screen-title { white-space: nowrap; flex: 1 0 auto; }
+.chat-time, .chat-reply { flex: none; white-space: nowrap; }
+.chat-name { min-width: 0; overflow-wrap: anywhere; }
+.notif-head > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.landing h1, .landing h2 { word-break: auto-phrase; overflow-wrap: break-word; }
+@media (max-width: 340px) {
+  .topbar-inline { flex-wrap: wrap; padding-left: 16px; padding-right: 16px; }
+  .topbar-inline .btn-small { padding: 5px 12px; }
+  .chat-meta { flex-wrap: wrap; }
+  .landing h1 { font-size: 30px; }
+  .landing h2 { font-size: 21px; }
+}
+
+/* A low half-open sheet has no room for a pinned footer over the text. */
+@media (max-width: 767px) and (max-height: 700px) {
+  .sheet:not(.full) .post-footer { position: static; box-shadow: none; margin: 0; padding: 0; }
+}

@@ -57,8 +57,8 @@ FastAPIは `core/auth.py` でJWTを検証してから、service権限で計算�
 
 ```mermaid
 flowchart LR
-  T[DBトリガー 反応・コメント・つながり] -->|INSERT| N[(notifications)]
-  F[FastAPI 似た人・島の変化・静かな投稿] -->|INSERT| N
+  T[DBトリガー 反応・コメント] -->|INSERT| N[(notifications)]
+  F[FastAPI 島の変化・静かな投稿（似た人の通知は停止）] -->|INSERT| N
   N -->|文ごとに1回 pg_net 中身なし| D[FastAPI /api/push/dispatch]
   D -->|pushed_at を付けて取り出す| N
   D -->|VAPID署名・暗号化| P[push の会社 FCM・Apple・Mozilla・Windows]
@@ -120,7 +120,7 @@ Storageの `post-images` は `image_path` / `avatar_path` から参照する。
 | embedding_cache（追加） | モデル契約+入力のSHA-256でキー化。生本文は保存しない。ベクトルの読み書きはserviceのみ |
 | accounts の人の層（2026-10-06） | 話題・目標・探している相手・手伝えることは公開読み取り、書くのは `PUT /api/account/me`（service）だけ。埋め込んだ `vec_*` と `last_seen_at` は列の権限で誰にも読ませない |
 | comments.reply_to（2026-10-06） | 同じ投稿のコメントへの返信。トリガーが返信先へ `reply`、著者へ `comment` |
-| notification_settings / push_subscriptions（2026-10-06） | 本人だけ。通知5分類ごとの push・アプリ内の切り替えと Web Push の購読先。購読を作るのはサーバーだけ（2026-10-09 から。届け先のホストを確かめてから保存） |
+| notification_settings / push_subscriptions（2026-10-06） | 本人だけ。通知3分類（reply・reaction・island）ごとの push・アプリ内の切り替え（DB の CHECK は旧5分類のまま）と Web Push の購読先。購読を作るのはサーバーだけ（2026-10-09 から。届け先のホストを確かめてから保存） |
 | notifications.pushed_at / push_config / push_presence（2026-10-09） | push の済み印（利用者は変えられない）、VAPID の鍵と送り先（service だけ）、画面に出ている人（service だけ。本人は RPC `mark_active` で最大120秒） |
 | islands_state / island_events / island_runs（2026-10-06） | 島の追跡の状態と変化の記録。公開読み取り、書くのは service だけ。island_runs は1台だけが追跡するための取り合い用 |
 

@@ -17,7 +17,7 @@ test('every kind belongs to the category the server files it under', () => {
   const block = config.match(/NOTIFICATION_CATEGORY_OF\s*=\s*\{([\s\S]*?)\}/)[1];
   const server = Object.fromEntries([...block.matchAll(/"(\w+)":\s*"(\w+)"/g)].map((m) => [m[1], m[2]]));
   assert.deepEqual({ ...rules.CATEGORY_OF }, server);
-  assert.equal(rules.categoryOf('quiet_post'), 'similar');
+  assert.equal(rules.categoryOf('quiet_post'), 'island');
   assert.equal(rules.categoryOf('island'), 'island');
 });
 
@@ -29,8 +29,8 @@ test('the list says what the lock screen says', () => {
   assert.ok(!/反応がない|反応がありません|だれも/.test(rules.KIND_TEXT.quiet_post));
 });
 
-test('five switches, all on until somebody turns one off', () => {
-  assert.deepEqual(rules.CATEGORIES.map((c) => c.id), ['reply', 'reaction', 'connection', 'similar', 'island']);
+test('three switches, all on until somebody turns one off', () => {
+  assert.deepEqual(rules.CATEGORIES.map((c) => c.id), ['reply', 'reaction', 'island']);
   const settings = rules.defaultSettings();
   for (const { id } of rules.CATEGORIES) assert.deepEqual(settings[id], { push: true, in_app: true });
 });
@@ -44,7 +44,7 @@ test('saved settings override the defaults, and odd shapes do not break anything
   assert.deepEqual(rules.mergeSettings(null), rules.defaultSettings());
   assert.deepEqual(rules.mergeSettings('nope'), rules.defaultSettings());
   const rows = rules.settingsRows(merged);
-  assert.equal(rows.length, 5);
+  assert.equal(rows.length, 3);
   assert.deepEqual(rows.find((row) => row.category === 'island'), { category: 'island', push: true, in_app: false });
 });
 
@@ -53,7 +53,50 @@ test('a kind switched off in the app stays listed but never interrupts', () => {
   assert.equal(rules.interrupts({ type: 'like' }, settings), false);
   assert.equal(rules.interrupts({ type: 'join' }, settings), false);
   assert.equal(rules.interrupts({ type: 'comment' }, settings), true);
-  assert.equal(rules.interrupts({ type: 'quiet_post' }, rules.mergeSettings({ similar: { in_app: false } })), false);
+});
+
+test('quiet_post follows the island switch, and a saved similar-off row holds it back', () => {
+  const quiet = { type: 'quiet_post' };
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings(null)), true);
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings({ island: { in_app: false } })), false);
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings({ island: { in_app: true }, similar: { push: true, in_app: false } })), false);
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings({ island: { in_app: true }, similar: { push: false, in_app: true } })), true);
+  assert.equal(rules.interrupts(quiet, {}), true);
+  assert.match(rules.CATEGORIES.find((c) => c.id === 'island').note, /近くの投稿/);
+});
+
+test('the server verdict quiet_post:false holds nearby posts back, in the real API shape', () => {
+  // GET /api/notification-settings: three rows, no similar, quiet_post on top.
+  const rows = {
+    reply: { push: true, in_app: true }, reaction: { push: true, in_app: true },
+    island: { push: true, in_app: true },
+  };
+  const quiet = { type: 'quiet_post', unread: true, id: 'q1' };
+  const like = { type: 'like', unread: true, id: 'l1' };
+  const off = rules.mergeSettings(rows, false);
+  assert.equal(rules.interrupts(quiet, off), false);
+  assert.equal(rules.interrupts(like, off), true);
+  assert.equal(rules.unreadCount([quiet, like], off), 1);
+  // true / missing: the island switch alone decides.
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings(rows, true)), true);
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings(rows)), true);
+  // Island off: off either way, and nothing is invented.
+  const islandOff = { ...rows, island: { push: true, in_app: false } };
+  assert.equal(rules.interrupts(quiet, rules.mergeSettings(islandOff, false)), false);
+  assert.equal(rules.mergeSettings(islandOff, false).similar, undefined);
+  // A later edit of another switch keeps the verdict.
+  const again = rules.mergeSettings(off);
+  again.reaction.in_app = false;
+  assert.equal(rules.interrupts(quiet, again), false);
+});
+
+test('kinds that lost their switch: old rows only list', () => {
+  const settings = rules.mergeSettings({ reaction: { push: false, in_app: false } });
+  assert.equal(rules.interrupts({ type: 'quiet_post' }, settings), true);
+  assert.equal(rules.interrupts({ type: 'connection' }, settings), false);
+  assert.equal(rules.interrupts({ type: 'similar' }, settings), false);
+  // The text of an old row is still there to be read.
+  assert.ok(rules.bodyText({ type: 'connection', payload: {} }));
 });
 
 // ---------------------------------------------------------------- the list

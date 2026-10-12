@@ -39,3 +39,16 @@ test('subscriptions stop receiving updates after disposal', () => {
   setPosts([]);
   assert.equal(count, 20);
 });
+
+test('removing the active post moves activePostId to the next one (or null)', () => {
+  state.myPosts = [{ id: 'new' }, { id: 'old' }];
+  state.activePostId = 'new';
+  removePost('new');
+  assert.equal(state.activePostId, 'old');
+  removePost('old');
+  assert.equal(state.activePostId, null);
+  state.myPosts = [{ id: 'a' }, { id: 'b' }];
+  state.activePostId = 'b';
+  removePost('a');
+  assert.equal(state.activePostId, 'b');
+});

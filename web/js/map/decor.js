@@ -1,4 +1,6 @@
-// The sea's own furniture: chart hatching, small boats, gulls, surf.
+// The sea's own furniture: chart hatching, small boats, gulls, whale shadows,
+// and the fog at the edge of the world. (Planes fly only on the routes between
+// islands, one to a route: lines.js.)
 //
 // None of it carries data. No boat is a person, no bird is a post, and nothing
 // here touches the camera, the coordinates or the hit list, so decoration can
@@ -8,6 +10,8 @@
 // Everything is positioned as a pure function of the clock, never as an
 // accumulated velocity: a backgrounded tab, a resize or a dropped frame cannot
 // drift the fleet or leave a bird somewhere it should not be.
+
+import { drawSpriteTurned, fogImage } from './sprites.js';
 
 export const SYSTEM_REDUCED_MOTION = Boolean(
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -51,33 +55,19 @@ export function hashId(id) {
 const BOAT_COUNT = 6;
 // Screen pixels at every zoom. A boat that grew with the map would compete with
 // the islands; the point is that it stays tiny.
-const BOAT_LENGTH = 7;
+const BOAT_LENGTH = 9;
 const SEA_MARK_COUNT = 44;
 const BIRD_SKEINS = 2;
-const BIRD_SIZE = 2.6;
-
-/** A chord across the sea box, eased back and forth.
- *
- * Built as a pair of points either side of the middle rather than two free
- * points: two free points can land close together, and something on a short leg
- * turns around every few seconds, which reads as fidgeting rather than as a
- * crossing.
- */
-function chord(sea, seed, spread) {
-  const angle = noise(seed, 1) * Math.PI * 2;
-  const reach = spread + noise(seed, 2) * 0.12;
-  const shift = (noise(seed, 3) - 0.5) * 0.18;
-  const midX = sea.x + sea.w / 2;
-  const midY = sea.y + sea.h / 2;
-  const armX = Math.cos(angle) * sea.w * reach;
-  const armY = Math.sin(angle) * sea.h * reach;
-  const offX = -Math.sin(angle) * sea.w * shift;
-  const offY = Math.cos(angle) * sea.h * shift;
-  return {
-    ax: midX + offX - armX, ay: midY + offY - armY,
-    bx: midX + offX + armX, by: midY + offY + armY,
-  };
-}
+// Half a gull's wingspan, seen from above.
+const BIRD_SIZE = 5;
+// Boats and gulls wander the sea on slow closed curves (drift, below) so they
+// turn gently instead of flipping round at the end of a line: everything here
+// is seen from straight above, where a boat that reverses on the spot would
+// show it. One round takes about a quarter of an hour for a boat and six
+// minutes for a skein of gulls - a tenth of the speed they had when they
+// ferried back and forth.
+const BOAT_DRIFT = { period: 900, reach: 0.4 };
+const BIRD_DRIFT = { period: 370, reach: 0.4 };
 
 export function drawSeaMarks(ctx, view, time) {
   const { sea, toScreen, width, height } = view;
@@ -107,147 +97,101 @@ export function drawSeaMarks(ctx, view, time) {
 export function drawBoats(ctx, view, time) {
   if (REDUCED_MOTION) return;
   const { sea, toScreen, width, height } = view;
-  // World units per second, tuned so one crossing takes the better part of a
-  // minute. Slow enough that the map still reads as a still map.
-  const speed = Math.max(sea.w, sea.h) / 55;
   for (let i = 0; i < BOAT_COUNT; i += 1) {
     const seed = 7919 * (i + 1);
-    const { ax, ay, bx, by } = chord(sea, seed, 0.28);
-    const span = Math.hypot(bx - ax, by - ay);
-    if (span < 1) continue;
-    const cycle = (time / ((2 * span) / speed) + noise(seed, 5)) * Math.PI * 2;
-    const travel = 0.5 - Math.cos(cycle) * 0.5;
-    const point = toScreen(ax + (bx - ax) * travel, ay + (by - ay) * travel);
+    const spot = drift(sea, seed, time + noise(seed, 5) * 2000, BOAT_DRIFT);
+    const point = toScreen(spot.x, spot.y);
     if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
-    const bob = Math.sin(time * 1.1 + noise(seed, 6) * Math.PI * 2) * 0.6;
-    const outbound = Math.sin(cycle) >= 0;
-    drawBoat(ctx, point.x, point.y + bob, (bx >= ax) === outbound ? 1 : -1);
+    drawBoat(ctx, point.x, point.y, spot.angle);
   }
 }
 
-function drawBoat(ctx, x, y, facing) {
+/** A small boat from above, bow first along `angle`, with its wake fanning out behind. */
+function drawBoat(ctx, x, y, angle) {
   const unit = BOAT_LENGTH;
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(facing, 1);
+  ctx.rotate(angle);
 
-  const wake = ctx.createLinearGradient(-unit * 2.6, 0, -unit * 0.4, 0);
+  // The wake: two lines opening out from the stern, fading as they go.
+  const wake = ctx.createLinearGradient(-unit * 2.4, 0, -unit * 0.4, 0);
   wake.addColorStop(0, 'rgba(255, 255, 255, 0)');
   wake.addColorStop(1, INK.wake);
   ctx.strokeStyle = wake;
   ctx.lineWidth = 1;
+  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-unit * 2.6, unit * 0.26);
-  ctx.lineTo(-unit * 0.4, unit * 0.26);
+  ctx.moveTo(-unit * 0.4, -unit * 0.12);
+  ctx.lineTo(-unit * 2.4, -unit * 0.5);
+  ctx.moveTo(-unit * 0.4, unit * 0.12);
+  ctx.lineTo(-unit * 2.4, unit * 0.5);
   ctx.stroke();
 
+  // The hull: pointed at the bow, square at the stern.
   ctx.fillStyle = INK.boat;
   ctx.beginPath();
-  ctx.moveTo(-unit * 0.5, -unit * 0.1);
-  ctx.lineTo(unit * 0.5, -unit * 0.1);
-  ctx.lineTo(unit * 0.24, unit * 0.32);
-  ctx.lineTo(-unit * 0.34, unit * 0.32);
+  ctx.moveTo(unit * 0.55, 0);
+  ctx.quadraticCurveTo(unit * 0.2, -unit * 0.24, -unit * 0.45, -unit * 0.2);
+  ctx.lineTo(-unit * 0.45, unit * 0.2);
+  ctx.quadraticCurveTo(unit * 0.2, unit * 0.24, unit * 0.55, 0);
   ctx.closePath();
   ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(-unit * 0.06, -unit * 0.16);
-  ctx.lineTo(-unit * 0.06, -unit * 0.95);
-  ctx.lineTo(unit * 0.4, -unit * 0.16);
-  ctx.closePath();
-  ctx.fill();
+  // A cabin on the deck, so it reads as a boat and not as a grain of rice.
+  ctx.fillStyle = 'rgba(23, 46, 74, .35)';
+  ctx.fillRect(-unit * 0.28, -unit * 0.09, unit * 0.34, unit * 0.18);
   ctx.restore();
 }
 
 export function drawBirds(ctx, view, time) {
   if (REDUCED_MOTION) return;
   const { sea, toScreen, width, height } = view;
-  const speed = Math.max(sea.w, sea.h) / 22;
   ctx.save();
   ctx.strokeStyle = INK.bird;
-  ctx.lineWidth = 1;
+  ctx.fillStyle = INK.bird;
+  ctx.lineWidth = 1.2;
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
   for (let flight = 0; flight < BIRD_SKEINS; flight += 1) {
     const seed = 15485863 * (flight + 1);
-    const { ax, ay, bx, by } = chord(sea, seed, 0.30);
-    const armX = bx - ax;
-    const armY = by - ay;
-    const span = Math.hypot(armX, armY);
-    if (span < 1) continue;
-    const cycle = (time / ((2 * span) / speed) + noise(seed, 5)) * Math.PI * 2;
-    const travel = 0.5 - Math.cos(cycle) * 0.5;
-    const lead = toScreen(ax + armX * travel, ay + armY * travel);
+    const spot = drift(sea, seed, time + noise(seed, 5) * 800, BIRD_DRIFT);
+    const lead = toScreen(spot.x, spot.y);
     if (lead.x < -60 || lead.x > width + 60 || lead.y < -60 || lead.y > height + 60) continue;
     // toScreen is a uniform scale plus a translation, so the world direction and
     // the screen direction are the same direction.
-    const sign = Math.sin(cycle) >= 0 ? 1 : -1;
-    const unitX = (armX * sign) / span;
-    const unitY = (armY * sign) / span;
+    const unitX = Math.cos(spot.angle);
+    const unitY = Math.sin(spot.angle);
     for (let bird = 0; bird < 3; bird += 1) {
-      const back = bird * 7;
-      const side = bird === 1 ? -5 : (bird === 2 ? 5 : 0);
-      const flap = Math.sin(time * 5.5 + bird * 0.7 + flight) * 0.7;
+      const back = bird === 0 ? 0 : 9;
+      const side = bird === 1 ? -8 : (bird === 2 ? 8 : 0);
       drawBird(ctx,
         lead.x - unitX * back - unitY * side,
         lead.y - unitY * back + unitX * side,
-        flap);
+        spot.angle,
+        time * 2.2 + bird * 1.3 + flight);
     }
   }
   ctx.restore();
 }
 
-function drawBird(ctx, x, y, flap) {
-  const unit = BIRD_SIZE;
-  // Wingtips above the body, dipping through the middle: the gull mark. Pull the
-  // control points the other way and the same three points draw a dome, which at
-  // this size reads as a hill rather than a bird.
-  const tip = y - unit * 0.5 - flap;
-  ctx.beginPath();
-  ctx.moveTo(x - unit, tip);
-  ctx.quadraticCurveTo(x - unit * 0.5, y + unit * 0.16, x, y);
-  ctx.quadraticCurveTo(x + unit * 0.5, y + unit * 0.16, x + unit, tip);
-  ctx.stroke();
-}
-
-/** A rounded, irregular blob outline. Used for the orbit view's little islands
- *  and for the surf ring, so both wobble the same way for the same post. */
-export function islandPath(ctx, x, y, radius, seed) {
-  const COUNT = 11;
-  const points = [];
-  for (let i = 0; i < COUNT; i += 1) {
-    const angle = (i / COUNT) * Math.PI * 2;
-    const wobble = 0.74 + noise(seed, i) * 0.46;
-    points.push([
-      x + Math.cos(angle) * radius * wobble,
-      y + Math.sin(angle) * radius * wobble * 0.8,
-    ]);
-  }
-  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-  ctx.beginPath();
-  const start = mid(points[COUNT - 1], points[0]);
-  ctx.moveTo(start[0], start[1]);
-  for (let i = 0; i < COUNT; i += 1) {
-    const control = points[i];
-    const end = mid(points[i], points[(i + 1) % COUNT]);
-    ctx.quadraticCurveTo(control[0], control[1], end[0], end[1]);
-  }
-  ctx.closePath();
-}
-
-/** Surf around one island, breathing slowly. The one moving thing that belongs
- *  to a post rather than to the decoration: the land somebody wrote is
- *  standing in water. */
-export function drawSurf(ctx, x, y, radius, id, time) {
-  const seed = hashId(id);
-  const swell = REDUCED_MOTION
-    ? 1.06
-    : 1.06 + Math.sin(time * 0.8 + noise(seed, 9) * Math.PI * 2) * 0.035;
+/** A gull from above, heading along `angle`: wings swept back from a short
+ * body. Now and then it beats its wings, which from above shows as the span
+ * drawing in; the rest of the time it glides. */
+function drawBird(ctx, x, y, angle, beat) {
+  const flap = Math.max(0, Math.sin(beat)) ** 2 * Math.max(0, Math.sin(beat * 0.31));
+  const span = BIRD_SIZE * (1 - flap * 0.35);
+  const sweep = BIRD_SIZE * (0.45 + flap * 0.2);
   ctx.save();
-  islandPath(ctx, x, y, radius * swell, seed);
-  ctx.strokeStyle = INK.surf;
-  ctx.lineWidth = Math.max(1.4, radius * 0.11);
-  ctx.globalAlpha = 0.38;
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(-sweep, -span);
+  ctx.quadraticCurveTo(BIRD_SIZE * 0.1, -span * 0.35, 0, 0);
+  ctx.quadraticCurveTo(BIRD_SIZE * 0.1, span * 0.35, -sweep, span);
   ctx.stroke();
+  // The body, head forward.
+  ctx.beginPath();
+  ctx.ellipse(-BIRD_SIZE * 0.1, 0, BIRD_SIZE * 0.42, BIRD_SIZE * 0.14, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -281,4 +225,121 @@ export function makeLabelSpace() {
     taken.push({ left: x - w / 2, right: x + w / 2, top: y - h / 2, bottom: y + h / 2 });
   };
   return claim;
+}
+
+// ---------------------------------------------------------------- whales
+
+// Three, at half the first size: ten big shadows crowded the sea (2026-10-12).
+const WHALE_COUNT = 3;
+
+/** Where something that drifts on a slow closed curve is at `time`, and which
+ * way it faces. A pure function of the clock, like everything else here: a
+ * hidden tab cannot strand a whale. The curve is a Lissajous figure, so each
+ * whale, boat or skein turns gently, never doubles back on itself, and wanders
+ * the whole sea. */
+export function drift(sea, seed, time, { period = 420, reach = 0.4 } = {}) {
+  const px = period * (0.8 + noise(seed, 1) * 0.5);
+  const py = period * (0.8 + noise(seed, 2) * 0.5);
+  const cx = sea.x + sea.w * (0.5 + (noise(seed, 3) - 0.5) * 0.3);
+  const cy = sea.y + sea.h * (0.5 + (noise(seed, 4) - 0.5) * 0.3);
+  const ax = sea.w * (reach * 0.55 + noise(seed, 5) * reach * 0.45);
+  const ay = sea.h * (reach * 0.55 + noise(seed, 6) * reach * 0.45);
+  const fx = noise(seed, 7) * Math.PI * 2;
+  const fy = noise(seed, 8) * Math.PI * 2;
+  const wx = (Math.PI * 2) / px;
+  const wy = (Math.PI * 2) / py;
+  const x = cx + ax * Math.sin(wx * time + fx);
+  const y = cy + ay * Math.sin(wy * time + fy);
+  const vx = ax * wx * Math.cos(wx * time + fx);
+  const vy = ay * wy * Math.cos(wy * time + fy);
+  return { x, y, angle: Math.atan2(vy, vx) };
+}
+
+/** A few whale shadows moving through the water, under the land. */
+export function drawWhales(ctx, view, time) {
+  const { sea, toScreen, scale, width, height } = view;
+  const clock = REDUCED_MOTION ? 0 : time;
+  const length = Math.max(12, Math.min(55, sea.w * 0.014 * scale));
+  for (let i = 0; i < WHALE_COUNT; i += 1) {
+    const seed = 40503 * (i + 3);
+    const spot = drift(sea, seed, clock + noise(seed, 9) * 400, { period: 380, reach: 0.44 });
+    const point = toScreen(spot.x, spot.y);
+    if (point.x < -length || point.x > width + length || point.y < -length || point.y > height + length) continue;
+    const size = length * (0.8 + noise(seed, 10) * 0.45);
+    drawSpriteTurned(ctx, 'whale', point.x, point.y, size, spot.angle, { alpha: 0.5 });
+  }
+}
+
+// ---------------------------------------------------------------- fog
+
+const FOG = [232, 236, 239];
+const FOG_SIZE = 192;
+let fogCache = null;
+
+/** The edge of the world: clear over the sea the map covers, thickening to
+ * white past it. A square-ish falloff texture over a world rectangle three
+ * times the sea's width, with plain fog beyond it. */
+function fogTexture() {
+  if (fogCache) return fogCache;
+  const canvas = document.createElement('canvas');
+  canvas.width = FOG_SIZE;
+  canvas.height = FOG_SIZE;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(FOG_SIZE, FOG_SIZE);
+  // The texture spans [-1, 1] on both axes; the clear box is the middle third.
+  const clear = 1 / 3;
+  const rise = 1 - clear;
+  for (let py = 0; py < FOG_SIZE; py += 1) {
+    for (let px = 0; px < FOG_SIZE; px += 1) {
+      const dx = Math.max(0, Math.abs((px + 0.5) / FOG_SIZE * 2 - 1) - clear);
+      const dy = Math.max(0, Math.abs((py + 0.5) / FOG_SIZE * 2 - 1) - clear);
+      const d = Math.min(1, Math.hypot(dx, dy) / (rise * 0.8));
+      const t = d * d * (3 - 2 * d);
+      const at = (py * FOG_SIZE + px) * 4;
+      image.data[at] = FOG[0];
+      image.data[at + 1] = FOG[1];
+      image.data[at + 2] = FOG[2];
+      image.data[at + 3] = Math.round(t * 255);
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  fogCache = canvas;
+  return canvas;
+}
+
+export function drawFog(ctx, view) {
+  const { sea, toScreen, scale, width, height } = view;
+  const cx = sea.x + sea.w / 2;
+  const cy = sea.y + sea.h / 2;
+  // The clear third of the texture covers the sea box itself: the fog is what
+  // the camera finds when it wanders to the edge of the world.
+  const clear = (Math.max(sea.w, sea.h) / 2) * 1.05;
+  const half = clear * 3;
+  const topLeft = toScreen(cx - half, cy - half);
+  const side = half * 2 * scale;
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.fillStyle = `rgb(${FOG[0]}, ${FOG[1]}, ${FOG[2]})`;
+  // Plain fog beyond the texture, laid a few pixels under its edge so no seam of
+  // sea shows between the two.
+  const lap = 6;
+  const left = topLeft.x + lap;
+  const top = topLeft.y + lap;
+  const right = topLeft.x + side - lap;
+  const bottom = topLeft.y + side - lap;
+  if (left > 0) ctx.fillRect(0, 0, left, height);
+  if (right < width) ctx.fillRect(right, 0, width - right, height);
+  if (top > 0) ctx.fillRect(Math.max(0, left), 0, right - Math.max(0, left), top);
+  if (bottom < height) ctx.fillRect(Math.max(0, left), bottom, right - Math.max(0, left), height - bottom);
+  // The picture (web/img/map/fog.png) when it is there, the same thing made in
+  // code when it is not. The outermost pixel is left out of the source: it
+  // would blend with nothing at the rim and show as a thin line of sea.
+  const picture = fogImage();
+  if (picture && picture.width > 4) {
+    ctx.drawImage(picture, 1, 1, picture.width - 2, picture.height - 2, topLeft.x, topLeft.y, side, side);
+  } else {
+    const canvas = fogTexture();
+    ctx.drawImage(canvas, 1, 1, canvas.width - 2, canvas.height - 2, topLeft.x, topLeft.y, side, side);
+  }
+  ctx.restore();
 }

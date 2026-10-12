@@ -63,19 +63,7 @@ test('splits, renames, landmarks and quiet islands each read as one sentence', (
     '山島がなくなりました。');
 });
 
-test('three or more people are counted, and a suggestion always has a line', () => {
+test('three or more people are counted, and the digest has a label', () => {
   assert.equal(text.namesOf([mio, kenta, { display_name: 'ゆき' }]), 'みおさんたち3人');
-  assert.equal(text.reasonLine({ reasons: [{ kind: 'island', text: '同じ山島にいます' }] }), '同じ山島にいます');
-  assert.equal(text.reasonLine({ reasons: [], score: 0.42 }), '似ている度 42%');
-  assert.equal(text.personMeta({ island: '山島', post_count: 4, connection_count: 0 }), '山島・投稿 4件');
   assert.equal(text.digestLabel(3), '前回から 3件の変化');
-});
-
-test('the orbit names the most telling reason in a few words', () => {
-  const island = { kind: 'island', text: '同じ山島にいます' };
-  assert.equal(text.orbitTag([island, { kind: 'topics', text: '共通の話題「子育て」「料理」' }]), '「子育て」');
-  assert.equal(text.orbitTag([island, { kind: 'seeking', text: 'あなたの探していることを手伝えそうです' }]), '頼れそう');
-  assert.equal(text.orbitTag([island]), '同じ島');
-  assert.equal(text.orbitTag([{ kind: 'posts', text: '投稿の話題が少し近いです' }]), '');
-  assert.equal(text.orbitTag(undefined), '');
 });

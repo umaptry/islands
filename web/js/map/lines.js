@@ -1,58 +1,59 @@
-// Lines between people, and what travels on them (段3).
+// Lines between people: roads and flight paths.
 //
 // One line per pair of people, ending on the post the two touched most - the
 // server decides which post and where it stands, so a line never waits for the
-// viewport to load its ends. How a line is drawn depends on the distance:
+// viewport to load its ends. Two kinds, as in the design mock:
 //
-//   far        lines between islands merge into one white 航路 per island
-//              pair, as wide as everything on it together. Lines inside one
-//              island are too short to read from there and are left out.
-//   near/deep  each pair on its own: white over the sea between islands, an
-//              earth path (土の道) inside one.
+//   same island    a road, drawn straight between the two. A road that is new
+//                  since the map opened grows out from one end.
+//   across water   a thin white arch, no outline. One plane flies back and forth
+//                  per route (the pair of islands), however many arches run
+//                  between them.
 //
-// Yours are orange at every distance. The people the AI thinks are like you -
-// and like whoever you are looking at - get an orange dotted line, until the
-// two of you actually meet: then it is a real line and the dots go (Q24・Q28).
+// Dotted lines to people you have not met yet are drawn here too (drawKin;
+// which people is kin.js).
 //
-// Boats, balloons and walkers travel only the lines that are alive now (two
-// separate days within two weeks, decided by the server). Like decor.js, where
-// each one is is a pure function of the clock, so a hidden tab or a dropped
-// frame cannot leave a boat stranded somewhere.
+// From far away (the far zoom level) no roads, arches or planes are drawn. The
+// roads are too short to read from there, and the arches used to be merged into
+// one per pair of islands, drawn between the islands' centres - which put them
+// somewhere else than the post-to-post arches of the nearer view, so a route
+// seemed to move as you zoomed (2026-10-12). Nothing here is about who you are:
+// the same lines are drawn for everyone. (The dotted lines are yours alone.)
+//
+// Like decor.js, where a plane is, is a pure function of the clock, so a hidden
+// tab or a dropped frame cannot leave one stranded.
 
 import { REDUCED_MOTION, hashId } from './decor.js';
-import { drawSprite } from './sprites.js';
+import { drawSpriteTurned } from './sprites.js';
 
-const MINE = '#ff8a1f';
-const MINE_UNDER = 'rgba(122, 52, 0, .35)';
 const ROUTE = '#ffffff';
-const ROUTE_UNDER = 'rgba(23, 46, 74, .22)';
-const PATH = '#e2bd86';
-const PATH_UNDER = 'rgba(74, 52, 38, .45)';
+const PATH = '#f1deb3';
+const PATH_UNDER = 'rgba(74, 52, 38, .5)';
 
-// Line width by tier (1 weak .. 3 strong), CSS px.
-const WIDTHS = [0, 1.6, 2.6, 3.8];
-// Tier of a merged route from the sum of its lines' strength: the same bounds
-// core/config.py CONNECTION_TIER_BOUNDS uses for one line.
-const ROUTE_TIER_BOUNDS = [3, 8];
+// Line width by tier (1 weak .. 3 strong), CSS px. A route over the water is a
+// plain white line and thinner than a road on land.
+const ROAD_WIDTHS = [0, 1.6, 2.6, 3.8];
+const ROUTE_WIDTHS = [0, 1, 1.5, 2.1];
+const FAINT_WIDTH = { road: 1, route: 0.8 };
 const FAINT_ALPHA = 0.26;
 const FRESH_DAYS = 30;
 
-// Vehicles: the longer side of each sprite, CSS px.
-const SIZES = { row: 22, sail: 26, ferry: 30, balloon: 28, walker: 18 };
-// A route that this many people use gets the ferry.
-const FERRY_PEOPLE = 4;
-// Ends further apart than this share of the world go by balloon.
-const BALLOON_REACH = 0.4;
-// Seconds between departures: strong lines often, weak ones now and then.
-const INTERVAL = { min: 6, max: 20 };
-// One crossing: the world's width in about 40 s, never quicker than 6 or
-// slower than 18. In world units, so a crossing does not speed up as you zoom.
-const CROSSING = { span: 40, min: 6, max: 18 };
-const CAP = { phone: 15, wide: 30 };
+// The arch's rise, as a share of the distance it spans (the mock's 0.3).
+const ARCH_BEND = 0.3;
+// A new road takes this long to grow, in ms.
+const GROW_MS = 660;
+// Planes: the longer side of the sprite in CSS px, and the cap per view.
+const PLANE_SIZE = { near: 24, deep: 30 };
+const PLANE_CAP = { phone: 12, wide: 24 };
+// One crossing: the world's width in about five minutes, never quicker than 45 s
+// or slower than two minutes. In world units, so a crossing does not speed up as
+// you zoom. (A fifth of the first speed: quicker read as traffic, not as a map.)
+const CROSSING = { span: 300, min: 45, max: 120 };
 
 // ---------------------------------------------------------------- geometry
 
-/** A gentle quadratic arc from p to q. `seed` picks which side it bows to. */
+/** A quadratic arc from p to q. `seed` picks which side it bows to; `bend` is
+ * how far, as a share of the distance (0 is a straight line). */
 export function arc(p, q, seed, bend = 0.16) {
   const dx = q.x - p.x;
   const dy = q.y - p.y;
@@ -72,8 +73,22 @@ export function pointOn({ p, c, q }, t) {
   };
 }
 
-function headingX({ p, c, q }, t) {
-  return 2 * (1 - t) * (c.x - p.x) + 2 * t * (q.x - c.x);
+/** The direction of travel along the arc at t, in radians (0 = to the right). */
+export function headingAt({ p, c, q }, t) {
+  const dx = 2 * (1 - t) * (c.x - p.x) + 2 * t * (q.x - c.x);
+  const dy = 2 * (1 - t) * (c.y - p.y) + 2 * t * (q.y - c.y);
+  return Math.atan2(dy, dx);
+}
+
+/** The first `share` of an arc, as an arc of its own. */
+export function partOf(shape, share) {
+  const g = Math.max(0, Math.min(1, share));
+  return {
+    p: shape.p,
+    c: { x: shape.p.x + (shape.c.x - shape.p.x) * g, y: shape.p.y + (shape.c.y - shape.p.y) * g },
+    q: pointOn(shape, g),
+    length: shape.length * g,
+  };
 }
 
 function onScreen({ p, c, q }, width, height, margin = 30) {
@@ -87,10 +102,10 @@ function stroke(ctx, { p, c, q }, { color, under, width, alpha = 1, dash = null 
   ctx.save();
   ctx.globalAlpha *= alpha;
   ctx.lineCap = 'round';
+  if (dash) ctx.setLineDash(dash);
   ctx.beginPath();
   ctx.moveTo(p.x, p.y);
   ctx.quadraticCurveTo(c.x, c.y, q.x, q.y);
-  if (dash) ctx.setLineDash(dash);
   if (under) {
     ctx.strokeStyle = under;
     ctx.lineWidth = width + 2;
@@ -110,12 +125,6 @@ export function freshness(row, now = Date.now()) {
   const last = Date.parse(row.last_at);
   const days = Number.isFinite(last) ? Math.max(0, (now - last) / 86400000) : FRESH_DAYS;
   return 0.95 - Math.min(1, days / FRESH_DAYS) * 0.5;
-}
-
-export function routeTier(strength) {
-  if (strength >= ROUTE_TIER_BOUNDS[1]) return 3;
-  if (strength >= ROUTE_TIER_BOUNDS[0]) return 2;
-  return 1;
 }
 
 const islandKey = (island) => island.island_id || island.label || `${island.cx},${island.cy}`;
@@ -144,7 +153,7 @@ export function islandFinder(islands) {
   };
 }
 
-/** Lines between islands, merged per island pair (the far view's 航路). */
+/** Lines between islands, grouped per island pair: a route, which has one plane. */
 export function buildRoutes(rows, islandOf) {
   const routes = new Map();
   rows.forEach((row) => {
@@ -168,42 +177,73 @@ export function buildRoutes(rows, islandOf) {
   return [...routes.values()];
 }
 
-export function vehicleKind({ sameIsland, distance, span, people, tier }) {
-  if (sameIsland) return 'walker';
-  if (distance > span * BALLOON_REACH) return 'balloon';
-  if (people >= FERRY_PEOPLE) return 'ferry';
-  if (tier >= 3) return 'sail';
-  return 'row';
-}
+// ---------------------------------------------------------------- new lines
 
-/** Every crossing under way at `time` on one line.
- *
- * A boat leaves every `interval` seconds and takes `duration` to cross; each
- * departure goes the other way from the last, so the line is travelled back and
- * forth. Positions come from the clock alone.
- */
-export function tripsAt(time, { seed, interval, duration }) {
-  const t = time + ((seed % 997) / 997) * interval;
-  const last = Math.floor(t / interval);
-  const trips = [];
-  for (let k = last; k >= last - Math.ceil(duration / interval); k -= 1) {
-    const age = t - k * interval;
-    if (age < 0 || age >= duration) continue;
-    trips.push({ progress: age / duration, forward: ((k % 2) + 2) % 2 === 0 });
+export const linkKey = (row) => `${row.a}|${row.b}`;
+
+let known = null;          // pairs already on the map when it loaded, and since
+const born = new Map();    // pair -> when its road started to grow
+
+/** Tell the lines which pairs exist now. The first list (`loaded`) is taken as
+ * "what the map already had" and nothing animates; every pair that shows up in a
+ * later list is new, and its road grows. Returns how many are new. */
+export function noteLinks(rows, now = performance.now()) {
+  const keys = rows.map(linkKey);
+  if (!known) {
+    known = new Set(keys);
+    return 0;
   }
-  return trips;
+  let fresh = 0;
+  keys.forEach((key) => {
+    if (known.has(key)) return;
+    known.add(key);
+    born.set(key, now);
+    fresh += 1;
+  });
+  return fresh;
 }
 
-export function intervalFor(strength) {
-  const share = Math.min(1, Math.max(0, (Number(strength) || 0) / ROUTE_TIER_BOUNDS[1]));
-  return INTERVAL.max - (INTERVAL.max - INTERVAL.min) * share;
+/** Forget what the lines knew (a different person signed in, tests). */
+export function resetLinks() {
+  known = null;
+  born.clear();
+}
+
+/** How much of a line is drawn: 1 for an old one, 0 to 1 while it grows. */
+export function growthOf(key, now = performance.now()) {
+  const start = born.get(key);
+  if (start === undefined) return 1;
+  if (REDUCED_MOTION) return 1;
+  const t = (now - start) / GROW_MS;
+  if (t >= 1) {
+    born.delete(key);
+    return 1;
+  }
+  return t * (2 - t);   // quickly at first, then easing in
+}
+
+/** Where a plane is on its arch at `time`, and which way it is going: out and
+ * back, forever, slowing into each end. `offset` keeps a fleet out of step. */
+export function planeAt(time, { duration, offset = 0 }) {
+  const phase = (((time + offset) / duration) % 2 + 2) % 2;
+  const forward = phase < 1;
+  const leg = forward ? phase : 2 - phase;
+  return { t: leg * leg * (3 - 2 * leg), forward, leg };
+}
+
+export function crossingSeconds(world, span) {
+  return Math.max(CROSSING.min, Math.min(CROSSING.max, (world / span) * CROSSING.span));
 }
 
 // ---------------------------------------------------------------- drawing
 
-/** The pairs to draw at this distance, each with its arc on screen. */
+// A piece of land (landmass.js) has no id; its centre is one for as long as it
+// keeps the same posts.
+const landKey = (mass) => `${mass.cx.toFixed(1)},${mass.cy.toFixed(1)}`;
+
+/** Every pair, with its shape on screen and the route it belongs to. */
 function layout(view) {
-  const { rows, islands, toScreen, far, meId, landOf } = view;
+  const { rows, islands, toScreen, landOf } = view;
   const islandOf = islandFinder(islands);
   const routes = buildRoutes(rows, islandOf);
   const routeOf = new Map();
@@ -212,215 +252,111 @@ function layout(view) {
   const lines = [];
   rows.forEach((row) => {
     if (!row.a_at || !row.b_at) return;
-    // The arc is drawn from the end with the smaller id, so A→B and B→A bow
-    // the same way.
+    // Drawn from the end with the smaller id, so A to B and B to A bow the same way.
     const flip = String(row.a) > String(row.b);
     const from = flip ? row.b_at : row.a_at;
     const to = flip ? row.a_at : row.b_at;
     const a = islandOf(row.a_post, row.a_at);
     const b = islandOf(row.b_post, row.b_at);
-    const mine = Boolean(meId) && (row.a === meId || row.b === meId);
-    // One named island can be several pieces of land; a walker stays on one.
+    // One named island can be several pieces of land; a road stays on one.
     const landA = landOf ? landOf(row.a_post) : null;
     const landB = landOf ? landOf(row.b_post) : null;
+    const sameIsland = Boolean(a) && a === b && (!landA || !landB || landA === landB);
+    const p = toScreen(from[0], from[1]);
+    const q = toScreen(to[0], to[1]);
+    const route = routeOf.get(row) || null;
+    // Which route the line is on, for its plane: the pair of islands, or, for
+    // an arch between two pieces of land of one island, the pair of pieces.
+    let group = route ? route.key : linkKey(row);
+    if (!route && !sameIsland && landA && landB) group = [landKey(landA), landKey(landB)].sort().join('|');
     lines.push({
-      row, mine,
-      sameIsland: Boolean(a) && a === b && (!landA || !landB || landA === landB),
-      route: routeOf.get(row) || null,
+      row, sameIsland, route, group,
       world: Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]),
-      arc: arc(toScreen(from[0], from[1]), toScreen(to[0], to[1]), hashId(`${row.a}|${row.b}`)),
+      arc: sameIsland
+        ? arc(p, q, 0, 0)
+        : arc(p, q, hashId(`${row.a}|${row.b}`), ARCH_BEND),
     });
   });
-  const routeArcs = far ? routes.map((route) => ({
-    route,
-    arc: arc(toScreen(route.a.cx, route.a.cy), toScreen(route.b.cx, route.b.cy), hashId(route.key), 0.18),
-  })) : [];
-  return { lines, routeArcs };
+  return { lines };
 }
 
-/** Solid lines (under the towns). Returns the layout the vehicles reuse. */
-export function drawLines(ctx, view) {
+/** Roads and arches (under the towns). Returns the layout the planes reuse,
+ * or null from far away, where neither is drawn. */
+export function drawLinks(ctx, view) {
   const { width, height, far, level } = view;
+  if (far) return null;
   const plan = layout(view);
   const now = Date.now();
+  const tick = performance.now();
   const grow = level === 'deep' ? 1.3 : 1;
-
-  if (far) {
-    plan.routeArcs.forEach(({ route, arc: shape }) => {
-      if (!onScreen(shape, width, height)) return;
-      stroke(ctx, shape, {
-        color: ROUTE, under: ROUTE_UNDER,
-        width: route.faint ? 1 : WIDTHS[routeTier(route.strength)],
-        alpha: freshness(route, now),
-      });
-    });
-  } else {
-    plan.lines.forEach(({ row, mine, sameIsland, arc: shape }) => {
-      if (mine || !onScreen(shape, width, height)) return;
-      stroke(ctx, shape, {
-        color: sameIsland ? PATH : ROUTE,
-        under: sameIsland ? PATH_UNDER : ROUTE_UNDER,
-        width: row.faint ? 1 : WIDTHS[row.tier || 1] * grow,
-        alpha: freshness(row, now),
-      });
-    });
-  }
-  // Yours, on top, at every distance.
-  plan.lines.forEach(({ row, mine, arc: shape }) => {
-    if (!mine || !onScreen(shape, width, height)) return;
-    stroke(ctx, shape, {
-      color: MINE, under: MINE_UNDER,
-      width: row.faint ? 1.2 : WIDTHS[row.tier || 1] * (far ? 1 : grow),
-      alpha: Math.max(0.45, freshness(row, now)),
+  plan.lines.forEach(({ row, sameIsland, arc: shape }) => {
+    if (!onScreen(shape, width, height)) return;
+    const share = growthOf(linkKey(row), tick);
+    const tier = row.tier || 1;
+    stroke(ctx, share < 1 ? partOf(shape, share) : shape, sameIsland ? {
+      color: PATH, under: PATH_UNDER,
+      width: row.faint ? FAINT_WIDTH.road : ROAD_WIDTHS[tier] * grow,
+      alpha: freshness(row, now),
+    } : {
+      color: ROUTE,
+      width: row.faint ? FAINT_WIDTH.route : ROUTE_WIDTHS[tier] * grow,
+      alpha: freshness(row, now),
     });
   });
   return plan;
 }
 
-/** Where a person stands: their most energetic post with a place. */
-export function homeOf(posts) {
-  let best = null;
-  posts.forEach((post) => {
-    if (post.x == null || post.y == null) return;
-    const energy = Number(post.energy) || 0;
-    if (!best || energy > best.energy) best = { post, energy };
-  });
-  return best ? best.post : null;
-}
+// Dotted lines: plain white like a route, and fainter (a hint of where to
+// look, as in the mock). Drawn only zoomed in, like the routes.
+const KIN = { width: 1.2, dash: [3, 5], alpha: { near: 0.6, deep: 0.65 } };
 
-/** The pairs that already share a line, as "a|b" both ways. */
-function pairsOf(rows) {
-  const pairs = new Set();
-  rows.forEach((row) => { pairs.add(`${row.a}|${row.b}`); pairs.add(`${row.b}|${row.a}`); });
-  return pairs;
-}
-
-/** Dotted lines to the people the AI thinks are alike (Q24・Q28).
- *
- * From you to yours, and from the post being looked at to its author's. A pair
- * that already shares a real line keeps only the real one.
- */
-export function drawHints(ctx, view) {
-  const { rows, toScreen, width, height, meId, home, similar, selected, selectedSimilar, focus } = view;
-  const pairs = pairsOf(rows);
-  const sets = [];
-  if (meId && home) sets.push({ owner: meId, from: home, people: similar });
-  if (selected && selectedSimilar && selectedSimilar.author === selected.author_id
-    && selected.author_id !== meId) {
-    sets.push({ owner: selected.author_id, from: selected, people: selectedSimilar.people });
-  }
-  sets.forEach(({ owner, from, people }) => {
-    (people || []).forEach((person) => {
-      if (!person.post || person.id === owner || pairs.has(`${owner}|${person.id}`)) return;
-      const shape = arc(toScreen(from.x, from.y), toScreen(person.post.x, person.post.y),
-        hashId(`${owner}|${person.id}`), 0.12);
-      if (shape.length < 8 || !onScreen(shape, width, height)) return;
-      // The person whose card is open (段4) stands out; the rest step back.
-      const style = !focus ? { width: 2, alpha: 0.9 }
-        : person.id === focus ? { width: 3.5, alpha: 1 } : { width: 2, alpha: 0.4 };
-      stroke(ctx, shape, { color: MINE, ...style, dash: [1, 6] });
+/** Dotted lines from your posts to people like you (under the towns, with the
+ * roads). Straight on the same island; across water, an arch like a route's. */
+export function drawKin(ctx, view, kin) {
+  const { toScreen, width, height, level } = view;
+  kin.forEach((line) => {
+    const p = toScreen(line.from.x, line.from.y);
+    const q = toScreen(line.to.x, line.to.y);
+    const shape = line.across ? arc(p, q, hashId(line.key), ARCH_BEND) : arc(p, q, 0, 0);
+    if (!onScreen(shape, width, height)) return;
+    stroke(ctx, shape, {
+      color: ROUTE, width: KIN.width,
+      alpha: KIN.alpha[level] || KIN.alpha.near, dash: KIN.dash,
     });
   });
 }
 
-function drawVehicle(ctx, kind, x, y, size, facing, time, alpha) {
-  const name = kind === 'walker'
-    ? (REDUCED_MOTION || Math.floor(time * 3) % 2 ? 'walker_a' : 'walker_b')
-    : { row: 'boat_row', sail: 'boat_sail', ferry: 'ferry', balloon: 'balloon' }[kind];
-  // Boats sit in the water on the line; the balloon floats above it.
-  const foot = kind === 'balloon' ? y - 6 : kind === 'walker' ? y + size * 0.45 : y + size * 0.3;
-  ctx.save();
-  ctx.translate(x, 0);
-  if (facing < 0) ctx.scale(-1, 1);
-  const box = drawSprite(ctx, name, 0, foot, size, { alpha });
-  ctx.restore();
-  return box ? { x, y: foot - box.h / 2, r: Math.max(14, size * 0.6) } : null;
-}
-
-/** Vehicles on the lines that are alive now. Returns their tap targets. */
-export function drawVehicles(ctx, view, plan, time) {
+/** Planes on the arches that are alive now (over the towns). */
+export function drawPlanes(ctx, view, plan, time) {
   const { width, height, far, level, span, phone } = view;
-  const cap = phone ? CAP.phone : CAP.wide;
-  const crossing = (world) => Math.max(CROSSING.min, Math.min(CROSSING.max, (world / span) * CROSSING.span));
-  const routeArc = new Map(plan.routeArcs.map(({ route, arc: shape }) => [route, shape]));
+  if (far || !plan) return;
+  const cap = phone ? PLANE_CAP.phone : PLANE_CAP.wide;
+  const size = PLANE_SIZE[level] || PLANE_SIZE.near;
 
-  const moving = [];
-  plan.lines.forEach((line) => {
-    const { row, sameIsland, route } = line;
-    if (!row.ongoing) return;
-    // From far away, a boat between islands rides the route, and walkers
-    // inside an island are too small to see.
-    const shape = far ? (route ? routeArc.get(route) : null) : line.arc;
-    if (!shape || shape.length < 24) return;
-    const kind = vehicleKind({
-      sameIsland, distance: line.world, span,
-      people: route ? route.people.size : 2, tier: row.tier || 1,
-    });
-    const seed = hashId(`${row.a}|${row.b}`);
-    const trips = REDUCED_MOTION
-      ? [{ progress: 0.5, forward: true }]
-      : tripsAt(time, { seed, interval: intervalFor(row.strength), duration: crossing(line.world) });
-    trips.forEach((trip) => moving.push({ line, shape, kind, trip, seed }));
+  // The arches between two islands are drawn one per pair of people, but the
+  // plane is one per route: it flies the strongest arch of its route that is on
+  // screen. Keyed by the route, so it keeps its place in the schedule while you
+  // pan from one of its arches to another.
+  const best = new Map();
+  plan.lines.forEach(({ row, sameIsland, group: key, arc: shape, world }) => {
+    if (sameIsland || row.faint || !onScreen(shape, width, height)) return;
+    if (growthOf(linkKey(row)) < 1) return;
+    const strength = Number(row.strength) || 0;
+    const held = best.get(key);
+    if (!held || strength > held.strength) best.set(key, { shape, key, world, strength });
   });
-
-  // Yours first, then the strongest, up to the cap.
-  moving.sort((a, b) => (b.line.mine - a.line.mine) || ((b.line.row.strength || 0) - (a.line.row.strength || 0)));
-  const hits = [];
-  const grow = level === 'deep' ? 1.2 : 1;
-  moving.slice(0, cap).forEach(({ line, shape, kind, trip, seed }) => {
-    const eased = 0.5 - Math.cos(Math.PI * trip.progress) / 2;
-    const t = trip.forward ? eased : 1 - eased;
+  const flights = [...best.values()].sort((a, b) => b.strength - a.strength);
+  flights.slice(0, cap).forEach(({ shape, key, world }) => {
+    const seed = hashId(key);
+    const duration = crossingSeconds(world, span);
+    const { t, forward, leg } = REDUCED_MOTION
+      ? { t: 0.5, forward: true, leg: 0.5 }
+      : planeAt(time, { duration, offset: (seed % 997) / 997 * duration * 2 });
     const point = pointOn(shape, t);
     if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) return;
-    const dx = headingX(shape, t) * (trip.forward ? 1 : -1);
-    const bob = REDUCED_MOTION ? 0 : Math.sin(time * 1.6 + (seed % 7)) * (kind === 'balloon' ? 2 : 0.8);
-    // Fade in leaving the quay and out arriving, rather than popping.
-    const alpha = REDUCED_MOTION ? 1 : Math.min(1, trip.progress / 0.08, (1 - trip.progress) / 0.08);
-    const size = SIZES[kind] * (far ? 0.85 : grow);
-    const hit = drawVehicle(ctx, kind, point.x, point.y + bob, size, dx < 0 ? -1 : 1, time, alpha);
-    if (hit && alpha > 0.5) hits.push({ ...hit, vehicle: line.row });
+    const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
+    // Fade in leaving the airfield and out arriving, rather than popping.
+    const alpha = REDUCED_MOTION ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
+    drawSpriteTurned(ctx, 'plane', point.x, point.y, size, heading, { alpha });
   });
-  return hits;
-}
-
-/** Q53: a gull sets off from you toward the island of somebody like you.
- *
- * Only for someone on another island - next door, you can already see them.
- * A tap flies the camera there.
- */
-export function drawGuide(ctx, view, time, face) {
-  const { toScreen, width, height, home, similar, islands } = view;
-  if (!home || !similar || !similar.length) return null;
-  const islandOf = islandFinder(islands);
-  const mineIsland = islandOf(home.id, [home.x, home.y]);
-  const target = similar.find((person) => person.post
-    && islandOf(person.post.id, [person.post.x, person.post.y]) !== mineIsland);
-  if (!target) return null;
-  const shape = arc(toScreen(home.x, home.y), toScreen(target.post.x, target.post.y),
-    hashId(`guide|${target.id}`), 0.12);
-  if (shape.length < 40) return null;
-
-  // Six and a half seconds out, then a rest before the next one leaves.
-  const cycle = 9;
-  const flight = 6.5;
-  const age = REDUCED_MOTION ? flight * 0.35 : time % cycle;
-  if (age > flight) return null;
-  const progress = age / flight;
-  const point = pointOn(shape, 0.5 - Math.cos(Math.PI * progress) / 2);
-  if (point.x < -20 || point.x > width + 20 || point.y < -20 || point.y > height + 20) return null;
-  const alpha = REDUCED_MOTION ? 1 : Math.min(1, progress / 0.1, (1 - progress) / 0.1);
-  const flap = REDUCED_MOTION || Math.floor(time * 4) % 2 ? 'gull_up' : 'gull_down';
-  const y = point.y + (REDUCED_MOTION ? 0 : Math.sin(time * 3) * 1.5);
-  ctx.save();
-  ctx.globalAlpha *= alpha;
-  ctx.translate(point.x, 0);
-  if (headingX(shape, progress) < 0) ctx.scale(-1, 1);
-  drawSprite(ctx, flap, 0, y + 4, 24);
-  ctx.restore();
-  // The one it is flying to, carried underneath.
-  ctx.save();
-  ctx.globalAlpha *= alpha;
-  face(target.icon_id, point.x, y + 12, 14);
-  ctx.restore();
-  return { x: point.x, y: y + 4, r: 22, guide: target.post };
 }

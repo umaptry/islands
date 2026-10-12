@@ -1,24 +1,20 @@
-// Meeting people (段4): the 「似ている人」 button and its list, a person's card,
-// and what changed on the map while you were away.
+// What changed on the map while you were away (段4): the pill and its sheet.
 //
-// Wired from screens/map.js with setupMeet({ openPost, react }) rather than
-// importing it, so the two screens do not import each other.
+// Wired from screens/map.js with setupMeet() rather than importing it, so the
+// two screens do not import each other.
 
 import { api } from '../net.js';
-import { hasReacted, state } from '../state.js';
+import { state } from '../state.js';
 import {
-  $, avatar, clear, clip, desktopSheet, el, openSheet, timeAgo,
+  $, avatar, clear, desktopSheet, el, openSheet, timeAgo,
 } from '../ui.js';
 import { focusOn } from '../map/index.js';
-import { describeChange, digestLabel, personMeta, reasonLine } from '../meet-text.js';
-import { isOpen } from '../components/postcard.js';
+import { describeChange, digestLabel } from '../meet-text.js';
 
 const SEEN_KEY = 'islands.seenChanges';
-let hooks = { openPost: () => {}, react: async () => {} };
 let digestFor = null; // the account the digest was fetched for, once a session
 let changes = [];
 let seen = readSeen();
-let sheetToken = 0;   // which of this module's sheets is open, if any
 
 /** Where a point should land while a sheet covers part of the screen. */
 const lift = () => (desktopSheet() ? 0.5 : 0.3);
@@ -46,171 +42,11 @@ function faces(people, size) {
   return el('span', { className: 'face-stack' }, ...people.map((person) => avatar(person, size)));
 }
 
-/** Open one of this module's sheets; closing it clears the person highlight. */
+/** Open one of this module's sheets. */
 function meetSheet() {
-  const token = ++sheetToken;
-  const body = openSheet({ onClose: () => {
-    if (token !== sheetToken) return;
-    sheetToken = 0;
-    state.focusPerson = null;
-  } });
+  const body = openSheet({});
   clear($('sheetFoot'));
-  return { body: clear(body), token };
-}
-
-// ---------------------------------------------------------------- similar people
-
-/** The bottom-left button: shown on the map view when there is somebody to meet. */
-export function paintPeople() {
-  const button = $('mapPeople');
-  const people = state.similar || [];
-  if (!state.account || state.view !== 'map' || !people.length) {
-    button.hidden = true;
-    return;
-  }
-  button.hidden = false;
-  const label = `似ている人 ${people.length}人`;
-  button.setAttribute('aria-label', label);
-  clear(button).append(
-    faces(people.slice(0, 2), 24),
-    el('span', { className: 'people-label', text: label }),
-    el('span', { className: 'people-count num', text: String(people.length), attrs: { 'aria-hidden': 'true' } }),
-  );
-}
-
-/** Q45: someone whose newest post on the map says "talk to me". */
-function welcomes(personId) {
-  const posts = (state.posts || []).filter((post) => post.author_id === personId);
-  if (!posts.length) return false;
-  const newest = posts.reduce((a, b) => (String(a.created_at) > String(b.created_at) ? a : b));
-  return isOpen(newest);
-}
-
-function openBadge() {
-  return el('span', { className: 'tag-badge open', text: '💬 話しかけていいよ' });
-}
-
-function openPeople() {
-  const { body } = meetSheet();
-  state.focusPerson = null;
-  body.append(el('h3', { className: 'meet-title', text: 'あなたに似ている人' }));
-  const list = el('div', { className: 'person-list' });
-  (state.similar || []).forEach((person) => {
-    list.append(el('button', {
-      className: 'person-row',
-      attrs: { type: 'button' },
-      on: { click: () => openPerson(person) },
-    },
-    avatar(person, 40),
-    el('span', { className: 'person-row-text' },
-      el('span', { className: 'person-row-name' },
-        person.display_name || '名前なし',
-        welcomes(person.id) ? el('span', { className: 'open-dot', text: '💬', attrs: { title: '話しかけていいよ' } }) : null),
-      el('span', { className: 'person-row-reason', text: reasonLine(person) }),
-      // The island on its own line unless the reason already names it.
-      person.island && !reasonLine(person).includes(person.island)
-        ? el('span', { className: 'person-row-island', text: person.island }) : null,
-    )));
-  });
-  body.append(list);
-}
-
-async function openPerson(person) {
-  state.focusPerson = person.id;
-  if (person.post) focusOn(person.post, { lift: lift() });
-  const { body, token } = meetSheet();
-  state.focusPerson = person.id;
-  body.append(backLink(), el('p', { className: 'sheet-loading', text: '読み込み中…' }));
-  let card;
-  try {
-    card = await api.get(
-      `/api/people/${encodeURIComponent(person.id)}/card?viewer=${encodeURIComponent(state.account.id)}`,
-      { auth: false },
-    );
-  } catch (error) {
-    if (token !== sheetToken) return;
-    clear(body).append(backLink(), el('p', { className: 'sheet-error', text: error.message }));
-    return;
-  }
-  if (token !== sheetToken) return;
-  paintCard(clear(body), card);
-}
-
-function backLink() {
-  return el('button', {
-    className: 'meet-back',
-    attrs: { type: 'button' },
-    text: '‹ 似ている人の一覧',
-    on: { click: openPeople },
-  });
-}
-
-function paintCard(body, card) {
-  const { person, latest_post: latest } = card;
-  body.append(backLink());
-  body.append(el('div', { className: 'person-head' },
-    avatar(person, 52),
-    el('div', { className: 'person-head-text' },
-      el('div', { className: 'person-name', text: person.display_name || '名前なし' }),
-      el('div', { className: 'person-meta', text: personMeta(card) }),
-      isOpen(latest) ? openBadge() : null,
-    ),
-  ));
-  if (card.reasons?.length) {
-    body.append(el('div', { className: 'reason-list' },
-      ...card.reasons.map((reason) => el('span', { className: 'reason-chip', text: reason.text }))));
-  }
-  if (person.bio) body.append(el('p', { className: 'person-bio', text: person.bio }));
-  const wants = [['探している', person.seeking], ['手伝える', person.offering]].filter(([, text]) => text);
-  if (wants.length) {
-    body.append(el('dl', { className: 'person-wants' },
-      ...wants.flatMap(([term, text]) => [el('dt', { text: term }), el('dd', { text })])));
-  }
-  if (latest) {
-    body.append(el('button', {
-      className: 'person-latest',
-      attrs: { type: 'button' },
-      on: { click: () => hooks.openPost(latest.id) },
-    },
-    el('span', { className: 'person-latest-label', text: `最新の投稿・${timeAgo(latest.created_at)}` }),
-    el('span', { className: 'person-latest-body', text: latest.body })));
-  }
-  if (card.connections?.length) {
-    const more = card.connection_count - card.connections.length;
-    body.append(el('div', { className: 'person-links' },
-      el('span', { className: 'person-links-label', text: 'よく話す人' }),
-      faces(card.connections, 26),
-      el('span', {
-        className: 'person-links-names',
-        text: card.connections.slice(0, 2).map((row) => clip(row.display_name || '', 6)).join('、')
-          + (card.connections.length > 2 || more > 0 ? ` ほか${card.connection_count - 2}人` : ''),
-      }),
-    ));
-  }
-  if (!latest) return;
-  const like = el('button', { className: 'btn btn-quiet person-like', attrs: { type: 'button' } });
-  const paintLike = () => {
-    const on = hasReacted(latest.id, 'like');
-    like.classList.toggle('on', on);
-    like.textContent = on ? 'いいね済み' : 'いいね';
-    like.setAttribute('aria-pressed', String(on));
-  };
-  paintLike();
-  like.addEventListener('click', async () => {
-    const pending = hooks.react(latest.id, 'like');
-    paintLike();
-    await pending;
-    paintLike();
-  });
-  $('sheetFoot').append(el('div', { className: 'person-actions' },
-    like,
-    el('button', {
-      className: 'btn',
-      attrs: { type: 'button' },
-      text: 'コメントする',
-      on: { click: () => hooks.openPost(latest.id, { draft: card.opener || '', expand: true }) },
-    }),
-  ));
+  return { body: clear(body) };
 }
 
 // ---------------------------------------------------------------- away digest
@@ -238,7 +74,7 @@ function unseen() {
 export function paintMarks() {
   const left = state.account ? unseen() : [];
   const pill = $('mapDigest');
-  pill.hidden = !left.length || state.view !== 'map' || !state.account;
+  pill.hidden = !left.length || !state.account;
   if (!pill.hidden) pill.textContent = digestLabel(left.length);
   state.changeMarks = left.filter((change) => change.place && change.place.cx != null)
     .map((change) => ({ id: change.id, x: change.place.cx, y: change.place.cy }));
@@ -290,8 +126,6 @@ function openDigest() {
 
 // ---------------------------------------------------------------- setup
 
-export function setupMeet({ openPost, react }) {
-  hooks = { openPost, react };
-  $('mapPeople').addEventListener('click', openPeople);
+export function setupMeet() {
   $('mapDigest').addEventListener('click', openDigest);
 }

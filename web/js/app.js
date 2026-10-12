@@ -1,7 +1,7 @@
 // Boot.
 //
-// index.html opens on #booting rather than on the intro, so a returning visitor
-// does not watch slide 1 flash past before their session is restored. Whichever
+// index.html opens on #booting rather than on the welcome page, so a returning
+// visitor does not watch it flash past before their session is restored. Whichever
 // branch wins here picks the first screen anybody actually sees.
 
 import { loadConfig, checkMapVersion } from './config.js';
@@ -15,14 +15,14 @@ import { setupPush, syncPush } from './push.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
 import { setupFeedback } from './feedback.js';
-import { setupAuth, setupGuidance, setupIntro, setupProfileSetup } from './screens/auth.js';
+import { setupAudio } from './audio.js';
+import { setupAuth, setupGuidance, setupProfileSetup, setupWelcome } from './screens/auth.js';
 import { setupCompose, setupReveal } from './screens/compose.js';
 import { setupMapScreen, refreshMyPosts } from './screens/map.js';
 import { refreshNotifications, setupNotifications, paintBadge } from './screens/notifications.js';
 import { setupProfile } from './screens/profile.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
-route('#/intro', 'intro');
 route('#/welcome', 'welcome');
 route('#/auth', 'auth');
 route('#/setup', 'setup');
@@ -44,14 +44,17 @@ setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
   const onboarding = onboardingStep();
   if (signedIn && pattern === '#/map' && onboarding) {
+    if (onboarding === 'photo') return '#/setup';
     return onboarding === 'post' ? '#/post?first=1' : '#/guidance';
   }
   if (NEEDS_ACCOUNT.has(pattern) && !signedIn) {
     return session.signedIn() ? '#/setup' : '#/auth';
   }
   // A finished account has no business back on the sign-in or setup screens.
-  if (signedIn && (pattern === '#/auth' || pattern === '#/intro')) return '#/map';
-  if (signedIn && pattern === '#/setup') return '#/map';
+  if (signedIn && pattern === '#/auth') return '#/map';
+  // The icon-photo step comes after the name is saved, so a named account is
+  // still allowed on it until that step is done.
+  if (signedIn && pattern === '#/setup') return onboarding === 'photo' ? null : '#/map';
   return null;
 });
 
@@ -67,7 +70,8 @@ async function boot() {
   }
 
   setupFeedback();
-  setupIntro();
+  setupAudio();
+  setupWelcome();
   setupIcons();
   document.addEventListener('map:version-changed', () => {
     const node = document.getElementById('mapVersionNotice');
@@ -115,7 +119,7 @@ async function boot() {
   // The first route is decided BEFORE the router starts, not after. Starting
   // the router and then navigating raced: the router's own apply() was still
   // awaiting the map's first fetch, so the second navigate found it busy and
-  // did nothing but change the address bar - leaving the hash saying #/intro
+  // did nothing but change the address bar - leaving the hash saying #/welcome
   // over a map screen.
   if (!window.location.hash || invalidatedSession) {
     let first = '#/welcome';

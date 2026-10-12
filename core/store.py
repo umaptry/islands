@@ -84,9 +84,16 @@ TERM_COLUMNS = ("id,author_id,cluster_id,x,y,terms,motivation,like_count,help_co
                 "join_count,comment_count,energy,created_at")
 NOTIFICATION_COLUMNS = ("id,recipient_id,actor_id,post_id,comment_id,type,created_at,read_at,"
                         "island_id,event_id,payload")
-ISLAND_STATE_COLUMNS = ("id,name,label,tier,score_total,score_recent,score_shown,post_ids,"
-                        "author_ids,cx,cy,landmarks,challenger,quiet,active,last_activity_at,"
-                        "created_at,updated_at")
+# The columns the 2026-10-12 migration added. A database that has not had it yet
+# answers 400 (42703 / PGRST204) when they are named; SupabaseStore then works
+# without them (see _has_name_columns), so new code can come up before the SQL.
+ISLAND_NAME_COLUMNS = ("name_source", "name_basis", "name_tried_at")
+ISLAND_STATE_BASE_COLUMNS = ("id,name,label,tier,score_total,score_recent,score_shown,post_ids,"
+                             "author_ids,cx,cy,landmarks,challenger,quiet,active,last_activity_at,"
+                             "created_at,updated_at")
+ISLAND_STATE_COLUMNS = ISLAND_STATE_BASE_COLUMNS + "," + ",".join(ISLAND_NAME_COLUMNS)
+# How long a "columns are there" / "columns are missing" check is trusted.
+NAME_COLUMNS_CHECK_SECONDS = 60
 ISLAND_EVENT_COLUMNS = "id,island_id,kind,cause,place,before,after,created_at"
 PUSH_CONFIG_COLUMNS = "vapid_public,vapid_private,dispatch_url"
 PUSH_SUBSCRIPTION_COLUMNS = "id,account_id,endpoint,p256dh,auth,user_agent,created_at"
@@ -330,6 +337,12 @@ class MemoryStore:
         with self._lock:
             return [self._joined(row) for row in self._live()]
 
+    def post_bodies(self, ids):
+        """{post_id: body} for live posts among ids (island naming reads this)."""
+        with self._lock:
+            return {i: self._posts[i]["body"] for i in ids
+                    if i in self._posts and not self._posts[i].get("deleted_at")}
+
     def nearest_posts(self, post_id, k):
         with self._lock:
             origin = self._posts.get(post_id)
@@ -431,6 +444,17 @@ class MemoryStore:
             for nid in stale:
                 del self._notifications[nid]
         return True
+
+    def joiners_of(self, post_id):
+        """Account ids that pressed 参加 on a post (local mode only).
+
+        With a database the reactions are public and the browser reads them
+        directly; this is the stand-in for 「参加者を見てみる」.
+        """
+        with self._lock:
+            return [actor for (pid, actor, kind) in self._reactions
+                    if pid == post_id and kind == "join"]
+
 
     def reactions_by_actor(self, actor_id):
         with self._lock:
@@ -547,16 +571,12 @@ class MemoryStore:
         return count
 
     def _notify_new_connection(self, a, b):
-        """notify_new_connection(): the first interaction tells both, once ever."""
-        if a is None or b is None or a == b:
-            return
-        if self._pair_interaction_count(a, b) != 1:
-            return
-        for row in self._notifications.values():
-            if row["type"] == "connection" and {row["recipient_id"], row["actor_id"]} == {a, b}:
-                return
-        self._notify(b, a, None, None, "connection")
-        self._notify(a, b, None, None, "connection")
+        """Retired 2026-10-12: 「新しいつながり」の通知はもう作らない。
+
+        The database function of the same name is a no-op too (migration
+        20261012000000). Rows written before stay as they were.
+        """
+        return
 
     def insert_notifications(self, rows):
         """Server-written notifications (similar, island)."""
@@ -791,6 +811,11 @@ class MemoryStore:
             return [dict(row) for row in self._islands.values()
                     if row.get("active", True) or not active_only]
 
+    supports_island_names = True
+
+    def island_names_ready(self):
+        return True
+
     def save_island_states(self, rows):
         stamp = _now()
         with self._lock:
@@ -894,6 +919,8 @@ class SupabaseStore:
         if not service_key.startswith("sb_secret_"):
             self._headers["Authorization"] = f"Bearer {service_key}"
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT)
+        self._has_name_columns = True      # until the database says otherwise
+        self._names_checked_at = None
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1065,6 +1092,17 @@ class SupabaseStore:
             "order": "energy.desc",
             "limit": str(limit),
         }, label="領域名の読み込み")
+
+    def post_bodies(self, ids):
+        """{post_id: body} for live posts among ids (island naming reads this)."""
+        ids = list(ids)
+        out = {}
+        for start in range(0, len(ids), 40):
+            chunk = ",".join(ids[start:start + 40])
+            for row in self._get(POSTS, {"select": "id,body", "deleted_at": "is.null",
+                                         "id": f"in.({chunk})"}, label="島の名前用の投稿"):
+                out[row["id"]] = row["body"]
+        return out
 
     def terrain_posts(self):
         rows = []
@@ -1383,24 +1421,99 @@ class SupabaseStore:
 
     # -- islands -------------------------------------------------------------
 
+    @property
+    def supports_island_names(self):
+        """False once the database turned out not to have the name columns."""
+        return self._has_name_columns
+
+    @staticmethod
+    def _missing_name_columns(response):
+        """True when a 400 says the islands_state name columns do not exist (yet)."""
+        if response.status_code != 400:
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        # Both: a CHECK violation (23514), a bad filter (PGRST100) or another column's
+        # 42703 must not be taken for "the migration has not been run".
+        return code in ("42703", "PGRST204") and any(name in text for name in ISLAND_NAME_COLUMNS)
+
+    def _island_columns(self):
+        return ISLAND_STATE_COLUMNS if self._has_name_columns else ISLAND_STATE_BASE_COLUMNS
+
     def island_states(self, active_only=True):
-        params = {"select": ISLAND_STATE_COLUMNS, "order": "created_at.asc"}
-        if active_only:
-            params["active"] = "is.true"
-        return self._get(ISLANDS_STATE, params, label="島の読み込み")
+        # An instance that decided "no columns" tries the full read again once the
+        # check interval has passed (the SQL may have been run since), without a restart.
+        if (not self._has_name_columns and self._names_checked_at is not None
+                and time.monotonic() - self._names_checked_at >= NAME_COLUMNS_CHECK_SECONDS):
+            self._has_name_columns = True
+            self._names_checked_at = time.monotonic()
+        for _ in range(2):
+            params = {"select": self._island_columns(), "order": "created_at.asc"}
+            if active_only:
+                params["active"] = "is.true"
+            response = self._send("GET", ISLANDS_STATE, label="島の読み込み", params=params,
+                                  allow_statuses=(400,))
+            if response.status_code < 300:
+                return response.json()
+            if self._has_name_columns and self._missing_name_columns(response):
+                self._remember_missing_name_columns()
+                continue
+            print(f"[store] 島の読み込み failed: HTTP {response.status_code}: {response.text[:200]}", flush=True)
+            raise StoreError("島の読み込み")
+        raise StoreError("島の読み込み")
+
+    def _remember_missing_name_columns(self):
+        if self._has_name_columns:
+            print("[store] islands_state has no name_source column yet; AI island names are off "
+                  "until supabase/migrations/20261012000000_ai_island_names_no_connection.sql is run",
+                  flush=True)
+        self._has_name_columns = False
+        self._names_checked_at = time.monotonic()
+
+    def island_names_ready(self):
+        """True when islands_state can be read with the name columns (cached briefly).
+
+        Used by /api/health: a database the 2026-10-12 migration has not reached
+        must not be promoted. Raises StoreError when the database cannot be asked.
+        """
+        now = time.monotonic()
+        if self._names_checked_at is not None and now - self._names_checked_at < NAME_COLUMNS_CHECK_SECONDS:
+            return self._has_name_columns
+        response = self._send("GET", ISLANDS_STATE, label="島の列の確認", allow_statuses=(400,),
+                              params={"select": ",".join(ISLAND_NAME_COLUMNS), "limit": "1"})
+        if response.status_code < 300:
+            self._has_name_columns = True
+            self._names_checked_at = now
+        elif self._missing_name_columns(response):
+            self._remember_missing_name_columns()
+        else:
+            raise StoreError("島の列の確認")
+        return self._has_name_columns
 
     def save_island_states(self, rows):
-        if rows:
-            keys = ISLAND_STATE_COLUMNS.split(",")
+        if not rows:
+            return 0
+        for _ in range(2):
+            keys = self._island_columns().split(",")
             stamp = _now()
-            self._send(
-                "POST", ISLANDS_STATE, label="島の保存",
+            response = self._send(
+                "POST", ISLANDS_STATE, label="島の保存", allow_statuses=(400,),
                 headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
                 params={"on_conflict": "id"},
                 json=[{**{key: row.get(key) for key in keys if key in row and key != "created_at"},
                        "updated_at": stamp} for row in rows],
             )
-        return len(rows)
+            if response.status_code < 300:
+                return len(rows)
+            if self._has_name_columns and self._missing_name_columns(response):
+                self._remember_missing_name_columns()
+                continue
+            print(f"[store] 島の保存 failed: HTTP {response.status_code}: {response.text[:200]}", flush=True)
+            raise StoreError("島の保存")
+        raise StoreError("島の保存")
 
     def add_island_events(self, rows):
         if rows:

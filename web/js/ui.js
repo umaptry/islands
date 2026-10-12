@@ -1,6 +1,6 @@
 // Small shared pieces: DOM helpers, the toast, the bottom sheet, formatting.
 
-import { avatarCss, avatarFor } from './avatars.js';
+import { paintAvatar } from './avatars.js';
 import { data } from './net.js';
 
 export const $ = (id) => document.getElementById(id);
@@ -39,7 +39,8 @@ export function clear(node) {
 
 // ---------------------------------------------------------------- avatars
 
-/** A round avatar: the uploaded image if there is one, the emoji disc if not.
+/** A round avatar: the uploaded image if there is one; otherwise the old emoji
+ * disc for people who still have one, or the silhouette for everybody else.
  *
  * `overrideUrl` is for the profile screens, which have to show a photo that has
  * been chosen but not yet uploaded - at that point there is no avatar_path to
@@ -56,8 +57,7 @@ export function avatar(person, size = 40, overrideUrl = null) {
     node.classList.add('has-image');
     node.append(el('img', { attrs: { src: url, alt: '', loading: 'lazy' } }));
   } else {
-    node.style.background = avatarCss(person ? person.icon_id : '0');
-    node.textContent = avatarFor(person ? person.icon_id : '0').emoji;
+    paintAvatar(node, person ? person.icon_id : null);
   }
   return node;
 }
@@ -81,7 +81,9 @@ export function toast(message) {
 // state is what lets you read a card without losing sight of the map.
 
 const sheetState = { open: false, expanded: false, onClose: null };
-export const desktopSheet = () => window.matchMedia('(min-width: 768px)').matches;
+// Wide and tall enough for the side panel; a phone held sideways is not.
+const DESKTOP_QUERY = '(min-width: 768px) and (min-height: 500px)';
+export const desktopSheet = () => window.matchMedia(DESKTOP_QUERY).matches;
 let sheetFocus = null;
 
 export function setupSheetAccessibility() {
@@ -100,7 +102,7 @@ export function setupSheetAccessibility() {
         `${Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop)}px`);
     }
   };
-  window.matchMedia('(min-width: 768px)').addEventListener('change', sync);
+  window.matchMedia(DESKTOP_QUERY).addEventListener('change', sync);
   window.visualViewport?.addEventListener('resize', sync);
   document.addEventListener('sheet:state', sync);
   document.addEventListener('keydown', (event) => {

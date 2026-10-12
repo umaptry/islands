@@ -5,23 +5,27 @@
 // full height where the message thread appears with the input pinned to the
 // bottom. The half state is what lets you read a card without losing the map.
 
-import { config, islandColor } from '../config.js';
+import { config, islandColor, isLocal } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import {
   hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, upsertPost, notify,
 } from '../state.js';
 import {
-  $, $$, clear, closeSheet, confirmAction, el, expandSheet, openSheet, sheetExpanded,
+  $, clear, closeSheet, confirmAction, el, expandSheet, openSheet, sheetExpanded,
   sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
 import { chatInput, postChat } from '../components/chat.js';
-import { loadDigest, paintMarks, paintPeople, setupMeet } from './meet.js';
+import { loadDigest, paintMarks, setupMeet } from './meet.js';
 import {
-  fitCamera, focusOn, initMap, invalidateOrbit, landmassOf, onCameraSettled, resize, ripple, viewport,
+  abortReveal, fitCamera, focusOn, initMap, landmassOf, onCameraSettled, participantView, playReveal,
+  resize, ripple, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
 } from '../map/index.js';
+import { noteLinks } from '../map/lines.js';
+import { isRecruiting, markRead } from '../map/reads.js';
 import { buzz, viewerKey } from '../feedback.js';
+import { playSe, setAmbient } from '../audio.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -35,9 +39,9 @@ let selectionGeneration = 0;
 let sheetEvents = null;
 let restorePost = null;
 let mapRequest = 0;
-let filterTimer = 0;
 let mapError = false;
-let pendingDraft = '';
+let worldCount = null;   // how many posts the whole world has (null: not asked yet)
+let myLinks = { owner: null, count: 0 };   // how many roads are mine, for the success sound
 
 function paintMapStatus() {
   const status = $('mapStatus');
@@ -46,17 +50,16 @@ function paintMapStatus() {
   status.hidden = !mapError && !filtering && state.posts.length > 0 && !terrainNote;
   $('mapRetry').hidden = !mapError;
   $('mapStatusText').textContent = mapError ? '地図を更新できませんでした。接続を確認してください。'
-    : filtering ? `${state.posts.filter(matchesFilters).length}件表示・検索対象は読み込み済みの範囲です${terrainNote}`
+    : filtering ? `${state.posts.filter(matchesFilters).length}件が該当・検索対象は読み込み済みの範囲です${terrainNote}`
     : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
-    : 'まだ投稿がありません。最初の投稿で島をつくりましょう。';
+    : worldCount === 0 && !state.myPosts.length ? 'まだ投稿がありません。最初の投稿で島をつくりましょう。'
+    : 'この範囲には投稿がありません。🌐で全体を見られます';
 }
 
+// The map is redrawn every frame from state.filters: posts that do not match
+// fade back, and the islands stay as they are, so there is nothing to fetch.
 function filtersChanged() {
-  mapRequest += 1;
   paintMapStatus();
-  clearTimeout(filterTimer);
-  state.terrainGrid = null;
-  if (state.saturated) filterTimer = setTimeout(() => refreshMap(), 250);
 }
 
 /** Q40: the tried-out sentence, standing on the map for this browser only. */
@@ -72,8 +75,61 @@ export async function showTrial() {
 
 export async function openOnMap(postId) {
   if (!await navigate('#/map')) return;
+  const fresh = justPosted(postId);
+  if (fresh) {
+    playNewPost(fresh);
+    return;
+  }
   await openPost(postId);
   if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+}
+
+// A post you wrote a moment ago is introduced once, with the full show; any
+// other way of reaching a post (a notification, your page) just opens it.
+const introduced = new Set();
+const JUST_POSTED_MS = 90000;
+let landing = null;   // the post being introduced, kept on the map meanwhile
+
+function justPosted(postId) {
+  if (!state.account || introduced.has(postId)) return null;
+  const post = state.myPosts.find((entry) => entry.id === postId) || state.postsById.get(postId);
+  if (!post || post.author_id !== state.account.id) return null;
+  const age = Date.now() - Date.parse(post.created_at);
+  return Number.isFinite(age) && age > -60000 && age < JUST_POSTED_MS ? post : null;
+}
+
+function playNewPost(post) {
+  introduced.add(post.id);
+  if (sheetOpen()) closeSheet();
+  setParticipantView(null);
+  paintParticipantBar();
+  landing = post;
+  upsertPost(post);
+  refreshIslands();
+  refreshNeighbors();
+  playReveal(post, {
+    then: async () => {
+      landing = null;
+      await openPost(post.id);
+      if (state.selected?.id === post.id) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+    },
+  });
+}
+
+/** A screen that is wide and short (a phone on its side) cannot fit every
+ * island name when the whole map is shown, so the first view comes in on your
+ * own island - or the biggest one - instead. The globe still shows everything. */
+function closeInFlat() {
+  if (window.innerHeight >= 500 || window.innerWidth <= window.innerHeight) return;
+  const cam = state.camera;
+  if (landing || state.selected || !cam.fit || Math.abs(cam.scale - cam.fit) > 1e-6) return;
+  const mine = state.myPosts.find((post) => post.id === state.activePostId) || state.myPosts[0];
+  let spot = mine && Number.isFinite(mine.x) && Number.isFinite(mine.y) ? { x: mine.x, y: mine.y } : null;
+  if (!spot) {
+    const biggest = [...state.islands].sort((a, b) => (b.people || 0) - (a.people || 0))[0];
+    if (biggest && Number.isFinite(biggest.cx) && Number.isFinite(biggest.cy)) spot = { x: biggest.cx, y: biggest.cy };
+  }
+  if (spot) zoomTo(spot.x, spot.y, cam.fit * 2.6, { lift: 0.5 });
 }
 
 // ---------------------------------------------------------------- data
@@ -84,6 +140,7 @@ export async function refreshMap({ fitFirst = false } = {}) {
     try {
       const result = await api.get('/api/map/bounds', { auth: false });
       if (generation !== mapRequest) return false;
+      worldCount = Number.isFinite(result.count) ? result.count : null;
       fitCamera([], result.bounds);
     } catch { fitCamera(); }
   }
@@ -95,13 +152,17 @@ export async function refreshMap({ fitFirst = false } = {}) {
     mapError = false;
     const saturated = posts.length >= limit;
     setPosts(posts, { saturated });
+    // A refresh that was asked for before the post existed must not take it
+    // away while it is being introduced.
+    if (landing && !state.postsById.has(landing.id)) upsertPost(landing);
     if (saturated) {
       // Only then: the coarse layer exists so distant land does not vanish when
       // the viewport holds more posts than we asked for. Fetching it always
       // would be a second query on every pan for nothing.
       try {
+        // Never filtered: the islands are drawn as they are while searching.
         const params = new URLSearchParams({ min_x: bounds.minX, min_y: bounds.minY,
-          max_x: bounds.maxX, max_y: bounds.maxY, query: state.filters.query, tags: state.filters.tags.join(',') });
+          max_x: bounds.maxX, max_y: bounds.maxY });
         const grid = await api.get(`/api/terrain?${params}`, { auth: false });
         if (generation !== mapRequest) return false;
         state.terrainGrid = grid;
@@ -132,60 +193,47 @@ export async function refreshIslands() {
   }
 }
 
+// The dotted lines (map/kin.js) need, for each of my posts, the people whose
+// posts are most like it. Asked again only after a while: it is a search over
+// every post, and who is like you changes slowly.
+const NEIGHBORS_FOR_KIN = 24;
+const NEIGHBORS_STALE_MS = 5 * 60000;
+
+export async function refreshNeighbors({ force = false } = {}) {
+  if (!state.account) return;
+  const owner = state.account.id;
+  const now = Date.now();
+  const keep = new Set(state.myPosts.map((post) => post.id));
+  [...state.neighbors.keys()].forEach((id) => { if (!keep.has(id)) state.neighbors.delete(id); });
+  await Promise.all(state.myPosts.map(async (post) => {
+    const held = state.neighbors.get(post.id);
+    if (!force && held && now - held.at < NEIGHBORS_STALE_MS) return;
+    try {
+      const result = await api.get(
+        `/api/neighbors?post=${encodeURIComponent(post.id)}&limit=${NEIGHBORS_FOR_KIN}`, { auth: false });
+      // Signed out (or somebody else signed in) while it was on its way.
+      if (state.account?.id !== owner) return;
+      state.neighbors.set(post.id, { at: now, rows: result.neighbors || [] });
+    } catch {
+      /* no dots for this post until next time */
+    }
+  }));
+}
+
 /** Lines between people (段3). Public, and cached by the server for a while. */
 export async function refreshConnections() {
   try {
     const result = await api.get('/api/connections', { auth: false });
     state.connections = result.connections || [];
+    // A road that was not there a moment ago grows, and says so.
+    // A sound only for a road that is mine; other people's roads grow silently.
+    const meId = state.account ? state.account.id : null;
+    const fresh = noteLinks(state.connections);
+    const mineNow = meId ? state.connections.filter((row) => row.a === meId || row.b === meId).length : 0;
+    if (fresh > 0 && myLinks.owner === meId && mineNow > myLinks.count) playSe('success');
+    myLinks = { owner: meId, count: mineNow };
   } catch {
     /* keep the lines already drawn */
-  }
-}
-
-let similarFetched = { account: null, at: 0 };
-
-/** The people most like me: where my dotted lines go. Slow to change, so at
- * most every five minutes. */
-export async function refreshSimilar({ force = false } = {}) {
-  const me = state.account ? state.account.id : null;
-  if (!me) {
-    state.similar = [];
-    paintPeople();
-    return;
-  }
-  if (!force && similarFetched.account === me && Date.now() - similarFetched.at < 300000) return;
-  try {
-    const result = await api.get(`/api/similar-people?account=${encodeURIComponent(me)}`, { auth: false });
-    state.similar = result.people || [];
-    similarFetched = { account: me, at: Date.now() };
-    paintPeople();
-  } catch {
-    /* no dotted lines this time */
-  }
-}
-
-const similarOf = new Map();
-
-/** The selected post's author's alike people, for their dotted lines. */
-async function loadSelectedSimilar(post) {
-  const author = post && post.author_id;
-  if (!author || (state.account && author === state.account.id)) {
-    state.selectedSimilar = null;
-    return;
-  }
-  const cached = similarOf.get(author);
-  if (cached && Date.now() - cached.at < 300000) {
-    state.selectedSimilar = { author, people: cached.people };
-    return;
-  }
-  try {
-    const result = await api.get(`/api/similar-people?account=${encodeURIComponent(author)}`, { auth: false });
-    similarOf.set(author, { at: Date.now(), people: result.people || [] });
-    if (state.selected && state.selected.author_id === author) {
-      state.selectedSimilar = { author, people: result.people || [] };
-    }
-  } catch {
-    state.selectedSimilar = null;
   }
 }
 
@@ -237,32 +285,13 @@ export async function refreshMyPosts() {
   }
 }
 
-async function refreshNeighbors() {
-  if (!state.activePostId) {
-    state.neighbors = [];
-    return;
-  }
-  try {
-    const result = await api.get(
-      `/api/neighbors?post=${encodeURIComponent(state.activePostId)}` +
-      `&limit=${config().limits.orbit_neighbors}`,
-      { auth: false },
-    );
-    state.neighbors = result.neighbors || [];
-    invalidateOrbit();
-  } catch {
-    state.neighbors = [];
-  }
-}
-
 // ---------------------------------------------------------------- chrome
 
 function paintBadge() {
-  paintPeople();
   paintMarks();
   const badge = $('islandBadge');
   const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
-  if (state.view !== 'map' || !mine) {
+  if (!mine) {
     badge.hidden = true;
     return;
   }
@@ -291,6 +320,7 @@ function paintFilterPanel() {
       text: tag,
       on: {
         click: () => {
+          playSe('hardClick');
           state.filters.tags = on
             ? state.filters.tags.filter((entry) => entry !== tag)
             : state.filters.tags.concat(tag);
@@ -327,23 +357,12 @@ function setupChrome() {
 
   $('mapFilterBtn').addEventListener('click', (event) => {
     event.stopPropagation();
+    playSe('hardClick');
     const panel = $('mapFilterPanel');
     panel.hidden = !panel.hidden;
   });
   document.addEventListener('pointerdown', (event) => {
     if (!$('mapFilter').contains(event.target)) $('mapFilterPanel').hidden = true;
-  });
-
-  $$('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      $$('.tab').forEach((other) => other.classList.remove('on'));
-      tab.classList.add('on');
-      state.view = tab.dataset.view;
-      if (state.view !== 'map') refreshNeighbors();
-      tab.setAttribute('aria-selected', 'true');
-      $$('.tab').filter((item) => item !== tab).forEach((item) => item.setAttribute('aria-selected', 'false'));
-      paintBadge();
-    });
   });
 
   $('mapRetry').addEventListener('click', async () => {
@@ -365,14 +384,11 @@ function setupChrome() {
     toast('お試しを消しました');
   });
 
-  $('mapRecenter').addEventListener('click', () => {
-    const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
-    // islands' version of this button dispatched a resize event and hoped. It
-    // moves the camera now: onto your own island if you have one, and onto the
-    // whole map if you do not.
-    if (mine) focusOn(mine, { lift: 0.42 });
-    else fitCamera();
+  $('mapOverview').addEventListener('click', () => {
+    playSe('click');
+    showAll();
   });
+  $('participantStop').addEventListener('click', stopParticipants);
 
   document.addEventListener('map:open', (event) => {
     openPost(event.detail.postId);
@@ -390,13 +406,11 @@ function setupChrome() {
 
 // ---------------------------------------------------------------- sheet
 
-/** Open a post's sheet. `draft` starts the message input with a first line
- * (Q44, from a person card); `expand` opens the sheet at full height. */
-export async function openPost(postId, { draft = '', expand = false } = {}) {
+/** Open a post's sheet. `expand` opens the sheet at full height. */
+export async function openPost(postId, { expand = false } = {}) {
   if (sheetOpen()) closeSheet();
   const generation = ++selectionGeneration;
   let post = state.postsById.get(postId);
-  pendingDraft = draft;
   const body = openSheet({ expanded: expand, onClose: () => {
     selectionGeneration += 1;
     sheetEvents?.abort();
@@ -404,7 +418,6 @@ export async function openPost(postId, { draft = '', expand = false } = {}) {
     if (activeChat) activeChat.destroy();
     activeChat = null;
     state.selected = null;
-    state.selectedSimilar = null;
   } });
   sheetEvents = new AbortController();
   clear(body).append(el('p', { className: 'sheet-loading', text: '読み込み中…' }));
@@ -426,7 +439,9 @@ export async function openPost(postId, { draft = '', expand = false } = {}) {
   }
   state.selected = post;
   recordView(post);
-  loadSelectedSimilar(post);
+  // Looking at a post puts its star out - except while looking at who joined,
+  // when the sheet is only a way to read the writer's words.
+  if (!participantView()) markRead(post.id);
   await renderSheet(post, generation);
 }
 
@@ -434,7 +449,7 @@ async function renderSheet(post, generation) {
   const body = clear($('sheetBody'));
   const mine = state.account && post.author_id === state.account.id;
 
-  // 似てる度 against whichever of my posts the orbit is centred on. Asking the
+  // 似てる度 against my active post. Asking the
   // server rather than measuring on the map: the map is a 2-D shadow, and this
   // number is the 448-dim cosine the ranking already uses.
   let similarity = null;
@@ -473,6 +488,7 @@ async function renderSheet(post, generation) {
     },
     onDelete: () => removeOwnPost(post),
     onReport: mine ? null : () => report(post),
+    onSeeParticipants: isRecruiting(post) ? () => showParticipants(post) : null,
   }));
 
   // The thread only exists once the sheet is expanded - islands' rule, and a
@@ -516,10 +532,7 @@ function paintThread(post, container) {
   container.append(el('div', { className: 'section-label', text: 'メッセージ' }), activeChat.node);
   if (state.account) {
     const chat = activeChat;
-    // The suggested first line is offered once; a repaint does not bring it back.
-    const draft = pendingDraft;
-    pendingDraft = '';
-    input = chatInput(post.id, { onSent: () => chat.refresh(), draft });
+    input = chatInput(post.id, { onSent: () => chat.refresh() });
     $('sheetFoot').append(input.node);
   } else {
     $('sheetFoot').append(el('button', {
@@ -639,6 +652,61 @@ function setupSheetGesture() {
   $('sheetBackdrop').addEventListener('pointerdown', closeSheet);
 }
 
+// ---------------------------------------------------------------- participants
+
+/** Who joined a post, as account ids.
+ *
+ * With a database the reactions are public, so this asks it directly. The local
+ * stand-in has a route of its own that lists the people who pressed 参加.
+ */
+async function joinersOf(post) {
+  const ids = new Set();
+  if (isLocal()) {
+    const result = await api.get(`/api/local/posts/${encodeURIComponent(post.id)}/joiners`, { auth: false });
+    (result.joiners || []).forEach((id) => ids.add(id));
+    return ids;
+  }
+  const { url, anon_key: key } = config().supabase;
+  const query = new URLSearchParams({ select: 'actor_id', post_id: `eq.${post.id}`, kind: 'eq.join' });
+  const rows = await api.get(`${url}/rest/v1/reactions?${query}`, { headers: { apikey: key } });
+  rows.forEach((row) => ids.add(row.actor_id));
+  return ids;
+}
+
+function paintParticipantBar() {
+  $('participantStop').hidden = !participantView();
+}
+
+/** 「参加者を見てみる」: pull back, keep the writer and the people who joined
+ * bright, and let everybody else fade. */
+async function showParticipants(post) {
+  let ids;
+  try {
+    ids = await joinersOf(post);
+  } catch {
+    toast('参加者を読み込めませんでした。少し待ってからもう一度お試しください。');
+    return;
+  }
+  ids.delete(post.author_id);
+  const count = ids.size;
+  ids.add(post.author_id);
+  closeSheet();
+  setParticipantView({ postId: post.id, ids });
+  paintParticipantBar();
+  showAll();
+  toast(count ? `参加した人 ${count}人を表示しています` : 'まだ参加した人はいません。投稿者だけを表示しています');
+}
+
+function stopParticipants() {
+  const view = participantView();
+  setParticipantView(null);
+  paintParticipantBar();
+  const post = view && state.postsById.get(view.postId);
+  if (!post) return;
+  const fit = state.camera.fit || state.camera.scale;
+  zoomTo(post.x, post.y, fit * 2.6, { lift: 0.4, then: () => openPost(post.id) });
+}
+
 // ---------------------------------------------------------------- polling
 
 function startPolling() {
@@ -647,8 +715,7 @@ function startPolling() {
     // A backgrounded tab should not keep polling; it catches up on visibility.
     if (document.hidden || document.querySelector('.screen.active').id !== 'map') return;
     await refreshMap();
-    await Promise.all([refreshIslands(), refreshMyReactions(), refreshConnections(), refreshSimilar()]);
-    if (state.view === 'orbit') await refreshNeighbors();
+    await Promise.all([refreshIslands(), refreshMyReactions(), refreshConnections()]);
   }, POLL_MS);
 
   document.addEventListener('visibilitychange', async () => {
@@ -662,7 +729,7 @@ function startPolling() {
 
 export function setupMapScreen() {
   setupChrome();
-  setupMeet({ openPost, react });
+  setupMeet();
   setupSheetGesture();
   paintFilterPanel();
   paintFilterCount();
@@ -670,8 +737,18 @@ export function setupMapScreen() {
   screen('map', {
     leave(next) {
       if (['me', 'user'].includes(next) && state.selected) restorePost = state.selected.id;
+      setAmbient(false);
+      stopMap();   // no painting while another screen is in front
+      abortReveal();
+      landing = null;
+      if (participantView()) {
+        setParticipantView(null);
+        paintParticipantBar();
+      }
     },
     async enter() {
+      setAmbient(true);
+      startMap();   // no-op the first time: initMap starts the loop itself
       if (!booted) {
         booted = true;
         initMap($('stage'), { onSelect: (post) => (post ? openPost(post.id) : closeSheet()) });
@@ -681,16 +758,17 @@ export function setupMapScreen() {
         const ok = await refreshMap({ fitFirst: true });
         if (!ok) toast('地図を読み込めませんでした。再試行しています…');
         await Promise.all([
-          refreshIslands(), refreshMyPosts(), refreshMyReactions(), refreshConnections(), refreshSimilar(),
+          refreshIslands(), refreshMyPosts(), refreshMyReactions(), refreshConnections(),
         ]);
-        await refreshNeighbors();
+        refreshNeighbors();
         startPolling();
+        closeInFlat();
       } else {
         resize();
         await refreshMap();
         refreshIslands();
         refreshConnections();
-        refreshSimilar();
+        refreshNeighbors();
       }
       paintBadge();
       paintTrial();

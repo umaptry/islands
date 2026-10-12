@@ -154,6 +154,50 @@ prepareは投稿・runtimeを変更しないが、サーバー専用embedding_ca
 9. 投稿・本文編集・画像・本人による認証・反応・コメントを確認し、Gemini使用量と遅延を測定する。
 10. 通常push用のGemini設定を固定し、CI再リリースを確認してから自動運用へ戻す。
 
+## 島の AI 命名の出し方と戻し方（2026-10-12）
+
+島の名前を Gemini で付ける機能は、**環境変数 `ISLAND_NAMING_ENABLED` が `1` のときだけ**動く。既定はオフ（未設定なら従来の上位語の名前のまま）。CI の変数・秘密は変えず、次の順で人が操作する。
+
+1. **SQL を流す**：`supabase/migrations/20261012000000_ai_island_names_no_connection.sql` を Supabase の SQL エディタで流す（何度流しても壊れない。古いコードも壊れない）。
+2. **新しいコードを出す**：main へ入れて CI を通す。`/api/health` の `ready` は、`islands_state` に `name_source` 列が読めないと `false` になる（`island_names_ready`・`not_ready_reasons` に理由が出る）ので、手順1を忘れると `verify_release.py --phase ready` が昇格を止める。
+3. **動作確認**：`/api/health` が `ready=true`、`island_names_ready=true`。`/api/islands` が今までどおり返ること。この時点ではまだ AI 命名はオフ。
+4. **鍵の確認**：オンにする前に、Cloud Run のコンテナに `GEMINI_API_KEY` が入っているか確認する（`gcloud run services describe islands --project <ID> --region asia-northeast1` の環境変数・Secret を見る）。onnx 構成のコンテナには入っていないことがあり、その場合は Secret を手動で足す必要がある。足すのは本番の設定変更なので、**2人の合意が要る**。鍵がないと `load_namer()` が何もせず、AI の名前は付かない（エラーにもならない）。
+5. **オンにする**：Cloud Run の環境変数に `ISLAND_NAMING_ENABLED=1` を足して新しい revision を出す。**同時に `web/how.html` の島名の説明（216行目付近）を更新する**（AI が投稿全体のジャンルを1語で付ける＝書き手3人以上・投稿5件以上の島。それ以外の島や、鍵がない・失敗したときは、投稿の名詞から上位2語）。AI で名前を付けるのは書き手3人以上かつ投稿5件以上の島だけ。同じ島は24時間あけないと呼び直さない（通信エラーは「試した」印を付けないので、次の追跡でまた呼ぶ）。1回の追跡で呼ぶのは最大4回。既定のモデルは `gemini-3.5-flash-lite`（`ISLAND_NAMING_MODEL` で変えられる）。
+6. **オンにした直後の確認**：ログに `island naming: … -> …`（INFO。投稿本文・個人名は出ない）が出ること。**`island naming: HTTP 404` / `HTTP 400` のログが出ていないこと**（モデル名の誤り・提供終了・鍵の誤りのサインで、出ていたら `ISLAND_NAMING_MODEL` と鍵を見直す。通信エラーの間は島に印が付かないので、直せばすぐ付き直す）。
+
+**止めたいとき**：`ISLAND_NAMING_ENABLED` を外す（または `0`）。すでに付いた AI の名前は `islands_state` に残り、そのまま表示され続ける（新しく付けないだけ）。
+
+**古い版のコードへ戻すとき**：古いコードは `name_source` を知らないので、AI の名前が付いた島を従来の名前に戻し、**AI の名前が付いた島の書き手に「名前が変わった」通知**（人と島ごとに1日1件まで）を出してしまう。これを防ぐには、旧イメージから `ISLANDS_AUTO_TRACK=0` を付けた**新しい revision を作って**そこへ traffic を向ける。**旧 revision への単純な `update-traffic` だけでは `ISLANDS_AUTO_TRACK=0` が付かず、通知が出る**（環境変数は revision ごとの設定のため）。
+
+```powershell
+# 1) 旧イメージ（digest）から、追跡を止めた新しい revision を作る（traffic はまだ流さない）
+gcloud run deploy islands --project <ID> --region asia-northeast1 --image <旧digest> --update-env-vars ISLANDS_AUTO_TRACK=0 --no-traffic --tag rollback
+# 2) その revision に traffic を向ける（revision 名は 1) の出力で確認）
+gcloud run services update-traffic islands --project <ID> --region asia-northeast1 --to-revisions <その revision>=100
+```
+
+`ISLANDS_AUTO_TRACK=0` の間は島の追跡が止まり、通知は出ない（名前の表示は旧コードの計算になる）。SQL の列は残したままでよい（古いコードは読まない・書かない）。
+
+**旧コードの追跡が走ってしまった場合だけ**（`ISLANDS_AUTO_TRACK=0` で止めていたなら流さず、そのまま新しい revision へ進めてよい）、新しいコードへ進める前に、保存されている AI の名前の印を消す補修 SQL を流す。**流すと全部の AI 島の名前がいったん従来名に戻り、新コードで付け直されるときに「名前が変わった」通知が出る**ので、本当に必要なときだけにする。
+
+```sql
+update public.islands_state set name_source = 'terms', name_basis = null, name_tried_at = null where name_source = 'ai';
+```
+
+そのうえで新しいコードの revision を出し、落ち着いてから `ISLANDS_AUTO_TRACK` を外す。
+
+**不適切な名前が付いたとき**
+- 名前を人が決めて固定する（`manual` の島は、コードが名前を変えず、AI も呼ばない）。島の id は `select id, name, name_source from public.islands_state where active order by created_at;` で調べる。
+
+```sql
+-- 固定する
+update public.islands_state set name = '手芸', name_source = 'manual' where id = '島のid';
+-- 固定をやめる（次の追跡から従来の名前に戻り、条件を満たせば AI が付け直す）
+update public.islands_state set name_source = 'terms', name_basis = null, name_tried_at = null where id = '島のid';
+```
+
+- 言葉そのものを禁止する：環境変数 `ISLAND_NAME_BLOCKLIST` にカンマ区切りで足す（例 `競馬,パチンコ`）。組み込みの禁止語は `core/island_namer.py` の `BLOCKED`。新しい revision を出すと効く。**禁止語は今後の答えに効く**。すでに付いた AI の名前が禁止語を含む場合は、次の読み込みから従来の名前に戻る（コードが再検査する）。付いた名前を別の名前にしたいときは、上の `manual` の SQL で直せる。
+
 ## 復旧とデータ保持
 
 切替前に隔離DBで両経路をリハーサルし、ID/本文/画像実体/反応/コメント/アカウントの保持を確認する。

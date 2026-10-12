@@ -6,6 +6,8 @@ ablation. The only domain-specific change in this project is the stop-word
 list in `stopwords.py`: the geometry parameters stay identical.
 """
 
+import os
+
 GEMINI_MODEL_NAME = "gemini-embedding-2"
 GEMINI_DIMENSIONS = 384
 GEMINI_TASK = "sentence similarity"
@@ -296,19 +298,51 @@ LANDMARK_CANDIDATES = (
 )
 
 # Notifications.
-NOTIFICATION_CATEGORIES = ("reply", "reaction", "connection", "similar", "island")
+# 2026-10-12: 「新しいつながり」(connection) と「おすすめ」(similar) の分類は
+# 画面から外した。古い画面が送ってきても 400 にしないよう、名前だけ残して無視する。
+NOTIFICATION_CATEGORIES = ("reply", "reaction", "island")
+LEGACY_NOTIFICATION_CATEGORIES = ("connection", "similar")
 NOTIFICATION_CATEGORY_OF = {
     "like": "reaction", "help": "reaction", "join": "reaction",
     "comment": "reply", "reply": "reply",
     "connection": "connection", "similar": "similar", "island": "island",
-    # Q34: a post nobody has answered yet, shown to people nearby. A
-    # recommendation like similar, and never pushed (see NEVER_PUSHED).
-    "quiet_post": "similar",
+    # Q34: a post nobody has answered yet, shown to people nearby. Since the
+    # similar switch went away it follows the island category (in the app
+    # only, never pushed; see NEVER_PUSHED and core/notifications.allows).
+    "quiet_post": "island",
 }
 # Types that stay inside the app whatever the settings say.
 NEVER_PUSHED = frozenset({"quiet_post"})
 REACTION_GROUP_MINUTES = 10
 ISLAND_NOTIFY_PER_DAY = 1
+
+# 島の名前を AI（Gemini）で付ける。島の追跡処理（10分に1回まで）の中だけで呼ぶ。
+# 鍵なし・失敗・時間切れのときは、島の投稿の上位語から作る従来の名前のまま。
+# 既定はオフ。移行 SQL を流し、新しいコードを出して確かめてから ISLAND_NAMING_ENABLED=1 にする。
+ISLAND_NAMING_ENABLED = os.environ.get("ISLAND_NAMING_ENABLED", "0") == "1"
+ISLAND_NAMING_MODEL = os.environ.get("ISLAND_NAMING_MODEL", "gemini-3.5-flash-lite")
+ISLAND_NAMING_TIMEOUT = 5.0        # 1回の呼び出しの秒数。越えたら従来の名前
+ISLAND_NAMING_MAX_PER_RUN = 4      # 1回の追跡で呼ぶ回数の上限（費用と時間の上限。聞き直しも数える）
+ISLAND_NAMING_SAMPLE_POSTS = 30    # プロンプトに入れる投稿の数
+ISLAND_NAMING_KEEP_OVERLAP = 0.7   # 顔ぶれ（投稿ID）の重なりがこれ以上なら前の名前を使い回す
+ISLAND_NAMING_RETRY_HOURS = 24     # 同じ島を（成功も失敗も）呼び直す最短の間隔
+ISLAND_NAMING_NOTIFY_OVERLAP = 0.4  # AI名→AI名の改名を通知するのは、投稿の重なりがこれ未満のときだけ
+ISLAND_NAMING_MIN_AUTHORS = 3      # AI で名前を付けるのは、書き手がこれ以上
+ISLAND_NAMING_MIN_POSTS = 5        # かつ投稿がこれ以上の島だけ（それ未満は従来方式）
+ISLAND_NAME_MAX_LENGTH = 8         # 「島」「大陸」を付ける前の最大字数
+# Activity genres an island can be called when no AI name exists (the default).
+# The live name is the genre closest in meaning to the island's words, instead of
+# its most frequent noun. Each is short, without 島/大陸 (the map adds those), and
+# at most ISLAND_NAME_MAX_LENGTH characters. Order breaks ties, so keep it stable.
+ISLAND_GENRES = (
+    "スポーツ", "アウトドア", "釣り", "旅", "ものづくり", "手芸", "料理", "農業",
+    "園芸", "ボランティア", "子育て", "教育", "学び", "読書", "語学", "音楽",
+    "アート", "写真", "映像", "映画", "ゲーム", "IT", "プログラミング", "AI",
+    "起業", "ビジネス", "地域づくり", "防災", "環境", "健康", "医療", "福祉",
+    "ペット", "ファッション", "美容", "グルメ", "建築", "科学", "歴史", "文章",
+    "ダンス", "演劇",
+)
+# 追加の禁止語は環境変数 ISLAND_NAME_BLOCKLIST（カンマ区切り）。組み込みの語は core/island_namer.py。
 
 # Q34 quiet posts (all provisional). A post with no like/help/join/comment
 # between these ages is shown, in the app only, to a few people who stand

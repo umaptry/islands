@@ -154,9 +154,8 @@ export function postChat(postId, { onCountChange, onReply } = {}) {
   return { node: wrap, refresh, destroy };
 }
 
-/** The input under a thread. `draft` starts it with a first line to send or
- * rewrite (Q44); replyTo(comment) makes the next message an answer to one. */
-export function chatInput(postId, { onSent, draft = '' } = {}) {
+/** The input under a thread. replyTo(comment) makes the next message an answer to one. */
+export function chatInput(postId, { onSent } = {}) {
   const limit = config().limits.comment_max;
   const field = el('input', {
     className: 'chat-input',
@@ -179,16 +178,13 @@ export function chatInput(postId, { onSent, draft = '' } = {}) {
   });
   const bar = el('div', { className: 'chat-reply-bar', attrs: { hidden: true } }, barText, barClose);
   let answering = null;   // the comment the next message replies to
-  let drafted = false;    // the field holds the suggested first line
 
   function showBar(text) {
     barText.textContent = text;
     bar.hidden = !text;
   }
   barClose.addEventListener('click', () => {
-    if (drafted) field.value = '';
     answering = null;
-    drafted = false;
     showBar('');
     sync();
     field.focus();
@@ -196,8 +192,6 @@ export function chatInput(postId, { onSent, draft = '' } = {}) {
 
   function replyTo(comment) {
     answering = comment;
-    if (drafted) field.value = '';
-    drafted = false;
     showBar(`${comment.author?.display_name || ''}さんへ返信`);
     sync();
     field.focus();
@@ -228,7 +222,6 @@ export function chatInput(postId, { onSent, draft = '' } = {}) {
     field.value = '';
     const answer = answering;
     answering = null;
-    drafted = false;
     showBar('');
     try {
       await data.addComment(postId, body, answer?.id || null);
@@ -243,13 +236,6 @@ export function chatInput(postId, { onSent, draft = '' } = {}) {
       sending = false;
       sync();
     }
-  }
-
-  if (draft) {
-    field.value = draft;
-    drafted = true;
-    showBar('声かけの候補です。直して送れます');
-    sync();
   }
 
   const node = el('div', { className: 'chat-compose' }, bar, el('div', { className: 'chat-input-row' }, field, send));

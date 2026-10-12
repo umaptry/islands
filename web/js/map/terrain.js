@@ -70,21 +70,19 @@ const mix = (a, b, t) => [
   Math.round(a[2] + (b[2] - a[2]) * t),
 ];
 
-// The game-board look: one line colour shared with the sprites' outlines, a
-// cliff face under every southern coast so the land reads as standing up out of
-// the water, and cel steps rather than gradients.
+// The game-board look: cel steps rather than gradients, and the sand meeting the
+// shallows through a line of surf. (There was a brown outline round the land and
+// a brown cliff under every southern coast; both read as a strip of mud between
+// the beach and the water, and were taken out on 2026-10-12.)
 const WHITE = [255, 255, 255];
 const FOAM = [240, 251, 255];
 const SHADE = [24, 46, 86];
-const LINE = [74, 52, 38];
-const CLIFF_TOP = [196, 142, 86];
-const CLIFF_FOOT = [150, 102, 62];
 
 /** Distance in pixels from the nearest set pixel of `mask` (chamfer 1/1.414). */
-function distanceFrom(mask, width, height, invert = false) {
+function distanceFrom(mask, width, height) {
   const far = 1e6;
   const out = new Float32Array(width * height);
-  for (let i = 0; i < out.length; i += 1) out[i] = (mask[i] ? !invert : invert) ? 0 : far;
+  for (let i = 0; i < out.length; i += 1) out[i] = mask[i] ? 0 : far;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const i = y * width + x;
@@ -122,8 +120,8 @@ function distanceFrom(mask, width, height, invert = false) {
  * The thresholds still decide everything - which band a point is, where the
  * coast is - so the ground means exactly what it did. What this adds is only
  * how it is drawn: water in three steps (open sea shows through, then the shelf,
- * then the bright shallows), foam on the coast, an outline, a cliff on the
- * south side, and light from the top-left in three flat steps.
+ * then the bright shallows), foam on the coast, and light from the top-left in
+ * three flat steps.
  *
  * `perScreen` is texture pixels per CSS pixel, so lines keep their on-screen
  * width at every zoom; `perWorld` is texture pixels per world unit, so the
@@ -137,11 +135,9 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
   const ring = mix(shallow, WHITE, 0.4);
   const shelfLimit = steps[0].limit * 0.35;
   const k = Math.max(0.25, perScreen);
-  const outline = Math.max(1, 1.3 * k);
   const foam = Math.max(1.5, 2.6 * k);
   const ringFrom = foam + 2.2 * k;
   const ringTo = ringFrom + 1.4 * k;
-  const cliff = Math.max(2, Math.round(5 * k));
 
   const n = width * height;
   const band = new Int8Array(n);
@@ -151,23 +147,7 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
     land[i] = band[i] >= 1 ? 1 : 0;
   }
 
-  // The cliff: water directly below land, `cliff` pixels deep.
-  const depth = new Uint8Array(n);
-  for (let x = 0; x < width; x += 1) {
-    let run = 255;
-    for (let y = 0; y < height; y += 1) {
-      const i = y * width + x;
-      if (land[i]) { run = 0; continue; }
-      if (run < 255) run += 1;
-      if (run <= cliff) depth[i] = run;
-    }
-  }
-  const solid = new Uint8Array(n);
-  for (let i = 0; i < n; i += 1) solid[i] = land[i] || depth[i] ? 1 : 0;
-
-  const toSolid = distanceFrom(solid, width, height);
-  const toWater = distanceFrom(solid, width, height, true);
-  const toEdge = distanceFrom(land, width, height, true);
+  const toLand = distanceFrom(land, width, height);
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -191,15 +171,11 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
           const below = band[i + width];
           if ((right >= 1 && right < own) || (below >= 1 && below < own)) rgb = mix(rgb, SHADE, 0.22);
         }
-        if (toEdge[i] <= outline) rgb = LINE;
-      } else if (depth[i]) {
-        rgb = depth[i] <= cliff * 0.55 ? CLIFF_TOP : CLIFF_FOOT;
-        if (toWater[i] <= outline) rgb = LINE;
-      } else if (toSolid[i] <= foam) {
+      } else if (toLand[i] <= foam) {
         rgb = FOAM;
       } else if (band[i] === 0) {
         rgb = field[i] < shelfLimit ? shelf : shallow;
-        if (toSolid[i] >= ringFrom && toSolid[i] <= ringTo && field[i] >= shelfLimit) rgb = ring;
+        if (toLand[i] >= ringFrom && toLand[i] <= ringTo && field[i] >= shelfLimit) rgb = ring;
         // Fade the outer edge of the shelf in over the first half-unit, or the
         // edge of the water is a staircase.
         alpha = Math.min(255, Math.round(((field[i] - floor) / 0.5) * 255));
@@ -211,6 +187,42 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
       pixels[at + 1] = rgb[1];
       pixels[at + 2] = rgb[2];
       pixels[at + 3] = alpha;
+    }
+  }
+}
+
+/** Anti-aliasing for a texture shown at about its own size: every pixel that
+ * differs from a neighbour becomes the average of the nine around it, so the
+ * steps of a coastline or a contour blend over one pixel. Averaged with alpha
+ * weights, or the transparent open sea (black, alpha 0) would darken the shelf. */
+function smoothEdges(pixels, width, height) {
+  const source = pixels.slice();
+  const same = new Uint32Array(source.buffer, source.byteOffset, width * height);
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const i = y * width + x;
+      const v = same[i];
+      if (v === same[i + 1] && v === same[i - 1] && v === same[i + width] && v === same[i - width]) continue;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let dy = -width; dy <= width; dy += width) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const at = (i + dy + dx) * 4;
+          const w = source[at + 3];
+          r += source[at] * w;
+          g += source[at + 1] * w;
+          b += source[at + 2] * w;
+          a += w;
+        }
+      }
+      const at = i * 4;
+      if (a === 0) continue;
+      pixels[at] = r / a;
+      pixels[at + 1] = g / a;
+      pixels[at + 2] = b / a;
+      pixels[at + 3] = a / 9;
     }
   }
 }
@@ -252,16 +264,39 @@ export function buildTerrain({ posts, cells = [], region, scale }) {
   const unit = Math.max(MIN_UNIT, Math.min(MAX_UNIT, stepped));
   const key = signature(posts, cells, region, unit);
   if (cache && cache.key === key) return cache;
+  const built = render({ posts, cells, region, scale, unit, padding: PADDING, limit: MAX_TEXTURE, trees: true });
+  if (built) cache = { ...built, key };
+  return built ? cache : null;
+}
 
-  const minX = region.minX - PADDING;
-  const minY = region.minY - PADDING;
-  const spanX = (region.maxX - region.minX) + PADDING * 2;
-  const spanY = (region.maxY - region.minY) + PADDING * 2;
+// The texture above covers every post, so close up it is stretched several
+// times and the coasts turn into staircases. Zoomed in, the map also asks for
+// this: the same ground for just the area around the screen, at the screen's
+// own resolution (up to DETAIL_MAX_UNIT texture pixels per world unit and
+// DETAIL_MAX_TEXTURE on a side). Not cached here: the map keeps the last one
+// while it still covers the screen, and builds it only once the camera stops.
+const DETAIL_MAX_UNIT = 16;
+const DETAIL_MAX_TEXTURE = 2048;
+
+export function buildDetail({ posts, cells = [], region, scale, pixelRatio = 1 }) {
+  const unit = Math.min(DETAIL_MAX_UNIT, (scale || 1) * pixelRatio);
+  return render({
+    posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, trees: false, smooth: true,
+  });
+}
+
+/** The field over `region` (plus `padding` world units), painted into a canvas
+ * of `unit` texture pixels per world unit, `limit` pixels at most on a side. */
+function render({ posts, cells, region, scale, unit, padding, limit, trees, smooth = false }) {
+  const minX = region.minX - padding;
+  const minY = region.minY - padding;
+  const spanX = (region.maxX - region.minX) + padding * 2;
+  const spanY = (region.maxY - region.minY) + padding * 2;
   if (spanX <= 0 || spanY <= 0) return null;
 
   // One texture budget for both axes, so a wide viewport does not get a tall
   // texture it cannot use.
-  const fit = Math.min(1, MAX_TEXTURE / (Math.max(spanX, spanY) * unit));
+  const fit = Math.min(1, limit / (Math.max(spanX, spanY) * unit));
   const scaled = unit * fit;
   const width = Math.max(1, Math.round(spanX * scaled));
   const height = Math.max(1, Math.round(spanY * scaled));
@@ -320,13 +355,13 @@ export function buildTerrain({ posts, cells = [], region, scale }) {
   const ctx = canvas.getContext('2d');
   const image = ctx.createImageData(width, height);
   paint(image.data, field, width, height, { perScreen: scaled / (scale || 1), perWorld: scaled });
+  if (smooth) smoothEdges(image.data, width, height);
   ctx.putImageData(image, 0, 0);
 
-  cache = {
-    key, canvas, minX, minY, scale: scaled, width, height,
-    trees: scatterTrees(field, width, height, minX, minY, scaled),
+  return {
+    canvas, minX, minY, scale: scaled, width, height,
+    trees: trees ? scatterTrees(field, width, height, minX, minY, scaled) : [],
   };
-  return cache;
 }
 
 // Trees, bushes and rocks stand on the ground the field already decided. A

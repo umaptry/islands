@@ -21,6 +21,8 @@ sys.path.insert(0, str(ROOT))
 for name in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY"):
     os.environ.pop(name, None)
 os.environ["KOTOBA_DISABLE_RATE_LIMIT"] = "1"
+# Island naming and embeddings must never reach the real Gemini from a test.
+os.environ.pop("GEMINI_API_KEY", None)
 # Tests call track_islands() themselves; a background step would still be
 # writing to the store a test has already swapped out.
 os.environ["ISLANDS_AUTO_TRACK"] = "0"

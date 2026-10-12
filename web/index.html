@@ -25,23 +25,99 @@
   <div class="spinner" role="status" aria-label="読み込み中"></div>
 </section>
 
-<!-- ============ 1. intro ============ -->
+<!-- ============ 1. welcome ============ -->
 <section id="welcome" class="screen tinted landing">
   <div class="scroller">
     <h1>islands</h1>
     <h2>同じ場の中に、<br>まだ知らない接点がある。</h2>
     <p>今すぐ参加しましょう。</p>
     <div id="welcomeOAuth"></div>
+    <div class="divider" id="welcomeDivider" hidden><span>または</span></div>
     <button class="btn btn-block" id="welcomeRegister">アカウント作成</button>
     <p class="returning">アカウントをお持ちの場合</p>
     <button class="btn btn-outline btn-block" id="welcomeLogin">ログイン</button>
     <button class="btn btn-quiet btn-block" id="welcomeBrowse">まずマップを見る</button>
   </div>
 </section>
-<section id="intro" class="screen tinted">
+
+<!-- ============ 2. sign in ============ -->
+<section id="auth" class="screen tinted">
+  <div class="scroller auth-scroll">
+    <h1 class="brand-inline">islands</h1>
+
+    <div class="auth-step" data-step="email">
+      <h2 class="screen-title">はじめる</h2>
+      <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
+      <div id="registerFields" hidden>
+        <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
+        <label class="field"><span class="label-text">所属組織<span class="hint-text">任意</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属組織"></label>
+      </div>
+      <label class="field">
+        <span class="label-text">メールアドレス</span>
+        <input class="input" id="authEmail" type="email" inputmode="email"
+               autocomplete="email" placeholder="you@example.com">
+      </label>
+      <div class="error" id="authError" role="alert"></div>
+      <button class="btn btn-block" id="authSend" disabled>パスコードを送る</button>
+      <div class="oauth" id="oauthRow" hidden>
+        <div class="divider"><span>または</span></div>
+      </div>
+    </div>
+
+    <div class="auth-step" data-step="code" hidden>
+      <h2 class="screen-title">パスコードを入力</h2>
+      <p class="lede">メールアドレスに届いたパスコードを入力してください。</p>
+      <p class="lede lede-sub" id="authSentTo"></p>
+      <div class="dev-code" id="authDevCode" hidden></div>
+      <label class="field">
+        <span class="label-text">パスコード</span>
+        <input class="input code-input" id="authCode" type="text" inputmode="numeric"
+               autocomplete="one-time-code" maxlength="8" placeholder="000000">
+      </label>
+      <div class="error" id="authCodeError" role="alert"></div>
+      <button class="btn btn-block" id="authVerify" disabled>次へ</button>
+      <button class="btn btn-quiet btn-block" id="authBack">メールアドレスを入れ直す</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. icon photo (and the name, for a sign-in that has none yet) ============ -->
+<section id="setup" class="screen tinted">
+  <div class="scroller">
+    <h2 class="screen-title" id="setupTitle">アイコンの写真を選びましょう</h2>
+    <p class="lede" id="setupLede">地図に出るのは、この写真と名前です。選ばなくても進めます。あとから変えられます。</p>
+
+    <div class="avatar-pick">
+      <span class="avatar-slot avatar-slot-large" id="setupAvatarPreview"></span>
+      <div class="avatar-actions">
+        <button class="btn btn-small btn-outline" id="setupAvatarPhoto" type="button">写真を選ぶ</button>
+        <button class="btn btn-small btn-quiet" id="setupAvatarClear" type="button" hidden>写真を外す</button>
+      </div>
+      <input type="file" id="setupAvatarFile" accept="image/*" hidden>
+    </div>
+
+    <div id="setupNameFields" hidden>
+      <label class="field">
+        <span class="label-text">名前<span class="hint-text">16字まで</span></span>
+        <input class="input" id="setupName" maxlength="16" placeholder="名前" autocomplete="nickname">
+      </label>
+      <label class="field">
+        <span class="label-text">所属組織<span class="hint-text">任意</span></span>
+        <input class="input" id="setupAffiliation" maxlength="32" placeholder="所属組織">
+      </label>
+    </div>
+    <div class="error" id="setupError" role="alert"></div>
+  </div>
+  <div class="form-footer">
+    <button class="btn btn-block" id="setupSave">次へ</button>
+  </div>
+</section>
+
+<!-- ============ 3b. guidance (new accounts only) ============ -->
+<section id="guidance" class="screen tinted">
   <div class="brand">islands</div>
   <div class="slides">
-    <div class="slide-track" id="slideTrack">
+    <div class="slide-track" id="guidanceTrack">
       <div class="slide">
         <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="中心の点のまわりを他の点が囲む図">
           <g fill="none" stroke="rgba(255,255,255,.45)" stroke-dasharray="3 5">
@@ -81,113 +157,38 @@
           <text x="148" y="126" font-size="14" text-anchor="middle">🏠</text>
         </svg>
         <h2>人が集まるほど、<br>島は大きく育つ</h2>
-        <p class="slide-note">いいね・手伝えるかも・参加したい・メッセージが、そのまま陸地になります。</p>
-      </div>
-    </div>
-  </div>
-  <div class="dots" id="dots"><i class="dot on"></i><i class="dot"></i><i class="dot"></i></div>
-  <div class="nav-row">
-    <button class="btn btn-quiet" id="introBack" hidden>戻る</button>
-    <button class="btn" id="introNext">次へ</button>
-  </div>
-</section>
-
-<!-- ============ 2. sign in ============ -->
-<section id="auth" class="screen tinted">
-  <div class="scroller auth-scroll">
-    <h1 class="brand-inline">islands</h1>
-
-    <div class="auth-step" data-step="email">
-      <h2 class="screen-title">はじめる</h2>
-      <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
-      <div id="registerFields" hidden>
-        <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
-        <label class="field"><span class="label-text">所属組織<span class="hint-text">任意</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属組織"></label>
-      </div>
-      <label class="field">
-        <span class="label-text">メールアドレス</span>
-        <input class="input" id="authEmail" type="email" inputmode="email"
-               autocomplete="email" placeholder="you@example.com">
-      </label>
-      <div class="error" id="authError" role="alert"></div>
-      <button class="btn btn-block" id="authSend" disabled>パスコードを送る</button>
-      <div class="oauth" id="oauthRow" hidden>
-        <div class="divider"><span>または</span></div>
-      </div>
-    </div>
-
-    <div class="auth-step" data-step="code" hidden>
-      <h2 class="screen-title">パスコードを入力</h2>
-      <p class="lede" id="authSentTo"></p>
-      <div class="dev-code" id="authDevCode" hidden></div>
-      <label class="field">
-        <span class="label-text">パスコード</span>
-        <input class="input code-input" id="authCode" type="text" inputmode="numeric"
-               autocomplete="one-time-code" maxlength="8" placeholder="000000">
-      </label>
-      <div class="error" id="authCodeError" role="alert"></div>
-      <button class="btn btn-block" id="authVerify" disabled>ログイン</button>
-      <button class="btn btn-quiet btn-block" id="authBack">メールアドレスを入れ直す</button>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 3. profile setup ============ -->
-<section id="setup" class="screen tinted">
-  <div class="scroller">
-    <h2 class="screen-title">プロフィール</h2>
-    <p class="lede">地図に出るのはこの名前とアイコンです。</p>
-
-    <div class="field">
-      <span class="label-text">アイコン</span>
-      <div class="avatar-row">
-        <span class="avatar-slot" id="setupAvatarPreview"></span>
-        <div class="avatar-actions">
-          <button class="btn btn-small btn-outline" id="setupAvatarPhoto" type="button">写真を選ぶ</button>
-          <button class="btn btn-small btn-quiet" id="setupAvatarClear" type="button" hidden>絵文字に戻す</button>
-        </div>
-        <input type="file" id="setupAvatarFile" accept="image/*" hidden>
-      </div>
-      <div class="icon-grid" id="setupIcons"></div>
-    </div>
-    <label class="field">
-      <span class="label-text">名前<span class="hint-text">16字まで</span></span>
-      <input class="input" id="setupName" maxlength="16" placeholder="ニックネーム" autocomplete="nickname">
-    </label>
-    <label class="field">
-      <span class="label-text">所属組織<span class="hint-text">任意</span></span>
-      <input class="input" id="setupAffiliation" maxlength="32" placeholder="会社・学校・チームなど">
-    </label>
-    <div class="error" id="setupError" role="alert"></div>
-  </div>
-  <div class="form-footer">
-    <button class="btn btn-block" id="setupSave" disabled>次へ</button>
-  </div>
-</section>
-
-<!-- ============ 3b. guidance (new accounts only) ============ -->
-<section id="guidance" class="screen tinted">
-  <div class="slides guidance-pages">
-    <div class="slide-track" id="guidanceTrack">
-      <div class="slide">
-        <h2>islandsへようこそ。</h2>
-        <p>islandsは、会社や交流会、スクールなど</p>
-        <p>すでに同じ場にいる人たちの活動・関心・経験・やりたいこと同士の関係性を</p>
-        <p>「島」として可視化するサービスです。</p>
+        <p class="slide-note">いいね・手伝えるかも・参加・メッセージが、そのまま陸地になります。</p>
       </div>
       <div class="slide">
-        <p>意味内容が近い投稿が集まってできる<br>島を通して</p>
-        <p>これまで見えていなかった<br>共通点や関わりしろを発見し</p>
-        <p>会話・相談・参加・小さな協働が<br>生まれるきっかけをつくります。</p>
-      </div>
-      <div class="slide">
-        <p>自分が取り組んでいる活動や、<br>過去に取り組んでいたこと</p>
-        <p>もしくはこれから挑戦してみたい<br>ことなどを投稿すると</p>
-        <p>自動で似た取り組みを行っている<br>人達が集まる"島"に投稿がプロットされ<br>共通点や関わりしろを発見できます。</p>
+        <svg class="slide-art" viewBox="0 0 200 200" role="img" aria-label="あなたから似ている人へ点線、交流した人へ実線がのびる図">
+          <ellipse cx="78" cy="122" rx="62" ry="44" fill="#4BB9FF"/>
+          <ellipse cx="78" cy="122" rx="51" ry="35" fill="#E6CF9B"/>
+          <ellipse cx="78" cy="120" rx="34" ry="22" fill="#81C784"/>
+          <ellipse cx="160" cy="44" rx="32" ry="24" fill="#4BB9FF"/>
+          <ellipse cx="160" cy="44" rx="24" ry="17" fill="#E6CF9B"/>
+          <ellipse cx="160" cy="43" rx="13" ry="8" fill="#81C784"/>
+          <g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 5">
+            <path d="M62 126 L100 104"/><path d="M62 126 L96 148"/><path d="M62 126 Q96 40 160 44"/>
+          </g>
+          <path d="M62 126 L36 106" stroke="rgba(74,52,38,.5)" stroke-width="5.5" stroke-linecap="round"/>
+          <path d="M62 126 L36 106" stroke="#F1DEB3" stroke-width="3.5" stroke-linecap="round"/>
+          <g fill="#fff" stroke="#4a3426" stroke-width="1.5">
+            <circle cx="100" cy="104" r="7"/><circle cx="96" cy="148" r="7"/><circle cx="36" cy="106" r="7"/><circle cx="160" cy="44" r="7"/>
+          </g>
+          <circle cx="62" cy="126" r="8" fill="#FF8A1F" stroke="#fff" stroke-width="2.5"/>
+          <g fill="#fff" font-size="10" font-weight="700" font-family="sans-serif" paint-order="stroke" stroke="rgba(23,46,74,.55)" stroke-width="3" stroke-linejoin="round">
+            <text x="62" y="146" text-anchor="middle">あなた</text>
+            <text x="112" y="101">似ている人</text>
+            <text x="36" y="91" text-anchor="middle">交流した人</text>
+            <text x="146" y="80" text-anchor="middle">別の島の似ている人</text>
+          </g>
+        </svg>
+        <h2>点線の先に、<br>話の合う人がいる</h2>
+        <p class="slide-note">点線はあなたにだけ見える、話が近い人の目印です。いいね・参加・メッセージで交流すると、実線の道や飛行機の航路に変わります。</p>
       </div>
     </div>
   </div>
-  <div class="dots" id="guidanceDots" aria-label="ガイドの進行状況"><i class="dot on"></i><i class="dot"></i><i class="dot"></i></div>
+  <div class="dots" id="guidanceDots" aria-label="ガイドの進行状況"><i class="dot on"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
   <div class="nav-row">
     <button class="btn btn-quiet" id="guidanceBack" hidden>戻る</button>
     <button class="btn" id="guidanceNext">次へ</button>
@@ -217,7 +218,8 @@
       <button class="btn btn-small btn-outline" id="composePromptUse" type="button">このお題で書く</button>
     </div>
 
-    <div class="field">
+    <div class="field compose-body">
+      <div class="field-title"><span>取り組み内容や活動</span><span class="required">必須</span></div>
       <textarea class="textarea" id="composeBody"
         placeholder="取り組みや活動内容（最大60文字）"></textarea>
       <div class="counter-row">
@@ -231,8 +233,10 @@
       </div>
     </div>
 
-    <div class="field">
-      <div class="slider">
+    <div class="field compose-heat">
+      <div class="field-title"><span>熱量</span><span class="required">必須</span></div>
+      <div class="heat-stage" id="composeHeat" aria-hidden="true"></div>
+      <div class="slider untouched" id="composeSlider">
         <div class="slider-track">
           <div class="slider-fill" id="composeFill"></div>
           <div class="slider-handle" id="composeHandle"></div>
@@ -241,20 +245,6 @@
         </div>
         <div class="slider-labels"><span>エンジョイ</span><span>ガチ</span></div>
       </div>
-    </div>
-
-    <div class="field compose-open">
-      <label class="switch-row">
-        <span class="switch-text">
-          <span class="switch-title">💬 話しかけていいよ</span>
-          <span class="switch-note">はじめての人からの声かけも歓迎、の印が付きます</span>
-        </span>
-        <input type="checkbox" class="switch" id="composeOpen">
-      </label>
-    </div>
-
-    <div class="field compose-tags">
-      <div class="checks" id="composeTags"></div>
     </div>
 
     <div class="field">
@@ -266,6 +256,10 @@
         </div>
         <input type="file" id="composeImageInput" accept="image/*" hidden>
       </div>
+    </div>
+
+    <div class="field compose-tags">
+      <div class="checks" id="composeTags"></div>
     </div>
 
     <div class="notice" id="composeMoveNotice" hidden>
@@ -285,16 +279,16 @@
   </div>
 </section>
 
-<!-- ============ 6. reveal ============ -->
+<!-- ============ 6. reveal (the first-post tryout only) ============ -->
 <section id="reveal" class="screen tinted">
   <div class="reveal-head">
-    <div class="reveal-title">あなたの島</div>
+    <div class="reveal-title">お試し：この文なら、ここに立ちます</div>
     <div class="reveal-island" id="revealIsland">—</div>
   </div>
   <div class="scroller" id="revealBody"></div>
   <div class="form-footer">
     <button class="btn btn-block" id="revealToMap">地図を見る</button>
-    <button class="btn btn-quiet btn-block" id="revealWrite" hidden>自分の言葉で書く</button>
+    <button class="btn btn-quiet btn-block" id="revealWrite">自分の言葉で書く</button>
   </div>
 </section>
 
@@ -316,11 +310,10 @@
         <div class="filter-panel" id="mapFilterPanel" hidden></div>
       </div>
     </div>
-    <div class="tabs" role="tablist">
-      <button class="tab on" data-view="map" role="tab">全体マップ</button>
-      <button class="tab" data-view="orbit" role="tab">まわりの人</button>
-    </div>
     <button class="digest-pill" id="mapDigest" type="button" hidden></button>
+    <button class="participant-stop" id="participantStop" type="button" hidden>
+      <span>参加者表示を中止</span><span aria-hidden="true">✕</span>
+    </button>
     <div class="trial-banner" id="trialBanner" hidden>
       <span class="trial-text">お試しの場所です。あなたにだけ見えています</span>
       <button class="btn btn-small" id="trialWrite" type="button">自分の言葉で書く</button>
@@ -332,12 +325,8 @@
     <i class="island-swatch" id="islandSwatch"></i><span id="islandText"></span>
   </div>
 
-  <div class="map-people">
-    <button class="people-button" id="mapPeople" type="button" hidden></button>
-  </div>
-
   <div class="map-controls">
-    <button class="round-button" id="mapRecenter" aria-label="自分の島に戻る">📍</button>
+    <button class="round-button" id="mapOverview" type="button" aria-label="地図全体を見る">🌐</button>
   </div>
   <div class="map-status" id="mapStatus" role="status" hidden>
     <span id="mapStatusText"></span>
@@ -375,11 +364,10 @@
         <span class="avatar-slot" id="editAvatarPreview"></span>
         <div class="avatar-actions">
           <button class="btn btn-small btn-outline" id="editAvatarPhoto" type="button">写真を選ぶ</button>
-          <button class="btn btn-small btn-quiet" id="editAvatarClear" type="button" hidden>絵文字に戻す</button>
+          <button class="btn btn-small btn-quiet" id="editAvatarClear" type="button" hidden>写真を外す</button>
         </div>
         <input type="file" id="editAvatarFile" accept="image/*" hidden>
       </div>
-      <div class="icon-grid" id="editIcons"></div>
     </div>
     <label class="field">
       <span class="label-text">名前</span>
@@ -390,6 +378,10 @@
       <input class="input" id="editAffiliation" maxlength="32" placeholder="所属組織">
     </label>
     <label class="field">
+      <span class="label-text">メールアドレス</span>
+      <input class="input" id="editEmail" type="email" readonly aria-readonly="true">
+    </label>
+    <label class="field">
       <span class="label-text">自己紹介</span>
       <textarea class="textarea short" id="editBio" maxlength="300" placeholder="自己紹介を入力"></textarea>
     </label>
@@ -397,16 +389,12 @@
       <span class="label-text">リンク</span>
       <input class="input" id="editLink" maxlength="200" placeholder="https://example.com">
     </label>
-    <label class="field">
-      <span class="label-text">メールアドレス</span>
-      <input class="input" id="editEmail" type="email" readonly aria-readonly="true">
-    </label>
     <div class="field feedback-settings">
       <span class="label-text">音と動き</span>
       <label class="switch-row">
         <span class="switch-text">
           <span class="switch-title">音</span>
-          <span class="switch-note">投稿したとき・つながったとき・通知が届いたときだけ、小さく鳴ります</span>
+          <span class="switch-note">BGM・波の音・効果音・通知音をまとめて切り替えます</span>
         </span>
         <input type="checkbox" class="switch" id="setSound">
       </label>

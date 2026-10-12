@@ -13,8 +13,9 @@ import { state, removePost } from '../state.js';
 import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
 import { react, openOnMap as openMapPost, refreshMyViews } from './map.js';
 import { postCard } from '../components/postcard.js';
+import { icon } from '../icons.js';
 import { setupAvatarField } from './auth.js';
-import { buzz, canBuzz, feedbackSettings, setFeedback, sound } from '../feedback.js';
+import { buzz, canBuzz, feedbackSettings, resumeAudio, setFeedback, sound } from '../feedback.js';
 import { CATEGORIES, defaultSettings, iosOtherBrowser, mergeSettings, settingsRows } from '../notify-rules.js';
 import { disablePush, enablePush, forgetDevice, pushStatus } from '../push.js';
 import { loadNotifySettings, useNotifySettings } from './notifications.js';
@@ -27,13 +28,13 @@ function header(account, { own } = {}) {
   const link = safeUrl(account.link_url);
   return el('div', { className: 'profile-head' },
     el('div', { className: 'profile-top' },
-      avatar(account, 78),
+      avatar(account, 80),
       own
         ? el('button', {
-          className: 'btn btn-small btn-outline',
-          text: 'プロフィールを編集',
+          className: 'profile-edit-button',
+          attrs: { type: 'button' },
           on: { click: () => navigate('#/me/edit') },
-        })
+        }, icon('pencil', 12), el('span', { text: 'プロフィールを編集' }))
         : null,
     ),
     el('h2', { className: 'profile-name' },
@@ -46,9 +47,8 @@ function header(account, { own } = {}) {
     link
       ? el('a', {
         className: 'profile-link',
-        text: account.link_url,
         attrs: { href: link, target: '_blank', rel: 'noopener noreferrer' },
-      })
+      }, icon('link', 16), el('span', { text: account.link_url }))
       : null,
   );
 }
@@ -86,7 +86,7 @@ function tabs(counts, onSelect) {
 
 /** The three counts islands hard-coded. Derived here from what is actually there.
  *
- * 協働 is "people who have reacted with 手伝えるかも or 参加したい to something
+ * 協働 is "people who have reacted with 手伝えるかも or 参加 to something
  * you wrote" - the two reactions that mean somebody offered to do a thing with
  * you, which is the only sense in which islands' "協働" tab ever meant anything.
  */
@@ -186,10 +186,10 @@ function paintTab(panel, tab, posts, own) {
   }
   const total = posts.reduce((sum, post) =>
     sum + (post.help_count || 0) + (post.join_count || 0), 0);
-  panel.append(el('p', { className: 'empty-note', text: '協働は「手伝えるかも」「参加したい」の反応を集計しています。' }));
+  panel.append(el('p', { className: 'empty-note', text: '協働は「手伝えるかも」「参加」の反応を集計しています。' }));
   panel.append(total
     ? el('div', { className: 'profile-summary' },
-      el('p', { text: `${total} 件の「手伝えるかも」「参加したい」が届いています。` }),
+      el('p', { text: `${total} 件の「手伝えるかも」「参加」が届いています。` }),
       ...posts.filter((post) => (post.help_count || 0) + (post.join_count || 0)).map((post) =>
         el('button', {
           className: 'list-row', attrs: { type: 'button' },
@@ -199,7 +199,7 @@ function paintTab(panel, tab, posts, own) {
             el('div', { className: 'list-row-title', text: post.body.slice(0, 24) }),
             el('div', {
               className: 'list-row-sub',
-              text: `手伝えるかも ${post.help_count || 0}・参加したい ${post.join_count || 0}`,
+              text: `手伝えるかも ${post.help_count || 0}・参加 ${post.join_count || 0}`,
             }),
           ),
         )))
@@ -246,7 +246,8 @@ export function setupProfileEdit() {
   // a sample of what was just turned on, so nobody has to save to find out.
   $('setSound').addEventListener('change', (event) => {
     setFeedback({ sound: event.target.checked });
-    if (event.target.checked) sound('notify');
+    // Wait for the audio to wake up, or the sample is dropped silently.
+    if (event.target.checked) resumeAudio().then(() => sound('notify'));
   });
   $('setVibrate').addEventListener('change', (event) => {
     setFeedback({ vibrate: event.target.checked });
@@ -269,7 +270,10 @@ export function setupProfileEdit() {
     state.myViews = {};
     state.trialPost = null;
     state.myPosts = [];
+    state.neighbors = new Map();
     state.activePostId = null;
+    state.quietPost = undefined;
+    window.dispatchEvent(new Event('islands:signout'));
     state.reactions = new Set();
     navigate('#/auth');
   });
@@ -374,7 +378,7 @@ async function saveKinds() {
   const asked = edits;
   try {
     const result = await api.put('/api/notification-settings', { settings: settingsRows(state.notifySettings) });
-    if (asked === edits) useNotifySettings(result.settings);
+    if (asked === edits) useNotifySettings(result.settings, result.quiet_post);
   } catch {
     if (asked !== edits) return;
     toast('通知の設定を保存できませんでした。もう一度お試しください。');
@@ -389,7 +393,7 @@ function kindChanged() {
   });
   edits += 1;
   // The badge and band follow at once; the server a moment later, in one go.
-  useNotifySettings(settings);
+  useNotifySettings(settings, state.quietPost);
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveKinds, SAVE_WAIT_MS);
 }
@@ -429,7 +433,7 @@ function setupNotifyFields() {
       paintDevice(next);
       if (next === 'on') {
         toast('この端末に通知が届くようになりました。');
-        sound('notify');
+        resumeAudio().then(() => sound('notify'));
       }
     } catch {
       toast('この端末を登録できませんでした。もう一度お試しください。');

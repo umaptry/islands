@@ -2,14 +2,18 @@
 //
 // islands' 投稿画面, with its four tag checkboxes and its エンジョイ↔ガチ slider,
 // plus the two things that only exist because the coordinates mean something:
-// the "this is being placed" animation, and the reveal that tells you which
-// island you landed on and who is nearest.
+// the "this is being placed" animation, and then the map, where the new post
+// lands on its island.
 //
 // Stage 5 added the small things around writing: a prompt for the week (Q37),
-// a "talk to me" switch that is really the first tag (Q45), and the first post
-// made by tapping an example sentence. The example is placed but never saved
+// and the first post made by tapping an example sentence. "Talk to me" (Q45) is
+// the first of the four tag checks, as in the mock. The example is placed but never saved
 // (Q40): it stands on the map as a ghost only this browser sees, until the
 // person writes in their own words or closes it.
+//
+// Following the mock (モック②), the post cannot be sent until the heat slider
+// has been moved once, and a HeatObject above the slider shows what the number
+// looks like on the map. The body stays at 60 characters.
 //
 // The image is downscaled and re-encoded in the browser before it is uploaded
 // (see image.js). A 4MB phone photo would be the single biggest thing this app
@@ -22,12 +26,10 @@ import { navigate, screen, show } from '../router.js';
 import { state, upsertPost } from '../state.js';
 import { setOnboardingStep } from '../onboarding.js';
 import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
-import { postRow } from '../components/postcard.js';
 import { buzz, moment } from '../feedback.js';
+import { heatObject } from '../components/heatobject.js';
 import { ripple } from '../map/index.js';
 import { openOnMap, showTrial } from './map.js';
-
-const OPEN_KEY = 'islands.openDefault';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -39,6 +41,8 @@ let previewUrl = null;
 let requestKey = null;
 let requestBody = null;
 let firstPost = false;
+let touched = false;     // the heat slider has been moved (a new post cannot go without)
+let heat = null;         // the HeatObject above the slider
 
 // ---------------------------------------------------------------- image
 
@@ -67,45 +71,29 @@ function paintCounter() {
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
-  $('composeSubmit').disabled = submitting || length < min || length > max;
+  $('composeSubmit').disabled = submitting || length < min || length > max || !touched;
 }
 
 function paintMotivation() {
   const value = Number($('composeMotivation').value);
   const color = motivationColor(value);
+  // Until it has been moved the bar shows no fill and no handle, and the ball
+  // is grey: the number is only an answer once somebody has given it.
+  $('composeSlider').classList.toggle('untouched', !touched);
   $('composeFill').style.width = `${value}%`;
   $('composeFill').style.background = `linear-gradient(to right, #ffffff, ${color})`;
   $('composeHandle').style.left = `calc(${value}% - 2px)`;
   $('composeHandle').style.backgroundColor = color;
+  heat.set(value, !touched);
 }
 
 function selectedTags() {
-  const tags = $$('#composeTags .check.on').map((node) => node.dataset.tag);
-  return $('composeOpen').checked ? [config().open_tag, ...tags] : tags;
-}
-
-/** The last choice of "talk to me", so it need not be set on every post. */
-function openByDefault() {
-  try {
-    return localStorage.getItem(OPEN_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function rememberOpen(on) {
-  try {
-    localStorage.setItem(OPEN_KEY, on ? '1' : '0');
-  } catch {
-    // Not remembered; the switch still works for this post.
-  }
+  return $$('#composeTags .check.on').map((node) => node.dataset.tag);
 }
 
 function paintTags(selected = []) {
   const box = clear($('composeTags'));
-  const open = config().open_tag;
-  $('composeOpen').checked = selected.includes(open);
-  config().tags.filter((tag) => tag !== open).forEach((tag) => {
+  config().tags.forEach((tag) => {
     const node = el('button', {
       className: `check${selected.includes(tag) ? ' on' : ''}`,
       attrs: { type: 'button', role: 'checkbox', 'aria-checked': selected.includes(tag) },
@@ -117,6 +105,7 @@ function paintTags(selected = []) {
     node.addEventListener('click', () => {
       const on = node.classList.toggle('on');
       node.setAttribute('aria-checked', String(on));
+      buzz('tap');
     });
     box.append(node);
   });
@@ -143,13 +132,18 @@ function paintExamples(show) {
 
 export function setupCompose() {
   const body = $('composeBody');
-  $('composeTags').closest('.field').before($('composeImageBtn').closest('.field'));
+  heat = heatObject(96);
+  $('composeHeat').append(heat.node);
   body.addEventListener('input', paintCounter);
-  $('composeMotivation').addEventListener('input', paintMotivation);
-  $('composeOpen').addEventListener('change', (event) => {
-    rememberOpen(event.target.checked);
-    buzz('tap');
-  });
+  // 'input' while dragging, 'change' for a keyboard or an assistive tool: either
+  // counts as having answered.
+  const moved = () => {
+    touched = true;
+    paintMotivation();
+    paintCounter();
+  };
+  $('composeMotivation').addEventListener('input', moved);
+  $('composeMotivation').addEventListener('change', moved);
   $('composePromptUse').addEventListener('click', () => {
     const text = config().weekly_prompt?.text;
     if (!text) return;
@@ -186,7 +180,7 @@ export function setupCompose() {
   screen('compose', {
     leave() {
       if (draftKey) drafts.set(draftKey, { body: body.value, tags: selectedTags(), motivation: $('composeMotivation').value,
-        imagePath, imageBlob, requestKey, requestBody });
+        touched, imagePath, imageBlob, requestKey, requestBody });
     },
     enter: async (params, query) => {
       const first = query && query.get('first') === '1';
@@ -202,6 +196,7 @@ export function setupCompose() {
       imageBlob = null;
       imagePath = null;
       submitting = false;
+      touched = false;
 
       if (params && params.id) {
         editing = state.myPosts.find((post) => post.id === params.id)
@@ -228,13 +223,16 @@ export function setupCompose() {
       $('composeMotivation').value = editing
         ? editing.motivation
         : config().limits.motivation_default;
-      paintTags(editing ? (editing.tags || []) : openByDefault() ? [config().open_tag] : []);
+      // A post that exists already has an answer; only a new one has to be given one.
+      touched = Boolean(editing);
+      paintTags(editing ? (editing.tags || []) : []);
       paintPrompt(!editing && !firstPost);
       paintExamples(firstPost && !editing);
       imagePath = editing ? (editing.image_path || null) : null;
       paintImage(imagePath ? data.imageUrl(imagePath) : null);
       if (draft) {
         $('composeMotivation').value = draft.motivation;
+        touched = Boolean(draft.touched);
         paintTags(draft.tags);
         imagePath = draft.imagePath;
         imageBlob = draft.imageBlob;
@@ -245,6 +243,13 @@ export function setupCompose() {
       paintMotivation();
     },
   });
+}
+
+/** show('compose') brings the bottom nav back; the first post is still in the way of it. */
+function keepNavHidden() {
+  if (!firstPost) return;
+  $('bottomNav').hidden = true;
+  document.body.classList.remove('has-nav');
 }
 
 async function submit() {
@@ -287,11 +292,14 @@ async function submit() {
     drafts.delete(draftKey);
     draftKey = '';
     moment('post');
-    if (firstPost) await landOnMap(result);
-    else showReveal(result);
+    // Straight onto the map, where the new ground rises and the face lands
+    // (as in the design mock). The 「あなたの島」 page that used to come first
+    // had only the island's name left on it once its list of near people went.
+    await landOnMap(result);
   } catch (error) {
     $('composeError').textContent = error.message;
     show('compose');
+    keepNavHidden();
   } finally {
     submitting = false;
     $('composeSubmit').textContent = editing ? '保存' : '投稿する';
@@ -315,13 +323,15 @@ async function tryExample(text) {
     const result = await runPlacement({ body: text }, { tryout: true });
     state.trialPost = {
       x: result.x, y: result.y, body: text,
-      icon_id: state.account?.icon_id, island: result.island,
+      icon_id: state.account?.icon_id, avatar_path: state.account?.avatar_path,
+      island: result.island,
     };
     setOnboardingStep(null);
-    showReveal(result, { trial: true });
+    showTrialReveal(result);
   } catch (error) {
     $('composeError').textContent = error.message;
     show('compose');
+    keepNavHidden();
   } finally {
     submitting = false;
     paintCounter();
@@ -367,60 +377,29 @@ async function runPlacement(payload, { tryout = false } = {}) {
   }
 }
 
-// ---------------------------------------------------------------- reveal
+// ---------------------------------------------------------------- tryout
 
-let revealTarget = null;
-let revealTrial = false;
-
-function showReveal(result, { trial = false } = {}) {
-  revealTarget = result;
-  revealTrial = trial;
+/** Where the tried-out sentence would stand, before it is shown on the map.
+ * (A real post goes straight to the map: see submit.) */
+function showTrialReveal(result) {
   const island = result.island;
-  $('revealIsland').textContent = island ? island.label : 'まだ名前のない島';
-  $('revealIsland').style.color = island ? islandColor(island.cluster_id) : '';
-  document.querySelector('#reveal .reveal-title').textContent = trial ? 'お試し：この文なら、ここに立ちます' : 'あなたの島';
-  $('revealWrite').hidden = !trial;
-
-  const container = clear($('revealBody'));
-  if (trial) {
-    container.append(el('p', {
-      className: 'trial-note',
-      text: `「${result.body}」\nこの文は保存していません。地図では、あなたにだけ見えます。`,
-    }));
+  // The name stays white on the sea; the island's own colour is the dot beside it.
+  const nameBox = clear($('revealIsland'));
+  if (island) {
+    const dot = el('span', { className: 'reveal-swatch' });
+    dot.style.background = islandColor(island.cluster_id);
+    nameBox.append(dot);
   }
-  if (!result.neighbors || !result.neighbors.length) {
-    container.append(el('p', {
-      className: 'empty-note',
-      text: 'まだあなただけです。URLを送ると相手も地図に出ます。',
-    }));
-  } else {
-    container.append(el('div', { className: 'section-label', text: 'あなたに近い人' }));
-    result.neighbors.forEach((person, position) => {
-      const card = postRow(person, {
-        trailing: el('span', { className: 'list-row-score num' },
-          el('b', { text: String(person.similarity ?? '—') }),
-          el('small', { text: '%' })),
-        onClick: () => openOnMap(person.id),
-      });
-      card.style.animationDelay = `${position * 150}ms`;
-      card.classList.add('appear');
-      container.append(card);
-
-      if (person.shared && person.shared.length) {
-        container.append(el('div', { className: 'chips indent' },
-          person.shared.map((word) => el('span', { className: 'chip', text: word }))));
-      }
-    });
-  }
+  nameBox.append(el('span', { text: island ? island.label : 'まだ名前のない島' }));
+  clear($('revealBody')).append(el('p', {
+    className: 'trial-note',
+    text: `「${result.body}」\nこの文は保存していません。地図では、あなたにだけ見えます。`,
+  }));
   show('reveal');
 }
 
 export function setupReveal() {
-  $('revealToMap').addEventListener('click', () => {
-    if (revealTrial) showTrial();
-    else if (revealTarget) landOnMap(revealTarget);
-    else navigate('#/map');
-  });
+  $('revealToMap').addEventListener('click', () => showTrial());
   $('revealWrite').addEventListener('click', () => navigate('#/post'));
   screen('reveal', {});
   screen('computing', {});

@@ -130,7 +130,7 @@ erDiagram
         text affiliation "所属 — 大学名や会社名など、32文字以下。未設定可（null）"
         text bio "自己紹介文 — 300文字以下の自由記述。投稿の本文とは別物"
         text link_url "外部リンク — SNSやWebサイトのURL、200文字以下。未設定可"
-        text icon_id "絵文字アバターの番号 — フロントのEMOJI配列のインデックス。デフォルトは0"
+        text icon_id "'photo'（写真のみ・絵文字なし）、または従来の絵文字の番号（数字）。デフォルトは0"
         text avatar_path "アップロードしたアバター画像のパス — 設定するとicon_idより優先される"
         timestamptz created_at "アカウントを最初に作成した日時 — 自動設定される"
         timestamptz updated_at "プロフィールを最後に更新した日時 — 更新時にトリガーで自動更新"
@@ -213,7 +213,7 @@ erDiagram
 |---|---|
 | `id` | Supabaseの認証システム（`auth.users`）と連動するので、ログインすれば自動でこのIDが付きます。ユーザーが退会（`auth.users`を削除）すると、`ON DELETE CASCADE` で関連データも自動削除されます。 |
 | `display_name` | 地図上に表示される名前です。**唯一の必須項目**で、空にはできません（`CHECK (length BETWEEN 1 AND 16)`）。これがないと地図にドットだけ表示されてしまい、誰だかわかりません。 |
-| `icon_id` / `avatar_path` | どちらもアバターですが使い分けがあります。`icon_id` はアプリ内蔵の絵文字から選ぶもの（デフォルト）、`avatar_path` はユーザーが自分の写真をアップロードしたときのパスです。`avatar_path` が設定されていればそちらが優先されます。 |
+| `icon_id` / `avatar_path` | どちらもアバターですが使い分けがあります。`icon_id` は `'photo'`（写真だけを使う。2026-10-12 以降の画面はこれを保存する）か、数字なら従来の絵文字の番号（画面からは選ばない。古い行に残る）、`avatar_path` はユーザーが自分の写真をアップロードしたときのパスです。`avatar_path` が設定されていればそちらが優先されます。 |
 | `topics` / `goal` / `seeking` / `offering` | 話題（`text[]`・8個まで・各1〜12字、`topics_ok()` で確認）、目標・探している相手・手伝えること（各60字まで）。「似ている人」の計算に使います。**サーバー（`PUT /api/account/me`）だけが書けます**。ブラウザに `update` 権限を渡すと、文字だけ変わってベクトルが古いまま残るためです。 |
 | `vec_topics` / `vec_goal` / `vec_seeking` / `vec_offering` | 上の4項目を埋め込んだ `vector(384)`。**誰にも読めません**（`anon`・`authenticated` への列の権限から外しています）。読むのは `service_role` の RPC `profile_vectors()` だけです。 |
 | `last_seen_at` | 前回来た日時。留守中の一覧（`/api/changes/digest`）の起点に使います。他人に来訪の時刻を知られないよう、これも列の権限から外しています。 |
@@ -344,23 +344,23 @@ PRIMARY KEY (post_id, actor_id, kind)
 | `join` | 誰かが投稿に「参加したい」した | 投稿の著者 |
 | `comment` | 誰かが投稿にコメントを書いた | 投稿の著者 |
 | `reply` | 誰かが自分のコメントに返信した | 返信先のコメントの書き手（投稿の著者が別の人なら、著者には `comment` が届く。同じ人に2通は送らない） |
-| `connection` | 2人のあいだで最初の交流が起きた（`pair_interaction_count(a, b)` が1になった） | 2人の両方（その2人で1回だけ） |
-| `similar` | 似ている度合いが0.75以上の人が新しく来た | 似ている側（サーバーが作る。1日3件まで） |
+| `connection` | **廃止（2026-10-12）**。作らない。過去の行は残る | - |
+| `similar` | **廃止（2026-10-12）**。サーバーは作らない。過去の行は残る | - |
 | `island` | 自分の島が合流・分割・名称変更・段の変化をした | 島の住人（サーバーが作る。1島1日1件）。`actor_id` は `null`、`island_id`・`event_id`・`payload`（名前・きっかけ）が入る |
-| `quiet_post` | 24時間〜7日たっても反応のない投稿があった（Q34・2026-10-09） | 同じ島か近い2島に投稿している人のうち、14日以内に来た人から近い順に3人まで（サーバーが作る。1人1日1件・1投稿1回）。**アプリの中だけ**で push しない。`actor_id` は投稿の著者。文言は「近くの島に、話が合いそうな投稿があります。」で、反応がないとは書かない。著者には何も届かない |
+| `quiet_post` | 24時間〜7日たっても反応のない投稿があった（Q34・2026-10-09） | 同じ島か近い2島に投稿している人のうち、14日以内に来た人から近い順に3人まで（サーバーが作る。1人1日1件・1投稿1回）。**アプリの中だけ**で push しない。アプリ内で出すかは「島の変化」（`island`）のアプリ内スイッチに従う（下の「quiet_post の切り替え」）。`actor_id` は投稿の著者。文言は「近くの島に、話が合いそうな投稿があります。」で、反応がないとは書かない。著者には何も届かない |
 
 `actor_id` は `island` のために `null` を許すようになりました（2026-10-06）。
 
-**通知の分類と切り替え**：種類は5つの分類にまとめ、分類ごとにアプリ外（push）とアプリ内を切り替えられます（`notification_settings`。行がなければ両方オン）。
+**通知の分類と切り替え**：種類は3つの分類にまとめ（2026-10-12に「新しいつながり」「おすすめ」を外した。API の `categories` は `reply`・`reaction`・`island` の3つ）、分類ごとにアプリ外（push）とアプリ内を切り替えられます（`notification_settings`。行がなければ両方オン）。
 
 | 分類 | 含む `type` |
 |---|---|
 | `reply` | `comment`・`reply` |
 | `reaction` | `like`・`help`・`join` |
-| `connection` | `connection` |
-| `similar` | `similar`・`quiet_post`（おすすめ。push は分類の設定に関係なく送らない） |
-| `island` | `island` |
+| `island` | `island`・`quiet_post`（`quiet_post` はアプリ内だけ。push しない） |
+| （分類なし） | 過去の `connection`・`similar` の行（一覧には残る。切り替えなし） |
 
+**quiet_post の切り替え**（2026-10-12）：「おすすめ」（`similar`）のスイッチを廃止したので、`quiet_post` は「島の変化」のアプリ内スイッチに従う。アプリ内に出す条件は、(1) `island` の `in_app` がオン、かつ (2) 以前 `similar` の `in_app` をオフにして保存した人（`notification_settings` に `similar` の行が残っている）ではない、の両方。(2) の人は `island` をオンにしても `quiet_post` はオフのまま。push には出さない（`island` の `push` にも従わない）。`GET` / `PUT /api/notification-settings` の返り値に、この結果が読み取り専用の最上位の `quiet_post`（真偽値）として入る（`settings` の形は変えない）。DB の `notification_feed()` が返す `category` は `quiet_post` を今も `similar` と書く（07 の pgTAP が固定しているため）ので、画面は `type` で見分ける。
 アプリ内を切った分類は、未読の数と印にだけ効きます（一覧には残ります）。push を切った分類は、アプリを閉じているときの端末の通知を出しません（§ push の口）。同じ投稿へのリアクションで、前のものから10分以内に続いたものは、読むときに1件にまとめます（RPC `notification_feed`。メモリ保存では `core/notifications.py` が同じ規則で動きます）。
 
 > [!TIP]
@@ -419,9 +419,9 @@ PRIMARY KEY (post_id, actor_id, kind)
 
 | 表 | 何を入れるか | 誰が読める・書ける |
 |---|---|---|
-| `notification_settings` | `account_id`・`category`（5分類）・`push`・`in_app`。主キーは `account_id`＋`category`。行がなければ両方オン | 本人だけ読む・作る・`push`/`in_app` を変える |
+| `notification_settings` | `account_id`・`category`（5分類。API は3分類で、DB の CHECK は旧5分類のまま）・`push`・`in_app`。主キーは `account_id`＋`category`。行がなければ両方オン | 本人だけ読む・作る・`push`/`in_app` を変える |
 | `push_subscriptions` | Web Push の購読先：`endpoint`・`p256dh`・`auth`・`user_agent` | 本人だけ読む・消す。作るのはサーバーだけ（`POST /api/push/subscribe` が届け先を確かめてから。2026-10-09 にブラウザの INSERT を外した） |
-| `islands_state` | 追跡している島：名前・段（0〜4）・成長点（累計・直近14日・見せる値）・投稿と書き手の ID・重心・ランドマーク・静かか | 誰でも読める。書くのはサーバーだけ |
+| `islands_state` | 追跡している島：名前（`name_source`＝`terms` 従来 / `ai` / `manual` 人が固定、`name_basis`＝AI が名前を付けた（または試した）ときの投稿ID、`name_tried_at`＝AI に最後に聞いた時刻。2026-10-12）・段（0〜4）・成長点（累計・直近14日・見せる値）・投稿と書き手の ID・重心・ランドマーク・静かか | 誰でも読める。書くのはサーバーだけ |
 | `island_events` | 島の変化：`kind`・`cause`（200字まで）・`place`・`before`・`after` | 誰でも読める。書くのはサーバーだけ |
 | `island_runs` | 1行だけの表。島の追跡をどのサーバーが実行するかの取り合い（`last_run_at`） | ブラウザからは読めない |
 
@@ -461,7 +461,7 @@ PRIMARY KEY (post_id, actor_id, kind)
 |---|---|---|
 | `mark_active(seconds)` | `authenticated` | 「これから `seconds` 秒は画面に出している」。最大120秒。0以下なら行を消す（画面を離れた） |
 | トリガー `notifications_push` | `notifications` への INSERT の文ごとに1回 | `push_config.dispatch_url` へ中身のない POST を pg_net で送る（`POST /api/push/dispatch`）。`quiet_post` だけの文では送らない。失敗しても通知の書き込みは止めない |
-| `notification_feed(limit_n)` | `authenticated` | 作り直した。`quiet_post` は分類 `similar` に並ぶ（ほかは前と同じ） |
+| `notification_feed(limit_n)` | `authenticated` | 作り直した。`quiet_post` の `category` は `similar` のまま返る（2026-10-12 以降、設定は `island` に従う。画面は `type` で判断する） |
 
 `notifications` を Realtime（変更をブラウザへすぐ流す仕組み）の publication に足しました。届くのは `notifications_read` の方針で読める本人の行だけです。
 
@@ -558,7 +558,7 @@ flowchart TD
 
 **2026-10-06 に足したこと**
 
-- `on_reaction_change` と `on_comment_change` は、通知を作ったあと `pair_interaction_count(操作した人, 相手)` を数え、1（2人の最初の交流）なら `notify_new_connection` が2人の両方に `connection` を送ります。
+- `on_reaction_change` と `on_comment_change` は、通知を作ったあと `notify_new_connection` を呼びますが、2026-10-12（`20261012000000_ai_island_names_no_connection.sql`）から何もしない関数です。`connection` は作られません。
 - `on_comment_change` は `reply_to` を確かめ（同じ投稿のコメントでなければ `23514`）、返信先の書き手に `reply`、投稿の著者が別の人なら著者に `comment` を送ります。
 - 新しい5つの表にも、ほかの表と同じ管理用トリガー（`check_map_maintenance`。地図の作り直し中は書き込みを止める）を付けています。
 
@@ -670,16 +670,16 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `POST` | `/api/posts` | ✅ 必要 | 投稿を作成 | ユーザーが地図にピンを立てる |
 | `PATCH` | `/api/posts/{id}` | ✅ 必要 | 投稿を編集 | 本文やタグを書き換える |
 | `DELETE` | `/api/posts/{id}` | ✅ 必要 | 投稿を削除 | 地図からピンを取り除く |
-| `GET` | `/api/neighbors` | ❌ 不要 | 近い投稿の取得 | プロフィールシートの「似ている人」表示 |
+| `GET` | `/api/neighbors` | ❌ 不要 | 近い投稿の取得 | 画面からは未使用（2026-10-12） |
 | `GET` | `/api/pair` | ❌ 不要 | 2投稿の類似度 | 2人を選んだときの「似てる度」表示 |
 | `GET` | `/api/account/me` | ✅ 必要 | 自分のプロフィール取得 | ログイン直後のプロフィール確認 |
 | `PUT` | `/api/account/me` | ✅ 必要 | プロフィール更新 | 名前・所属・自己紹介・話題・目標などの編集 |
 | `GET` | `/api/connections?person={id}` | ❌ 不要 | 人と人の線 | 地図に線を引く（`person` で1人に絞れる） |
-| `GET` | `/api/similar-people?account={id}` | △ どちらでも | 似ている人の上位5人 | `account` を省くとログイン中の本人 |
-| `GET` | `/api/people/{id}/card?viewer={id}` | △ どちらでも | 人の札 | 地図で人を選んだときの札（共通点と声かけの一言つき） |
+| `GET` | `/api/similar-people?account={id}` | △ どちらでも | 似ている人の上位5人 | 画面からは未使用（2026-10-12）。`account` を省くとログイン中の本人 |
+| `GET` | `/api/people/{id}/card?viewer={id}` | △ どちらでも | 人の札 | 画面からは未使用（2026-10-12）。共通点と声かけの一言つき |
 | `GET` | `/api/changes?since={日時}&limit=50` | ❌ 不要 | 島の変化の記録 | 変化の一覧を出す |
 | `GET` | `/api/changes/digest` | ✅ 必要 | 留守中の変化（上位5件） | 久しぶりに来た人に見せる |
-| `GET` / `PUT` | `/api/notification-settings` | ✅ 必要 | 通知の切り替え | 分類ごとの push・アプリ内のオンオフ |
+| `GET` / `PUT` | `/api/notification-settings` | ✅ 必要 | 通知の切り替え | 分類（reply・reaction・island の3つ）ごとの push・アプリ内のオンオフ。返り値には読み取り専用の `quiet_post`（真偽値）も入る。古い画面が送る `connection`・`similar` は無視（400 にしない） |
 | `POST` | `/api/posts/preview` | ✅ 必要 | 例文のお試し（保存しない） | 最初の投稿の練習で「この文ならここに立つ」を見せる |
 | `POST` | `/api/posts/{id}/view` | △ どちらでも | 見られた数を1つ記録 | 他の人の投稿を開いたとき |
 | `GET` | `/api/me/views` | ✅ 必要 | 自分の投稿ごとの見られた数 | 自分の投稿の札に「N人が見ました」 |
@@ -819,6 +819,9 @@ GET /api/health HTTP/1.1
 | `store_ok` | `boolean` | データベースと正常に通信できているか。`false` なら DB 障害の可能性あり |
 | `posts` | `integer` \| `null` | 現在の投稿数。DBと通信できない場合は `null` |
 | `model_version` | `string` | 使用中のモデルバージョン識別子 |
+| `island_names_ready` | `boolean` | `islands_state` の `name_source` 列が読めるか（2026-10-12 の移行 SQL が流れているか）。ローカル（memory）は常に `true`。結果は約60秒キャッシュ |
+| `ready` | `boolean` | 昇格してよい状態か。`store_ok`・版の一致・保守中でない・`island_names_ready` のすべてが `true` のとき `true`。CI の `verify_release.py --phase ready` が見る |
+| `not_ready_reasons` | `string[]` | `ready` が `false` の理由（`store_unreachable`・`artifact_version_mismatch`・`maintenance`・`islands_state.name_source column missing (run migration 20261012000000)`）。`ready` なら空 |
 
 > [!TIP]
 > `ok: true` でも `store_ok: false` の場合、サーバー自体は動いているがデータベースとの通信に問題があります。投稿の作成や編集は一時的にエラーになりますが、しばらく待てば自動復旧することが多いです。
@@ -875,6 +878,7 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 | `post_count` | `integer` | この島の上に立っている投稿の数 |
 | `cluster_ids` | `integer[]` | この島に含まれるクラスタのID番号リスト |
 | `top_terms` | `string[]` | 島を特徴づけるキーワード上位（名前の元になった単語） |
+| `name_source` | `"terms"` \| `"ai"` \| `"manual"` | 名前の出どころ（2026-10-12）。`ai` / `manual` の島は `top_terms` の話題行を画面で隠す。`name_basis` などの内部の記録は返さない |
 | `island_id` | `string` (UUID) | 追跡している島の ID（`islands_state.id`）。まだ記録されていない島には付かない |
 | `tier` / `tier_name` | `integer` / `string` | 町の段（0〜4）と名前（小屋・村・港町・町・都市） |
 | `score` | `number` | 見せている成長点（1回で縮むのは最大20%） |
@@ -932,7 +936,7 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 
 #### `GET /api/similar-people` — 似ている人
 
-> **いつ使うか**: 「似ている人」を出すとき。`?account={id}` を省くとログイン中の本人で計算します（どちらもないと `401`）。
+> **いつ使うか**: 画面からは未使用（2026-10-12 に画面を廃止。API とデータは残す）。「似ている人」を出すとき。`?account={id}` を省くとログイン中の本人で計算します（どちらもないと `401`）。
 
 **レスポンス例** `200 OK`（値は架空）
 ```json
@@ -961,7 +965,7 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 
 #### `GET /api/people/{id}/card` — 人の札
 
-> **いつ使うか**: 地図で人を選んだときの札。見る人はログイン中の本人、またはログインなしなら `?viewer={id}`（`/api/similar-people` の `account` と同じ公開の問い）。見る人がいないとき・自分自身のときは `reasons` が空、`opener` が `null`。知らない人は `404`。
+> **いつ使うか**: 画面からは未使用（2026-10-12 に画面を廃止。API とデータは残す）。地図で人を選んだときの札。見る人はログイン中の本人、またはログインなしなら `?viewer={id}`（`/api/similar-people` の `account` と同じ公開の問い）。見る人がいないとき・自分自身のときは `reasons` が空、`opener` が `null`。知らない人は `404`。
 
 ```json
 {
@@ -1034,7 +1038,7 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 
 #### `GET` / `PUT /api/notification-settings` — 通知の切り替え 🔒
 
-5つの分類（`reply`・`reaction`・`connection`・`similar`・`island`）ごとに、アプリ外（`push`）とアプリ内（`in_app`）を切り替えます。行がない分類は両方オンとして返します。
+3つの分類（`reply`・`reaction`・`island`。2026-10-12 に `connection`・`similar` を外した）ごとに、アプリ外（`push`）とアプリ内（`in_app`）を切り替えます。行がない分類は両方オンとして返します。
 
 ```http
 PUT /api/notification-settings
@@ -1051,11 +1055,10 @@ Content-Type: application/json
   "settings": {
     "reply":      { "push": true,  "in_app": true },
     "reaction":   { "push": false, "in_app": true },
-    "connection": { "push": true,  "in_app": true },
-    "similar":    { "push": true,  "in_app": true },
     "island":     { "push": true,  "in_app": true }
   },
-  "categories": ["reply", "reaction", "connection", "similar", "island"]
+  "categories": ["reply", "reaction", "island"],
+  "quiet_post": true
 }
 ```
 
@@ -1110,7 +1113,7 @@ VAPID（送り手の名札）の鍵は `push_config` にサーバーが初めて
 
 #### `GET /api/neighbors` — 意味的に近い投稿のランキング取得
 
-> **いつ使うか**: ある投稿をタップしたときに表示する「似ている人」リスト。  
+> **いつ使うか**: 画面からは未使用（2026-10-12 に画面を廃止。API とデータは残す）。ある投稿をタップしたときに表示する「似ている人」リスト。  
 > **何を基準にランキングするか**: **448次元空間でのコサイン類似度**。地図上の見た目の距離（ピクセル距離）ではありません。  
 > **なぜ地図上の距離を使わないか**: 448次元を2次元に圧縮する過程で情報が失われるため、地図上では離れて見えても意味的には近い組み合わせが存在します。実際の測定では、448次元での真の近傍のうち、地図上でも近く見えるのは約34%だけです。
 
