@@ -15,6 +15,9 @@ const paths = {
   help: '<path d="M2 12h3l4-3h4a2 2 0 0 1 0 4h-3m3 0 6-4a2 2 0 0 1 3 3l-7 6H5l-3-1M2 10v10"/><path d="M14 6c-5-3 0-7 2-3 2-4 7 0 2 3l-2 2Z"/>',
   hand: '<path d="M8 13V5a2 2 0 0 1 4 0v7-9a2 2 0 0 1 4 0v9-7a2 2 0 0 1 4 0v10a7 7 0 0 1-12 5l-6-6a2 2 0 0 1 3-3l3 2"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+  bellOff: '<path d="M8.7 3A6 6 0 0 1 18 8c0 2.2.3 3.9.7 5.2M17 17H3s3-2 3-9c0-.7.1-1.3.3-1.9M10.3 21a1.9 1.9 0 0 0 3.4 0M2 2l20 20"/>',
+  pencil: '<path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   send: '<path d="m22 2-7 20-4-9L2 9 20 2ZM22 2 11 13"/>',
 };
 
@@ -29,7 +32,7 @@ export function icon(name, size = 22) {
 
 export function setupIcons() {
   const ids = { composeBack: 'back', editBack: 'back', userBack: 'back', composeImageBtn: 'image',
-    composeImageClear: 'close', mapSearchClear: 'close', sheetClose: 'close', mapRecenter: 'pin' };
+    composeImageClear: 'close', mapSearchClear: 'close', sheetClose: 'close' };
   Object.entries(ids).forEach(([id, name]) => document.getElementById(id)?.replaceChildren(icon(name)));
   document.querySelector('.search-icon')?.replaceChildren(icon('search', 18));
   document.querySelector('#mapFilterBtn > span')?.replaceChildren(icon('filter', 20));

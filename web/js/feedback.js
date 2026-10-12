@@ -22,6 +22,12 @@ const TONES = {
 let settings = parseSettings(read(SETTINGS_KEY), SYSTEM_REDUCED_MOTION);
 let audio = null;
 let lastSound = 0;
+const listeners = new Set();
+
+/** Run `fn(settings)` whenever the settings change (audio.js follows the sound switch). */
+export function onFeedbackChange(fn) {
+  listeners.add(fn);
+}
 
 function read(key) {
   try {
@@ -48,6 +54,13 @@ export function setFeedback(change) {
   write(SETTINGS_KEY, JSON.stringify(settings));
   setReducedMotion(settings.reduceMotion);
   document.documentElement.classList.toggle('reduce-motion', settings.reduceMotion);
+  for (const fn of listeners) {
+    try {
+      fn({ ...settings });
+    } catch {
+      // One listener failing must not stop the others.
+    }
+  }
 }
 
 /** Whether this browser can buzz at all (iPhone Safari cannot). */
@@ -92,7 +105,8 @@ export function moment(kind) {
   buzz(kind);
 }
 
-function audioContext() {
+/** The one AudioContext the whole app shares (created only after a tap). */
+export function audioContext() {
   if (audio) return audio;
   const Context = window.AudioContext || window.webkitAudioContext;
   if (!Context) return null;
@@ -108,12 +122,30 @@ function audioContext() {
 export function setupFeedback() {
   setReducedMotion(settings.reduceMotion);
   document.documentElement.classList.toggle('reduce-motion', settings.reduceMotion);
+  // Touch pointerdown is not a user activation on iOS Safari, so also listen to
+  // touchend / click. The listeners stay: after an interruption (a phone call)
+  // iOS leaves the context not running until the next tap, so each gesture
+  // tries to resume it when needed.
+  const GESTURES = ['pointerdown', 'touchend', 'click', 'keydown'];
   const unlock = () => {
     const context = audioContext();
-    if (context && context.state === 'suspended') context.resume().catch(() => {});
+    if (!context) return;
+    if (settings.sound && !document.hidden && context.state !== 'running') context.resume().catch(() => {});
   };
-  window.addEventListener('pointerdown', unlock, { passive: true });
-  window.addEventListener('keydown', unlock);
+  GESTURES.forEach((name) => window.addEventListener(name, unlock, { passive: true }));
+}
+
+/** Wake the shared AudioContext and wait until it is running (or has failed).
+ * Use it right after a tap that turns sound back on:
+ *   resumeAudio().then(() => sound('notify'));
+ * Resolves true when the context is running, false otherwise. Never rejects. */
+export function resumeAudio() {
+  const context = audioContext();
+  if (!context) return Promise.resolve(false);
+  if (context.state === 'running') return Promise.resolve(true);
+  return Promise.resolve()
+    .then(() => context.resume())
+    .then(() => context.state === 'running', () => false);
 }
 
 /** Who is reading, for counting a view once (Q35). */

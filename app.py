@@ -31,6 +31,7 @@ when there is no Supabase project configured. It is what makes `uvicorn app:app`
 work with nothing else running.
 """
 
+import copy
 import hashlib
 import io
 import json
@@ -62,6 +63,7 @@ from core import auth
 from core import connections as lines
 from core import growth
 from core import introductions
+from core import island_namer
 from core import island_tracking
 from core import notifications as notices
 from core import quiet
@@ -77,6 +79,7 @@ from core.config import (
     CONNECTIONS_SINCE,
     DIGEST_CONTRIBUTORS,
     ISLAND_COLORS,
+    ISLAND_GENRES,
     ISLAND_NOTIFY_PER_DAY,
     ISLAND_RUN_MIN_SECONDS,
     LANDMARK_CANDIDATES,
@@ -95,6 +98,7 @@ from core.config import (
     MOTIVATION_MAX,
     MOTIVATION_MIN,
     NEVER_PUSHED,
+    LEGACY_NOTIFICATION_CATEGORIES,
     NOTIFICATION_CATEGORIES,
     ORBIT_NEIGHBOR_COUNT,
     PERSON_CARD_CONNECTIONS,
@@ -156,6 +160,7 @@ NAMING_POST_LIMIT = 5000
 # Island tracking starts itself from /api/islands and /api/changes. The test
 # suite turns that off and calls track_islands() directly, so no background
 # thread is still writing when a test swaps the store.
+SIMILAR_NOTIFY_ENABLED = False  # 「似た人」通知の停止（false のまま）
 ISLAND_AUTO_TRACK = os.environ.get("ISLANDS_AUTO_TRACK", "1") == "1"
 # Likewise for Web Push: tests call dispatch_pushes() themselves.
 PUSH_AUTO = os.environ.get("ISLANDS_AUTO_PUSH", "1") == "1"
@@ -164,6 +169,16 @@ PUSH_MIN_GAP_SECONDS = 1.0
 PUSH_URL = "/#/notifications"
 
 _logger = logging.getLogger(__name__)
+
+# Cloud Run only shows what reaches stderr: let the island namer's INFO line (the check
+# right after switching AI names on) through, and leave every other logger as it was.
+_namer_logger = logging.getLogger("core.island_namer")
+if _namer_logger.getEffectiveLevel() > logging.INFO:
+    _namer_logger.setLevel(logging.INFO)
+if not _namer_logger.handlers:
+    _namer_handler = logging.StreamHandler()  # stderr
+    _namer_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    _namer_logger.addHandler(_namer_handler)
 
 _URL = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
@@ -560,6 +575,13 @@ def live_islands(force=False):
         _logger.warning("island naming capped at %d posts; some posts will have no island membership", NAMING_POST_LIMIT)
 
     named = name_landmasses(posts, state["idf"], name_group)
+    # Word counts only say what the islanders mention; the heading is the activity genre.
+    named = name_by_genre(named, {post["id"]: post for post in posts})
+    try:
+        # Islands that already have an AI name keep showing it (no network).
+        named = island_namer.overlay(named, state["store"].island_states())
+    except StoreError:
+        pass
     # Explicit membership replaces the client's former centre-distance guess.
     payload = named
     membership = {}
@@ -572,6 +594,17 @@ def live_islands(force=False):
     return payload
 
 
+# Bookkeeping of island naming (post-id lists, timestamps): kept out of API answers.
+_INTERNAL_ISLAND_KEYS = ("name_basis", "name_tried_at", "name_hold")
+
+
+def public_island(island):
+    """A copy of a live island without the naming bookkeeping; name_source is always set."""
+    row = {key: value for key, value in island.items() if key not in _INTERNAL_ISLAND_KEYS}
+    row["name_source"] = "terms" if island.get("name_hold") else (island.get("name_source") or "terms")
+    return row
+
+
 def island_of(post_id):
     """The landmass a post is standing on, as it is named right now."""
     live_islands()
@@ -579,7 +612,7 @@ def island_of(post_id):
         membership = _islands_cache["key"] or {}
         islands = _islands_cache["value"]
     index = membership.get(post_id)
-    return islands[index] if index is not None and index < len(islands) else None
+    return public_island(islands[index]) if index is not None and index < len(islands) else None
 
 
 def invalidate_islands():
@@ -647,6 +680,10 @@ def notify_similar(account_id):
     person told. The rows are written whatever the settings say: settings only
     decide whether a row interrupts (push, badge), never whether it exists.
     """
+    # 2026-10-12: 「似た人」の通知は作らない（モック反映の決定）。関数と呼び出しは
+    # 互換のために残し、何も書かずに空を返す。
+    if not SIMILAR_NOTIFY_ENABLED:
+        return []
     store = state["store"]
     day_ago = datetime.now(timezone.utc) - timedelta(days=1)
     rows = []
@@ -761,32 +798,81 @@ def landmark_ranker(islands, posts_by_id):
     process. Both sides are centred on the seed mean, as profiles are.
     """
     model = state["model"]
-    texts = []
-    for island in islands:
-        counts = Counter()
-        for post_id in island.get("post_ids") or []:
-            counts.update(set((posts_by_id.get(post_id) or {}).get("terms") or []))
-        words = [island.get("name") or ""] + [word for word, _ in counts.most_common(8)]
-        texts.append("、".join(word for word in words if word) or "島")
+    texts = [island_text(island, posts_by_id) for island in islands]
     if not texts:
         return None
     if state.get("landmark_vectors") is None:
         state["landmark_vectors"] = np.asarray(
             model.encode(list(LANDMARK_CANDIDATES), normalize_embeddings=True), dtype=float)
-    mean = dense_mean()
-
-    def unit(vector):
-        vector = np.asarray(people.centre(vector, mean), dtype=float)
-        norm = float(np.linalg.norm(vector))
-        return vector / norm if norm else vector
-
-    candidates = np.array([unit(row) for row in state["landmark_vectors"]])
+    candidates = centred_units(state["landmark_vectors"])
     ranked = {}
-    for island, vector in zip(islands, np.asarray(model.encode(texts, normalize_embeddings=True), dtype=float)):
-        scores = candidates @ unit(vector)
+    for island, unit_vector in zip(islands, centred_units(model.encode(texts, normalize_embeddings=True))):
+        scores = candidates @ unit_vector
         order = sorted(range(len(LANDMARK_CANDIDATES)), key=lambda k: (-float(scores[k]), k))
         ranked[id(island)] = [LANDMARK_CANDIDATES[k] for k in order]
     return lambda island: ranked.get(id(island))
+
+
+def island_text(island, posts_by_id, lead=None):
+    """The island's words as one sentence for the encoder: its own, then its posts' commonest terms."""
+    counts = Counter()
+    for post_id in island.get("post_ids") or []:
+        counts.update(set((posts_by_id.get(post_id) or {}).get("terms") or []))
+    words = list(lead if lead is not None else [island.get("name") or ""])
+    words += [word for word, _ in counts.most_common(8)]
+    seen = set()
+    words = [word for word in words if word and not (word in seen or seen.add(word))]
+    return "、".join(words) or "島"
+
+
+def centred_units(vectors):
+    """Rows centred on the seed mean (as profiles are) and scaled to length 1."""
+    mean = dense_mean()
+    rows = []
+    for vector in np.asarray(vectors, dtype=float):
+        vector = np.asarray(people.centre(vector, mean), dtype=float)
+        norm = float(np.linalg.norm(vector))
+        rows.append(vector / norm if norm else vector)
+    return np.array(rows)
+
+
+def name_by_genre(islands, posts_by_id):
+    """Call each island by the activity genre closest to its words; word counts stay as the topics.
+
+    Islands arrive biggest first and each takes its best genre that no bigger
+    island holds, so names stay unique and the same posts give the same names
+    (ties go to the earlier genre). If the encoder is unavailable the islands
+    keep their word-count names ('terms'); this never raises.
+    """
+    if not islands:
+        return islands
+    try:
+        model = state["model"]
+        if state.get("genre_vectors") is None:
+            state["genre_vectors"] = np.asarray(
+                model.encode(list(ISLAND_GENRES), normalize_embeddings=True), dtype=float)
+        texts = [island_text(island, posts_by_id, [island.get("name") or ""] + list(island.get("topics") or []))
+                 for island in islands]
+        scores = centred_units(model.encode(texts, normalize_embeddings=True)) @ centred_units(
+            state["genre_vectors"]).T
+    except Exception as error:
+        if not state.get("genre_warned"):
+            state["genre_warned"] = True
+            _logger.warning("island genres unavailable, keeping word-count names (%s)", type(error).__name__)
+        return islands
+    taken = set()
+    for island, row in zip(islands, scores):
+        order = sorted(range(len(ISLAND_GENRES)), key=lambda k: (-round(float(row[k]), 6), k))  # rounding: float noise must not flip ties
+        genre = next((ISLAND_GENRES[k] for k in order if ISLAND_GENRES[k] not in taken), None)
+        if genre is None:
+            continue
+        taken.add(genre)
+        heading, topics = island.get("name") or "", list(island.get("topics") or [])
+        island["topics"] = [word for word in [heading] + topics if word and word != genre][:len(topics) + 1]
+        island["name"] = genre
+        island["label"] = f"{genre}{island_namer.island_terrain(island)}"
+        island["name_source"] = "genre"
+    return islands
 
 
 # Changes worth interrupting the people on the island for. Going quiet is in
@@ -821,6 +907,48 @@ def notify_islands(events, states, now):
     return rows
 
 
+def name_islands_with_ai(named, previous, posts_by_id, now=None):
+    """Genre names from Gemini for islands whose membership moved. Never raises.
+
+    Runs inside the tracking step only (at most every ISLAND_RUN_MIN_SECONDS).
+    No key, a timeout or a bad answer leaves the word-count name in place.
+    """
+    try:
+        store = state["store"]
+        if not getattr(store, "supports_island_names", True):
+            return 0  # the migration is not in the database yet: no AI names
+        namer = state.get("island_namer")
+        if namer is None and "island_namer" not in state:
+            namer = state["island_namer"] = island_namer.load_namer()
+        if namer is None:
+            return 0
+
+        def people_names(island):
+            ids = sorted({posts_by_id[pid]["author_id"] for pid in island.get("post_ids") or []
+                          if pid in posts_by_id and posts_by_id[pid].get("author_id")})
+            names = []
+            for start in range(0, len(ids), 40):  # same chunk size as post_bodies
+                try:
+                    names += [row.get("display_name") or "" for row in store.list_accounts(ids[start:start + 40])]
+                except Exception as error:
+                    _logger.warning("island naming: display names unavailable (%s)", type(error).__name__)
+            return names
+
+        def bodies(ids):
+            found = store.post_bodies(ids)
+            return [found[pid] for pid in ids if pid in found]
+
+        def author_count(island):
+            return len({posts_by_id[pid]["author_id"] for pid in island.get("post_ids") or []
+                        if pid in posts_by_id and posts_by_id[pid].get("author_id")})
+
+        return island_namer.name_islands(named, previous, bodies, namer, people_names,
+                                         now=now, author_count=author_count)
+    except Exception:
+        _logger.exception("island naming failed")
+        return 0
+
+
 def track_islands(now=None):
     """One tracking step: match the live islands to the stored ones, save, notify.
 
@@ -829,10 +957,13 @@ def track_islands(now=None):
     """
     store = state["store"]
     now = now or datetime.now(timezone.utc)
-    named = live_islands(force=True)
+    # Work on a copy: the cached islands are read by requests while this runs.
+    named = copy.deepcopy(live_islands(force=True))
     posts_by_id = {post["id"]: post for post in store.list_terms(limit=NAMING_POST_LIMIT)}
     events = store.interaction_events(since=None)
     previous = store.island_states()
+    island_namer.overlay(named, previous)  # idempotent; live_islands already did it
+    name_islands_with_ai(named, previous, posts_by_id, now=now)
     try:
         ranker = landmark_ranker(named, posts_by_id)
     except Exception:  # an embedding outage costs the landmarks, not the step
@@ -842,6 +973,8 @@ def track_islands(now=None):
     store.save_island_states(result["states"])
     store.add_island_events(result["events"])
     result["notifications"] = notify_islands(result["events"], result["states"], now) if previous else []
+    # No cache swap here: the next live_islands() lays the saved names over its own
+    # (fresh) islands, and swapping in this older copy could overwrite a newer cache.
     return result
 
 
@@ -1066,11 +1199,11 @@ def with_tracked_state(payload):
     try:
         states = state["store"].island_states()
     except StoreError:
-        return payload
+        return [public_island(island) for island in payload]
     _links, identity = island_tracking.match(states, payload)
     out = []
     for index, island in enumerate(payload):
-        row = dict(island)
+        row = public_island(island)
         known = states[identity[index]] if index in identity else None
         if known:
             row.update({
@@ -1234,6 +1367,24 @@ def health():
     except StoreError:
         runtime = {"maintenance": True, "active_version": None}
         compatible = False
+    # The island names need the 2026-10-12 columns. Without them a release is not
+    # ready, so the CI check (scripts/verify_release.py --phase ready) stops it.
+    # Only a Supabase database can lack them; the local store always has them.
+    not_ready = []
+    if not store_ok:
+        not_ready.append("store_unreachable")
+    if not compatible:
+        not_ready.append("artifact_version_mismatch")
+    if runtime["maintenance"]:
+        not_ready.append("maintenance")
+    island_names_ok = True
+    if store_ok:
+        try:
+            island_names_ok = bool(state["store"].island_names_ready())
+        except StoreError:
+            island_names_ok = False
+        if not island_names_ok:
+            not_ready.append("islands_state.name_source column missing (run migration 20261012000000)")
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
@@ -1247,7 +1398,9 @@ def health():
         "artifact_compatible": compatible,
         "maintenance": runtime["maintenance"],
         "active_map_version": runtime["active_version"],
-        "ready": store_ok and compatible and not runtime["maintenance"],
+        "island_names_ready": island_names_ok,
+        "ready": store_ok and compatible and not runtime["maintenance"] and island_names_ok,
+        "not_ready_reasons": not_ready,
     }
 
 
@@ -1456,19 +1609,29 @@ def changes_digest(request: Request):
 
 @app.get("/api/notification-settings")
 def notification_settings(request: Request):
-    """Push and in-app switches for each of the five kinds. No row means on."""
+    """Push and in-app switches for each of the three kinds (reply, reaction, island). No row means on.
+
+    `quiet_post` (top level, read-only, worked out here): whether "a quiet post
+    nearby" shows in the app. It is the island in_app switch, and stays false for
+    somebody who had switched the retired similar category's in_app off. Quiet
+    posts are never pushed.
+    """
     user_id = current_user(request)
     try:
         rows = state["store"].get_notification_settings(user_id)
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
-    return {"settings": notices.merge_settings(rows), "categories": list(NOTIFICATION_CATEGORIES)}
+    merged = notices.merge_settings(rows)
+    return {"settings": merged, "categories": list(NOTIFICATION_CATEGORIES),
+            "quiet_post": merged.quiet_post}
 
 
 @app.put("/api/notification-settings")
 def put_notification_settings(payload: NotificationSettings, request: Request):
     user_id = current_user(request)
     rows = [item.model_dump() for item in payload.settings]
+    # Old screens still send connection / similar: accept and ignore them.
+    rows = [row for row in rows if row["category"] not in LEGACY_NOTIFICATION_CATEGORIES]
     unknown = [row["category"] for row in rows if row["category"] not in NOTIFICATION_CATEGORIES]
     if unknown:
         raise HTTPException(status_code=422, detail=f"知らない通知の種類です: {', '.join(unknown)}")
@@ -1476,7 +1639,9 @@ def put_notification_settings(payload: NotificationSettings, request: Request):
         saved = state["store"].put_notification_settings(user_id, rows)
     except StoreError:
         raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
-    return {"settings": notices.merge_settings(saved), "categories": list(NOTIFICATION_CATEGORIES)}
+    merged = notices.merge_settings(saved)
+    return {"settings": merged, "categories": list(NOTIFICATION_CATEGORIES),
+            "quiet_post": merged.quiet_post}
 
 
 def _decoded(value):
@@ -2043,6 +2208,13 @@ def local_my_reactions(request: Request):
     require_local()
     user_id = current_user(request)
     return {"reactions": state["store"].reactions_by_actor(user_id)}
+
+
+@app.get("/api/local/posts/{post_id}/joiners")
+def local_joiners(post_id: str):
+    """Who joined a post: the local stand-in for reading the reactions table."""
+    require_local()
+    return {"joiners": state["store"].joiners_of(post_id)}
 
 
 @app.get("/api/local/notifications")

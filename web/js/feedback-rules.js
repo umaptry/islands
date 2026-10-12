@@ -69,3 +69,25 @@ export function makeViewerKey(randomBytes) {
 export function isViewerKey(text) {
   return typeof text === 'string' && /^anon:[0-9a-f]{16,64}$/.test(text);
 }
+
+/** The effects the design mock's sound set offers (audio.js). */
+export const SE_NAMES = Object.freeze(['success', 'click', 'hardClick', 'pop', 'fanfare']);
+
+/** The same effect twice inside this gap is skipped, so quick taps never pile up. */
+export const SE_GAP_MS = 70;
+
+/** Whether BGM and ambience may run at all: the sound setting is on and the tab is in front. */
+export function audioShouldRun(settings, hidden) {
+  return Boolean(settings && settings.sound) && !hidden;
+}
+
+/** Whether effect `name` may play now, given when it last played. */
+export function maySe(name, settings, hidden, lastAt, now) {
+  if (!SE_NAMES.includes(name) || !audioShouldRun(settings, hidden)) return false;
+  return !(lastAt > 0 && now - lastAt < SE_GAP_MS);
+}
+
+/** Whether the map ambience (waves, gulls) should be sounding. */
+export function ambientShouldPlay(wanted, settings, hidden) {
+  return Boolean(wanted) && audioShouldRun(settings, hidden);
+}

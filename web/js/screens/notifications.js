@@ -7,7 +7,7 @@
 // laptop agree, and nothing you did yourself ever appears.
 //
 // Stage 6 (items 22 and 23): the list comes grouped from notification_feed() -
-// reactions to one post within ten minutes are one entry - and each of the five
+// reactions to one post within ten minutes are one entry - and each of the three
 // kinds can be kept out of the band and the badge. A kind switched off still
 // lists; it just never interrupts. The rules live in notify-rules.js.
 
@@ -17,7 +17,7 @@ import { state } from '../state.js';
 import { openOnMap } from './map.js';
 import { icon } from '../icons.js';
 import { moment } from '../feedback.js';
-import { $, avatar, clear, clip, el, timeAgo } from '../ui.js';
+import { $, clear, clip, el, timeAgo } from '../ui.js';
 import {
   arrivals, bodyText, defaultSettings, headline, knownIds, mergeSettings, rowIds, unreadCount,
 } from '../notify-rules.js';
@@ -40,7 +40,7 @@ const ICONS = { like: 'heart', help: 'help', join: 'hand', comment: 'message', r
   connection: 'hand', similar: 'user', island: 'pin', quiet_post: 'user' };
 
 /**
- * This person's five switches. Read once per account; a failed read leaves
+ * This person's three switches. Read once per account; a failed read leaves
  * everything on and is tried again on the next refresh.
  */
 export async function loadNotifySettings({ force = false } = {}) {
@@ -48,9 +48,9 @@ export async function loadNotifySettings({ force = false } = {}) {
   if (!id) return defaultSettings();
   if (!force && settingsFor === id && state.notifySettings) return state.notifySettings;
   try {
-    const { settings } = await api.get('/api/notification-settings');
+    const { settings, quiet_post: quietPost } = await api.get('/api/notification-settings');
     if (state.account?.id !== id) return defaultSettings();
-    useNotifySettings(settings);
+    useNotifySettings(settings, quietPost);
   } catch {
     return state.notifySettings && settingsFor === id ? state.notifySettings : defaultSettings();
   }
@@ -58,8 +58,9 @@ export async function loadNotifySettings({ force = false } = {}) {
 }
 
 /** After the settings screen saved: the badge follows the switches at once. */
-export function useNotifySettings(settings) {
-  state.notifySettings = mergeSettings(settings);
+export function useNotifySettings(settings, quietPost) {
+  if (quietPost !== undefined) state.quietPost = quietPost;
+  state.notifySettings = mergeSettings(settings, state.quietPost);
   settingsFor = state.account?.id || null;
   state.unread = unreadCount(state.notifications, state.notifySettings);
   paintBadge();
@@ -164,9 +165,9 @@ function paintList() {
 
   if (!entries.length) {
     list.append(el('div', { className: 'empty-panel' },
-      el('div', { className: 'empty-icon', text: '🔔' }),
+      el('div', { className: 'empty-icon' }, icon('bellOff', 40)),
       el('p', { text: '通知はありません' }),
-      el('p', { className: 'empty-sub', text: 'メッセージ・反応・新しいつながり・おすすめ・島の変化が届くと、ここに表示されます。' }),
+      el('p', { className: 'empty-sub', text: 'メッセージ・反応・島の変化が届くと、ここに表示されます。' }),
     ));
     return;
   }
@@ -178,7 +179,6 @@ function paintList() {
       on: { click: () => open(entry) },
     },
       el('span', { className: 'notif-icon' }, icon(ICONS[entry.type] || 'bell')),
-      avatar((entry.actors && entry.actors[0]) || {}, 34),
       el('span', { className: 'notif-body' },
         el('span', { className: 'notif-head' },
           el('b', { text: headline(entry) }),

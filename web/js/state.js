@@ -18,18 +18,15 @@ export const state = {
   reactions: new Set(),   // "postId:kind" for everything I have reacted to
   notifications: [],      // the grouped feed, newest first (段6)
   unread: 0,              // unread entries whose kind may interrupt
-  notifySettings: null,   // { category: { push, in_app } } for the five kinds
+  quietPost: undefined,   // the server's last quiet_post verdict (false = 「おすすめ」 was off)
+  notifySettings: null,   // { category: { push, in_app } } for the three switches (plus a saved similar row, if any)
   selected: null,         // the post the sheet is showing
-  view: 'map',            // 'map' | 'orbit'
   filters: { query: '', tags: [] },
   camera: { scale: 1, x: 0, y: 0 },
   myPosts: [],
-  neighbors: [],          // orbit ranking for my active post
-  activePostId: null,     // which of my posts the orbit is centred on
+  activePostId: null,     // which of my posts the map and 似てる度 are centred on
   connections: [],        // lines between people, /api/connections
-  similar: [],            // the people most like me, /api/similar-people
-  selectedSimilar: null,  // { author, people } for the selected post's author
-  focusPerson: null,      // the similar person whose card is open (段4)
+  neighbors: new Map(),   // my post id -> { at, rows } from /api/neighbors: the dotted lines
   changeMarks: [],        // unseen away-digest places, { id, x, y } in world units
   trialPost: null,        // the first-post tryout, never saved (段5 Q40)
   myViews: {},            // post id -> how many people opened it (Q35)
@@ -91,6 +88,7 @@ export function removePost(postId) {
   state.posts = state.posts.filter((post) => post.id !== postId);
   state.postsById.delete(postId);
   state.myPosts = state.myPosts.filter((post) => post.id !== postId);
+  if (state.activePostId === postId) state.activePostId = state.myPosts[0]?.id ?? null;
   if (state.selected && state.selected.id === postId) state.selected = null;
   state.revision += 1;
   notify('posts');

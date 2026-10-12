@@ -108,11 +108,10 @@ def dispatch(service=None, now=None):
 
 
 def opened(browser, service, kind):
-    """What `browser` shows for one category. A first reaction or message
-    also draws the line between the two people, which is pushed too."""
+    """What `browser` shows for one category."""
     messages = [browser.decrypt(sent["body"]) for sent in service.sent
                 if sent["url"] == browser.endpoint]
-    assert {message["kind"] for message in messages} <= {kind, "connection"}, messages
+    assert {message["kind"] for message in messages} <= {kind}, messages
     return [message for message in messages if message["kind"] == kind]
 
 
@@ -379,8 +378,8 @@ def test_a_kind_switched_off_for_push_stays_in_the_list(fresh_client, people):
     reader.comment(post["id"], "いいですね")
     service, _ = dispatch()
     kinds = [browser.decrypt(sent["body"])["kind"] for sent in service.sent]
-    assert kinds == ["reply"]  # the message, not the like or the new line
-    assert author.unread(["like"]) and author.unread(["connection"])
+    assert kinds == ["reply"]  # the message, not the like
+    assert author.unread(["like"]) and not author.unread(["connection"])
 
 
 def test_old_news_is_marked_but_not_pushed(fresh_client, people):

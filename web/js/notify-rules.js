@@ -13,16 +13,19 @@ export const CATEGORY_OF = Object.freeze({
   comment: 'reply', reply: 'reply',
   connection: 'connection', similar: 'similar', island: 'island',
   // Q34: a post nobody has answered yet, recommended to people nearby.
-  quiet_post: 'similar',
+  // Follows the island switch (see interrupts() for the one exception).
+  quiet_post: 'island',
 });
 
-/** The five switches, in the order the settings list them. */
+/** The three switches, in the order the settings list them.
+ *
+ * 「新しいつながり」 and 「おすすめ」 are gone (モック②): the server no longer
+ * makes those rows, so there is nothing left for a switch to hold back. Rows
+ * written before still list, under CATEGORY_OF above. */
 export const CATEGORIES = Object.freeze([
   { id: 'reply', title: '返信・メッセージ', note: 'あなたの投稿へのメッセージと、あなたへの返信' },
-  { id: 'reaction', title: '反応', note: 'いいね・手伝えるかも・参加したい（10分ぶんをまとめます）' },
-  { id: 'connection', title: '新しいつながり', note: '初めてやりとりしたとき' },
-  { id: 'similar', title: 'おすすめ', note: '似ている人（1日3件まで）・近くの投稿（アプリの中だけ）' },
-  { id: 'island', title: '島の変化', note: 'あなたの投稿がある島（1つの島につき1日1件まで）' },
+  { id: 'reaction', title: '反応', note: 'いいね・手伝えるかも・参加（10分ぶんをまとめます）' },
+  { id: 'island', title: '島の変化', note: 'あなたの投稿がある島の変化と、近くの投稿のお知らせ（島の変化は1つの島につき1日1件まで）' },
 ]);
 
 export const KIND_TEXT = Object.freeze({
@@ -46,8 +49,13 @@ export function defaultSettings() {
   return Object.fromEntries(CATEGORIES.map(({ id }) => [id, { push: true, in_app: true }]));
 }
 
-/** The API's settings over the defaults, trusting nothing about their shape. */
-export function mergeSettings(saved) {
+/** The API's settings over the defaults, trusting nothing about their shape.
+ *
+ * `quietPost` is the server's own verdict (最上位の quiet_post): false means
+ * somebody who had turned 「おすすめ」 off, whose nearby-post notices stay off
+ * even though the island switch is on. The API no longer sends a `similar`
+ * row, so that verdict is put back here as one (see interrupts()). */
+export function mergeSettings(saved, quietPost) {
   const settings = defaultSettings();
   if (!saved || typeof saved !== 'object') return settings;
   for (const { id } of CATEGORIES) {
@@ -55,6 +63,15 @@ export function mergeSettings(saved) {
     if (entry && typeof entry === 'object') {
       settings[id] = { push: entry.push !== false, in_app: entry.in_app !== false };
     }
+  }
+  // No switch for it any more, but an old "similar" row still counts for
+  // quiet_post (see interrupts()). Only kept when the server sent one.
+  const similar = saved.similar;
+  if (similar && typeof similar === 'object') {
+    settings.similar = { push: similar.push !== false, in_app: similar.in_app !== false };
+  }
+  if (quietPost === false && settings.island.in_app) {
+    settings.similar = { push: true, in_app: false };
   }
   return settings;
 }
@@ -66,10 +83,27 @@ export function settingsRows(settings) {
   }));
 }
 
-/** A kind switched off for in_app stays in the list but never interrupts. */
+/** A kind switched off for in_app stays in the list but never interrupts.
+ *
+ * A kind with no switch any more does not interrupt. The server sorts old
+ * connection / similar rows the same way: it no longer pushes them, they only
+ * list. A nearby post (quiet_post) follows the island switch, and is also held
+ * back when the "similar" row has in_app off (mergeSettings() puts it there when
+ * the server says quiet_post is false). With no similar row, the island switch
+ * alone decides; with no island row either, it is shown. */
 export function interrupts(entry, settings) {
-  const switches = (settings || {})[categoryOf(entry.type)];
-  return Boolean(switches && switches.in_app);
+  const all = settings || {};
+  if (entry.type === 'quiet_post') {
+    if (all.similar && all.similar.in_app === false) return false;
+    return all.island ? Boolean(all.island.in_app) : true;
+  }
+  // Rows from the retired kinds (connection, similar) still list, but no
+  // longer interrupt - the same as allows() on the server.
+  const category = categoryOf(entry.type);
+  if (!CATEGORIES.some((switchRow) => switchRow.id === category)) return false;
+  const switches = all[category];
+  if (!switches) return false;
+  return Boolean(switches.in_app);
 }
 
 // ---------------------------------------------------------------- the list

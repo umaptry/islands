@@ -25,7 +25,13 @@ const QUALITIES = [0.82, 0.7, 0.58, 0.45];
  */
 export async function prepareImage(file, limits = POST_IMAGE) {
   const { maxEdge, targetBytes } = { ...POST_IMAGE, ...limits };
-  const bitmap = await createImageBitmap(file);
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    // A file that is not a picture (or one the browser cannot decode).
+    throw new Error('画像を読み込めませんでした。別の画像をお試しください。');
+  }
   const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
   const width = Math.max(1, Math.round(bitmap.width * scale));
   const height = Math.max(1, Math.round(bitmap.height * scale));

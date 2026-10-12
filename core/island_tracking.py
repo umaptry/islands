@@ -19,8 +19,10 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from core import growth
+from core.energy import terrain_word
 from core.config import (
     ISLAND_MATCH_OVERLAP,
+    ISLAND_NAMING_NOTIFY_OVERLAP,
     ISLAND_QUIET_DAYS,
     LANDMARK_COUNT_BY_TIER,
     LANDMARK_SWAP_DAYS,
@@ -32,6 +34,7 @@ CAUSES = {
     "merge": "あいだの投稿が増えて島がつながった",
     "split": "話題が分かれて島が2つになった",
     "rename": "島でよく使われる言葉が変わった",
+    "rename_ai": "島の話題が変わって名前が変わった",
     "tier_up": "人・投稿・交流が増えた",
     "tier_down": "しばらく交流が少なかった",
     "quiet_gone": "島の投稿がなくなった",
@@ -39,6 +42,14 @@ CAUSES = {
     "landmark_new": "島が育って目印が増えた",
     "landmark_swap": "島の話題が変わって目印が入れ替わった",
 }
+
+
+def jaccard(old_ids, new_ids):
+    """Share of two id lists that is the same (intersection over union), 0..1."""
+    old, new = set(old_ids or ()), set(new_ids or ())
+    if not old or not new:
+        return 0.0
+    return len(old & new) / len(old | new)
 
 
 def _heading(name):
@@ -189,8 +200,16 @@ def update(previous, current, posts_by_id, events, now=None, rank_landmarks=None
         tier = growth.tier_for(shown, old.get("tier") if old else None)
         state = {
             "id": island_id,
-            "name": island.get("name"),
-            "label": island.get("label"),
+            # name_hold: the stored AI name of an island that cannot show it right now
+            # (another island shows the same name); it stays the saved name.
+            "name": island.get("name_hold") or island.get("name"),
+            "label": (f"{island['name_hold']}{terrain_word(island.get('size') or len(post_ids))}" if island.get("name_hold")
+                      else island.get("label")),
+            # "ai" when the name came from core.island_namer; basis is the post
+            # set it was made for, so an unchanged island keeps its name.
+            "name_source": island.get("name_source"),
+            "name_basis": island.get("name_basis"),
+            "name_tried_at": island.get("name_tried_at"),
             "tier": tier,
             "score_total": points["total"],
             "score_recent": points["recent"],
@@ -227,8 +246,26 @@ def update(previous, current, posts_by_id, events, now=None, rank_landmarks=None
             record(island_id, "birth", "birth", place, {}, after)
         # Names stored before the topic line existed were "A / B"; only the
         # heading counts, so that change alone is not a rename.
-        if old is not None and _heading(old.get("name")) != _heading(state["name"]):
-            record(island_id, "rename", "rename", place, {"name": old.get("name")}, {"name": state["name"]})
+        # The first AI name an island gets replaces the word-count one without
+        # a rename event: otherwise the switch would tell every island at once.
+        # An AI name replacing an AI name is told only when the island itself
+        # changed (posts shared with last time under ISLAND_NAMING_NOTIFY_OVERLAP);
+        # a reworded name for the same island is saved quietly.
+        # The same goes for the first genre name ('genre', chosen by meaning in app.name_by_genre)
+        # and for moving between genre and AI names. A genre name changing for the same
+        # island (or falling back to the word count when the encoder is down) is quiet too.
+        named_by_meaning = ("ai", "genre")
+        old_source = old.get("name_source") if old is not None else None
+        switched = (state["name_source"] in named_by_meaning and old is not None
+                    and old_source != state["name_source"])
+        reworded = (old is not None
+                    and ((state["name_source"] in named_by_meaning and old_source == state["name_source"])
+                         or (old_source == "genre" and state["name_source"] == "terms"))
+                    and jaccard(old.get("post_ids"), state["post_ids"]) >= ISLAND_NAMING_NOTIFY_OVERLAP)
+        if old is not None and not switched and not reworded and _heading(old.get("name")) != _heading(state["name"]):
+            # A genre is chosen by meaning, like an AI name: its cause reads "the topic changed".
+            ai_involved = bool({"ai", "genre"} & {state["name_source"], old.get("name_source")})
+            record(island_id, "rename", "rename_ai" if ai_involved else "rename", place, {"name": old.get("name")}, {"name": state["name"]})
         if old is not None and old.get("tier", 0) != tier:
             cause = "tier_up" if tier > old.get("tier", 0) else "tier_down"
             record(island_id, "tier", cause, place,

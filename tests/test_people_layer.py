@@ -144,7 +144,19 @@ def test_an_embedding_outage_still_saves_the_words(people, app_module, monkeypat
     assert stored["vec_topics"] is None and stored["vec_goal"] is None
 
 
-def test_a_close_newcomer_is_announced_once_and_at_most_three_a_day(people, app_module):
+def test_a_close_newcomer_is_not_announced_any_more(people, app_module):
+    """「似た人」の通知は2026-10-12に止めた。既定ではサーバーは何も作らない。"""
+    first = people("first@example.com", "さいしょ")
+    c = first.client
+    put_profile(c, first, **CAMPER)
+    for i in range(3):
+        put_profile(c, people(f"copy{i}@example.com", f"そっくり{i}"), **CAMPER)
+    assert first.inbox({"similar"}) == []
+    assert app_module.notify_similar(first.id) == []
+
+
+def test_the_similar_rules_still_hold_when_switched_on(people, app_module, monkeypatch):
+    monkeypatch.setattr(app_module, "SIMILAR_NOTIFY_ENABLED", True)
     first = people("first@example.com", "さいしょ")
     c = first.client
     put_profile(c, first, **CAMPER)
@@ -302,15 +314,15 @@ def test_one_line_per_pair_however_many_posts_and_taps(people, app_module):
     assert len(lines_now(c, person=chiaki.id)) == 1
 
 
-def test_the_first_exchange_tells_both_people_once(people, app_module):
+def test_the_first_exchange_no_longer_tells_anyone(people, app_module):
     akari = people("a@example.com", "あかり")
     bannai = people("b@example.com", "ばんない")
     post = akari.post(CAMPING_A)
     bannai.react(post["id"], "like")
     bannai.react(post["id"], "join")
     bannai.comment(post["id"], "いいですね")
-    assert len(akari.inbox({"connection"})) == 1
-    assert len(bannai.inbox({"connection"})) == 1
+    assert akari.inbox({"connection"}) == []
+    assert bannai.inbox({"connection"}) == []
 
 
 # --------------------------------------------------------------------------
@@ -430,7 +442,7 @@ def test_every_kind_has_a_push_and_an_in_app_switch(people, app_module):
     akari = people("a@example.com", "あかり")
     c = akari.client
     settings = c.get("/api/notification-settings", headers=akari.headers).json()
-    assert settings["categories"] == ["reply", "reaction", "connection", "similar", "island"]
+    assert settings["categories"] == ["reply", "reaction", "island"]
     assert all(value == {"push": True, "in_app": True} for value in settings["settings"].values())
 
     saved = c.put("/api/notification-settings", headers=akari.headers, json={"settings": [
@@ -461,14 +473,14 @@ def test_reactions_are_grouped_and_a_switched_off_kind_stays_listed_without_a_ba
     assert reactions[0]["others"] == 2
     assert reactions[0]["actors"][0]["display_name"] == "ファン2", "newest first"
     assert len(reactions[0]["ids"]) == 3
-    assert feed["unread"] == 1 + 3, "the grouped likes and three new connections"
+    assert feed["unread"] == 1, "the grouped likes (no connection notifications any more)"
 
     c.put("/api/notification-settings", headers=akari.headers,
           json={"settings": [{"category": "reaction", "push": True, "in_app": False}]})
     feed = c.get("/api/local/notifications/feed", headers=akari.headers).json()
     reactions = [row for row in feed["notifications"] if row["category"] == "reaction"]
     assert reactions and reactions[0]["interrupts"] is False, "still listed"
-    assert feed["unread"] == 3, "but no longer counted on the badge"
+    assert feed["unread"] == 0, "but no longer counted on the badge"
 
 
 # --------------------------------------------------------------------------

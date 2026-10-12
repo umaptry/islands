@@ -1,4 +1,11 @@
-// Getting in: the intro slides, the real sign-in, and the first profile.
+// Getting in: the welcome page, the real sign-in, the first profile and the guidance.
+//
+// The order follows the design mock (モック②): the way in, name / 所属 / mail,
+// the passcode, then the icon photo, the two ようこそ pages, the 案内 page and
+// the first post. The passcode is a real one (a mail from Supabase Auth, or the
+// number shown on the screen in local mode); the mock's "any four digits" is
+// not here. The icon is a photo or nothing: the 30 emoji are gone, and a person
+// who chooses no photo gets a silhouette.
 //
 // islands had two screens here that did the same thing behind different titles
 // ("アカウント作成" and "ログイン"), and both accepted any four digits. There is
@@ -7,7 +14,7 @@
 // only side that knows. The code is a real one-time code from Supabase Auth.
 
 import { config } from '../config.js';
-import { EMOJI, avatarCss } from '../avatars.js';
+import { PHOTO_ICON, hasEmoji } from '../avatars.js';
 import { AVATAR_IMAGE, prepareImage } from '../image.js';
 import { api, data } from '../net.js';
 import { session } from '../session.js';
@@ -18,49 +25,22 @@ import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
 
-// ---------------------------------------------------------------- intro
+// ---------------------------------------------------------------- welcome
 
-let introIndex = 0;
-
-function paintIntro() {
-  const track = $('slideTrack');
-  const total = track.children.length;
-  track.style.transform = `translateX(${-introIndex * 100}%)`;
-  [...$('dots').children].forEach((dot, i) => dot.classList.toggle('on', i === introIndex));
-  $('introBack').hidden = introIndex === 0;
-  $('introNext').textContent = introIndex === total - 1 ? 'はじめる' : '次へ';
-}
-export function setupIntro() {
+export function setupWelcome() {
   $('welcomeRegister').addEventListener('click', () => navigate('#/auth?intent=register'));
   $('welcomeLogin').addEventListener('click', () => navigate('#/auth?intent=login'));
   $('welcomeBrowse').addEventListener('click', () => navigate('#/map'));
   screen('welcome', { enter() {
     const box = clear($('welcomeOAuth'));
-    (config().oauth || []).forEach((provider) => box.append(el('button', {
-      className: 'btn btn-block', text: `${provider === 'google' ? 'Google' : 'Apple'}で登録`,
+    const providers = config().oauth || [];
+    providers.forEach((provider) => box.append(el('button', {
+      className: 'btn btn-block', text: provider === 'google' ? 'Googleで登録' : 'Appleのアカウントで登録',
       on: { click: () => session.startOAuth(provider) },
     })));
+    // The 「または」 line only means something when there is a choice above it.
+    $('welcomeDivider').hidden = providers.length === 0;
   } });
-  // Buttons are the only way through. A scroll-snap track let a half swipe
-  // settle between two slides with the dots showing one thing and the screen
-  // showing another.
-  $('introNext').addEventListener('click', () => {
-    const total = $('slideTrack').children.length;
-    if (introIndex < total - 1) {
-      introIndex += 1;
-      paintIntro();
-    } else {
-      navigate('#/welcome');
-    }
-  });
-  $('introBack').addEventListener('click', () => {
-    if (introIndex > 0) {
-      introIndex -= 1;
-      paintIntro();
-    }
-  });
-  paintIntro();
-  screen('intro', { enter: () => { introIndex = 0; paintIntro(); } });
 }
 
 // ---------------------------------------------------------------- sign in
@@ -80,13 +60,23 @@ export function setupAuth() {
   const verify = $('authVerify');
   let sending = false;
   let resendUntil = 0;
+  let resendFor = '';      // the address the wait belongs to
   let resendTimer = null;
+  const normalized = (value) => String(value || '').trim().toLowerCase();
+
+  // The wait is per address: another address is not held back by it.
+  function waitLeft() {
+    if (!resendFor || normalized(email.value) !== resendFor) return 0;
+    return Math.max(0, Math.ceil((resendUntil - Date.now()) / 1000));
+  }
 
   function paintSend() {
-    const seconds = Math.max(0, Math.ceil((resendUntil - Date.now()) / 1000));
+    const seconds = waitLeft();
     if (seconds === 0 && resendTimer) {
       clearInterval(resendTimer);
       resendTimer = null;
+    } else if (seconds > 0 && !resendTimer) {
+      resendTimer = setInterval(paintSend, 250);
     }
     send.disabled = sending || seconds > 0 || !email.value.includes('@') || (registerIntent && !$('registerName').value.trim());
     send.textContent = sending ? '送信中…' : (
@@ -94,12 +84,13 @@ export function setupAuth() {
     );
   }
 
-  function startResendCooldown(delay = RESEND_COOLDOWN_MS) {
+  function startResendCooldown(address, delay = RESEND_COOLDOWN_MS) {
     // GoTrue has a per-address resend window. Mirroring it in the client
     // prevents accidental double-clicks and back-and-forth navigation from
     // consuming the project-wide mail allowance.
-    resendUntil = Math.max(resendUntil, Date.now() + Math.max(delay, RESEND_COOLDOWN_MS));
-    if (!resendTimer) resendTimer = setInterval(paintSend, 250);
+    const until = Date.now() + Math.max(delay, RESEND_COOLDOWN_MS);
+    resendUntil = resendFor === address ? Math.max(resendUntil, until) : until;
+    resendFor = address;
     paintSend();
   }
 
@@ -123,14 +114,14 @@ export function setupAuth() {
   });
 
   send.addEventListener('click', async () => {
-    if (sending || Date.now() < resendUntil) return;
+    if (sending || waitLeft() > 0) return;
     sending = true;
     paintSend();
     try {
       const result = await session.requestCode(email.value);
       pendingEmail = result.email;
-      startResendCooldown();
-      $('authSentTo').textContent = `${result.email} に届いたパスコードを入力してください。`;
+      startResendCooldown(normalized(email.value));
+      $('authSentTo').textContent = `送り先：${result.email}`;
       const devBox = $('authDevCode');
       if (result.devCode) {
         // Local mode has no mail server. Saying so plainly beats a code that
@@ -151,7 +142,7 @@ export function setupAuth() {
     } catch (error) {
       $('authError').textContent = error.message;
       if (error.code === 'over_email_send_rate_limit') {
-        startResendCooldown(error.retryAfterMs || RESEND_COOLDOWN_MS);
+        startResendCooldown(normalized(email.value), error.retryAfterMs || RESEND_COOLDOWN_MS);
       }
     } finally {
       sending = false;
@@ -169,7 +160,7 @@ export function setupAuth() {
       $('authCodeError').textContent = error.message;
       verify.disabled = false;
     } finally {
-      verify.textContent = 'ログイン';
+      verify.textContent = '次へ';
     }
   });
 
@@ -179,12 +170,29 @@ export function setupAuth() {
     paintSend();
   });
 
+  // Signing out leaves nothing of the last person on the form: the address,
+  // the code and the resend wait all go (otherwise the next person is held
+  // back by 「再送まで N秒」 for an address that is not theirs).
+  window.addEventListener('islands:signout', () => {
+    email.value = '';
+    code.value = '';
+    $('registerName').value = '';
+    $('authError').textContent = '';
+    $('authCodeError').textContent = '';
+    verify.disabled = true;
+    resendUntil = 0;
+    resendFor = '';
+    pendingEmail = '';
+    showStep('email');
+    paintSend();
+  });
+
   screen('auth', {
     enter: (_params, query) => {
       registerIntent = query?.get('intent') === 'register';
       $('registerFields').hidden = !registerIntent;
       $('auth').classList.toggle('register', registerIntent);
-      $('authLede').textContent = registerIntent ? '下記の情報を入力してください。' : 'メールアドレスにパスコードを送ります。';
+      $('authLede').textContent = registerIntent ? '下記の情報を入力してください。' : 'メールアドレスを入力してください。';
       const title = registerIntent ? 'アカウント作成' : 'ログイン';
       document.querySelector('#auth [data-step="email"] h2').textContent = title;
       document.querySelector('#auth [data-step="code"] h2').textContent = title;
@@ -231,12 +239,16 @@ export async function afterSignIn() {
   if (!state.account || !state.account.display_name) {
     if (registerIntent && $('registerName').value.trim()) {
       try {
+        // icon_id PHOTO_ICON marks the account as "photo only" from the start,
+        // so a person who skips the photo gets the silhouette and not the
+        // default emoji the column would otherwise hand out.
         state.account = (await api.put('/api/account/me', {
           display_name: $('registerName').value.trim(),
           affiliation: $('registerAffiliation').value.trim() || null,
+          icon_id: PHOTO_ICON,
         })).account;
-        setOnboardingStep('0');
-        navigate('#/guidance');
+        setOnboardingStep('photo');
+        navigate('#/setup');
       } catch (error) {
         toast(error.message);
         await navigate('#/setup');
@@ -263,34 +275,14 @@ export async function afterSignIn() {
 
 // ---------------------------------------------------------------- avatar
 
-function paintIconGrid(grid, selected, onPick) {
-  clear(grid);
-  EMOJI.forEach((emoji, index) => {
-    const id = String(index);
-    const cell = el('button', {
-      className: `icon-cell${id === selected ? ' on' : ''}`,
-      attrs: { type: 'button', 'aria-label': `アイコン ${index + 1}` },
-      text: emoji,
-      style: { background: avatarCss(id) },
-      on: {
-        click: () => {
-          onPick(id);
-          $$('.icon-cell', grid).forEach((node, i) => {
-            node.classList.toggle('on', String(i) === id);
-          });
-        },
-      },
-    });
-    grid.append(cell);
-  });
-}
-
 /**
- * The アイコン field: 30 emoji discs, or a photo.
+ * The アイコン field: a photo, or nothing.
  *
  * `accounts.avatar_path`, the column grants, the Storage policy and ui.js's
- * rendering branch were all here already; this is the half that was missing,
- * so the second option in 要件 2.2 could not actually be taken.
+ * rendering branch were all here already. The 30 emoji discs that used to sit
+ * under the photo button are gone (モック②: the icon is a photo); a person who
+ * still has an emoji keeps seeing it until they set a photo, and 「写真を外す」
+ * gives it back to them.
  *
  * The photo is held as a blob and uploaded by commit(), not when it is picked.
  * That matches the composer, and it means somebody who opens the file dialog
@@ -305,7 +297,8 @@ export function setupAvatarField(prefix) {
   const photoButton = $(`${prefix}AvatarPhoto`);
   const clearButton = $(`${prefix}AvatarClear`);
   const file = $(`${prefix}AvatarFile`);
-  const chosen = { icon_id: '0', avatar_path: null };
+  const size = prefix === 'setup' ? 112 : 72;
+  const chosen = { icon_id: PHOTO_ICON, avatar_path: null };
   let pending = null;        // a prepared blob, not yet uploaded
   let pendingUrl = null;     // its object URL, for the preview
 
@@ -317,13 +310,9 @@ export function setupAvatarField(prefix) {
 
   function paint() {
     const showingPhoto = Boolean(pendingUrl || chosen.avatar_path);
-    clear(preview).append(avatar(chosen, 64, pendingUrl));
+    clear(preview).append(avatar(chosen, size, pendingUrl));
     clearButton.hidden = !showingPhoto;
     photoButton.textContent = showingPhoto ? '写真を変える' : '写真を選ぶ';
-    // A photo wins over the emoji, so nothing in the grid should look chosen.
-    $$('.icon-cell', $(`${prefix}Icons`)).forEach((node, index) => {
-      node.classList.toggle('on', !showingPhoto && String(index) === chosen.icon_id);
-    });
   }
 
   photoButton.addEventListener('click', () => file.click());
@@ -352,16 +341,9 @@ export function setupAvatarField(prefix) {
   return {
     reset(account = {}) {
       releasePending();
-      chosen.icon_id = account.icon_id
-        || String(Math.floor(Math.random() * EMOJI.length));
+      // An old emoji icon stays as it is; everybody else is "photo only".
+      chosen.icon_id = hasEmoji(account.icon_id) ? String(account.icon_id) : PHOTO_ICON;
       chosen.avatar_path = account.avatar_path || null;
-      paintIconGrid($(`${prefix}Icons`), chosen.icon_id, (id) => {
-        chosen.icon_id = id;
-        // Choosing a face is also how you take a photo back off.
-        releasePending();
-        chosen.avatar_path = null;
-        paint();
-      });
       paint();
     },
 
@@ -372,7 +354,7 @@ export function setupAvatarField(prefix) {
         releasePending();
       }
       // null rather than undefined: the API clears the column on an explicit
-      // null, which is what 「絵文字に戻す」 has to mean.
+      // null, which is what 「写真を外す」 has to mean.
       return { icon_id: chosen.icon_id, avatar_path: chosen.avatar_path };
     },
   };
@@ -380,11 +362,18 @@ export function setupAvatarField(prefix) {
 
 // ---------------------------------------------------------------- setup
 
+/**
+ * The icon-photo step. Registration has already saved the name by the time it
+ * gets here, so the name boxes stay hidden; a sign-in that arrives with no name
+ * at all (a provider account, an address signed in from the login page) gets
+ * them on this same screen.
+ */
 export function setupProfileSetup() {
   const name = $('setupName');
   const save = $('setupSave');
   const field = setupAvatarField('setup');
-  const sync = () => { save.disabled = !name.value.trim(); };
+  let needsName = false;
+  const sync = () => { save.disabled = needsName && !name.value.trim(); };
   name.addEventListener('input', sync);
 
   save.addEventListener('click', async () => {
@@ -392,8 +381,10 @@ export function setupProfileSetup() {
     $('setupError').textContent = '';
     try {
       const result = await api.put('/api/account/me', {
-        display_name: name.value.trim(),
-        affiliation: $('setupAffiliation').value.trim() || null,
+        ...(needsName ? {
+          display_name: name.value.trim(),
+          affiliation: $('setupAffiliation').value.trim() || null,
+        } : {}),
         ...(await field.commit()),
       });
       state.account = result.account;
@@ -409,7 +400,10 @@ export function setupProfileSetup() {
 
   screen('setup', {
     enter: () => {
-      field.reset(state.account || {});
+      needsName = !(state.account && state.account.display_name);
+      $('setupNameFields').hidden = !needsName;
+      $('setupTitle').textContent = needsName ? 'プロフィール' : 'アイコンの写真を選びましょう';
+      field.reset(needsName ? {} : state.account);
       name.value = (state.account && state.account.display_name) || '';
       $('setupAffiliation').value = (state.account && state.account.affiliation) || '';
       $('setupError').textContent = '';
@@ -420,17 +414,24 @@ export function setupProfileSetup() {
 
 // ---------------------------------------------------------------- guidance
 
+// The picture slides (the 「使い方を見る」 intro that was, and what the lines
+// between people mean), shown once to a new account between the profile and the
+// first post. Buttons are the only
+// way through: a scroll-snap track let a half swipe settle between two slides
+// with the dots showing one thing and the screen showing another.
 export function setupGuidance() {
   let index = 0;
   const track = () => $('guidanceTrack');
   const dots = () => [...$('guidanceDots').children];
 
   function paint() {
-    const total = track().children.length;
-    [...track().children].forEach((slide, i) => { slide.hidden = i !== index; });
+    const slides = [...track().children];
+    track().style.transform = `translateX(${-index * 100}%)`;
+    // The slides beside the one in view are only slid out of sight.
+    slides.forEach((slide, i) => { slide.inert = i !== index; });
     dots().forEach((dot, i) => dot.classList.toggle('on', i === index));
     $('guidanceBack').hidden = index === 0;
-    $('guidanceNext').textContent = '次へ';
+    $('guidanceNext').textContent = index === slides.length - 1 ? 'はじめる' : '次へ';
     setOnboardingStep(String(index));
   }
 

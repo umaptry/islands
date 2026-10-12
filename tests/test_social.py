@@ -8,8 +8,8 @@ people and two devices.
 
 from conftest import BOOKKEEPING, CAMPING_A, CAMPING_B
 
-# What a tap or a message tells the author. The first exchange between two
-# people also sends both a "connection", which these tests are not about.
+# What a tap or a message tells the author. (The "connection" notification for
+# a first exchange was retired on 2026-10-12.)
 TAPS = {"like", "help", "join", "comment", "reply"}
 
 
@@ -92,11 +92,10 @@ def test_the_author_is_told_and_the_actor_is_not(people):
     bannai.comment(post["id"], "いいですね")
 
     inbox = akari.inbox()
-    assert {row["type"] for row in inbox} == {"like", "comment", "connection"}
+    assert {row["type"] for row in inbox} == {"like", "comment"}
     assert all(row["actor"]["display_name"] == "ばんない" for row in inbox)
-    # The first exchange between two people is a new line on the map, and both
-    # ends hear about that. The tap itself is still only the author's news.
-    assert [row["type"] for row in bannai.inbox()] == ["connection"], (
+    # The tap itself is only the author's news.
+    assert bannai.inbox() == [], (
         "the person who tapped does not get told about it"
     )
 
@@ -149,7 +148,7 @@ def test_marking_all_read_clears_the_badge(people, fresh_client):
     response = fresh_client.post(
         "/api/local/notifications/read", json={"ids": None}, headers=akari.headers
     )
-    assert response.json()["updated"] == 4, "three taps and the new connection"
+    assert response.json()["updated"] == 3, "three taps"
     assert akari.unread() == []
 
 
@@ -245,6 +244,32 @@ def test_an_avatar_can_be_taken_off_again(people, fresh_client):
         "/api/account/me", json={"avatar_path": None}, headers=akari.headers
     ).json()["account"]
     assert back_to_emoji["avatar_path"] is None
+
+
+def test_a_photo_only_account_keeps_the_marker_and_old_emoji_ids_stay(people, fresh_client):
+    """モック②: the icon is a photo. A new account saves icon_id "photo" (no emoji)
+    and is told apart from an old emoji account (a number) by that alone."""
+    akari = people("a@example.com", "あかり")
+    assert akari.account["icon_id"] == "1"          # an old emoji account stays as it was
+    saved = fresh_client.put(
+        "/api/account/me", json={"icon_id": "photo"}, headers=akari.headers
+    ).json()["account"]
+    assert saved["icon_id"] == "photo"
+    assert saved["avatar_path"] is None
+
+
+def test_the_local_server_says_who_joined_a_post(people, fresh_client):
+    """The stand-in for reading the reactions table: 参加者を見てみる (local mode)."""
+    akari = people("a@example.com", "あかり")
+    bob = people("b@example.com", "ボブ")
+    carol = people("c@example.com", "キャロル")
+    post = akari.post("みんなで山に登る仲間を探しています", tags=["参加者募集中"])
+    assert bob.react(post["id"], "join").status_code == 200
+    assert carol.react(post["id"], "like").status_code == 200      # a like is not a join
+    answer = fresh_client.get(f"/api/local/posts/{post['id']}/joiners").json()
+    assert answer["joiners"] == [bob.id]
+    bob.unreact(post["id"], "join")
+    assert fresh_client.get(f"/api/local/posts/{post['id']}/joiners").json()["joiners"] == []
 
 
 # --------------------------------------------------------------------------
@@ -415,3 +440,41 @@ def test_bookkeeping_and_camping_are_different_places(people):
     books = akari.post(BOOKKEEPING)
     distance = ((camping["x"] - books["x"]) ** 2 + (camping["y"] - books["y"]) ** 2) ** 0.5
     assert distance > 100, "two unrelated posts must not land on the same island"
+
+
+# --------------------------------------------------------------------------
+# 2026-10-12: 「新しいつながり」「似た人」の通知は作らない
+# --------------------------------------------------------------------------
+
+def test_no_connection_notification_is_made(people, fresh_client):
+    akari = people("a@example.com", "あかり")
+    bannai = people("b@example.com", "ばんない")
+    post = akari.post(CAMPING_A)
+    bannai.react(post["id"], "like")
+    bannai.comment(post["id"], "いいですね")
+    assert not [row for row in akari.inbox() + bannai.inbox() if row["type"] == "connection"]
+
+
+def test_similar_notifications_are_not_made(people):
+    import app as application
+
+    akari = people("a@example.com", "あかり")
+    assert application.notify_similar(akari.id) == []
+
+
+def test_settings_list_three_categories_and_accept_the_old_ones(fresh_client, people):
+    akari = people("a@example.com", "あかり")
+    got = fresh_client.get("/api/notification-settings", headers=akari.headers).json()
+    assert got["categories"] == ["reply", "reaction", "island"]
+    assert set(got["settings"]) == {"reply", "reaction", "island"}
+    # An old screen still sends the removed categories: no 400, and no effect.
+    put = fresh_client.put("/api/notification-settings", headers=akari.headers, json={
+        "settings": [{"category": "connection", "push": False, "in_app": False},
+                     {"category": "similar", "push": False, "in_app": False},
+                     {"category": "reaction", "push": False, "in_app": True}]})
+    assert put.status_code == 200, put.text
+    assert set(put.json()["settings"]) == {"reply", "reaction", "island"}
+    assert put.json()["settings"]["reaction"]["push"] is False
+    bad = fresh_client.put("/api/notification-settings", headers=akari.headers, json={
+        "settings": [{"category": "marketing", "push": True, "in_app": True}]})
+    assert bad.status_code == 422

@@ -1,5 +1,6 @@
-// Words for meeting people: why a suggested person is shown, and what changed
-// on the map while you were away. Pure functions, no imports, so node can test them.
+// Words for what changed on the map while you were away. (The lines that said
+// why a person was suggested went with 似ている人 and 人の札.) Pure functions,
+// no imports, so node can test them.
 
 const CONTINENT_MIN_POSTS = 50; // core/config.py CONTINENT_MIN_POSTS
 
@@ -25,39 +26,6 @@ export function peopleSentence(people, role) {
   const names = namesOf(people);
   if (!names) return '';
   return role === 'posts' ? `${names}が投稿しています。` : `${names}のやりとりがきっかけです。`;
-}
-
-/** The one-line reason a suggested person is shown (Q15). */
-export function reasonLine(person) {
-  const reason = person?.reasons?.[0]?.text;
-  if (reason) return reason;
-  return typeof person?.score === 'number' ? `似ている度 ${Math.round(person.score * 100)}%` : '';
-}
-
-const ORBIT_TAGS = {
-  seeking: '頼れそう', offering: '力になれそう', goal: '目標が近い', posts: '投稿が近い', island: '同じ島',
-};
-
-/**
- * The few words on the dotted line in 「まわりの人」: the most telling reason,
- * shortened. Being on the same island says little there, so it comes last;
- * a weak reason ("少し近い") gets no words at all.
- */
-export function orbitTag(reasons) {
-  const strong = (reasons || []).filter((reason) => reason?.text && !reason.text.includes('少し'));
-  const reason = strong.find((row) => row.kind !== 'island') || strong[0];
-  if (!reason) return '';
-  if (reason.kind === 'topics') return (reason.text.match(/「[^」]+」/) || [''])[0];
-  return ORBIT_TAGS[reason.kind] || '';
-}
-
-/** 「焚き火島・投稿 4件・つながり 3人」 under a person's name. */
-export function personMeta(card) {
-  const parts = [];
-  if (card?.island) parts.push(card.island);
-  if (card?.post_count) parts.push(`投稿 ${card.post_count}件`);
-  if (card?.connection_count) parts.push(`つながり ${card.connection_count}人`);
-  return parts.join('・');
 }
 
 export function digestLabel(count) {

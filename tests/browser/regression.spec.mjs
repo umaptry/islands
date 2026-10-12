@@ -51,10 +51,19 @@ test('reference registration saves profile and completes the first post', async 
   await expect(page.locator('.dev-code-value')).toBeVisible();
   await page.locator('#authCode').fill(await page.locator('.dev-code-value').innerText());
   await page.locator('#authVerify').click();
+  // モック②の流れ: パスコードのあとにアイコンの写真（選ばなくても進める）。
+  await expect(page.locator('#setup')).toHaveClass(/active/);
+  await expect(page.locator('#setupNameFields')).toBeHidden();
+  await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
-  await expect(page.locator('#guidance h2')).toHaveText('islandsへようこそ。');
-  for (let i = 0; i < 3; i++) await page.locator('#guidanceNext').click();
+  await expect(page.locator('#guidance h2').first()).toContainText('あなたが書いた一言で');
+  const pages = await page.locator('#guidanceTrack > .slide').count();
+  for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
   await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
+  // スライダーを一度動かすまで投稿できない。
+  await expect(page.locator('#composeSubmit')).toBeDisabled();
+  await page.locator('#composeMotivation').fill('70');
+  await expect(page.locator('#composeSubmit')).toBeEnabled();
   await page.locator('#composeSubmit').click();
   await expect(page.locator('#map')).toHaveClass(/active/);
   await page.goto('/');

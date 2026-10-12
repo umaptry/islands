@@ -1,4 +1,9 @@
-"""Island names are made of what people posted, not of a table of genres.
+"""Island names: the words people posted are the detail line, the heading is an activity genre (2026-10-12).
+
+Until then the heading was the most used noun and no table of genres was involved.
+The tests below that name a landmass by word counts call `name_landmasses` directly.
+
+Original note:
 
 This is the seam where the two projects meet. `islands` decided a post's genre
 by matching its text against twelve hand-written keyword lists - the best it
@@ -15,6 +20,7 @@ import pytest
 
 from conftest import Person
 from core.clustering import name_group
+from core.config import ISLAND_GENRES
 from core.stopwords import DISPLAY_STOP_WORDS
 
 MOUNTAINS_A = "山登りが好きで、週末は低山を歩いています。山頂で湯を沸かしてコーヒーを飲む時間が好きです。"
@@ -138,8 +144,10 @@ def test_the_first_post_names_its_own_island(fresh_client):
     islands = islands_now(fresh_client)
     assert len(islands) == 1
     assert islands[0]["size"] == 1
-    # Built from words this person actually used - not from a table of genres.
-    for word in islands[0]["name"].split(" / "):
+    # The heading is an activity genre; the words this person actually used are the detail line.
+    assert islands[0]["name"] in ISLAND_GENRES and islands[0]["name_source"] == "genre"
+    assert islands[0]["topics"]
+    for word in islands[0]["topics"]:
         assert word in MOUNTAINS_A, f"{word} is not in the post it claims to describe"
     assert placed["island"]["name"] == islands[0]["name"]
     assert placed["island"]["label"].endswith("島")
@@ -180,9 +188,10 @@ def test_once_their_ground_meets_they_share_one_name(fresh_client, people):
     islands = islands_now(fresh_client)
     assert len(islands) == 1, f"a {gap:.0f}-unit gap should be covered by now"
     assert islands[0]["size"] == 2
+    assert islands[0]["name"] in ISLAND_GENRES
     assert any(word in MOUNTAINS_A and word in MOUNTAINS_B
-               for word in islands[0]["name"].split(" / ")), (
-        f"{islands[0]['name']} is not a word they share"
+               for word in islands[0]["topics"]), (
+        f"{islands[0]['topics']} has no word they share"
     )
 
 
@@ -196,7 +205,8 @@ def test_a_post_about_something_else_makes_a_second_island(fresh_client, people)
     assert len(islands_now(fresh_client)) == before + 1
 
     named = island_for(fresh_client, placed["id"])
-    for word in named["name"].split(" / "):
+    assert named["name"] in ISLAND_GENRES
+    for word in named["topics"]:
         assert word in SOLDERING, f"{word} is not in the post it claims to describe"
 
 

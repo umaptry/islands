@@ -29,7 +29,7 @@ def validate(health, config, provider, version, supabase_url, phase="ready"):
             errors.append("DB and artifact versions mismatch")
         maintenance = phase == "maintenance"
         if health.get("maintenance") is not maintenance or health.get("ready") is not (not maintenance):
-            errors.append("unexpected maintenance/readiness state")
+            errors.append(f"unexpected maintenance/readiness state: {health.get('not_ready_reasons')}")
     if errors:
         raise RuntimeError("; ".join(errors))
 

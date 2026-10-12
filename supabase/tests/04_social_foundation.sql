@@ -52,16 +52,16 @@ select throws_ok(
   '23514', null, 'a goal is at most sixty characters');
 
 -- -----------------------------------------------------------------------
--- 2. Interactions: one 'connection' each way, once per pair
+-- 2. Interactions (the 'connection' notification was retired on 2026-10-12)
 -- -----------------------------------------------------------------------
 insert into public.reactions(post_id, actor_id, kind) values
   ('00000000-0000-4000-8000-000000000001', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'like');
-select is((select count(*)::int from public.notifications where type = 'connection'), 2,
-          'the first interaction tells both people');
+select is((select count(*)::int from public.notifications where type = 'connection'), 0,
+          'the first interaction no longer makes a connection notification (retired 2026-10-12)');
 insert into public.reactions(post_id, actor_id, kind) values
   ('00000000-0000-4000-8000-000000000002', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'help');
-select is((select count(*)::int from public.notifications where type = 'connection'), 2,
-          'a second interaction is not a new connection');
+select is((select count(*)::int from public.notifications where type = 'connection'), 0,
+          'nor does a second one');
 select is(public.pair_interaction_count('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
                                         'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), 2,
           'interactions are counted per pair in either direction');
@@ -89,8 +89,8 @@ select is((select count(*)::int from public.notifications
 select is((select count(*)::int from public.notifications
             where type = 'connection'
               and recipient_id in ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')
-              and actor_id in ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')), 2,
-          'a reply connects the replier to the person replied to');
+              and actor_id in ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')), 0,
+          'a reply no longer makes a connection notification');
 select throws_ok(
   $$insert into public.comments(post_id, author_id, body, reply_to) values
      ('00000000-0000-4000-8000-000000000002', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',

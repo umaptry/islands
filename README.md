@@ -110,8 +110,12 @@ radius = (30 + energy × 0.45) × (2/3)
 影響半径が重なる投稿を Union-Find で推移的にまとめ、その一群を1つの島とします
 （A-B と B-C が重なれば、A と C が離れていても1つの大陸）。
 
-名前は、**その島にいる投稿の名詞を集めて「何人が使ったか × コーパスでの珍しさ」で
-上位2語** を選びます。元の islands にあった12ジャンルの固定表は使いません。座標が
+名前は、**島の投稿を Gemini に見せて、全体を包括するジャンル名（「アート」
+「キャンプ」など）を1語で付けさせます**（2026-10-12〜。**既定はオフ**で、環境変数
+`ISLAND_NAMING_ENABLED=1` と `GEMINI_API_KEY` が揃ったときだけ動く。書き手3人以上・投稿5件以上の島だけ。島の顔ぶれがほぼ変わらない間は
+前の名前を使い回し、呼ぶのは島の追跡処理の中だけ）。鍵がないとき（手元）や失敗したときは、
+従来の「投稿の名詞を集めて、何人が使ったか × コーパスでの珍しさで上位2語」で代用します。
+元の islands にあった12ジャンルの固定表は使いません。座標が
 意味を持っている以上、固定ジャンルはただの劣化だからです。
 
 誰も投稿していない場所には名前が無く、地図にも出ません。地図は名前のない海から
@@ -504,7 +508,7 @@ Supabase を設定していなければローカルモードのままなので�
 app.py                  FastAPI。torch を一切読み込まない
                         /api/posts        投稿の作成・編集・削除（要JWT）
                         /api/islands      島の検出と命名
-                        /api/neighbors    近い人（448次元コサイン）
+                        /api/neighbors    近い投稿（448次元コサイン。画面からは未使用）
                         /api/pair         2投稿の似てる度と共通のことば
                         /api/account/me   プロフィール
                         /api/config       ブラウザが描画に使う定数一式
@@ -535,12 +539,15 @@ web/
     ui.js               トースト・シート・DOM ヘルパ
     image.js            画像の縮小・再エンコード（投稿画像とアイコン共通）
     avatars.js
+    audio.js            BGM・波の音・効果音（Web Audio で生成）
+    heat.js             熱量の玉・炎の段・色・輪郭（地図と投稿画面で共有）
     map/
-      index.js          カメラ・ジェスチャ・地図と orbit の描画
+      index.js          カメラ・ジェスチャ・地図の描画
       terrain.js        エネルギー場 → バイオームのラスタ
       landmass.js       Union-Find（クライアント側）
       decor.js          海図の波・小舟・鳥・波打ち際
-    components/         postcard.js / chat.js
+      reads.js          この端末で開いた「参加者募集中」の投稿の記録（金の星用）
+    components/         postcard.js / chat.js / heatobject.js
     screens/            auth / compose / map / notifications / profile
 scripts/
   seed_corpus.jsonl     シード1,000件

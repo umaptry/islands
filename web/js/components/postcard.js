@@ -2,12 +2,11 @@
 //
 // Ported piece for piece: the author row, the tag badges, the body, the
 // エンジョイ↔ガチ indicator, the image, and the action footer with comments,
-// いいね, 手伝えるかも and 参加したい. The own-post menu (edit / delete) is
+// いいね, 手伝えるかも and 参加. The own-post menu (edit / delete) is
 // here too - in islands both of its items were an alert() saying the feature
 // did not exist.
 //
-// Stage 5 added the "talk to me" badge (Q45), shown first and in green, and
-// for the author alone, how many people have seen the post (Q35). Nobody else
+// Stage 5 added, for the author alone, how many people have seen the post (Q35). Nobody else
 // ever sees that number, and there is no "seen but not answered" anywhere:
 // a reply that does not come should not feel like one that was refused (Q46).
 //
@@ -18,8 +17,9 @@
 import { config } from '../config.js';
 import { data } from '../net.js';
 import { hasReacted, state, subscribe } from '../state.js';
-import { avatar, clip, el, motivationColor, timeAgo } from '../ui.js';
+import { avatar, confirmAction, el, motivationColor, timeAgo } from '../ui.js';
 import { icon } from '../icons.js';
+import { isRecruiting } from '../map/reads.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -42,16 +42,19 @@ subscribe(() => {
   });
 });
 
+// いいね shows only its heart and count; 手伝えるかも and 参加 carry their words.
+// 参加 exists only on a post that is looking for participants.
 const REACTIONS = [
-  { kind: 'like', label: 'いいね', icon: '♥', countKey: 'like_count', tone: 'like' },
-  { kind: 'help', label: '手伝えるかも', icon: '✋', countKey: 'help_count', tone: 'help' },
-  { kind: 'join', label: '参加', icon: '➕', countKey: 'join_count', tone: 'join' },
+  { kind: 'like', label: 'いいね', icon: 'heart', countKey: 'like_count', tone: 'like', side: 'left' },
+  { kind: 'help', label: '手伝えるかも', icon: 'help', countKey: 'help_count', tone: 'help', side: 'right' },
+  { kind: 'join', label: '参加', icon: 'hand', countKey: 'join_count', tone: 'join', side: 'right' },
 ];
 
 /**
  * @param post           the post row
  * @param options.onReact  (kind) => Promise
  * @param options.onEdit / onDelete / onOpenAuthor / onReport / onComments
+ * @param options.onSeeParticipants  () => void, shown on 「参加者募集中」 posts
  * @param options.similarity { similarity, shared, note } when viewing somebody else
  * @param options.compact  drop the image and the footer (used in list contexts)
  */
@@ -88,13 +91,8 @@ export function postCard(post, options = {}) {
 
   // --- tags -------------------------------------------------------------
   if ((post.tags || []).length) {
-    const open = config().open_tag;
-    const tags = post.tags.includes(open) ? [open, ...post.tags.filter((tag) => tag !== open)] : post.tags;
     card.append(el('div', { className: 'post-tags' },
-      tags.map((tag) => (tag === open
-        ? el('span', { className: 'tag-badge open', text: '💬 話しかけていいよ' })
-        : el('span', { className: 'tag-badge', text: tag }))),
-    ));
+      post.tags.map((tag) => el('span', { className: 'tag-badge', text: tag }))));
   }
 
   // --- body -------------------------------------------------------------
@@ -115,7 +113,21 @@ export function postCard(post, options = {}) {
   }
 
   // --- footer -----------------------------------------------------------
-  if (!options.compact) card.append(footer(post, options));
+  // The reactions and, on a 「参加者募集中」 post, the button that shows who has
+  // joined sit together at the foot of the card (as in the mock), so that the
+  // half-open sheet can keep both in view.
+  if (!options.compact) {
+    const foot = el('div', { className: 'post-footer' }, footer(post, options));
+    if (options.onSeeParticipants && isRecruiting(post)) {
+      foot.append(el('button', {
+        className: 'post-participants-button',
+        attrs: { type: 'button' },
+        text: '参加者を見てみる',
+        on: { click: () => options.onSeeParticipants(post) },
+      }));
+    }
+    card.append(foot);
+  }
   if (mine) {
     const views = el('p', { className: 'post-views', attrs: { 'data-views': '' } });
     paintViews(views, post.id);
@@ -137,7 +149,7 @@ function paintViews(node, postId) {
   node.textContent = `👣 ${count}人が見ました`;
 }
 
-/** Whether a post says "talk to me" (Q45). */
+/** Whether a post carries the 気軽に話しかけて tag (Q45). */
 export function isOpen(post) {
   return Boolean(post?.tags?.includes(config().open_tag));
 }
@@ -196,14 +208,8 @@ function motivationBar(value) {
       }),
     ),
     el('div', { className: 'motivation-labels' },
-      el('span', {},
-        el('span', { text: 'エンジョイ' }),
-        el('span', { className: 'motivation-sub', text: 'casual' }),
-      ),
-      el('span', {},
-        el('span', { text: 'ガチ' }),
-        el('span', { className: 'motivation-sub', text: 'hardcore' }),
-      ),
+      el('span', { text: 'エンジョイ' }),
+      el('span', { text: 'ガチ' }),
     ),
   );
 }
@@ -240,8 +246,11 @@ function similarityBlock({ similarity, shared, note }) {
 
 function footer(post, options) {
   const row = el('div', { className: 'post-actions' });
+  const left = el('div', { className: 'post-actions-group' });
+  const right = el('div', { className: 'post-actions-group right' });
+  row.append(left, right);
 
-  row.append(el('button', {
+  left.append(el('button', {
     className: 'post-action',
     attrs: { type: 'button', 'aria-label': 'メッセージを開く' },
     on: { click: () => options.onComments && options.onComments(post) },
@@ -251,12 +260,15 @@ function footer(post, options) {
   ));
 
   REACTIONS.forEach((reaction) => {
+    // Somebody else's 参加 button on a post that is not recruiting would be a
+    // promise nobody asked for. Your own earlier join stays visible and undoable.
+    if (reaction.kind === 'join' && !isRecruiting(post) && !hasReacted(post.id, 'join')) return;
     const button = el('button', {
       className: `post-action reaction ${reaction.tone}`,
       attrs: { type: 'button', 'data-reaction': reaction.kind, 'aria-label': reaction.label },
     },
-      el('span', { className: 'post-action-icon' }, icon({ like: 'heart', help: 'help', join: 'hand' }[reaction.kind], 20)),
-      el('span', { className: 'post-action-label', text: reaction.label }),
+      el('span', { className: 'post-action-icon' }, icon(reaction.icon, reaction.kind === 'like' ? 20 : 18)),
+      reaction.kind === 'like' ? null : el('span', { className: 'post-action-label', text: reaction.label }),
       el('span', { className: 'post-action-count num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
     );
 
@@ -271,6 +283,14 @@ function footer(post, options) {
 
     button.addEventListener('click', async () => {
       if (!options.onReact) return;
+      // Joining is a promise to turn up, so it is asked about once; taking it
+      // back, and every other reaction, is a single tap.
+      if (reaction.kind === 'join' && state.account && !hasReacted(post.id, 'join')) {
+        const ok = await confirmAction({
+          title: '本当に参加しますか？', confirmLabel: '参加する',
+        });
+        if (!ok) return;
+      }
       if (!hasReacted(post.id, reaction.kind) && state.account) {
         button.classList.remove('pop');
         void button.offsetWidth;
@@ -284,25 +304,8 @@ function footer(post, options) {
         paint();
       }
     });
-    row.append(button);
+    (reaction.side === 'left' ? left : right).append(button);
   });
 
-  return row;
-}
-
-/** A compact row for lists: reveal, profile tabs, notification targets. */
-export function postRow(post, { onClick, trailing } = {}) {
-  const row = el('button', {
-    className: 'list-row',
-    attrs: { type: 'button' },
-    on: { click: () => onClick && onClick(post) },
-  },
-    avatar(post, 40),
-    el('div', { className: 'list-row-body' },
-      el('div', { className: 'list-row-title', text: post.display_name || '' }),
-      el('div', { className: 'list-row-sub', text: clip(post.body || '', 42) }),
-    ),
-    trailing || null,
-  );
   return row;
 }
