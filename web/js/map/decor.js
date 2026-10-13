@@ -59,7 +59,7 @@ const BOAT_LENGTH = 9;
 const SEA_MARK_COUNT = 44;
 const BIRD_SKEINS = 2;
 // Half a gull's wingspan, seen from above.
-const BIRD_SIZE = 5;
+const BIRD_SIZE = 2.5;   // halved 2026-10-13, with the flock's spacing and line
 // Boats and gulls wander the sea on slow closed curves (drift, below) so they
 // turn gently instead of flipping round at the end of a line: everything here
 // is seen from straight above, where a boat that reverses on the spot would
@@ -148,7 +148,7 @@ export function drawBirds(ctx, view, time) {
   ctx.save();
   ctx.strokeStyle = INK.bird;
   ctx.fillStyle = INK.bird;
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = 0.7;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   for (let flight = 0; flight < BIRD_SKEINS; flight += 1) {
@@ -161,8 +161,8 @@ export function drawBirds(ctx, view, time) {
     const unitX = Math.cos(spot.angle);
     const unitY = Math.sin(spot.angle);
     for (let bird = 0; bird < 3; bird += 1) {
-      const back = bird === 0 ? 0 : 9;
-      const side = bird === 1 ? -8 : (bird === 2 ? 8 : 0);
+      const back = bird === 0 ? 0 : 4.5;
+      const side = bird === 1 ? -4 : (bird === 2 ? 4 : 0);
       drawBird(ctx,
         lead.x - unitX * back - unitY * side,
         lead.y - unitY * back + unitX * side,

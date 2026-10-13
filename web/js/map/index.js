@@ -1100,7 +1100,8 @@ function drawTrees(trees, places, posts, thin, alpha = 1) {
   });
 }
 
-/** A white disc with the person's face, outlined like the buildings. */
+/** A white disc with the person's face. The dark outline other people's faces
+ * had is gone (2026-10-13); a coloured ring (yours, a heat) stays. */
 function faceBadge(who, x, y, size, { ring = OUTLINE, glow = 0 } = {}) {
   paintFaceBadge(ctx, who, x, y, size, ring, glow);
 }
@@ -1116,9 +1117,11 @@ function paintFaceBadge(c, who, x, y, size, ring, glow = 0) {
   c.fillStyle = '#fffaf0';
   c.fill();
   c.shadowBlur = 0;
-  c.lineWidth = ring === OUTLINE ? Math.max(1.4, size * 0.07) : Math.max(2.2, size * 0.12);
-  c.strokeStyle = ring;
-  c.stroke();
+  if (ring && ring !== OUTLINE) {
+    c.lineWidth = Math.max(2.2, size * 0.12);
+    c.strokeStyle = ring;
+    c.stroke();
+  }
   c.restore();
   drawFace(c, who, x, y, size * 0.74, ring);
 }

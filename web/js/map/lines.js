@@ -31,10 +31,11 @@ const PATH = '#f1deb3';
 const PATH_UNDER = 'rgba(74, 52, 38, .5)';
 
 // Line width by tier (1 weak .. 3 strong), CSS px. A route over the water is a
-// plain white line and thinner than a road on land.
+// plain white line and thinner than a road on land: at most half what it was
+// (2026-10-13), the weakest kept just visible.
 const ROAD_WIDTHS = [0, 1.6, 2.6, 3.8];
-const ROUTE_WIDTHS = [0, 1, 1.5, 2.1];
-const FAINT_WIDTH = { road: 1, route: 0.8 };
+const ROUTE_WIDTHS = [0, 0.7, 0.85, 1.05];
+const FAINT_WIDTH = { road: 1, route: 0.6 };
 const FAINT_ALPHA = 0.26;
 const FRESH_DAYS = 30;
 
