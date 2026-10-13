@@ -257,6 +257,8 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, .32);
 }
 .oauth-button { margin-bottom: 10px; }
+/* LINE's own green (LINE Login button guidelines); the others keep the app's buttons. */
+.btn.oauth-line, .btn-outline.oauth-line { background: #06c755; border-color: #06c755; color: #fff; }
 
 .dev-code {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

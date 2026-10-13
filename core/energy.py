@@ -81,6 +81,43 @@ def post_radius(post):
     return influence_radius(total_energy(post))
 
 
+# A post's cone reaches a little less far in some directions than in others, so
+# a lone post makes an island with bays and headlands instead of a disc. Only
+# ever less (by COAST_DEPTH at most): which posts share a landmass is still
+# decided by the full radii. Fixed by the post's id, so the island keeps its
+# shape. The browser reads these two from /api/config; web/js/map/coast.js
+# repeats only the hash and the sum, and tests pin both to one set of numbers
+# (2026-10-13).
+COAST_DEPTH = 0.3
+COAST_WAVES = ((2, 1.0), (3, 0.8), (4, 0.5), (5, 0.35), (7, 0.2))
+
+
+def hash32(text):
+    """FNV-1a over the UTF-8 bytes, as coast.js computes it."""
+    h = 0x811C9DC5
+    for byte in str(text).encode("utf-8"):
+        h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def coast_reach(post, dx, dy):
+    """The share of the full radius the post's cone reaches towards (dx, dy):
+    between 1 - COAST_DEPTH and 1. Takes and returns numpy arrays."""
+    import numpy as np
+
+    key = str(post.get("id") or f"{post['x']},{post['y']}")
+    angle = np.arctan2(dy, dx)
+    wave = np.zeros_like(angle, dtype=float)
+    norm = 0.0
+    for k, weight in COAST_WAVES:
+        h = hash32(f"{key}:{k}")
+        amp = weight * (0.5 + 0.5 * ((h & 0xFFFF) / 65536))
+        phase = ((h >> 16) / 65536) * 2 * np.pi
+        wave += amp * np.cos(k * angle - phase)
+        norm += amp
+    return 1 - COAST_DEPTH * (1 + wave / norm) / 2
+
+
 def biome_at(summed_energy):
     """Which band a point of the field falls in. `None` is open sea.
 
@@ -306,11 +343,14 @@ def constants():
         "biome_colors": dict(BIOME_COLORS),
         "plot_tiers": [[threshold, glyph] for threshold, glyph in PLOT_TIERS],
         "continent_min_posts": CONTINENT_MIN_POSTS,
+        "coast_depth": COAST_DEPTH,
+        "coast_waves": [[k, weight] for k, weight in COAST_WAVES],
     }
 
 
 __all__ = [
-    "BIOME_ORDER", "biome_at", "computed_energy", "constants", "detect_landmasses",
+    "BIOME_ORDER", "biome_at", "coast_reach", "computed_energy", "constants", "detect_landmasses",
+    "hash32",
     "influence_radius", "interaction_count", "name_landmasses", "plot_glyph",
     "post_radius", "terrain_word", "total_energy",
 ]

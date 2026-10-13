@@ -1306,6 +1306,7 @@ def config():
         "oauth": [
             name for name, flag in (
                 ("google", os.environ.get("KOTOBA_OAUTH_GOOGLE") == "1"),
+                ("line", os.environ.get("KOTOBA_OAUTH_LINE") == "1"),
                 ("apple", os.environ.get("KOTOBA_OAUTH_APPLE") == "1"),
             ) if flag
         ],

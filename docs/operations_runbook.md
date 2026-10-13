@@ -198,6 +198,45 @@ update public.islands_state set name_source = 'terms', name_basis = null, name_t
 
 - 言葉そのものを禁止する：環境変数 `ISLAND_NAME_BLOCKLIST` にカンマ区切りで足す（例 `競馬,パチンコ`）。組み込みの禁止語は `core/island_namer.py` の `BLOCKED`。新しい revision を出すと効く。**禁止語は今後の答えに効く**。すでに付いた AI の名前が禁止語を含む場合は、次の読み込みから従来の名前に戻る（コードが再検査する）。付いた名前を別の名前にしたいときは、上の `manual` の SQL で直せる。
 
+## Google・LINE でのログインの出し方（2026-10-13）
+
+コードは入っている。ボタンは Cloud Run の環境変数 `KOTOBA_OAUTH_GOOGLE` / `KOTOBA_OAUTH_LINE` が `1` のときだけ出る（未設定なら今までどおりメールのパスコードだけ）。Google・LINE・Supabase・Cloud Run の設定変更なので、**2人の合意が要る**。順番は「外の設定（Google・LINE・Supabase）→ 動作確認 → 環境変数」。環境変数を先に立てると、押しても失敗するボタンが出る。
+
+### Google
+
+1. Google Cloud Console の「Google Auth Platform」（OAuth 同意画面）：対象は「外部」。アプリ名とサポート用のメールを入れる。スコープは `openid`・メール・プロフィールだけにする（この範囲なら Google の審査は要らない）。公開ステータスを「本番環境」にする（「テスト」のままだと、登録したテストユーザーしか入れない）。
+2. 「クライアント」を種類「ウェブ アプリケーション」で作る。承認済みのリダイレクト URI に `https://<project-ref>.supabase.co/auth/v1/callback` を入れる。
+3. Supabase → Authentication → Sign In / Providers → Google を有効にし、クライアント ID とクライアント シークレットを貼る。
+4. Supabase → Authentication → URL Configuration の Redirect URLs に、本番の URL（末尾 `/`）があることを確かめる。ないと、ログイン後に Site URL へ戻される。
+
+### LINE
+
+LINE は Supabase に最初から入っている接続先ではないので、「Custom Providers」（2026-04 から。無料プランでも3つまで）で足す。
+
+1. LINE Developers コンソールで、プロバイダーを作り、その下に「LINE ログイン」チャネルを作る（アプリタイプは「ウェブアプリ」）。チャネルは後から別のプロバイダーへ移せない。
+2. Supabase → Authentication → Sign In / Providers → 一番下の Custom Providers → New Provider。
+   - 識別子は **`custom:line`**（コードがこの名前で呼ぶ。`web/js/session.js` の `SUPABASE_PROVIDERS`）
+   - 種類は OIDC、Issuer は `https://access.line.me`。Client ID はチャネル ID、Client Secret はチャネルシークレット
+   - メールなしでも登録できる設定（email optional）を有効にする。LINE は申請しないとメールを渡さない
+   - 画面に出る Callback URL を控える
+   - OIDC で ID トークンの検証に失敗するとき（LINE のウェブログインの ID トークンは HS256 署名のことがある）は、種類を OAuth2 にして手で入れる：authorize `https://access.line.me/oauth2/v2.1/authorize`、token `https://api.line.me/oauth2/v2.1/token`、userinfo `https://api.line.me/oauth2/v2.1/userinfo`、スコープ `openid profile`
+3. LINE のチャネル →「LINE ログイン設定」→ コールバック URL に、手順2で控えた Callback URL を入れる。
+4. メールも受け取りたいときだけ：チャネル基本設定 → OpenID Connect →「メールアドレス取得権限」を申請する（利用目的が分かる画面の写しが要る）。islands はメールがなくてもアカウントを作れるので必須ではない。
+5. 「開発中」のチャネルは、チャネルの管理者とテスターしかログインできない。確認が済んでから「公開」にする（**公開は元に戻せない**）。
+
+### 出す
+
+1. **ボタンを出す前の確認**：ブラウザで `https://<project-ref>.supabase.co/auth/v1/authorize?provider=google&redirect_to=<本番のURL>/`（LINE は `provider=custom:line`）を開く。ログインのあと本番の画面へ戻り、名前とアイコンの設定（`#/setup`）が出れば通っている。
+2. Cloud Run の環境変数を足して新しい revision を出す。CI の deploy は `--update-env-vars` で決まった変数だけを書き換えるので、ここで足した変数は次の deploy でも残る。
+
+   ```powershell
+   gcloud run services update islands --project <ID> --region asia-northeast1 --update-env-vars KOTOBA_OAUTH_GOOGLE=1,KOTOBA_OAUTH_LINE=1
+   ```
+
+3. 入口の画面に「Googleで登録」「LINEで登録」、ログイン画面に「Google で続ける」「LINE で続ける」が出る。メールのボタンは「メールアドレスで登録」に変わる。
+
+**止めたいとき**：`--remove-env-vars KOTOBA_OAUTH_LINE` などで外す。ボタンが消えるだけで、その方法で作ったアカウントは残る。ただしメールを渡していない LINE の人は、メールのパスコードでは入れなくなるので、止める前に人数を確かめる。
+
 ## 復旧とデータ保持
 
 切替前に隔離DBで両経路をリハーサルし、ID/本文/画像実体/反応/コメント/アカウントの保持を確認する。

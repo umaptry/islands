@@ -11,7 +11,7 @@
 // recomputed here. The map is a plain pan/zoom of the server's x/y. Nothing is
 // re-projected client-side.
 
-import { config, energyOf, interactionsOf, islandColor, radiusOf } from '../config.js';
+import { config, interactionsOf, islandColor, radiusOf } from '../config.js';
 import { drawFace } from '../avatars.js';
 import { matchesFilters, state, filtering } from '../state.js';
 import { clip, toast } from '../ui.js';
@@ -24,6 +24,7 @@ import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
 import { kinLines } from './kin.js';
 import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
 import { buildDetail, buildTerrain, gridTerrain } from './terrain.js';
+import { groundOf } from './coast.js';
 import { isUnreadRecruit } from './reads.js';
 import {
   drawHeat, faceLift, getHeatTier, heatColor, heatFrameAt, heatFrameTime,
@@ -1075,11 +1076,7 @@ function standsOnLand(x, foot, size, members) {
   const land = (sx, sy) => {
     const at = toWorld(sx, sy);
     let sum = 0;
-    posts.forEach((post) => {
-      const r = radiusOf(post);
-      const d = Math.hypot(post.x - at.x, post.y - at.y);
-      if (r > 0 && d < r) sum += energyOf(post) * (1 - d / r);
-    });
+    posts.forEach((post) => { sum += groundOf(post, at.x, at.y); });
     return sum >= sand;
   };
   return land(x - size * 0.4, foot) && land(x + size * 0.4, foot) && land(x, foot) && land(x, foot - size * 0.5);
@@ -1702,11 +1699,13 @@ function speechBubble(tail, { text, width: w, y, x = tail }) {
   ctx.moveTo(tail - 4, y + 10);
   ctx.lineTo(tail, y + 15);
   ctx.lineTo(tail + 4, y + 10);
+  // No outline (2026-10-13); a soft shadow keeps it off pale sand.
+  ctx.shadowColor = 'rgba(40, 30, 20, 0.22)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 1;
   ctx.fillStyle = '#fffaf0';
   ctx.fill();
-  ctx.lineWidth = 1.3;
-  ctx.strokeStyle = OUTLINE;
-  ctx.stroke();
+  ctx.shadowColor = 'transparent';
   ctx.font = '500 11px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

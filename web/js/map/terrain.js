@@ -1,7 +1,8 @@
 // The ground, built the way islands built it.
 //
 // Every post contributes a cone of energy - highest at the post, falling
-// linearly to nothing at its influence radius - and the cones are ADDED. The
+// linearly to nothing at its influence radius, which reaches a little less far
+// in some directions (coast.js) - and the cones are ADDED. The
 // sum at each point decides what that point is made of: shallows, desert,
 // savanna, plains, forest, mountain. Two quiet posts side by side make plains
 // out of what either alone would leave as desert, which is the whole mechanism.
@@ -18,6 +19,7 @@
 // the render loop just blits.
 
 import { config, energyOf, radiusOf } from '../config.js';
+import { coastOf, reachAt } from './coast.js';
 
 // Texture resolution, in device pixels per world unit, and the ceiling on the
 // texture itself. 1400 covers a phone at 3x without ever allocating something a
@@ -303,7 +305,7 @@ function render({ posts, cells, region, scale, unit, padding, limit, trees, smoo
 
   const field = new Float32Array(width * height);
 
-  const contribute = (worldX, worldY, energy, radius) => {
+  const contribute = (worldX, worldY, energy, radius, coast = null) => {
     if (!(radius > 0) || !(energy > 0)) return;
     const px = (worldX - minX) * scaled;
     const py = (worldY - minY) * scaled;
@@ -328,12 +330,13 @@ function render({ posts, cells, region, scale, unit, padding, limit, trees, smoo
       for (let x = from; x <= to; x += 1) {
         const dx = x - px;
         const distance = Math.sqrt(dx * dx + dySq);
-        field[row + x] += energy * (1 - distance / r);
+        const reach = coast ? r * reachAt(coast, dx, dy, distance) : r;
+        if (distance < reach) field[row + x] += energy * (1 - distance / reach);
       }
     }
   };
 
-  posts.forEach((post) => contribute(post.x, post.y, energyOf(post), radiusOf(post)));
+  posts.forEach((post) => contribute(post.x, post.y, energyOf(post), radiusOf(post), coastOf(post)));
 
   if (cells.length) {
     const { radius_base: base, radius_scale: rate, radius_trim: trim } = config().energy;

@@ -261,8 +261,9 @@ supabase db push
 すべて if-not-exists なので再実行しても安全です。
 
 - **Authentication → Providers → Email** を有効化。OTP（6桁コード）が使えることを確認
-- Google / Apple を使うならここで設定し、環境変数 `KOTOBA_OAUTH_GOOGLE=1` /
-  `KOTOBA_OAUTH_APPLE=1` を立てます（未設定ならログイン画面にボタンを出しません）
+- Google / LINE / Apple を使うならここで設定し、環境変数 `KOTOBA_OAUTH_GOOGLE=1` /
+  `KOTOBA_OAUTH_LINE=1` / `KOTOBA_OAUTH_APPLE=1` を立てます（未設定ならログイン画面にボタンを出しません）。
+  LINE は Custom Providers で `custom:line` として足します（手順は `docs/operations_runbook.md`）
 - **Project Settings → API Keys** から `URL` / publishable / secret キーを控えます
   （legacy の anon / service_role キーも利用可能）
 - Storage のバケット `post-images` は migration が作ります

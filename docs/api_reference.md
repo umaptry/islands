@@ -771,7 +771,7 @@ Host: localhost:7860
 | `supabase.url` | `string` | Supabase プロジェクトのURL。ローカルモードでは空文字 |
 | `supabase.anon_key` | `string` | ブラウザがSupabaseにアクセスするための公開鍵（秘密鍵ではない） |
 | `supabase.bucket` | `string` | 画像アップロード先のストレージバケット名 |
-| `oauth` | `string[]` | 有効なOAuthプロバイダー。`["google"]` や `["google", "apple"]` など |
+| `oauth` | `string[]` | 有効なOAuthプロバイダー（`google` / `line` / `apple`）。`["google"]` や `["google", "line"]` など。`line` は Supabase の `custom:line` へつなぐ |
 | `world.min` / `world.max` | `number` | 地図の座標範囲。常に `0.0`〜`1000.0` |
 | `world.seed_bounds` | `[minX, minY, maxX, maxY]` | シードコーパス（学習に使った1000件の文章）が分布している矩形範囲。カメラの初期位置決定に使用 |
 | `energy.thresholds` | `object` | 地形の見た目を決める閾値。たとえば合計エネルギーが 90以上なら「草原」、300以上なら「森」 |

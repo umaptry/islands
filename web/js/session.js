@@ -16,6 +16,9 @@ const STORAGE_KEY = 'kasanari-session';
 // Refresh a minute early. A token that expires between the check and the
 // request arriving is a 401 the user reads as being logged out at random.
 const REFRESH_MARGIN = 60_000;
+// LINE is not one of Supabase's built-in providers: it is added in the dashboard
+// as a custom OIDC provider with this identifier (docs/operations_runbook.md).
+const SUPABASE_PROVIDERS = { line: 'custom:line' };
 
 function read() {
   try {
@@ -195,7 +198,7 @@ export const session = {
     const { url } = config().supabase;
     const redirect = `${window.location.origin}/`;
     window.location.href =
-      `${url}/auth/v1/authorize?provider=${encodeURIComponent(provider)}` +
+      `${url}/auth/v1/authorize?provider=${encodeURIComponent(SUPABASE_PROVIDERS[provider] || provider)}` +
       `&redirect_to=${encodeURIComponent(redirect)}`;
   },
 
