@@ -123,8 +123,11 @@ from core.energy import name_landmasses
 from core.features import build_hybrid_features, extract_label_terms, normalize_text
 from core.geometry import scale_projected_coordinate
 from core.similarity import (
+    SPARSE_DIM,
     cosine_percent,
     describe_relation,
+    map_view,
+    reads_map_view,
     resolve_scale,
     shared_keywords,
     similarity_view,
@@ -233,6 +236,15 @@ def load_artifacts():
     with io.open(ARTIFACTS / "vectorizers.pkl", "rb") as handle:
         sparse_artifacts = pickle.load(handle)
 
+    # A map built on the centred view needs its centroid to place anything at
+    # all, so it is taken here unconditionally - not through resolve_scale,
+    # which may drop it for 似てる度 and fall back, and must never do that to
+    # the encoder's input (core.similarity.map_view).
+    centroid = seed_map.get("cosine_centroid")
+    map_centroid = centroid if reads_map_view(centroid) else None
+    if map_centroid is not None and len(map_centroid.get("dense_mean") or []) + SPARSE_DIM != encoder.input_dim:
+        raise RuntimeError("seed_map.json の cosine_centroid がエンコーダの入力と合いません。")
+
     seed = np.array(seed_map["seed"], dtype=float)
     # The client frames the camera on the corpus but never draws it, so it needs
     # the extent and not the 1,000 points.
@@ -247,6 +259,7 @@ def load_artifacts():
         "encoder": encoder,
         "scale_bounds": scale_bounds,
         "sparse_artifacts": sparse_artifacts,
+        "map_centroid": map_centroid,
         "seed_coords": seed[:, :2],
         "seed_clusters": seed[:, 2].astype(int),
         "islands": seed_map["islands"],
@@ -525,7 +538,7 @@ def project(text):
             detail="意味のある単語が見つかりませんでした。もう少し具体的に書いてみてください。",
         )
     vector = features[0]
-    raw = state["encoder"](vector)
+    raw = state["encoder"](map_input(vector))
     x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), state["scale_bounds"])
     cluster_id = assign_cluster(x, y, state["seed_coords"], state["seed_clusters"])
 
@@ -540,6 +553,13 @@ def project(text):
         round(x, 2), round(y, 2), int(cluster_id), extract_label_terms(text),
         vector, np.asarray(centred, dtype=float),
     )
+
+
+def map_input(vector):
+    """What the frozen encoder reads: the stored vector itself for a map built
+    that way, or its centred view for one built on that (manifest schema 2)."""
+    centroid = state.get("map_centroid")
+    return vector if centroid is None else map_view(vector, centroid)
 
 
 def as_pgvector(values):

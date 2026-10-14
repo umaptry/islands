@@ -14,7 +14,7 @@ from core.terrain import energy_grid
 def test_artifacts_reject_wrong_provider_and_changed_file(tmp_path):
     for name in ('manifest.json', 'seed_map.json', 'encoder.npz', 'vectorizers.pkl'):
         shutil.copyfile('artifacts/' + name, tmp_path / name)
-    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-v1'
+    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-e5-v2'
     with pytest.raises(RuntimeError):
         validate_manifest(tmp_path, 'gemini')
     with (tmp_path / 'encoder.npz').open('ab') as handle:

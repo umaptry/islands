@@ -35,6 +35,21 @@ CHAR_WEIGHT = FEATURE_CONFIG["char_weight"]
 DENSE_RAW_WEIGHT = FEATURE_CONFIG["dense_raw_weight"]
 DENSE_CONCEPT_WEIGHT = FEATURE_CONFIG["dense_concept_weight"]
 
+# How a map built from 2026-10-15 on reads a stored vector, for its encoder and
+# for 似てる度 alike: the dense block centred on the seed mean, recombined with
+# the word block at 0.80 / 0.20 (core.similarity.map_view). Measured with Gemini
+# on the 100 labelled probes with the built map, a post's nearest map neighbour
+# shared its family of topics 38% -> 82% of the time (with the 10k seed corpus),
+# and posts with none among their four nearest went 36% -> 10%. At 0.35 the word block let common words
+# (勉強, 毎日) outvote the meaning; 0-25% measured alike, above 30% fell away.
+#
+# Kept OUT of FEATURE_CONFIG on purpose: that dict describes the STORED vector
+# and every artifact's manifest must equal it, so older artifacts stay loadable.
+# A build writes these weights into its own seed_map.json (cosine_centroid), and
+# from then on the artifact, not these constants, decides how it is read.
+VIEW_DENSE_WEIGHT = 0.80
+VIEW_SPARSE_WEIGHT = 0.20
+
 # Reference layout parameters for the one-off teacher UMAP run.
 LAYOUT_CONFIG = {
     "n_neighbors": 15,

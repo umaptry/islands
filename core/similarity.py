@@ -42,6 +42,12 @@ SPARSE_DIM = FEATURE_CONFIG["svd_components"]
 # what stops an older seed_map.json from being read on the new scale.
 CENTERED_SPACE = "centered-v2"
 
+# The space of a map built on the centred view (2026-10-15): the artifact's own
+# cosine_centroid carries the weights and `map_input: true`, the encoder reads
+# map_view(vec), and 似てる度 is measured in the same view. Stamped on both the
+# anchors and the centroid, so either half can tell which ruler it belongs to.
+MAP_VIEW_SPACE = "centered-map-v3"
+
 # A text sitting exactly on the seed centroid has no residual direction left to
 # normalise. It cannot happen with real profiles (the closest of the 1,000 seeds
 # is 0.283 away) but dividing by it would produce noise amplified to unit length,
@@ -134,7 +140,11 @@ def similarity_view(vector, centroid):
     The stored vector is normalize(hstack([dense * 0.65, sparse * 0.35])), so
     re-normalising each half recovers the original blocks exactly (measured
     error 1.6e-08). Nothing is re-encoded and no stored row changes: this is a
-    reinterpretation at comparison time, and the map coordinates never see it.
+    reinterpretation at comparison time.
+
+    The halves are recombined with the weights the artifact's centroid carries:
+    0.80 / 0.20 for a map built on this view, whose encoder reads the very same
+    vector (map_view), or 0.65 / 0.35 for an older centroid that carries none.
 
     Returns the vector unchanged whenever it cannot be split confidently, so an
     unexpected width degrades to the old behaviour instead of raising.
@@ -155,7 +165,53 @@ def similarity_view(vector, centroid):
     residual = _unit(dense - mean)
     if residual is None or np.linalg.norm(dense - mean) < MIN_RESIDUAL_NORM:
         return values
-    return _unit(np.hstack([residual * DENSE_WEIGHT, sparse * SPARSE_WEIGHT]))
+    dense_weight, sparse_weight = view_weights(centroid)
+    return _unit(np.hstack([residual * dense_weight, sparse * sparse_weight]))
+
+
+def view_weights(centroid):
+    """(dense, sparse) weights a centroid's view recombines the two blocks with."""
+    if centroid and "dense_weight" in centroid:
+        return float(centroid["dense_weight"]), float(centroid["sparse_weight"])
+    return DENSE_WEIGHT, SPARSE_WEIGHT
+
+
+def reads_map_view(centroid):
+    """Whether an artifact's encoder was trained on map_view rather than on the
+    stored vector itself."""
+    return bool(centroid) and centroid.get("map_input") is True
+
+
+def _unit_rows(matrix):
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    return matrix / np.where(norms == 0.0, 1.0, norms)
+
+
+def map_view(vectors, centroid):
+    """What the encoder of a centred-view map reads: one stored vector (1-D) or a
+    matrix of them, through the artifact's centroid.
+
+    The build trains the teacher UMAP and the student on this function's output
+    and serving feeds the encoder the same, so the two cannot drift. Unlike
+    similarity_view it never falls back to the raw vector: an encoder handed a
+    vector from another space does not fail, it prints a plausible wrong place
+    on the map. Anything that does not fit raises instead.
+    """
+    if not reads_map_view(centroid):
+        raise ValueError("this artifact's centroid does not describe a map view")
+    matrix = np.asarray(vectors, dtype=float)
+    single = matrix.ndim == 1
+    if single:
+        matrix = matrix[None, :]
+    mean = as_vector(centroid.get("dense_mean"))
+    if matrix.ndim != 2 or mean is None or matrix.shape[1] != mean.size + SPARSE_DIM:
+        raise ValueError(f"map_view: expected {None if mean is None else mean.size + SPARSE_DIM} "
+                         f"dimensions, got {matrix.shape}")
+    dense_weight, sparse_weight = view_weights(centroid)
+    dense = _unit_rows(matrix[:, :-SPARSE_DIM])
+    sparse = _unit_rows(matrix[:, -SPARSE_DIM:])
+    viewed = _unit_rows(np.hstack([_unit_rows(dense - mean) * dense_weight, sparse * sparse_weight]))
+    return viewed[0] if single else viewed
 
 
 def cosine_between(a, b, centroid=None):
@@ -217,9 +273,12 @@ def resolve_scale(anchors, centroid):
     """
     if not anchors:
         return None, None
-    stamped = anchors.get("space") == CENTERED_SPACE
+    space = anchors.get("space")
+    stamped = space in (CENTERED_SPACE, MAP_VIEW_SPACE)
     usable = bool(centroid) and as_vector(centroid.get("dense_mean")) is not None
-    if stamped and usable:
+    # A centroid says which space it describes (an older one says nothing and
+    # means centered-v2); the ruler must have been measured in that same space.
+    if stamped and usable and (centroid.get("space") or CENTERED_SPACE) == space:
         return anchors, centroid
     if not stamped and not centroid:
         return anchors, None

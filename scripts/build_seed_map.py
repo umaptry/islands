@@ -70,6 +70,15 @@ def use_paths(corpus=None, artifacts=None):
 # Quality gates, identical to pokeDB's.
 MAX_MEAN_DRIFT_RATIO = 0.35
 MIN_OVERLAP_VS_CEILING = 0.65
+# The generalization gate compares each held-out seed's nearest neighbours in the
+# feature space and on the map. Its neighbourhood was 15 seeds when there were
+# 1,000 of them: 1.5% of the map. At 10,182 seeds, 15 is 0.15% - a far finer
+# question, and one even UMAP's own transform only answers at 0.74 of the
+# ceiling (the student: 0.37). So the neighbourhood is that same 1.5% share,
+# never under 15; the threshold is unchanged, and the k=15 figure is still
+# recorded next to it (2026-10-15, measured on the Gemini 10k build).
+GATE_NEIGHBOUR_SHARE = 0.015
+GATE_MIN_NEIGHBOURS = 15
 MAX_NUMPY_TORCH_DIFF = 1e-5
 HOLDOUT_SIZE = 60
 
@@ -145,19 +154,25 @@ def build(args):
         print("     python scripts/validate_corpus.py で該当行を特定してください。")
         return 1
     print(f"      shape={features.shape}")
+    # Everything from here on - teacher, student, gates, 似てる度 - reads the
+    # centred view (core.similarity.map_view), the vector serving will hand the
+    # encoder. The stored 448-dim vector itself is unchanged.
+    import build_similarity_calibration as calibration
+    centroid, view = calibration.map_view_centroid(features)
+    print(f"      中心化した見方（密 {centroid['dense_weight']} / 単語 {centroid['sparse_weight']}）で地図を作ります")
 
     print("[4/8] 教師UMAPを1回だけ実行中（この結果はお手本として使い、以後破棄）...")
     reducer = umap.UMAP(n_components=2, **LAYOUT_CONFIG)
-    reference_coords = reducer.fit_transform(features)
+    reference_coords = reducer.fit_transform(view)
 
     print("[5/8] エンコーダ f を学習中（448 -> 512 -> 256 -> 128 -> 2）...")
     ab_params = train_parametric._umap_ab(LAYOUT_CONFIG["spread"], LAYOUT_CONFIG["min_dist"])
     encoder, torch_artifacts, train_stats = train_parametric.train_encoder(
-        features, reference_coords, graph=None, ab_params=ab_params
+        view, reference_coords, graph=None, ab_params=ab_params
     )
     print(f"      {train_stats}")
 
-    predicted = train_parametric.predict(encoder, torch_artifacts, features)
+    predicted = train_parametric.predict(encoder, torch_artifacts, view)
     scaled, scale_bounds = isotropic_scale_coordinates(predicted)
     coords, moved = dejitter_exact_overlaps(scaled)
     print(f"[6/8] 等方スケール: scale={scale_bounds['scale']:.4f} / 完全重複を{moved}点ずらしました")
@@ -173,7 +188,7 @@ def build(args):
 
     print("[8/8] 品質ゲートを検証中...")
     gates, passed = run_gates(
-        features, reference_coords, encoder, torch_artifacts, train_stats, ab_params,
+        view, reference_coords, encoder, torch_artifacts, train_stats, ab_params,
         skip_holdout=args.fast,
     )
     for name, (ok, detail) in gates.items():
@@ -214,23 +229,22 @@ def build(args):
         "distance_quantiles": build_distance_quantiles(coords),
         "idf": build_idf(token_lists),
     }
+    # The centroid is part of the map now (the encoder reads through it), and
+    # 似てる度 is calibrated in the same view: all of it goes out in one write.
+    anchors, quantiles, _pairs, _nearest = calibration.measure(view, space=centroid["space"])
+    payload["cosine_anchors"] = anchors
+    payload["cosine_centroid"] = centroid
+    payload["cosine_quantiles"] = quantiles
     atomic_write(
         SEED_MAP_JSON,
         lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")),
     )
+    write_manifest(ARTIFACTS, spec)
 
     print()
     print(f"完了: {SEED_MAP_JSON.name} / {VECTORIZERS_PICKLE.name} / {ENCODER_NPZ.name}")
     print(f"      近傍距離 {payload['meta']['nearest_neighbor_stats']}")
-    # Calibration belongs to this exact feature space; publish it with the map.
-    import build_similarity_calibration as calibration
-    centroid, centred = calibration.centre(features)
-    anchors, quantiles, _pairs, _nearest = calibration.measure(centred)
-    payload["cosine_anchors"] = anchors
-    payload["cosine_centroid"] = centroid
-    payload["cosine_quantiles"] = quantiles
-    atomic_write(SEED_MAP_JSON, lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")))
-    write_manifest(ARTIFACTS, spec)
+    print(f"      似てる度の目盛り floor={anchors['cosine_floor']} ceiling={anchors['cosine_ceiling']}")
     print("\n*** このスクリプトは今後実行しないでください（実行するとマップが動きます） ***")
     return 0
 
@@ -296,17 +310,23 @@ def run_gates(features, reference_coords, encoder, torch_artifacts, train_stats,
         gates["generalization"] = (True, "--fast のためスキップ")
     else:
         print("      ホールドアウト検証中（60点を隠して再学習）...")
+        neighbours = max(GATE_MIN_NEIGHBOURS, round(GATE_NEIGHBOUR_SHARE * (len(features) - HOLDOUT_SIZE)))
         result = train_parametric.evaluate_generalization(
             features, reference_coords, LAYOUT_CONFIG["n_neighbors"], ab_params,
-            holdout=HOLDOUT_SIZE,
+            holdout=HOLDOUT_SIZE, k=neighbours,
+            also_k=(GATE_MIN_NEIGHBOURS,) if neighbours != GATE_MIN_NEIGHBOURS else (),
         )
         ratio = result["overlap_vs_ceiling"]
-        gates["generalization"] = (
-            ratio >= MIN_OVERLAP_VS_CEILING,
-            f"overlap_vs_ceiling={ratio} (>= {MIN_OVERLAP_VS_CEILING}), "
+        detail = (
+            f"overlap_vs_ceiling={ratio} (>= {MIN_OVERLAP_VS_CEILING}) at k={neighbours}, "
             f"achieved={result['holdout_neighborhood_overlap']}, "
-            f"ceiling={result['reference_layout_ceiling']}",
+            f"ceiling={result['reference_layout_ceiling']}"
         )
+        finer = result.get(f"at_k{GATE_MIN_NEIGHBOURS}")
+        if finer:
+            detail += (f"; at k={GATE_MIN_NEIGHBOURS}: overlap_vs_ceiling={finer['overlap_vs_ceiling']}, "
+                       f"achieved={finer['achieved']}, ceiling={finer['ceiling']}")
+        gates["generalization"] = (ratio >= MIN_OVERLAP_VS_CEILING, detail)
 
     return gates, all(ok for ok, _ in gates.values())
 

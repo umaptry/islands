@@ -801,7 +801,7 @@ GET /api/health HTTP/1.1
 ```json
 {
   "ok": true,
-  "seed_count": 1000,
+  "seed_count": 10182,
   "regions": 8,
   "store": "supabase",
   "store_ok": true,
@@ -813,7 +813,7 @@ GET /api/health HTTP/1.1
 | フィールド | 型 | 何がわかるか |
 |---|---|---|
 | `ok` | `boolean` | `true` = サーバープロセス自体は正常に動作中 |
-| `seed_count` | `integer` | 地図の基盤となるシードコーパスの点数。通常は1000 |
+| `seed_count` | `integer` | 地図の基盤となるシードコーパスの点数。2026-10-15 の地図から 10182（それ以前は 1000） |
 | `regions` | `integer` | 初期状態での島（クラスタ）の数 |
 | `store` | `"supabase"` \| `"memory"` | 現在のデータストア種別 |
 | `store_ok` | `boolean` | データベースと正常に通信できているか。`false` なら DB 障害の可能性あり |

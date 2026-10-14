@@ -11,15 +11,15 @@ from scripts import artifact_release, migrate_map, verify_release
 
 def test_archive_pins_version_hash_and_exact_files(tmp_path):
     archive = tmp_path / "map.zip"
-    sha = artifact_release.pack("artifacts", archive, "onnx", "kotoba-map-v1")
-    manifest = artifact_release.unpack(archive, tmp_path / "map", "onnx", "kotoba-map-v1", sha)
-    assert manifest["artifact_version"] == "kotoba-map-v1"
+    sha = artifact_release.pack("artifacts", archive, "onnx", "kotoba-map-e5-v2")
+    manifest = artifact_release.unpack(archive, tmp_path / "map", "onnx", "kotoba-map-e5-v2", sha)
+    assert manifest["artifact_version"] == "kotoba-map-e5-v2"
     with pytest.raises(RuntimeError, match="checksum"):
-        artifact_release.unpack(archive, tmp_path / "bad", "onnx", "kotoba-map-v1", "0" * 64)
+        artifact_release.unpack(archive, tmp_path / "bad", "onnx", "kotoba-map-e5-v2", "0" * 64)
     with zipfile.ZipFile(archive, "a") as handle:
         handle.writestr("../private-posts.json", "private")
     with pytest.raises(RuntimeError, match="exactly four"):
-        artifact_release.unpack(archive, tmp_path / "extra", "onnx", "kotoba-map-v1", artifact_release.sha256(archive))
+        artifact_release.unpack(archive, tmp_path / "extra", "onnx", "kotoba-map-e5-v2", artifact_release.sha256(archive))
     assert not (tmp_path / "private-posts.json").exists()
 
 

@@ -81,6 +81,8 @@ from core.similarity import (  # noqa: E402
     cosine_between,
     cosine_percent,
     describe_relation,
+    map_view,
+    reads_map_view,
     resolve_scale,
     shared_keywords,
 )
@@ -153,7 +155,8 @@ def fetch_live(refetch=False):
         say(f"      /api/health -> users={health.get('users')} "
             f"store={health.get('store')} model={health.get('model_version')}")
         # 手元の artifacts と本番のビルドが揃っていなければ、以降の再計算は無意味。
-        if health.get("model_version") != "kotoba-map-v1":
+        expected = json.loads((ARTIFACTS / "manifest.json").read_text(encoding="utf-8"))["artifact_version"]
+        if health.get("model_version") != expected:
             raise SystemExit(f"[NG] model_version が想定と違います: {health.get('model_version')}")
 
         live_map = get_json(client, "/api/map")
@@ -211,8 +214,10 @@ def recompute(live_map, live_users):
         raise SystemExit(f"[NG] 内容語が残らない本文が {zero_rows} 件あります。")
 
     vectors, coords, mismatched = {}, {}, []
+    centroid = seed_map.get("cosine_centroid")
     for uid, vector in zip(order, np.asarray(features, dtype=np.float64)):
-        raw = encoder(vector)
+        # The same input serving gives the encoder (app.map_input).
+        raw = encoder(map_view(vector, centroid) if reads_map_view(centroid) else vector)
         x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), scale_bounds)
         x, y = round(x, 2), round(y, 2)
         vectors[uid] = vector
@@ -367,7 +372,10 @@ def gemini_vectors(order, live_users):
             [bench.gemini_prompt(text, task) for text in texts],
             "gemini-embedding-2", key, dim, checkpoint)
 
-    seed_all, _ = build.load_corpus(build.CORPUS_PATH)
+    # The original 1,000 lines only: the corpus grew to ~10,000 (2026-10-15), and
+    # drawing from all of it would pick other texts, miss the cache and stop
+    # mirroring the sample the anchors below were first measured on.
+    seed_all = build.load_corpus(build.CORPUS_PATH)[0][:1000]
     picked = sorted(np.random.default_rng(42).choice(
         len(seed_all), bench.DEFAULT_SEED_SAMPLE, replace=False))
     seed_texts = [seed_all[index] for index in picked]

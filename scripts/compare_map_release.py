@@ -14,6 +14,7 @@ from core.artifact_manifest import validate_manifest, digest
 from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
 from core.encoder import load_encoder
 from core.features import build_hybrid_features
+from core.similarity import map_view, reads_map_view, similarity_view
 from benchmark_embeddings import score_probe
 
 
@@ -29,14 +30,22 @@ def evaluate(directory, provider, texts, labels, cache):
     with (directory / "vectorizers.pkl").open("rb") as handle:
         sparse = pickle.load(handle)
     vectors, _, zero, _ = build_hybrid_features(texts, model, fit_sparse=False, sparse_artifacts=sparse)
+    raw_vectors = vectors
     if zero:
         raise RuntimeError("Evaluation contains empty feature rows")
     partners = min(int(np.sum(labels == label)) - 1 for label in set(labels))
     if partners < 1 or len(set(labels)) < 2:
         raise RuntimeError("Evaluation needs multiple topics with at least two examples each")
+    # Each map is scored in the space it serves: its 似てる度 view for the
+    # feature metrics, and for the map whatever its encoder actually reads.
+    centroid = seed.get("cosine_centroid")
+    if reads_map_view(centroid):
+        vectors = map_view(vectors, centroid)
+    elif centroid:
+        vectors = np.array([similarity_view(vector, centroid) for vector in vectors])
     score = score_probe(vectors, labels, partners)
     encoder, _ = load_encoder(directory / "encoder.npz")
-    coords = encoder(vectors)
+    coords = encoder(vectors if reads_map_view(centroid) else raw_vectors)
     distances = ((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2)
     np.fill_diagonal(distances, np.inf)
     neighbors = np.argsort(distances, axis=1)[:, :partners]

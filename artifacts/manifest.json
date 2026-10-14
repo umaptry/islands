@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "artifact_version": "kotoba-map-v1",
+  "schema_version": 2,
+  "artifact_version": "kotoba-map-e5-v2",
   "embedding": {
     "provider": "onnx",
     "model": "intfloat/multilingual-e5-small",
@@ -23,8 +23,8 @@
   },
   "feature_dimensions": 448,
   "files": {
-    "seed_map.json": "527a2b429498a6563288a1bc27e4b9fce4cc680700704461454bddf9e0dcaac7",
-    "encoder.npz": "5b6a2432ee46e2800f2e1880482b11918cc3ad89be1a932e94f3ed3c83d82934",
-    "vectorizers.pkl": "40a5c40f7fa31da87d4a79a788f0adf08d4379e5e6ade91402b1437dc10df62b"
+    "seed_map.json": "0332d02074a0e9d6ddf3b10b6d049d0a0f73bf1ae131344cb64293feb51c3618",
+    "encoder.npz": "5905710ba0bda8a4598881ce1dc27a42f0c429107a261d57981e68b0f5271a0c",
+    "vectorizers.pkl": "e6928feb157e4356bebdfadb9760982831ef75303e03f07e3a769879d698ff19"
   }
 }
