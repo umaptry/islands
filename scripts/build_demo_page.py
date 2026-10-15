@@ -77,6 +77,7 @@ from core.features import (  # noqa: E402
     extract_label_terms,
 )
 from core.geometry import scale_projected_coordinate  # noqa: E402
+from core.placement import place_by_seeds  # noqa: E402
 from core.similarity import (  # noqa: E402
     cosine_between,
     cosine_percent,
@@ -215,10 +216,19 @@ def recompute(live_map, live_users):
 
     vectors, coords, mismatched = {}, {}, []
     centroid = seed_map.get("cosine_centroid")
+    placement = seed_map.get("placement") or {}
+    seed_vectors = (np.load(ARTIFACTS / "seed_vectors.npy").astype(float)
+                    if placement.get("method") == "seed_mode" else None)
     for uid, vector in zip(order, np.asarray(features, dtype=np.float64)):
-        # The same input serving gives the encoder (app.map_input).
-        raw = encoder(map_view(vector, centroid) if reads_map_view(centroid) else vector)
-        x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), scale_bounds)
+        # The same placement serving uses (app.project).
+        viewed = map_view(vector, centroid) if reads_map_view(centroid) else vector
+        if seed_vectors is not None:
+            x, y = place_by_seeds(viewed, seed_vectors, np.array(seed_map["seed"], dtype=float)[:, :2],
+                                  k=placement["k"], temperature=placement["temperature"],
+                                  bandwidth=placement["bandwidth"])
+        else:
+            raw = encoder(viewed)
+            x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), scale_bounds)
         x, y = round(x, 2), round(y, 2)
         vectors[uid] = vector
         coords[uid] = (x, y)

@@ -19,7 +19,7 @@
 // the render loop just blits.
 
 import { config, energyOf, radiusOf } from '../config.js';
-import { coastOf, reachAt } from './coast.js';
+import { coastOf, reachFrom, reachTable } from './coast.js';
 
 // Texture resolution, in device pixels per world unit, and the ceiling on the
 // texture itself. 1400 covers a phone at 3x without ever allocating something a
@@ -30,6 +30,7 @@ const MAX_TEXTURE = 1400;
 const PADDING = 24;   // world units of margin, so a coastline is never clipped
 
 let cache = null;
+let pending = null;   // { revision, unit, cells, region } of a ground being built elsewhere
 
 function hexToRgb(hex) {
   const value = parseInt(String(hex).replace('#', ''), 16);
@@ -231,7 +232,8 @@ function smoothEdges(pixels, width, height) {
 
 /** A stable key for "would this produce the same texture". */
 function signature(posts, cells, region, unit) {
-  return JSON.stringify([posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2)]);
+  return JSON.stringify([posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2),
+    config().energy.radius_factor ?? 1]);
 }
 
 let gridCache = null;
@@ -259,16 +261,60 @@ export function gridTerrain(grid) {
  * visible one if you go looking, but it is the difference between distant land
  * being roughly right and distant land not being there at all.
  */
-export function buildTerrain({ posts, cells = [], region, scale }) {
-  // Quarter-octave steps: a pinch crosses a step every ~19% of zoom instead of
-  // rebuilding the field on every frame of the gesture.
-  const stepped = 2 ** (Math.round(Math.log2(scale || 1) * 4) / 4);
-  const unit = Math.max(MIN_UNIT, Math.min(MAX_UNIT, stepped));
+export function buildTerrain({ posts, cells = [], region, scale, revision = null, elsewhere = null }) {
+  const unit = groundUnit(scale);
+  const factor = config().energy.radius_factor ?? 1;
+  const same = (entry) => Boolean(entry) && entry.revision === revision && entry.unit === unit
+    && entry.factor === factor && entry.cells === cells && sameRegion(entry.region, region);
+  // Asked every frame: when the caller's revision says nothing changed, skip
+  // serialising every post into the key (most of a millisecond on a phone).
+  if (revision !== null && cache && (same(cache) || same(pending))) return cache;
   const key = signature(posts, cells, region, unit);
-  if (cache && cache.key === key) return cache;
+  if (cache && cache.key === key) {
+    pending = null;
+    // In place: the map keeps its sharp close-up while the ground is this one.
+    Object.assign(cache, { revision, unit, factor, cells, region });
+    return cache;
+  }
+  // With a ground already on screen and somewhere else to build (index.js hands
+  // in offthread.js's worker), the new one is made there and the old one stays,
+  // stretched, until it arrives: the stop after a pinch, or a poll bringing new
+  // posts, no longer stalls the map for 0.2 s (2026-10-16).
+  if (elsewhere && cache && revision !== null) {
+    const wanted = { revision, unit, factor, cells, region };
+    const sent = elsewhere({ posts, cells, region, scale }, (built, ok) => {
+      if (pending !== wanted) return;   // a newer ground was asked for meanwhile
+      pending = null;
+      if (ok) cache = built ? { ...toCanvas(built), trees: built.trees, key, ...wanted } : null;
+    });
+    if (sent) {
+      pending = wanted;
+      return cache;
+    }
+  }
+  pending = null;
   const built = render({ posts, cells, region, scale, unit, padding: PADDING, limit: MAX_TEXTURE, trees: true });
-  if (built) cache = { ...built, key };
+  if (built) cache = { ...built, key, revision, unit, factor, cells, region };
   return built ? cache : null;
+}
+
+/** buildTerrain's texture as plain pixels and trees, for the worker. */
+export function groundPixels({ posts, cells = [], region, scale }) {
+  const built = compute({ posts, cells, region, scale, unit: groundUnit(scale), padding: PADDING, limit: MAX_TEXTURE });
+  if (!built) return null;
+  const { field, ...pixels } = built;
+  return { ...pixels, trees: scatterTrees(field, built.width, built.height, built.minX, built.minY, built.scale) };
+}
+
+// Quarter-octave steps: a pinch crosses a step every ~19% of zoom instead of
+// rebuilding the field on every frame of the gesture.
+function groundUnit(scale) {
+  const stepped = 2 ** (Math.round(Math.log2(scale || 1) * 4) / 4);
+  return Math.max(MIN_UNIT, Math.min(MAX_UNIT, stepped));
+}
+
+function sameRegion(a, b) {
+  return a && b && a.minX === b.minX && a.minY === b.minY && a.maxX === b.maxX && a.maxY === b.maxY;
 }
 
 // The texture above covers every post, so close up it is stretched several
@@ -281,15 +327,44 @@ const DETAIL_MAX_UNIT = 16;
 const DETAIL_MAX_TEXTURE = 2048;
 
 export function buildDetail({ posts, cells = [], region, scale, pixelRatio = 1 }) {
+  const built = detailPixels({ posts, cells, region, scale, pixelRatio });
+  return built ? toCanvas(built) : null;
+}
+
+/** buildDetail without the canvas: plain pixels, so a Web Worker can build it
+ * (terrain-worker.js, via offthread.js) and the page only puts them on a canvas. */
+export function detailPixels({ posts, cells = [], region, scale, pixelRatio = 1 }) {
   const unit = Math.min(DETAIL_MAX_UNIT, (scale || 1) * pixelRatio);
-  return render({
-    posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, trees: false, smooth: true,
+  const built = compute({
+    posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, smooth: true,
   });
+  if (!built) return null;
+  const { field: _field, ...pixels } = built;
+  return pixels;
+}
+
+/** Pixels from detailPixels (or compute) on a canvas the map can draw. */
+export function toCanvas({ pixels, minX, minY, scale, width, height }) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d').putImageData(new ImageData(pixels, width, height), 0, 0);
+  return { canvas, minX, minY, scale, width, height };
 }
 
 /** The field over `region` (plus `padding` world units), painted into a canvas
  * of `unit` texture pixels per world unit, `limit` pixels at most on a side. */
-function render({ posts, cells, region, scale, unit, padding, limit, trees, smooth = false }) {
+function render({ trees, ...options }) {
+  const built = compute(options);
+  if (!built) return null;
+  return {
+    ...toCanvas(built),
+    trees: trees ? scatterTrees(built.field, built.width, built.height, built.minX, built.minY, built.scale) : [],
+  };
+}
+
+/** The field and its painted pixels; no canvas, no DOM. */
+function compute({ posts, cells, region, scale, unit, padding, limit, smooth = false }) {
   const minX = region.minX - padding;
   const minY = region.minY - padding;
   const spanX = (region.maxX - region.minX) + padding * 2;
@@ -306,6 +381,7 @@ function render({ posts, cells, region, scale, unit, padding, limit, trees, smoo
   const field = new Float32Array(width * height);
 
   const contribute = (worldX, worldY, energy, radius, coast = null) => {
+    const table = coast ? reachTable(coast) : null;
     if (!(radius > 0) || !(energy > 0)) return;
     const px = (worldX - minX) * scaled;
     const py = (worldY - minY) * scaled;
@@ -330,7 +406,7 @@ function render({ posts, cells, region, scale, unit, padding, limit, trees, smoo
       for (let x = from; x <= to; x += 1) {
         const dx = x - px;
         const distance = Math.sqrt(dx * dx + dySq);
-        const reach = coast ? r * reachAt(coast, dx, dy, distance) : r;
+        const reach = table ? r * reachFrom(table, dx, dy) : r;
         if (distance < reach) field[row + x] += energy * (1 - distance / reach);
       }
     }
@@ -339,7 +415,7 @@ function render({ posts, cells, region, scale, unit, padding, limit, trees, smoo
   posts.forEach((post) => contribute(post.x, post.y, energyOf(post), radiusOf(post), coastOf(post)));
 
   if (cells.length) {
-    const { radius_base: base, radius_scale: rate, radius_trim: trim } = config().energy;
+    const { radius_base: base, radius_scale: rate, radius_trim: trim, radius_factor: factor = 1 } = config().energy;
     const size = 20; // ENERGY_CELL_SIZE, see core/config.py and schema.sql
     cells.forEach((cell) => {
       const energy = Number(cell.sum_energy) || 0;
@@ -347,24 +423,15 @@ function render({ posts, cells, region, scale, unit, padding, limit, trees, smoo
         (cell.cell_x + 0.5) * size,
         (cell.cell_y + 0.5) * size,
         energy,
-        (base + energy * rate) * trim,
+        (base + energy * rate) * trim * factor,
       );
     });
   }
 
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  const image = ctx.createImageData(width, height);
-  paint(image.data, field, width, height, { perScreen: scaled / (scale || 1), perWorld: scaled });
-  if (smooth) smoothEdges(image.data, width, height);
-  ctx.putImageData(image, 0, 0);
-
-  return {
-    canvas, minX, minY, scale: scaled, width, height,
-    trees: trees ? scatterTrees(field, width, height, minX, minY, scaled) : [],
-  };
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  paint(pixels, field, width, height, { perScreen: scaled / (scale || 1), perWorld: scaled });
+  if (smooth) smoothEdges(pixels, width, height);
+  return { pixels, field, minX, minY, scale: scaled, width, height };
 }
 
 // Trees, bushes and rocks stand on the ground the field already decided. A
@@ -420,5 +487,6 @@ function scatterTrees(field, width, height, minX, minY, scaled) {
 
 export function invalidateTerrain() {
   cache = null;
+  pending = null;
   palette = null;
 }

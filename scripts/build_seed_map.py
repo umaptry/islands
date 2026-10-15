@@ -38,6 +38,7 @@ from core.config import (  # noqa: E402
     GEMINI_MODEL_NAME,
     LAYOUT_CONFIG,
     LAYOUT_VERSION,
+    SEED_PLACEMENT,
     MODEL_VERSION,
 )
 from core.encoder import load_encoder, save_encoder  # noqa: E402
@@ -48,6 +49,8 @@ from core.geometry import (  # noqa: E402
     nearest_neighbor_stats,
 )
 from core.similarity import build_distance_quantiles, build_idf  # noqa: E402
+from core.placement import place_by_seeds  # noqa: E402
+from core.artifact_manifest import SEED_VECTORS  # noqa: E402
 
 CORPUS_PATH = ROOT / "scripts" / "seed_corpus.jsonl"
 ARTIFACTS = ROOT / "artifacts"
@@ -186,11 +189,16 @@ def build(args):
     for island in islands:
         print(f"      島{island['id']}: {island['name']}  ({island['size']}件)")
 
+    # New posts are placed by their seeds (core.placement), from the vectors as
+    # shipped: float16, so the gate below measures exactly what serving does.
+    seed_vectors = view.astype(np.float16)
     print("[8/8] 品質ゲートを検証中...")
     gates, passed = run_gates(
         view, reference_coords, encoder, torch_artifacts, train_stats, ab_params,
         skip_holdout=args.fast,
     )
+    gates["placement"] = placement_gate(seed_vectors.astype(float), coords)
+    passed = passed and gates["placement"][0]
     for name, (ok, detail) in gates.items():
         print(f"      [{'OK' if ok else 'NG'}] {name}: {detail}")
     if not passed:
@@ -204,6 +212,7 @@ def build(args):
         torch_artifacts["coord_mean"], torch_artifacts["coord_scale"], scale_bounds,
     )
     atomic_write(VECTORIZERS_PICKLE, lambda h: pickle.dump(sparse_artifacts, h), mode="wb")
+    atomic_write(ARTIFACTS / SEED_VECTORS, lambda h: np.save(h, seed_vectors), mode="wb")
 
     payload = {
         "meta": {
@@ -228,6 +237,9 @@ def build(args):
         ],
         "distance_quantiles": build_distance_quantiles(coords),
         "idf": build_idf(token_lists),
+        # How a new text is placed: by its nearest seeds (core.placement), whose
+        # spots are "seed" above and whose vectors are seed_vectors.npy.
+        "placement": dict(SEED_PLACEMENT),
     }
     # The centroid is part of the map now (the encoder reads through it), and
     # 似てる度 is calibrated in the same view: all of it goes out in one write.
@@ -329,6 +341,27 @@ def run_gates(features, reference_coords, encoder, torch_artifacts, train_stats,
         gates["generalization"] = (ratio >= MIN_OVERLAP_VS_CEILING, detail)
 
     return gates, all(ok for ok, _ in gates.values())
+
+
+def placement_gate(vectors, coords, holdout=300):
+    """Hold seeds out, place them by the others, and compare their nearest
+    neighbours in meaning with their nearest on the map - the student's
+    generalization measure, for the placement serving actually uses."""
+    import train_parametric
+
+    rng = np.random.default_rng(train_parametric.SEED)
+    order = rng.permutation(len(vectors))
+    test, train = np.sort(order[:holdout]), np.sort(order[holdout:])
+    placed = place_by_seeds(vectors[test], vectors[train], coords[train], k=SEED_PLACEMENT["k"],
+                            temperature=SEED_PLACEMENT["temperature"], bandwidth=SEED_PLACEMENT["bandwidth"])
+    neighbours = max(GATE_MIN_NEIGHBOURS, round(GATE_NEIGHBOUR_SHARE * len(train)))
+    ratios = {}
+    for k in sorted({GATE_MIN_NEIGHBOURS, neighbours}):
+        got = train_parametric.neighborhood_overlap(vectors[train], coords[train], vectors[test], placed, k=k)
+        top = train_parametric.neighborhood_overlap(vectors[train], coords[train], vectors[test], coords[test], k=k)
+        ratios[k] = (round(got, 4), round(top, 4), round(got / max(top, 1e-6), 4))
+    detail = "; ".join(f"k={k}: overlap_vs_ceiling={r[2]}, achieved={r[0]}, ceiling={r[1]}" for k, r in ratios.items())
+    return ratios[neighbours][2] >= MIN_OVERLAP_VS_CEILING, f"{detail} (>= {MIN_OVERLAP_VS_CEILING} at k={neighbours})"
 
 
 def relabel(_args):

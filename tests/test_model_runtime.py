@@ -12,9 +12,10 @@ from core.terrain import energy_grid
 
 
 def test_artifacts_reject_wrong_provider_and_changed_file(tmp_path):
-    for name in ('manifest.json', 'seed_map.json', 'encoder.npz', 'vectorizers.pkl'):
+    listed = json.loads(open('artifacts/manifest.json', encoding='utf-8').read())['files']
+    for name in ('manifest.json', *listed):
         shutil.copyfile('artifacts/' + name, tmp_path / name)
-    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-e5-v2'
+    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-e5-v3'
     with pytest.raises(RuntimeError):
         validate_manifest(tmp_path, 'gemini')
     with (tmp_path / 'encoder.npz').open('ab') as handle:

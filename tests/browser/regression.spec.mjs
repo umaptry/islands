@@ -108,9 +108,14 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
   }, postId);
   const mobile = page.viewportSize().width < 768;
   expect(await page.evaluate(() => window.sheetListenerCount)).toBe(1);
-  await expect(page.locator('#sheet')).toHaveAttribute('aria-modal', String(mobile));
+  // Never modal: the map stays live under an open post, on a phone too.
+  await expect(page.locator('#sheet')).toHaveAttribute('aria-modal', 'false');
+  await expect(page.locator('#map')).not.toHaveAttribute('inert', '');
   if (mobile) {
+    // Half height, the card does not scroll; full height, it does.
+    expect(await page.locator('#sheetScroll').evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');
     await page.locator('#sheetGrip').click();
+    await expect.poll(() => page.locator('#sheetScroll').evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
     await expect.poll(async () => (await page.locator('#sheet').boundingBox()).height).toBeGreaterThan(700);
   } else {
     await expect(page.locator('#bottomNav')).not.toHaveAttribute('inert', '');

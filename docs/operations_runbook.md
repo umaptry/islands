@@ -264,11 +264,13 @@ LINE は Supabase に最初から入っている接続先ではないので、�
 **作り方**
 
 ```powershell
-$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261015-v2'
-python scripts/build_seed_map.py --artifacts output/gemini-v2
-$env:EMBEDDING_PROVIDER = 'onnx'; $env:MAP_BUILD_VERSION = 'kotoba-map-e5-v2'
-python scripts/build_seed_map.py --artifacts output/e5-v2   # 手元と CI 用。artifacts/ の4ファイルを置き換える
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261015-v3'
+python scripts/build_seed_map.py --artifacts output/gemini-v3
+$env:EMBEDDING_PROVIDER = 'onnx'; $env:MAP_BUILD_VERSION = 'kotoba-map-e5-v3'
+python scripts/build_seed_map.py --artifacts output/e5-v3   # 手元と CI 用。artifacts/ の5ファイルを置き換える
 ```
+
+**v3（2026-10-16）で加わったこと**：新しい投稿はお手本で置く（`core.placement`、成果物に `seed_vectors.npy` が増えて5ファイル。`artifact_release.py` は manifest が挙げるファイルだけを ZIP に入れ・取り出す。知らない名前は拒否）。品質ゲートに「placement」（300件を隠し、残りのお手本で置いたときの近所の再現。Gemini v3 で上限比 0.94）。先生役 `min_dist` 0.0。島の半径は投稿数で縮む（`core.energy.reach_factor`、REQUIREMENTS 4.1.1）。評価用の短い投稿478件で、島22個（5件以上13個）、最大148件。
 
 **版の名前は毎回新しくする。** 本番の切り替えは DB の `map_runtime.active_version` と成果物の版の一致で判断するので、同じ名前を使い回すと新旧の位置が混ざっても気付けない。
 

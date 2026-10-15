@@ -8,6 +8,7 @@ just lands somewhere plausible and wrong. These tests are what makes that loud.
 
 import json
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -95,7 +96,8 @@ def test_the_ruler_must_belong_to_the_centroids_space():
 
 
 def test_the_manifest_says_how_the_encoder_reads(tmp_path):
-    for name in ("manifest.json", "seed_map.json", "encoder.npz", "vectorizers.pkl"):
+    listed = json.loads(Path("artifacts/manifest.json").read_text(encoding="utf-8"))["files"]
+    for name in ("manifest.json", *listed):
         shutil.copyfile("artifacts/" + name, tmp_path / name)
     manifest = validate_manifest(tmp_path, "onnx")
     seed = json.loads((tmp_path / "seed_map.json").read_text(encoding="utf-8"))
@@ -110,12 +112,13 @@ def test_the_manifest_says_how_the_encoder_reads(tmp_path):
 
 
 def test_serving_places_the_seeds_where_the_build_put_them(loaded):
-    """Golden check of build/serve parity. The build wrote each seed's position
-    from the student's output on the build's own features; serving computes a
-    post's position from its text alone. Fed the first seed texts, serving must
-    land on the same spots - a missed map_view, a wrong centroid or a different
-    recipe would move them by tens of pixels, not by rounding."""
+    """Golden check of build/serve parity. Serving computes a post's position
+    from its text alone; fed the first seed texts it must read them in the same
+    view the build stored, and place them where the build's own data says - a
+    missed map_view, a wrong centroid or a different recipe would move them by
+    tens of pixels, not by rounding."""
     import app as application
+    from core.placement import place_by_seeds
 
     # The committed map is built on the map view, so this walks the path
     # production will take, not only the older one (2026-10-15).
@@ -123,17 +126,74 @@ def test_serving_places_the_seeds_where_the_build_put_them(loaded):
     assert loaded["map_centroid"] is not None
     with open("scripts/seed_corpus.jsonl", encoding="utf-8") as handle:
         texts = [json.loads(line)["text"] for line in handle if line.strip()][:24]
-    built = np.asarray(loaded["seed_coords"][:24], dtype=float)
-    served = np.array([application.project(text)[:2] for text in texts], dtype=float)
-    # 0.5 is the most the build's dejitter moves an exact duplicate.
-    assert float(np.max(np.hypot(*(served - built).T))) < 1.0
+    projected = [application.project(text) for text in texts]
+    served = np.array([row[:2] for row in projected], dtype=float)
+
+    placement = loaded.get("placement")
+    if placement is None:
+        # Placed by the student: the seeds land on their own spots.
+        built = np.asarray(loaded["seed_coords"][:24], dtype=float)
+        # 0.5 is the most the build's dejitter moves an exact duplicate.
+        assert float(np.max(np.hypot(*(served - built).T))) < 1.0
+        return
+    # Placed by the seeds: the text read now is the vector the build shipped...
+    views = np.array([application.map_input(row[4]) for row in projected])
+    shipped = placement["vectors"][:24]
+    cosines = np.sum(views * shipped, axis=1) / np.linalg.norm(shipped, axis=1)
+    assert float(cosines.min()) > 0.999      # float16 storage costs about 1e-4
+    # ...and lands where the shipped data places it.
+    expected = place_by_seeds(shipped, placement["vectors"], placement["spots"], k=placement["k"],
+                              temperature=placement["temperature"], bandwidth=placement["bandwidth"])
+    assert float(np.max(np.hypot(*(served - expected).T))) < 1.0
+
+
+def test_a_post_between_two_groups_of_seeds_joins_the_bigger_one():
+    """Two groups of seeds near a text in meaning: it lands in the heavier one,
+    not in the sea halfway between them."""
+    from core.placement import place_by_seeds
+
+    rng = np.random.default_rng(6)
+    centre = unit(rng.normal(size=8))
+    near = [unit(centre + rng.normal(scale=0.05, size=8)) for _ in range(9)]
+    vectors = np.array(near + [unit(rng.normal(size=8)) for _ in range(20)])
+    spots = np.array([[100.0 + i, 100.0] for i in range(5)] + [[400.0 + i, 400.0] for i in range(4)]
+                     + [[800.0, 800.0]] * 20)
+    x, y = place_by_seeds(centre, vectors, spots, k=9, temperature=1.0, bandwidth=25.0)
+    assert 95 < x < 110 and abs(y - 100) < 1
+    # Same text, same spot.
+    assert (x, y) == tuple(place_by_seeds(centre, vectors, spots, k=9, temperature=1.0, bandwidth=25.0))
+
+
+def test_island_reach_shrinks_as_the_map_fills():
+    from core.config import ISLAND_REACH_FLOOR, ISLAND_REACH_FULL_POSTS
+    from core.energy import influence_radius, reach_factor
+
+    assert reach_factor(0) == reach_factor(3) == reach_factor(ISLAND_REACH_FULL_POSTS) == 1.0
+    # The fitted points: about x0.9 at ~240 posts and x0.7 at ~480.
+    assert abs(reach_factor(240) - 0.9) < 0.01
+    assert abs(reach_factor(480) - 0.7) < 0.01
+    assert reach_factor(480) < reach_factor(240) < reach_factor(200) < 1
+    assert reach_factor(10 ** 7) == ISLAND_REACH_FLOOR
+    assert influence_radius(50, 0.5) == influence_radius(50) / 2
+
+
+def test_the_browser_is_served_the_reach_factor(client):
+    energy = client.get("/api/config").json()["energy"]
+    assert 0 < energy["radius_factor"] <= 1
+
+
+def test_the_islands_poll_carries_the_reach_factor_too(client):
+    """A page open while the map grows keeps its ground in step with the names."""
+    energy = client.get("/api/config").json()["energy"]
+    assert client.get("/api/islands").json()["radius_factor"] == energy["radius_factor"]
 
 
 def as_map_view_artifact(directory):
     """The committed artifact, re-stamped as if built on the map view: its own
     dense mean, the 0.8 / 0.2 weights, map_input, and a fresh manifest."""
     from core.artifact_manifest import embedding_spec, write_manifest
-    for name in ("manifest.json", "seed_map.json", "encoder.npz", "vectorizers.pkl"):
+    listed = json.loads(Path("artifacts/manifest.json").read_text(encoding="utf-8"))["files"]
+    for name in ("manifest.json", *listed):
         shutil.copyfile("artifacts/" + name, directory / name)
     seed = json.loads((directory / "seed_map.json").read_text(encoding="utf-8"))
     centroid = dict(seed["cosine_centroid"], dense_weight=0.8, sparse_weight=0.2,
@@ -206,3 +266,13 @@ def test_island_names_need_a_share_of_the_island_but_never_more_than_twenty():
     assert meta["minimum_support"] == clustering.LABEL_SUPPORT_CAP
     small = clustering.rank_cluster_keywords(labels, 1, tokens, Model(), {})
     assert small["minimum_support"] == max(2, int(np.ceil(10 * clustering.LABEL_SUPPORT_RATIO)))
+
+
+def test_a_map_missing_one_of_its_files_is_refused_by_name(tmp_path):
+    listed = json.loads(Path("artifacts/manifest.json").read_text(encoding="utf-8"))["files"]
+    for name in ("manifest.json", *listed):
+        if name != "seed_vectors.npy":
+            shutil.copyfile("artifacts/" + name, tmp_path / name)
+    assert "seed_vectors.npy" in listed
+    with pytest.raises(RuntimeError, match="missing: seed_vectors.npy"):
+        validate_manifest(tmp_path, "onnx")

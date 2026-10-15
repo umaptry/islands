@@ -13,7 +13,7 @@ GEMINI_DIMENSIONS = 384
 GEMINI_TASK = "sentence similarity"
 
 MODEL_VERSION = "kotoba-map-v2"
-LAYOUT_VERSION = "parametric-isotropic-v1"
+LAYOUT_VERSION = "seed-placed-isotropic-v2"
 
 # One free-text self-introduction per person is the ONLY input signal.
 FEATURE_CONFIG = {
@@ -50,10 +50,20 @@ DENSE_CONCEPT_WEIGHT = FEATURE_CONFIG["dense_concept_weight"]
 VIEW_DENSE_WEIGHT = 0.80
 VIEW_SPARSE_WEIGHT = 0.20
 
-# Reference layout parameters for the one-off teacher UMAP run.
+# How a map built from 2026-10-15 on places a new text: at the main group among
+# its k nearest seeds in meaning (core.placement.place_by_seeds). temperature
+# weights the k by similarity, bandwidth (world units) is how close two seeds'
+# spots must be to count as one group. Written into the artifact, which decides.
+SEED_PLACEMENT = {"method": "seed_mode", "k": 15, "temperature": 0.02, "bandwidth": 25.0}
+
+# Reference layout parameters for the one-off teacher UMAP run. min_dist went
+# 0.05 -> 0.0 on 2026-10-15: with posts placed by their seeds, the tighter teacher
+# left more sea between topics - on 478 labelled posts at reach x0.7, 18-29
+# islands with 106-150 posts on the biggest (0.05: 22-30 and 130-213), the
+# placement no less accurate (3 random seeds each).
 LAYOUT_CONFIG = {
     "n_neighbors": 15,
-    "min_dist": 0.05,
+    "min_dist": 0.0,
     "spread": 1.0,
     "n_epochs": 1000,
     "negative_sample_rate": 10,
@@ -160,6 +170,16 @@ ENERGY_PER_INTERACTION = 5
 ENERGY_RADIUS_BASE = 30.0
 ENERGY_RADIUS_SCALE = 0.45
 ENERGY_RADIUS_TRIM = 2.0 / 3.0
+# Islands are the posts whose ground overlaps. Past ISLAND_REACH_FULL_POSTS the
+# reach shrinks as (full / posts) ** ISLAND_REACH_POWER - as if the map grew with
+# its people - so islands keep apart instead of chaining into one continent.
+# Fitted on the labelled eval posts placed by seeds (2026-10-16): about 20
+# islands with the biggest holding a quarter to a third of the posts needed
+# x1.0 at ~120 posts, x0.9 at ~240 and x0.7 at ~480 (x1.0 there: one island of
+# all 478). Never below the floor, or a very busy map would be dust.
+ISLAND_REACH_FULL_POSTS = 180
+ISLAND_REACH_POWER = 0.36
+ISLAND_REACH_FLOOR = 0.4
 
 # Where the ground changes. Summed energy at a point in the field, not one
 # post's energy: two posts side by side make forest out of what either alone

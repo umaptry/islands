@@ -118,7 +118,9 @@ from core.config import (
     TAGS,
 )
 from core.encoder import load_encoder
-from core.energy import constants as energy_constants
+from core.energy import constants as energy_constants, reach_factor
+from core.artifact_manifest import SEED_VECTORS
+from core.placement import place_by_seeds
 from core.energy import name_landmasses
 from core.features import build_hybrid_features, extract_label_terms, normalize_text
 from core.geometry import scale_projected_coordinate
@@ -236,6 +238,15 @@ def load_artifacts():
     with io.open(ARTIFACTS / "vectorizers.pkl", "rb") as handle:
         sparse_artifacts = pickle.load(handle)
 
+    # A map placed by its seeds (core.placement) needs their map-view vectors.
+    placement = None
+    if (seed_map.get("placement") or {}).get("method") == "seed_mode":
+        vectors = np.load(ARTIFACTS / SEED_VECTORS).astype(float)
+        if vectors.shape != (len(seed_map["seed"]), encoder.input_dim):
+            raise RuntimeError("seed_vectors.npy がシードの数・次元と合いません。")
+        placement = dict(seed_map["placement"], vectors=vectors,
+                         spots=np.array(seed_map["seed"], dtype=float)[:, :2])
+
     # A map built on the centred view needs its centroid to place anything at
     # all, so it is taken here unconditionally - not through resolve_scale,
     # which may drop it for 似てる度 and fall back, and must never do that to
@@ -244,6 +255,8 @@ def load_artifacts():
     map_centroid = centroid if reads_map_view(centroid) else None
     if map_centroid is not None and len(map_centroid.get("dense_mean") or []) + SPARSE_DIM != encoder.input_dim:
         raise RuntimeError("seed_map.json の cosine_centroid がエンコーダの入力と合いません。")
+    if placement is not None and map_centroid is None:
+        raise RuntimeError("シードで置く地図には中心化した見方（cosine_centroid.map_input）が要ります。")
 
     seed = np.array(seed_map["seed"], dtype=float)
     # The client frames the camera on the corpus but never draws it, so it needs
@@ -260,6 +273,7 @@ def load_artifacts():
         "scale_bounds": scale_bounds,
         "sparse_artifacts": sparse_artifacts,
         "map_centroid": map_centroid,
+        "placement": placement,
         "seed_coords": seed[:, :2],
         "seed_clusters": seed[:, 2].astype(int),
         "islands": seed_map["islands"],
@@ -538,8 +552,15 @@ def project(text):
             detail="意味のある単語が見つかりませんでした。もう少し具体的に書いてみてください。",
         )
     vector = features[0]
-    raw = state["encoder"](map_input(vector))
-    x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), state["scale_bounds"])
+    placement = state.get("placement")
+    if placement is not None:
+        # Where its nearest seeds in meaning stand (core.placement).
+        x, y = (float(value) for value in place_by_seeds(
+            map_input(vector), placement["vectors"], placement["spots"], k=placement["k"],
+            temperature=placement["temperature"], bandwidth=placement["bandwidth"]))
+    else:
+        raw = state["encoder"](map_input(vector))
+        x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), state["scale_bounds"])
     cluster_id = assign_cluster(x, y, state["seed_coords"], state["seed_clusters"])
 
     # The vector similarity is measured in. Storing it lets Postgres rank
@@ -560,6 +581,22 @@ def map_input(vector):
     that way, or its centred view for one built on that (manifest schema 2)."""
     centroid = state.get("map_centroid")
     return vector if centroid is None else map_view(vector, centroid)
+
+
+_reach_cache = {"stamp": 0.0, "value": 1.0}
+
+
+def current_reach_factor():
+    """core.energy.reach_factor for the posts on the map now, recounted at most
+    once a minute: the browser and the server's island grouping use it alike."""
+    now = time.time()
+    if now - _reach_cache["stamp"] >= ISLAND_CACHE_SECONDS:
+        try:
+            _reach_cache["value"] = reach_factor(state["store"].count_posts())
+        except StoreError:
+            pass  # keep the last one
+        _reach_cache["stamp"] = now
+    return _reach_cache["value"]
 
 
 def as_pgvector(values):
@@ -594,7 +631,7 @@ def live_islands(force=False):
     if len(posts) >= NAMING_POST_LIMIT:
         _logger.warning("island naming capped at %d posts; some posts will have no island membership", NAMING_POST_LIMIT)
 
-    named = name_landmasses(posts, state["idf"], name_group)
+    named = name_landmasses(posts, state["idf"], name_group, reach_factor(len(posts)))
     # Word counts only say what the islanders mention; the heading is the activity genre.
     named = name_by_genre(named, {post["id"]: post for post in posts})
     try:
@@ -775,6 +812,21 @@ def introduce(viewer_id, other_id, index, places, ranked=None):
         shared_islands=shared_islands, shared_topics=shared_topics,
     )
     return {"reasons": found, "opener": introductions.opener(found, other, shared_topics)}
+
+
+CONNECTION_BROWSER_SECONDS = 10
+FRESH_LINES_MIN_SECONDS = 2.0
+_fresh_lines = {"stamp": 0.0}
+
+
+def fresh_lines_due():
+    """Whether a requested recount may run now: one every couple of seconds at most."""
+    now = time.time()
+    with _connections_lock:
+        if now - _fresh_lines["stamp"] < FRESH_LINES_MIN_SECONDS:
+            return False
+        _fresh_lines["stamp"] = now
+        return True
 
 
 def connection_lines(force=False):
@@ -1331,7 +1383,7 @@ def config():
             ) if flag
         ],
         "world": {"min": MAP_MIN, "max": MAP_MAX, "seed_bounds": state["seed_bounds"]},
-        "energy": energy_constants(),
+        "energy": {**energy_constants(), "radius_factor": current_reach_factor()},
         "tags": list(TAGS),
         # Q45: the tag that says "話しかけていいよ". Named so the browser can
         # give it its own switch instead of finding it by its wording.
@@ -1432,19 +1484,27 @@ def islands(response: Response):
     # Everyone looking at the map wants the same answer, and it changes on a
     # timer rather than per viewer. Worth a CDN hop if one is ever put in front.
     response.headers["Cache-Control"] = "public, max-age=30"
-    return {"islands": payload}
+    # The browser's ground follows the map's reach factor, which moves as the map
+    # fills: a page open for hours picks it up here (web/js/config.js).
+    return {"islands": payload, "radius_factor": current_reach_factor()}
 
 
 @app.get("/api/connections")
-def connections(response: Response, person: str = ""):
-    """Lines between people. Public: a line is visible to everybody, not just the two."""
+def connections(response: Response, person: str = "", fresh: str = ""):
+    """Lines between people. Public: a line is visible to everybody, not just the two.
+
+    `fresh` comes from somebody who just reacted or wrote. In production that
+    write goes to the database directly, so this server's cache cannot know of
+    it: recount now (at most once every few seconds, whoever asks).
+    """
     try:
-        rows = connection_lines()
+        rows = connection_lines(force=bool(fresh) and fresh_lines_due())
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     if person:
         rows = [row for row in rows if person in (row["a"], row["b"])]
-    response.headers["Cache-Control"] = f"public, max-age={CONNECTION_CACHE_SECONDS}"
+    # Short enough that the 15 s poll never reads a stale copy from the browser.
+    response.headers["Cache-Control"] = "no-store" if fresh else f"public, max-age={CONNECTION_BROWSER_SECONDS}"
     return {"connections": rows, "since": CONNECTIONS_SINCE}
 
 
@@ -1719,10 +1779,11 @@ def map_bounds():
         raise HTTPException(503, "地図の範囲を読み込めませんでした。") from exc
     if not posts:
         return {"bounds": None, "count": 0}
-    return {"bounds": [min(p["x"] - post_radius(p) for p in posts),
-                       min(p["y"] - post_radius(p) for p in posts),
-                       max(p["x"] + post_radius(p) for p in posts),
-                       max(p["y"] + post_radius(p) for p in posts)], "count": len(posts)}
+    factor = current_reach_factor()
+    return {"bounds": [min(p["x"] - post_radius(p, factor) for p in posts),
+                       min(p["y"] - post_radius(p, factor) for p in posts),
+                       max(p["x"] + post_radius(p, factor) for p in posts),
+                       max(p["y"] + post_radius(p, factor) for p in posts)], "count": len(posts)}
 
 
 @app.get("/api/terrain")
@@ -1745,7 +1806,7 @@ def terrain(min_x: float, min_y: float, max_x: float, max_y: float,
     posts = [p for p in posts if
              (not needle or needle in (p.get('body', '') + ' ' + p.get('display_name', '')).lower())
              and (not selected or any(tag in p.get('tags', []) for tag in selected))]
-    return energy_grid(posts, bounds)
+    return energy_grid(posts, bounds, factor=current_reach_factor())
 
 
 @app.post("/api/posts")

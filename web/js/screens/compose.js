@@ -19,6 +19,7 @@
 // (see image.js). A 4MB phone photo would be the single biggest thing this app
 // ever moves, and nobody looking at a card in a bottom sheet needs 4032 pixels.
 
+import { RECRUIT_TAG } from '../map/reads.js';
 import { config, islandColor } from '../config.js';
 import { POST_IMAGE, prepareImage } from '../image.js';
 import { api, data } from '../net.js';
@@ -252,6 +253,13 @@ function keepNavHidden() {
   document.body.classList.remove('has-nav');
 }
 
+/** What 参加者募集中 does, told to the author (who never sees the star). */
+function recruitNote(tags) {
+  return (tags || []).includes(RECRUIT_TAG)
+    ? ' 参加者募集中の投稿は、ほかの人の地図に金の星で表示されます。'
+    : '';
+}
+
 async function submit() {
   if (submitting) return;
   submitting = true;
@@ -281,7 +289,7 @@ async function submit() {
       upsertPost(updated);
       drafts.delete(draftKey);
       draftKey = '';
-      toast(moved ? '保存しました。地図の位置も更新されました。' : '保存しました。');
+      toast((moved ? '保存しました。地図の位置も更新されました。' : '保存しました。') + recruitNote(payload.tags));
       navigate('#/me');
       return;
     }
@@ -296,6 +304,8 @@ async function submit() {
     // (as in the design mock). The 「あなたの島」 page that used to come first
     // had only the island's name left on it once its list of near people went.
     await landOnMap(result);
+    // The star is for other people; say so, or the author sees nothing happen.
+    if (recruitNote(payload.tags)) toast(recruitNote(payload.tags).trim());
   } catch (error) {
     $('composeError').textContent = error.message;
     show('compose');

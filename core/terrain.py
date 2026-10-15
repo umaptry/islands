@@ -7,7 +7,7 @@ import numpy as np
 from core.energy import coast_reach, total_energy, post_radius
 
 
-def energy_grid(posts, bounds, resolution=192):
+def energy_grid(posts, bounds, resolution=192, factor=1.0):
     min_x, min_y, max_x, max_y = bounds
     width = height = resolution
     xs = np.linspace(min_x, max_x, width)
@@ -15,7 +15,7 @@ def energy_grid(posts, bounds, resolution=192):
     field = np.zeros((height, width), dtype=np.float64)
     for post in posts:
         energy = total_energy(post)
-        radius = post_radius(post)
+        radius = post_radius(post, factor)
         if energy <= 0 or radius <= 0:
             continue
         # Touch only samples inside this cone's bounding square.

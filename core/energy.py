@@ -25,6 +25,9 @@ from core.config import (
     ENERGY_RADIUS_BASE,
     ENERGY_RADIUS_SCALE,
     ENERGY_RADIUS_TRIM,
+    ISLAND_REACH_FLOOR,
+    ISLAND_REACH_FULL_POSTS,
+    ISLAND_REACH_POWER,
     PLOT_TIERS,
     REGION_MIN_GROUP,
     REGION_MIN_POSTS,
@@ -72,13 +75,25 @@ def total_energy(post):
     return computed_energy(post)
 
 
-def influence_radius(energy):
-    """How far one post's ground reaches. islands: (30 + e * 0.45) * (2/3)."""
-    return (ENERGY_RADIUS_BASE + float(energy) * ENERGY_RADIUS_SCALE) * ENERGY_RADIUS_TRIM
+def reach_factor(post_count):
+    """What every radius is multiplied by on a map holding `post_count` posts:
+    1 up to ISLAND_REACH_FULL_POSTS, then (full / count) ** ISLAND_REACH_POWER,
+    never below the floor. The browser is served the same number
+    (/api/config energy.radius_factor)."""
+    count = max(int(post_count or 0), 0)
+    if count <= ISLAND_REACH_FULL_POSTS:
+        return 1.0
+    return max(ISLAND_REACH_FLOOR, (ISLAND_REACH_FULL_POSTS / count) ** ISLAND_REACH_POWER)
 
 
-def post_radius(post):
-    return influence_radius(total_energy(post))
+def influence_radius(energy, factor=1.0):
+    """How far one post's ground reaches. islands: (30 + e * 0.45) * (2/3),
+    times the map's reach factor."""
+    return (ENERGY_RADIUS_BASE + float(energy) * ENERGY_RADIUS_SCALE) * ENERGY_RADIUS_TRIM * factor
+
+
+def post_radius(post, factor=1.0):
+    return influence_radius(total_energy(post), factor)
 
 
 # A post's cone reaches a little less far in some directions than in others, so
@@ -175,7 +190,7 @@ class _DisjointSet:
             self._parent[root_a] = root_b
 
 
-def detect_landmasses(posts):
+def detect_landmasses(posts, factor=None):
     """Group posts whose ground overlaps. islands' detectIslands, minus the naming.
 
     Returns [{"posts": [...], "cx": float, "cy": float, "size": int,
@@ -194,7 +209,10 @@ def detect_landmasses(posts):
     if count == 0:
         return []
 
-    radii = [post_radius(post) for post in posts]
+    # Given by the caller when `posts` is not the whole map (the browser passes
+    # what is on screen); otherwise these posts are the map and set it.
+    factor = reach_factor(count) if factor is None else factor
+    radii = [post_radius(post, factor) for post in posts]
     sets = _DisjointSet(count)
     for i in range(count):
         xi, yi = float(posts[i]["x"]), float(posts[i]["y"])
@@ -245,7 +263,7 @@ def terrain_word(size):
     return "大陸" if size >= CONTINENT_MIN_POSTS else "島"
 
 
-def name_landmasses(posts, idf, name_group):
+def name_landmasses(posts, idf, name_group, factor=None):
     """Landmasses with names taken from the posts standing on them.
 
     `name_group` is core.clustering.name_group, passed in rather than imported
@@ -256,7 +274,7 @@ def name_landmasses(posts, idf, name_group):
     one with more people behind it has the better claim - the same rule the map
     used before landmasses existed.
     """
-    landmasses = detect_landmasses(posts)
+    landmasses = detect_landmasses(posts, factor)
     taken = []
     named = []
     masses = []
@@ -352,5 +370,5 @@ __all__ = [
     "BIOME_ORDER", "biome_at", "coast_reach", "computed_energy", "constants", "detect_landmasses",
     "hash32",
     "influence_radius", "interaction_count", "name_landmasses", "plot_glyph",
-    "post_radius", "terrain_word", "total_energy",
+    "post_radius", "reach_factor", "terrain_word", "total_energy",
 ]

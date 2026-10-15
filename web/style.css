@@ -563,12 +563,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 
 /* ---------------------------------------------------------------- sheet */
 
-.sheet-backdrop {
-  position: fixed; inset: 0; background: rgba(10, 30, 52, .34);
-  opacity: 0; pointer-events: none; transition: opacity .22s var(--ease); z-index: 40;
-}
-.sheet-backdrop.on { opacity: 1; pointer-events: auto; }
-
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
   visibility: hidden; pointer-events: none;
@@ -840,7 +834,6 @@ body:has(#islandBadge:not([hidden])) .toast {
   }
   .sheet.on { transform: none; }
   .sheet.full { height: auto; }
-  .sheet-backdrop { display: none; }
   .sheet-grip { display: none; }
   .sheet-scroll { padding-top: 16px; }
   .sheet-thread { border-top: 1px solid var(--line); max-height: 40dvh; overflow-y: auto; }
@@ -896,6 +889,13 @@ body:has(#islandBadge:not([hidden])) .toast {
 .map-status { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); background: rgb(255 255 255 / .94); color: #374151; border-radius: 8px; padding: 8px 12px; font-size: 12px; z-index: 4; }
 .sheet { bottom: var(--keyboard-inset, 0px); }
 .sheet:not(.full) .sheet-scroll { overscroll-behavior: contain; }
+/* At half height the card does not scroll: a swipe up on it grows the sheet
+   (setupSheetGesture in screens/map.js) and only the full sheet scrolls, as
+   with a place on Google Maps (2026-10-16). Sideways scrollers inside still
+   scroll. The side panel of wider screens scrolls as before. */
+@media not all and (min-width: 768px) and (min-height: 500px) {
+  .sheet:not(.full) .sheet-scroll { overflow-y: hidden; touch-action: pan-x; }
+}
 .sheet-open .bottom-nav { visibility: hidden; }
 .chat-input-row { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 .chat-input { min-width: 0; }

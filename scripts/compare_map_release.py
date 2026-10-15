@@ -15,6 +15,7 @@ from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
 from core.encoder import load_encoder
 from core.features import build_hybrid_features
 from core.similarity import map_view, reads_map_view, similarity_view
+from core.placement import place_by_seeds
 from benchmark_embeddings import score_probe
 
 
@@ -45,7 +46,13 @@ def evaluate(directory, provider, texts, labels, cache):
         vectors = np.array([similarity_view(vector, centroid) for vector in vectors])
     score = score_probe(vectors, labels, partners)
     encoder, _ = load_encoder(directory / "encoder.npz")
-    coords = encoder(vectors if reads_map_view(centroid) else raw_vectors)
+    placement = seed.get("placement") or {}
+    if placement.get("method") == "seed_mode":
+        coords = place_by_seeds(vectors, np.load(directory / "seed_vectors.npy").astype(float),
+                                np.array(seed["seed"], dtype=float)[:, :2], k=placement["k"],
+                                temperature=placement["temperature"], bandwidth=placement["bandwidth"])
+    else:
+        coords = encoder(vectors if reads_map_view(centroid) else raw_vectors)
     distances = ((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2)
     np.fill_diagonal(distances, np.inf)
     neighbors = np.argsort(distances, axis=1)[:, :partners]

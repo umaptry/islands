@@ -7,9 +7,20 @@ import sys
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.artifact_manifest import FILES, validate_manifest
+from core.artifact_manifest import FILES, SEED_VECTORS, validate_manifest
 
 NAMES = (*FILES, "manifest.json")
+ALLOWED = (*FILES, SEED_VECTORS)
+
+
+def names_of(manifest):
+    """The files a release carries: those its manifest pins, plus the manifest.
+    Only known names: the list comes from inside the archive, and a name such as
+    ../x would otherwise be written outside the output directory."""
+    pinned = set(FILES) | set(manifest["files"])
+    if not pinned <= set(ALLOWED):
+        raise RuntimeError("Release manifest pins files a map does not have")
+    return (*sorted(pinned), "manifest.json")
 
 
 def check(directory, provider, version):
@@ -25,7 +36,7 @@ def sha256(path):
 
 
 def pack(directory, output, provider, version, quality_report=None):
-    check(directory, provider, version)
+    manifest = check(directory, provider, version)
     if provider == "gemini":
         if not quality_report:
             raise RuntimeError("Gemini release requires --quality-report")
@@ -36,7 +47,7 @@ def pack(directory, output, provider, version, quality_report=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in NAMES:
+        for name in names_of(manifest):
             archive.write(Path(directory) / name, name)
     return sha256(output)
 
@@ -47,12 +58,16 @@ def unpack(source, output, provider, version, expected_sha256):
     output = Path(output)
     with zipfile.ZipFile(source) as archive:
         entries = archive.infolist()
-        if len(entries) != len(NAMES) or {e.filename for e in entries} != set(NAMES):
-            raise RuntimeError("Release archive must contain exactly four map files")
+        try:
+            names = names_of(json.loads(archive.read("manifest.json")))
+        except (KeyError, ValueError) as error:
+            raise RuntimeError("Release archive has no readable manifest") from error
+        if len(entries) != len(names) or {e.filename for e in entries} != set(names):
+            raise RuntimeError("Release archive must contain exactly the files its manifest pins")
         if sum(e.file_size for e in entries) > 256 * 1024 * 1024:
             raise RuntimeError("Release archive exceeds the map size limit")
         output.mkdir(parents=True, exist_ok=False)
-        for name in NAMES:
+        for name in names:
             with (output / name).open("xb") as handle:
                 handle.write(archive.read(name))
     return check(output, provider, version)

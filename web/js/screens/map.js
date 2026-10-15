@@ -5,7 +5,7 @@
 // full height where the message thread appears with the input pinned to the
 // bottom. The half state is what lets you read a card without losing the map.
 
-import { config, islandColor, isLocal } from '../config.js';
+import { config, isLocal, islandColor, setReachFactor } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import {
@@ -151,7 +151,7 @@ export async function refreshMap({ fitFirst = false } = {}) {
     if (generation !== mapRequest) return false;
     mapError = false;
     const saturated = posts.length >= limit;
-    setPosts(posts, { saturated });
+    setPosts(posts, { saturated, bounds });
     // A refresh that was asked for before the post existed must not take it
     // away while it is being introduced.
     if (landing && !state.postsById.has(landing.id)) upsertPost(landing);
@@ -187,6 +187,7 @@ export async function refreshIslands() {
   try {
     const result = await api.get('/api/islands', { auth: false });
     state.islands = result.islands || [];
+    setReachFactor(result.radius_factor);
     paintBadge();
   } catch {
     /* keep the previous names rather than blanking every label */
@@ -220,10 +221,14 @@ export async function refreshNeighbors({ force = false } = {}) {
   }));
 }
 
-/** Lines between people (段3). Public, and cached by the server for a while. */
-export async function refreshConnections() {
+/** Lines between people (段3). Public, and cached by the server for a while.
+ * `fresh` right after you reacted or wrote: the server recounts and nothing on
+ * the way may answer from a cache, so your road appears now and not on the next
+ * poll - it used to take 25-45 s, and longer in production. */
+export async function refreshConnections({ fresh = false } = {}) {
   try {
-    const result = await api.get('/api/connections', { auth: false });
+    const result = await api.get(fresh ? '/api/connections?fresh=1' : '/api/connections',
+      { auth: false, ...(fresh ? { cache: 'no-store' } : {}) });
     state.connections = result.connections || [];
     // A road that was not there a moment ago grows, and says so.
     // A sound only for a road that is mine; other people's roads grow silently.
@@ -532,7 +537,7 @@ function paintThread(post, container) {
   container.append(el('div', { className: 'section-label', text: 'メッセージ' }), activeChat.node);
   if (state.account) {
     const chat = activeChat;
-    input = chatInput(post.id, { onSent: () => chat.refresh() });
+    input = chatInput(post.id, { onSent: () => { chat.refresh(); refreshConnections({ fresh: true }); } });
     $('sheetFoot').append(input.node);
   } else {
     $('sheetFoot').append(el('button', {
@@ -574,6 +579,7 @@ export async function react(postId, kind) {
   try {
     if (on) await data.removeReaction(postId, kind);
     else await data.addReaction(postId, kind);
+    refreshConnections({ fresh: true });
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));
     else state.reactions.delete(reactionKey(postId, kind));
@@ -649,7 +655,6 @@ function setupSheetGesture() {
 
   $('sheetGrip').addEventListener('click', () => expandSheet(!sheetExpanded()));
   $('sheetClose').addEventListener('click', closeSheet);
-  $('sheetBackdrop').addEventListener('pointerdown', closeSheet);
 }
 
 // ---------------------------------------------------------------- participants
@@ -714,8 +719,9 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     // A backgrounded tab should not keep polling; it catches up on visibility.
     if (document.hidden || document.querySelector('.screen.active').id !== 'map') return;
-    await refreshMap();
-    await Promise.all([refreshIslands(), refreshMyReactions(), refreshConnections()]);
+    // Lines alongside the map, not after it: a slow map refresh held them up.
+    await Promise.all([refreshMap(), refreshConnections()]);
+    await Promise.all([refreshIslands(), refreshMyReactions()]);
   }, POLL_MS);
 
   document.addEventListener('visibilitychange', async () => {

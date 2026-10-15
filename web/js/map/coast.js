@@ -68,6 +68,32 @@ export function reachAt(shape, dx, dy, distance) {
   return 1 - shape.depth * (1 + wave / shape.norm) / 2;
 }
 
+// The texture builder asks for a reach at every pixel inside every cone. A table
+// of the curve, 256 steps round, read with linear interpolation, is 3x cheaper
+// than the sum above and differs from it by under 2e-4 of the radius - nothing
+// a screen can show (2026-10-16). groundOf and the server keep the exact sum.
+const TABLE_STEPS = 256;
+
+/** The shape's reach as a table over the angle, built once per shape. */
+export function reachTable(shape) {
+  if (!shape.table) {
+    const table = new Float64Array(TABLE_STEPS + 1);
+    for (let i = 0; i <= TABLE_STEPS; i += 1) {
+      const angle = (i / TABLE_STEPS) * Math.PI * 2 - Math.PI;
+      table[i] = reachAt(shape, Math.cos(angle), Math.sin(angle), 1);
+    }
+    shape.table = table;
+  }
+  return shape.table;
+}
+
+/** reachAt from the table: towards (dx, dy). */
+export function reachFrom(table, dx, dy) {
+  const at = ((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * TABLE_STEPS;
+  const i = Math.min(TABLE_STEPS - 1, Math.floor(at));
+  return table[i] + (table[i + 1] - table[i]) * (at - i);
+}
+
 /** One post's share of the ground at world (x, y), as terrain.js adds it up. */
 export function groundOf(post, x, y) {
   const radius = radiusOf(post);

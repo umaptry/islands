@@ -11,10 +11,10 @@
 // recomputed here. The map is a plain pan/zoom of the server's x/y. Nothing is
 // re-projected client-side.
 
-import { config, interactionsOf, islandColor, radiusOf } from '../config.js';
+import { config, energyOf, interactionsOf, islandColor, radiusOf } from '../config.js';
 import { drawFace } from '../avatars.js';
 import { matchesFilters, state, filtering } from '../state.js';
-import { clip, toast } from '../ui.js';
+import { clip, desktopSheet, sheetOpen, toast } from '../ui.js';
 import {
   INK, REDUCED_MOTION, drawBirds, drawBoats, drawFog, drawSeaMarks, drawWhales,
   hashId, makeLabelSpace,
@@ -23,9 +23,10 @@ import { detectLandmasses, membership } from './landmass.js';
 import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
 import { kinLines } from './kin.js';
 import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
-import { buildDetail, buildTerrain, gridTerrain } from './terrain.js';
+import { buildDetail, buildTerrain, gridTerrain, toCanvas } from './terrain.js';
+import { offThread } from './offthread.js';
 import { groundOf } from './coast.js';
-import { isUnreadRecruit } from './reads.js';
+import { isRecruiting, isUnreadRecruit } from './reads.js';
 import {
   drawHeat, faceLift, getHeatTier, heatColor, heatFrameAt, heatFrameTime,
   heatSpriteHalf, heatSpriteValue, isFlameTier,
@@ -91,8 +92,20 @@ function insets() {
 }
 
 /** The controls floating over the map, in canvas px. Labels keep out of them
- * so a name or a speech bubble is never half under the search bar. */
+ * so a name or a speech bubble is never half under the search bar. Measured at
+ * most every CHROME_MS: querying and measuring eight elements on every frame
+ * was 8% of a phone's frame time while panning (2026-10-16). */
+const CHROME_MS = 300;
+let chromeCache = { at: -Infinity, boxes: [] };
+
 function chromeBoxes() {
+  const now = performance.now();
+  if (now - chromeCache.at < CHROME_MS) return chromeCache.boxes;
+  chromeCache = { at: now, boxes: measureChrome() };
+  return chromeCache.boxes;
+}
+
+function measureChrome() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
   return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #islandBadge, #map .map-controls, #mapStatus')]
@@ -310,13 +323,15 @@ let tween = 0;
  * the ground neither lurches nor drifts sideways on the way. Any touch stops it
  * where it is. Reduced motion jumps straight there.
  */
-export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, then } = {}) {
+export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = null, then } = {}) {
   cancelAnimationFrame(tween);
   frame = insets();
   const from = { ...state.camera };
   const to = clampScale(targetScale);
-  const anchorX = width / 2;
-  const anchorY = frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
+  const anchorX = x ?? width / 2;
+  // `y`, in canvas px, puts the point exactly there instead of `lift` of the
+  // way down the free frame.
+  const anchorY = y ?? frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
   const start = toWorld(anchorX, anchorY);
   const duration = REDUCED_MOTION ? 0 : 480;
   const began = performance.now();
@@ -570,6 +585,23 @@ function zoomAround(point, requested, absolute = false) {
   state.camera.y = cy - localY * next;
 }
 
+// Tapped with no post open, the face slides to the middle of the screen, a
+// quarter of the way down (25vh), clear of the half-height sheet opening under
+// it. With a post already open the map stays put, so you can go from face to
+// face without the ground moving each time (2026-10-16).
+const TAP_SPOT = 0.25;
+
+function tapSpot() {
+  const box = canvas.getBoundingClientRect();
+  let x = width / 2;
+  if (desktopSheet()) {
+    // A window just wide enough for the side panel has its middle under it.
+    const panel = document.getElementById('sheet').getBoundingClientRect();
+    x = Math.max(x, panel.right - box.left + 48);
+  }
+  return { x, y: window.innerHeight * TAP_SPOT - box.top };
+}
+
 function pick(event) {
   const rect = canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
@@ -591,9 +623,10 @@ function pick(event) {
       const fit = state.camera.fit || state.camera.scale;
       const { post } = hit;
       playSe('pop');
-      zoomTo(post.x, post.y, fit * 2.6, { lift: 0.4, then: () => onPick(post) });
+      zoomTo(post.x, post.y, fit * 2.6, { ...tapSpot(), then: () => onPick(post) });
     } else {
       playSe('pop');
+      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, state.camera.scale, tapSpot());
       onPick(hit.post);
     }
     return;
@@ -729,12 +762,24 @@ function renderMap(time) {
   // The ground. Built from every post the client holds, not just the ones on
   // screen, so panning does not make a coastline appear out of nothing.
   const grid = gridTerrain(state.terrainGrid);
-  const ground = state.posts;
-  const buildGround = (list) => buildTerrain({
+  const ground = groundPosts();
+  // While the camera moves, the ground stays at the zoom it was built for and is
+  // only stretched: a pinch crossed a texture step every ~19% and rebuilt the
+  // whole map mid-gesture (0.2-0.4 s stalls; about a second on a phone).
+  const now = performance.now();
+  const mark = `${state.camera.x.toFixed(1)},${state.camera.y.toFixed(1)},${state.camera.scale.toFixed(5)}`;
+  if (mark !== cameraMark) {
+    cameraMark = mark;
+    cameraStill = now;
+  }
+  if (now - cameraStill >= GROUND_SETTLE_MS || groundScale === null) groundScale = scale;
+  const buildGround = (list, revision = null) => buildTerrain({
     posts: list,
-    cells: state.saturated ? state.cells : [],
-    region: postsRegion(),
-    scale,
+    cells: state.saturated ? state.cells : NO_CELLS,
+    region: groundRegion(ground),
+    scale: groundScale,
+    revision,
+    elsewhere: (job, answer) => offThread('ground', job, answer),
   });
   let terrain = null;
   let before = null;   // the ground as it was without the new post, while it rises
@@ -748,7 +793,7 @@ function renderMap(time) {
       reveal.before = before;
       terrain = buildGround(ground);
     } else {
-      terrain = buildGround(ground);
+      terrain = buildGround(ground, groundRev);
     }
   }
   if (grid) {
@@ -845,17 +890,23 @@ function renderMap(time) {
   const keepOnScreen = (x, w) => Math.max(w / 2 + 8, Math.min(width - w / 2 - 8, x));
 
   // Island names claim their space before anything else: they are the
-  // headline. A name never disappears, but it moves - and it moves along its
-  // own island, never off into the sea, and never up under the search bar.
+  // headline. A name moves before it gives way - along its own island, never
+  // off into the sea, and never up under the search bar - and the busiest
+  // islands choose first. Only a name with no room anywhere near its island
+  // waits until you come closer; yours and a lit one are always drawn
+  // (2026-10-16: two names used to print over each other at the overview).
   const face = level === 'deep' ? FACE_DEEP : FACE_NEAR;
+  const minePosts = new Set(visible.filter((entry) => entry.mine).map((entry) => entry.post.id));
+  const weight = (place) => Number(place.island.people) || place.members.size;
   nameBoxes = [];
   ctx.save();
-  places.forEach((place) => {
+  [...places].sort((a, b) => weight(b) - weight(a)).forEach((place) => {
     const { island, box } = place;
     if (box.bottom < ceiling - 4) return;
     ctx.font = LABEL_FONT;
     const textWidth = ctx.measureText(island.label).width;
-    const x = keepOnScreen(place.x, textWidth);
+    const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
+    const mine = [...place.members].some((id) => minePosts.has(id));
     // Zoomed in, a line of people and topics hangs under the name: the pair
     // stands clear of the town and of the faces as one block.
     const detail = z >= DETAIL_AT;
@@ -868,16 +919,29 @@ function renderMap(time) {
         .map(({ point }) => point.y - face / 2 - 14 - 12 - under);
       if (tops.length) anchor = Math.min(anchor, Math.min(...tops));
     }
-    let y = Math.max(ceiling, anchor);
-    for (const offset of [0, -16, -32, 16, 32]) {
-      // The controls hold their own space in `claim`, so beside them (a wide
-      // screen) a name may rise to the top edge.
-      const candidate = Math.max(14, anchor + offset);
-      if (claim(x, candidate, textWidth, 15)) { y = candidate; break; }
+    let x = null;
+    let y = null;
+    // Up and down first, then a little to either side (a third of the name).
+    spots: for (const shift of [0, -0.35, 0.35]) {
+      for (const offset of [0, -16, -32, 16, 32]) {
+        // The controls hold their own space in `claim`, so beside them (a wide
+        // screen) a name may rise to the top edge.
+        const spotX = keepOnScreen(place.x + shift * textWidth, textWidth);
+        const candidate = Math.max(14, anchor + offset);
+        if (claim(spotX, candidate, textWidth, 15)) {
+          x = spotX;
+          y = candidate;
+          break spots;
+        }
+      }
+    }
+    if (y === null) {
+      if (!lit && !mine) return;
+      x = keepOnScreen(place.x, textWidth);
+      y = Math.max(ceiling, anchor);
     }
     place.labelBox = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 10, bottom: y + 10 };
     nameBoxes.push(place.labelBox);
-    const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
     label(island.label, x, y, LABEL_FONT, {
       alpha: place.fade,
       ...(lit ? { lit: islandColor(island.cluster_id), width: textWidth } : {}),
@@ -982,6 +1046,69 @@ function paintGround(terrain, alpha, hole = null) {
 // the camera moves, the last sharp one is kept for as long as it is the same
 // ground; outside it the coarse one shows until the next stop.
 const SHARP_SETTLE_MS = 160;
+const GROUND_SETTLE_MS = 160;
+const NO_CELLS = [];         // one empty list, so the terrain cache can tell nothing changed
+let groundScale = null;      // the zoom the whole-map ground is built for
+
+// The ground is drawn from every post seen this session, not only the ones the
+// latest viewport fetch returned. A settled pan used to swap state.posts for a
+// new subset, which changed the terrain key and rebuilt the whole map (28-230 ms
+// on a desktop, close to a second on a phone) and threw away the sharp close-up
+// too (2026-10-16). Deleted posts are dropped (state.removed).
+const seen = new Map();
+let seenRevision = -1;
+let groundRev = 0;
+let groundList = [];
+
+function groundPosts() {
+  if (state.revision !== seenRevision) {
+    seenRevision = state.revision;
+    let changed = false;
+    // Every fetch brings new objects for the same posts: only a move or a change
+    // of energy is a new ground. Rebuilding on every poll also threw away the
+    // sharp close-up each time.
+    state.posts.forEach((post) => {
+      const known = seen.get(post.id);
+      if (known === post) return;
+      if (!known || known.x !== post.x || known.y !== post.y || energyOf(known) !== energyOf(post)) changed = true;
+      seen.set(post.id, post);
+    });
+    state.removed.forEach((id) => { if (seen.delete(id)) changed = true; });
+    // A post deleted or hidden by someone else just stops coming back: anything
+    // inside the area last fetched in full that is no longer in it is gone.
+    const area = state.fetched;
+    if (area) {
+      seen.forEach((post, id) => {
+        if (!state.postsById.has(id) && post.x > area.minX && post.x < area.maxX
+            && post.y > area.minY && post.y < area.maxY) {
+          seen.delete(id);
+          changed = true;
+        }
+      });
+    }
+    if (changed) {
+      groundRev += 1;
+      groundList = [...seen.values()];
+    }
+  }
+  return groundList;
+}
+
+function groundRegion(list) {
+  if (!list.length) return postsRegion();
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  list.forEach((post) => {
+    const reach = radiusOf(post);
+    minX = Math.min(minX, post.x - reach);
+    minY = Math.min(minY, post.y - reach);
+    maxX = Math.max(maxX, post.x + reach);
+    maxY = Math.max(maxY, post.y + reach);
+  });
+  return { minX, minY, maxX, maxY };
+}
 const SHARP_RATIO_CAP = 2;
 const SHARP_MARGIN = 0.25;   // of the screen's size, on every side
 let sharp = null;            // { ...texture, base, unit }
@@ -1010,11 +1137,6 @@ function sharpGround(base, posts) {
     return null;
   }
   const now = performance.now();
-  const mark = `${state.camera.x.toFixed(1)},${state.camera.y.toFixed(1)},${state.camera.scale.toFixed(5)}`;
-  if (mark !== cameraMark) {
-    cameraMark = mark;
-    cameraStill = now;
-  }
   const valid = sharp && sharp.base === base;
   const a = toWorld(0, 0);
   const b = toWorld(width, height);
@@ -1022,19 +1144,30 @@ function sharpGround(base, posts) {
     && b.x <= sharp.minX + sharp.width / sharp.scale && b.y <= sharp.minY + sharp.height / sharp.scale;
   const fine = valid && sharp.unit >= need * 0.8;
   if ((!covers || !fine) && !sharpTimer && now - cameraStill >= SHARP_SETTLE_MS) {
-    // Out of the frame being painted: the next frame shows it.
-    sharpTimer = setTimeout(() => {
+    const scale = state.camera.scale;
+    const pixelRatio = Math.min(dpr, SHARP_RATIO_CAP);
+    const job = { posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale, pixelRatio };
+    // In the worker when there is one (offthread.js): the map keeps moving
+    // while it is made. One job at a time; the answer clears sharpTimer.
+    const sent = offThread('detail', job, (built, ok) => {
       sharpTimer = 0;
-      const scale = state.camera.scale;
-      const unit = scale * Math.min(dpr, SHARP_RATIO_CAP);
-      const built = buildDetail({
-        posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale,
-        pixelRatio: Math.min(dpr, SHARP_RATIO_CAP),
-      });
-      sharp = built ? { ...built, base, unit } : null;
-    }, 0);
+      if (ok) sharp = built ? { ...toCanvas(built), base, unit: scale * pixelRatio } : null;
+    });
+    if (sent) {
+      sharpTimer = -1;
+    } else {
+      // Out of the frame being painted: the next frame shows it.
+      sharpTimer = setTimeout(() => {
+        sharpTimer = 0;
+        const built = buildDetail(job);
+        sharp = built ? { ...built, base, unit: scale * pixelRatio } : null;
+      }, 0);
+    }
   }
-  return valid ? sharp : null;
+  // The last sharp texture keeps showing until its replacement is ready, even if
+  // the ground under it was rebuilt: the coarse one flashing up in between read
+  // as a blur followed by a second freeze.
+  return sharp;
 }
 
 /** Zoomed in, the town steps aside for the people.
@@ -1407,7 +1540,9 @@ function starPin(x, y, motion, phase) {
   ctx.restore();
 }
 
-/** Zoomed in: a gold ring round the face with four stars turning about it. */
+/** Zoomed in: a gold ring round the face with four stars turning about it.
+ * Wider and glowing since 2026-10-16: the thin ring was lost among the orange
+ * heat rings of a crowded island. */
 function starAura(x, y, radius, motion, phase) {
   const a = radius / 18;
   const turn = motion === null ? 0 : motion * 0.9 + phase;
@@ -1415,22 +1550,36 @@ function starAura(x, y, radius, motion, phase) {
   ctx.save();
   ctx.beginPath();
   ctx.arc(x, y, radius + 4 * a + 1, 0, Math.PI * 2);
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 4.5;
   ctx.strokeStyle = GOLD;
-  ctx.globalAlpha *= 0.9;
+  ctx.shadowColor = 'rgba(255, 200, 40, 0.9)';
+  ctx.shadowBlur = 8;
   ctx.stroke();
   ctx.restore();
   ctx.save();
   const orbit = radius + 12 * a;
   for (let i = 0; i < 4; i += 1) {
     const angle = turn + (i * Math.PI) / 2;
-    sparkle(x + Math.cos(angle) * orbit, y + Math.sin(angle) * orbit, Math.max(4, 7 * a) * k, turn);
+    sparkle(x + Math.cos(angle) * orbit, y + Math.sin(angle) * orbit, Math.max(6, 8 * a) * k, turn);
     ctx.fillStyle = '#ffffff';
     ctx.fill();
     ctx.lineWidth = 0.8;
     ctx.strokeStyle = '#b8860b';
     ctx.stroke();
   }
+  ctx.restore();
+}
+
+/** Your own 「参加者募集中」 post: a quiet gold ring, no sparkles - the turning
+ * stars are for people who have not opened it yet (2026-10-16). */
+function recruitRing(x, y, radius) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = GOLD;
+  ctx.globalAlpha *= 0.85;
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -1484,6 +1633,7 @@ function drawPinsFar(visible, places, claim, meId, motion) {
       radar(point.x, point.y, 11, motion);
       if (!onTown(point)) {
         faceBadge(post, point.x, point.y, 22, { ring: MINE, glow: 8 });
+        if (isRecruiting(post)) recruitRing(point.x, point.y, 15);
         claim(point.x, point.y, 24, 24);
       } else {
         ctx.save();
@@ -1570,34 +1720,47 @@ function drawTalk(talk) {
 
 // ---------------------------------------------------------------- faces
 
-/** Zoomed in: everybody's face where they wrote, wrapped in its heat, names
- * where they fit (`named`: other people's names too, close up; yours always).
+/** Zoomed in: faces where people wrote, wrapped in their heat, names where they
+ * fit (`named`: other people's names too, close up; yours always).
  *
- * Room is handed out in order - you, then the people closest to you, then the
- * busiest - and whoever does not get room is drawn smaller and unnamed rather
- * than not at all. Paint runs the other way, so the first in line ends on top
- * and the finger finds them first.
+ * Like a street map's pins (2026-10-16): a face needs a clear patch of screen
+ * (its size plus FACE_GAP), handed out in order - yours, the open one, unread
+ * 「参加者募集中」, then the busiest, ties broken by the post so the choice holds
+ * still while you pan. Whoever gets no patch waits as a small dot and becomes a
+ * face as zooming in spreads the crowd apart; every face used to be drawn, small
+ * if need be, and a busy island at near zoom was a jumble. Paint runs the other
+ * way, so the first in line ends on top and the finger finds them first.
  */
 const ANIMATED_FACES = 30;
+const FACE_GAP = { near: 16, deep: 10 };
 
 function drawFaces(visible, claim, level, motion, talk, stage, named) {
   const deep = level === 'deep';
   const full = deep ? FACE_DEEP : FACE_NEAR;
   const meId = state.account ? state.account.id : null;
   const selectedId = state.selected ? state.selected.id : null;
+  const landingId = stage ? reveal.id : null;
+  const firstInLine = (entry) => {
+    if (entry.mine || entry.post.id === landingId) return 0;
+    if (entry.post.id === selectedId) return 1;
+    if (isUnreadRecruit(entry.post, meId)) return 2;
+    return 3;
+  };
   const ranked = visible.map((entry) => ({
     ...entry,
     dim: entry.out || dimmed(entry.post),
-    rank: entry.mine ? 0 : 1,
+    rank: firstInLine(entry),
     busy: interactionsOf(entry.post),
-  })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy);
+    tie: hashId(entry.post.id),
+  })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy || a.tie - b.tie);
+  const gap = deep ? FACE_GAP.deep : FACE_GAP.near;
 
   ctx.save();
   ranked.forEach((entry) => {
     const { point, post } = entry;
-    const room = claim(point.x, point.y, full + 2, full + 2) || entry.mine;
+    const room = claim(point.x, point.y, full + gap, full + gap) || entry.rank <= 1;
     entry.room = room;
-    entry.size = room ? full : Math.round(full * 0.65);
+    entry.size = full;
     // Other people's names only close up; yours always.
     if (!room || entry.dim || !(named || entry.mine)) return;
     ctx.font = SMALL_FONT;
@@ -1641,17 +1804,26 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
         ctx.translate(-point.x, -point.y);
       }
     }
-    if (mine && !dim) radar(point.x, cy, r, motion);
-    // Crowded: a face that got no room is drawn small and bare - no ball or
-    // flame, no count, no mark, no aura.
-    const reach = entry.room ? drawHeatSprite(point.x, point.y, r, post.motivation, own, phase) : 0;
-    drawFaceSprite(post, point.x, cy, size, mine);
-    if (entry.room) {
-      if (isUnreadRecruit(post, meId) && !dim) starAura(point.x, cy, r, motion, phase);
-      if (isOpen(post)) openMark(point.x - size * 0.42, cy - size * 0.42, deep);
-      // How much it has been answered: always when deep, only when busy at near.
-      if (busy > 0 && (deep || busy >= 5)) countChip(point.x + size * 0.42, cy - size * 0.42, busy);
+    if (!entry.room) {
+      // Waiting for room: a dot in its heat's colour, not a face, not a target.
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, deep ? 3.5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = heatColor(post.motivation);
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      if (!plain) ctx.restore();
+      return;
     }
+    if (mine && !dim) radar(point.x, cy, r, motion);
+    if (mine && !dim && isRecruiting(post)) recruitRing(point.x, cy, r + 3);
+    const reach = drawHeatSprite(point.x, point.y, r, post.motivation, own, phase);
+    drawFaceSprite(post, point.x, cy, size, mine);
+    if (isUnreadRecruit(post, meId) && !dim) starAura(point.x, cy, r, motion, phase);
+    if (isOpen(post)) openMark(point.x - size * 0.42, cy - size * 0.42, deep);
+    // How much it has been answered: always when deep, only when busy at near.
+    if (busy > 0 && (deep || busy >= 5)) countChip(point.x + size * 0.42, cy - size * 0.42, busy);
     if (post.id === selectedId) selectionRing(ctx, point.x, cy, r + 4, islandColor(post.cluster_id));
 
     if (name) {

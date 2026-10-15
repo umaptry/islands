@@ -11,16 +11,29 @@ from scripts import artifact_release, migrate_map, verify_release
 
 def test_archive_pins_version_hash_and_exact_files(tmp_path):
     archive = tmp_path / "map.zip"
-    sha = artifact_release.pack("artifacts", archive, "onnx", "kotoba-map-e5-v2")
-    manifest = artifact_release.unpack(archive, tmp_path / "map", "onnx", "kotoba-map-e5-v2", sha)
-    assert manifest["artifact_version"] == "kotoba-map-e5-v2"
+    sha = artifact_release.pack("artifacts", archive, "onnx", "kotoba-map-e5-v3")
+    manifest = artifact_release.unpack(archive, tmp_path / "map", "onnx", "kotoba-map-e5-v3", sha)
+    assert manifest["artifact_version"] == "kotoba-map-e5-v3"
     with pytest.raises(RuntimeError, match="checksum"):
-        artifact_release.unpack(archive, tmp_path / "bad", "onnx", "kotoba-map-e5-v2", "0" * 64)
+        artifact_release.unpack(archive, tmp_path / "bad", "onnx", "kotoba-map-e5-v3", "0" * 64)
     with zipfile.ZipFile(archive, "a") as handle:
         handle.writestr("../private-posts.json", "private")
-    with pytest.raises(RuntimeError, match="exactly four"):
-        artifact_release.unpack(archive, tmp_path / "extra", "onnx", "kotoba-map-e5-v2", artifact_release.sha256(archive))
+    with pytest.raises(RuntimeError, match="exactly the files"):
+        artifact_release.unpack(archive, tmp_path / "extra", "onnx", "kotoba-map-e5-v3", artifact_release.sha256(archive))
     assert not (tmp_path / "private-posts.json").exists()
+
+
+def test_a_manifest_cannot_name_files_outside_the_map(tmp_path):
+    """The file list comes from inside the archive; it must not steer writes."""
+    manifest = json.loads((__import__("pathlib").Path("artifacts") / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"]["../escape.txt"] = "0" * 64
+    archive = tmp_path / "evil.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("manifest.json", json.dumps(manifest))
+        handle.writestr("../escape.txt", "x")
+    with pytest.raises(RuntimeError, match="does not have"):
+        artifact_release.unpack(archive, tmp_path / "out", "onnx", "kotoba-map-e5-v3", artifact_release.sha256(archive))
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def contract():

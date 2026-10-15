@@ -16,7 +16,7 @@ on:
         default: onnx
       artifact_version:
         type: string
-        default: kotoba-map-e5-v2
+        default: kotoba-map-e5-v3
       artifact_uri:
         description: 'Gemini: private gs://bucket/object.zip#generation'
         type: string
@@ -149,7 +149,7 @@ jobs:
       id-token: write
     env:
       PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.provider || vars.EMBEDDING_PROVIDER || 'onnx' }}
-      MAP_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_version || vars.MAP_ARTIFACT_VERSION || 'kotoba-map-e5-v2' }}
+      MAP_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_version || vars.MAP_ARTIFACT_VERSION || 'kotoba-map-e5-v3' }}
       MAP_URI: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_uri || vars.MAP_ARTIFACT_URI }}
       MAP_SHA256: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_sha256 || vars.MAP_ARTIFACT_SHA256 }}
       RUNTIME_SA: ${{ vars.CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT }}
@@ -173,7 +173,7 @@ jobs:
           [[ "$SUPABASE_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
           [[ "$MAP_VERSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]
           case "$PROVIDER" in
-            onnx) test "$MAP_VERSION" = kotoba-map-e5-v2 ;;
+            onnx) test "$MAP_VERSION" = kotoba-map-e5-v3 ;;
             gemini)
               [[ "$GEMINI_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
               [[ "$MAP_URI" =~ ^gs://[^/]+/.+#[0-9]+$ ]]

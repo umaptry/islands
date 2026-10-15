@@ -31,6 +31,8 @@ export const state = {
   trialPost: null,        // the first-post tryout, never saved (段5 Q40)
   myViews: {},            // post id -> how many people opened it (Q35)
   ripples: [],            // { x, y, at, size, color } rings that answer an action
+  removed: new Set(),     // ids deleted this session: the map's ground forgets them
+  fetched: null,          // { minX, minY, maxX, maxY } fetched in full by the last refresh
 };
 
 export function subscribe(listener) {
@@ -42,9 +44,12 @@ export function notify(reason) {
   listeners.forEach((listener) => listener(reason));
 }
 
-export function setPosts(posts, { saturated = false } = {}) {
+export function setPosts(posts, { saturated = false, bounds = null } = {}) {
   state.posts = posts;
   state.saturated = saturated;
+  // The area these posts are ALL the posts of (not when the server held more
+  // than we asked for): the map's ground forgets what vanished from it.
+  state.fetched = saturated ? null : bounds;
   state.postsById = new Map(posts.map((post) => [post.id, post]));
   state.revision += 1;
   notify('posts');
@@ -85,6 +90,7 @@ export function upsertPost(post) {
 }
 
 export function removePost(postId) {
+  state.removed.add(postId);
   state.posts = state.posts.filter((post) => post.id !== postId);
   state.postsById.delete(postId);
   state.myPosts = state.myPosts.filter((post) => post.id !== postId);

@@ -6,6 +6,8 @@ from pathlib import Path
 from core.config import FEATURE_CONFIG
 
 FILES = ("seed_map.json", "encoder.npz", "vectorizers.pkl")
+# A map placed by its seeds (core.placement) also ships their map-view vectors.
+SEED_VECTORS = "seed_vectors.npy"
 PREPROCESSING = "hybrid-raw35-concept65-dense65-sparse35-v1"
 
 # 1: the encoder reads the stored vector itself. 2 (2026-10-15): it reads
@@ -47,7 +49,7 @@ def write_manifest(directory, spec):
         "schema_version": schema, "artifact_version": seed["meta"]["model_version"],
         "embedding": spec, "feature_config": FEATURE_CONFIG,
         "feature_dimensions": seed["meta"]["feature_dim"],
-        "files": {name: digest(directory / name) for name in FILES},
+        "files": {name: digest(directory / name) for name in FILES + ((SEED_VECTORS,) if (directory / SEED_VECTORS).exists() else ())},
     }
     target = directory / "manifest.json"
     temporary = target.with_suffix(".tmp")
@@ -66,7 +68,9 @@ def validate_manifest(directory, provider):
         raise RuntimeError("Embedding backend does not match the artifact manifest")
     if manifest["feature_config"] != FEATURE_CONFIG or manifest["feature_dimensions"] != 448:
         raise RuntimeError("Feature configuration does not match the artifact manifest")
-    for name in FILES:
+    for name in sorted(set(FILES) | set(manifest["files"])):
+        if not (directory / name).is_file():
+            raise RuntimeError(f"Artifact file missing: {name}")
         if manifest["files"].get(name) != digest(directory / name):
             raise RuntimeError(f"Artifact checksum mismatch: {name}")
     seed = json.loads((directory / "seed_map.json").read_text(encoding="utf-8"))
@@ -77,4 +81,7 @@ def validate_manifest(directory, provider):
     from core.similarity import reads_map_view
     if reads_map_view(seed.get("cosine_centroid")) != (manifest["schema_version"] == SCHEMA_MAP_VIEW):
         raise RuntimeError("Manifest schema does not match how the seed map's encoder reads vectors")
+    placed_by_seeds = (seed.get("placement") or {}).get("method") == "seed_mode"
+    if placed_by_seeds and (SEED_VECTORS not in manifest["files"] or manifest["schema_version"] != SCHEMA_MAP_VIEW):
+        raise RuntimeError("A map placed by its seeds needs seed_vectors.npy and the map view")
     return manifest

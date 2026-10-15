@@ -16,6 +16,21 @@ export async function loadConfig() {
   return cache;
 }
 
+/** The island reach factor moves as the map fills (core.energy.reach_factor).
+ * /api/islands carries the current one, so a page left open while the map grows
+ * keeps drawing the ground the server names. A new object, so the ground's
+ * worker is handed it too (map/offthread.js). */
+export function setReachFactor(value) {
+  if (!cache || !(Number(value) > 0) || cache.energy.radius_factor === Number(value)) return false;
+  cache = { ...cache, energy: { ...cache.energy, radius_factor: Number(value) } };
+  return true;
+}
+
+/** For a worker: the config the page already loaded, handed over in a message. */
+export function useConfig(payload) {
+  cache = payload;
+}
+
 /** Synchronous access after loadConfig() has resolved once. */
 export function config() {
   if (!cache) throw new Error('loadConfig() before config()');
@@ -48,10 +63,12 @@ export function interactionsOf(post) {
     + (post.join_count || 0) + (post.comment_count || 0);
 }
 
-/** islands' influence radius, in world units. */
+/** islands' influence radius, in world units, times the map's reach factor:
+ * past a couple of hundred posts the server shrinks every island's reach as the
+ * map fills (core.energy.reach_factor), so islands keep apart. */
 export function radiusOf(post) {
-  const { radius_base: base, radius_scale: scale, radius_trim: trim } = config().energy;
-  return (base + energyOf(post) * scale) * trim;
+  const { radius_base: base, radius_scale: scale, radius_trim: trim, radius_factor: factor = 1 } = config().energy;
+  return (base + energyOf(post) * scale) * trim * factor;
 }
 
 /** islands' staged settlement glyph. */
