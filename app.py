@@ -120,7 +120,7 @@ from core.config import (
 from core.encoder import load_encoder
 from core.energy import constants as energy_constants, reach_factor
 from core.artifact_manifest import SEED_VECTORS
-from core.placement import place_by_seeds
+from core.placement import place_by_seeds, placement_spots
 from core.energy import name_landmasses
 from core.features import build_hybrid_features, extract_label_terms, normalize_text
 from core.geometry import scale_projected_coordinate
@@ -242,10 +242,10 @@ def load_artifacts():
     placement = None
     if (seed_map.get("placement") or {}).get("method") == "seed_mode":
         vectors = np.load(ARTIFACTS / SEED_VECTORS).astype(float)
-        if vectors.shape != (len(seed_map["seed"]), encoder.input_dim):
+        spots = placement_spots(seed_map)   # seeds, then their variants
+        if vectors.shape != (len(spots), encoder.input_dim):
             raise RuntimeError("seed_vectors.npy がシードの数・次元と合いません。")
-        placement = dict(seed_map["placement"], vectors=vectors,
-                         spots=np.array(seed_map["seed"], dtype=float)[:, :2])
+        placement = dict(seed_map["placement"], vectors=vectors, spots=spots)
 
     # A map built on the centred view needs its centroid to place anything at
     # all, so it is taken here unconditionally - not through resolve_scale,

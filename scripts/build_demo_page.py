@@ -77,7 +77,7 @@ from core.features import (  # noqa: E402
     extract_label_terms,
 )
 from core.geometry import scale_projected_coordinate  # noqa: E402
-from core.placement import place_by_seeds  # noqa: E402
+from core.placement import place_by_seeds, placement_spots  # noqa: E402
 from core.similarity import (  # noqa: E402
     cosine_between,
     cosine_percent,
@@ -223,7 +223,7 @@ def recompute(live_map, live_users):
         # The same placement serving uses (app.project).
         viewed = map_view(vector, centroid) if reads_map_view(centroid) else vector
         if seed_vectors is not None:
-            x, y = place_by_seeds(viewed, seed_vectors, np.array(seed_map["seed"], dtype=float)[:, :2],
+            x, y = place_by_seeds(viewed, seed_vectors, placement_spots(seed_map),
                                   k=placement["k"], temperature=placement["temperature"],
                                   bandwidth=placement["bandwidth"])
         else:

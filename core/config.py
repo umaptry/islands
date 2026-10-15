@@ -54,7 +54,13 @@ VIEW_SPARSE_WEIGHT = 0.20
 # its k nearest seeds in meaning (core.placement.place_by_seeds). temperature
 # weights the k by similarity, bandwidth (world units) is how close two seeds'
 # spots must be to count as one group. Written into the artifact, which decides.
-SEED_PLACEMENT = {"method": "seed_mode", "k": 15, "temperature": 0.02, "bandwidth": 25.0}
+# Softer since v4 (2026-10-16; was k 15, temperature 0.02, bandwidth 25): more
+# seeds and a flatter weighting keep a post with its topic rather than with
+# posts worded like it. On the Gemini map: held-out seeds 0.94 -> 0.96 of the
+# ceiling (1.5%: 0.94 -> 1.00), the 478 evaluation posts' nearest neighbour on
+# their own topic 44% -> 50%, build probes lost 14% -> 11%.
+SEED_PLACEMENT = {"method": "seed_mode", "k": 60, "temperature": 0.05, "bandwidth": 40.0}
+SEED_VARIANTS_FILE = "seed_variants.jsonl"   # in scripts/, see core.placement
 
 # Reference layout parameters for the one-off teacher UMAP run. min_dist went
 # 0.05 -> 0.0 on 2026-10-15: with posts placed by their seeds, the tighter teacher

@@ -15,7 +15,7 @@ from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
 from core.encoder import load_encoder
 from core.features import build_hybrid_features
 from core.similarity import map_view, reads_map_view, similarity_view
-from core.placement import place_by_seeds
+from core.placement import place_by_seeds, placement_spots
 from benchmark_embeddings import score_probe
 
 
@@ -49,7 +49,7 @@ def evaluate(directory, provider, texts, labels, cache):
     placement = seed.get("placement") or {}
     if placement.get("method") == "seed_mode":
         coords = place_by_seeds(vectors, np.load(directory / "seed_vectors.npy").astype(float),
-                                np.array(seed["seed"], dtype=float)[:, :2], k=placement["k"],
+                                placement_spots(seed), k=placement["k"],
                                 temperature=placement["temperature"], bandwidth=placement["bandwidth"])
     else:
         coords = encoder(vectors if reads_map_view(centroid) else raw_vectors)

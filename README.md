@@ -554,6 +554,7 @@ web/
     screens/            auth / compose / map / notifications / profile
 scripts/
   seed_corpus.jsonl     シード10,182件（もとの1,000件＋分野つきの短い投稿9,182件。2026-10-15）
+  seed_variants.jsonl   種類ちがいの例文5,397件（お手本を昔・今・やってみたい・告知に書き換え、元の位置に立つ。2026-10-16）
   validate_corpus.py    ビルド前の検査
   build_seed_map.py     凍結マップ構築（1回だけ実行）/ --relabel / --verify
   build_similarity_calibration.py  似てる度の目盛りを校正（座標は動かない）

@@ -15,7 +15,7 @@ def test_artifacts_reject_wrong_provider_and_changed_file(tmp_path):
     listed = json.loads(open('artifacts/manifest.json', encoding='utf-8').read())['files']
     for name in ('manifest.json', *listed):
         shutil.copyfile('artifacts/' + name, tmp_path / name)
-    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-e5-v3'
+    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-e5-v4'
     with pytest.raises(RuntimeError):
         validate_manifest(tmp_path, 'gemini')
     with (tmp_path / 'encoder.npz').open('ab') as handle:

@@ -276,3 +276,80 @@ def test_a_map_missing_one_of_its_files_is_refused_by_name(tmp_path):
     assert "seed_vectors.npy" in listed
     with pytest.raises(RuntimeError, match="missing: seed_vectors.npy"):
         validate_manifest(tmp_path, "onnx")
+
+
+# -- seeds of every kind of post (2026-10-16) ---------------------------------
+
+def test_each_variant_stands_on_its_source_seed():
+    """seed_vectors.npy holds the seeds, then the variants; the placement reads
+    a spot per row, the variant's being its source seed's."""
+    from core.placement import placement_spots
+
+    seed = json.loads(Path("artifacts/seed_map.json").read_text(encoding="utf-8"))
+    sources = seed["placement"]["variant_sources"]
+    rows = np.load("artifacts/seed_vectors.npy")
+    spots = placement_spots(seed)
+    count = seed["meta"]["seed_count"]
+    assert len(sources) > 1000
+    assert rows.shape[0] == len(spots) == count + len(sources)
+    assert np.array_equal(spots[count:], spots[np.array(sources)])
+    seed["placement"]["variant_sources"] = [count]
+    with pytest.raises(RuntimeError, match="範囲外"):
+        placement_spots(seed)
+
+
+def test_the_variants_file_says_what_each_one_is():
+    rows = [json.loads(line) for line in Path("scripts/seed_variants.jsonl").read_text(encoding="utf-8").splitlines()]
+    corpus = sum(1 for line in Path("scripts/seed_corpus.jsonl").read_text(encoding="utf-8").splitlines() if line.strip())
+    assert {row["type"] for row in rows} == {"past", "present", "future", "event"}
+    assert all(0 <= row["source"] < corpus and 8 <= len(row["text"]) <= 120 for row in rows)
+    # The kinds the seeds lacked: the past and announcements.
+    kinds = {kind: sum(row["type"] == kind for row in rows) for kind in ("past", "event")}
+    assert min(kinds.values()) > 1000
+
+
+def test_the_placement_gate_holds_a_seeds_variants_out_with_it(monkeypatch):
+    """A variant stands on its seed's spot: left in, it would hand a held-out
+    seed its own answer and the gate would measure nothing."""
+    import scripts.build_seed_map as build
+
+    rng = np.random.default_rng(3)
+    seeds = rng.normal(size=(400, 8))
+    seeds /= np.linalg.norm(seeds, axis=1, keepdims=True)
+    coords = rng.uniform(0, 1000, size=(400, 2))
+    sources = np.arange(400)                  # one variant per seed: a copy of it
+    seen = {}
+
+    def spy(views, vectors, spots, **kwargs):
+        seen["rows"], seen["spots"] = vectors, spots
+        return np.zeros((len(views), 2))
+
+    monkeypatch.setattr(build, "place_by_seeds", spy)
+    build.placement_gate(np.vstack([seeds, seeds]), coords, sources, holdout=50)
+    # 350 seeds and their 350 copies: no copy of the 50 held out.
+    assert len(seen["rows"]) == 2 * (400 - 50)
+    assert len(np.unique(np.round(seen["rows"], 9), axis=0)) == 400 - 50
+
+
+def test_a_variant_pointing_past_the_seeds_stops_the_build(tmp_path):
+    import scripts.build_seed_map as build
+
+    path = tmp_path / "variants.jsonl"
+    path.write_text(json.dumps({"source": 5, "type": "past", "text": "昔は毎週末に山へ登っていました"}, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert build.load_variants(path, 6)[0].tolist() == [5]
+    with pytest.raises(SystemExit):
+        build.load_variants(path, 5)
+    assert build.load_variants(tmp_path / "none.jsonl", 5) is None
+
+
+def test_another_corpus_does_not_pick_up_the_real_variants(monkeypatch):
+    """Variants name rows of scripts/seed_corpus.jsonl; a build of another corpus
+    (tests, experiments) uses none unless it is given its own."""
+    import scripts.build_seed_map as build
+
+    for name in ("CORPUS_PATH", "VARIANTS_PATH", "ARTIFACTS", "SEED_MAP_JSON", "VECTORIZERS_PICKLE", "ENCODER_NPZ"):
+        monkeypatch.setattr(build, name, getattr(build, name))
+    build.use_paths(corpus="other.jsonl")
+    assert build.VARIANTS_PATH is None and build.load_variants(build.VARIANTS_PATH, 10) is None
+    build.use_paths(corpus="other.jsonl", variants="mine.jsonl")
+    assert build.VARIANTS_PATH.name == "mine.jsonl"
