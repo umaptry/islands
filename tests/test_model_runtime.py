@@ -106,3 +106,16 @@ def test_post_retry_is_idempotent(fresh_client):
     assert first.status_code == second.status_code == 200
     assert first.json()['id'] == second.json()['id']
     assert fresh_client.get('/api/health').json()['posts'] == 1
+
+
+def test_the_gemini_embedder_asks_for_what_the_manifest_says(monkeypatch):
+    """The spec written into a map (task, dimensions, model) is what the API is
+    asked for. Until 2026-10-16 load_embedder used its own defaults, so changing
+    the task in core.config would have stamped maps with a task never sent."""
+    from core.artifact_manifest import embedding_spec
+
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    embedder = load_embedder(provider='gemini')
+    spec = embedding_spec('gemini')
+    assert embedder._prompt('焚き火') == f"task: {spec['task']} | query: 焚き火"
+    assert (embedder._model, embedder._dimensions) == (spec['model'], spec['dimensions'])

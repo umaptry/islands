@@ -270,6 +270,23 @@ $env:EMBEDDING_PROVIDER = 'onnx'; $env:MAP_BUILD_VERSION = 'kotoba-map-e5-v3'
 python scripts/build_seed_map.py --artifacts output/e5-v3   # 手元と CI 用。artifacts/ の5ファイルを置き換える
 ```
 
+**v6（2026-10-16）**：v5（用途 `clustering`）に、先生役 UMAP の新しい設定（`core.config.LAYOUT_CONFIG` の `repulsion_strength` 2・`spread` 0.5、`LAYOUT_VERSION` v3）を加えて作り直した版。埋め込みは v5 と同じなのでキャッシュがあれば送信はなく、所要は学習とゲートで約1時間:
+
+```powershell
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261016-v6'
+python scripts/build_seed_map.py --artifacts output/gemini-v6
+```
+
+**v5（2026-10-16）**：Gemini の用途を `clustering` にして地図を作り直した版（`core.config.GEMINI_TASK`）。用途は成果物の embedding spec に入るので、**このコードは v4 以前の Gemini の地図を読まず、v4 以前のコードは v5 を読まない**（どちらも起動時に止まる。黙って違う場所に置くことはない）。本番は、コードと地図を同じリリースで切り替える。お手本と例文を新しい用途で埋め込み直すので、キャッシュが無ければ Gemini の回数制限しだいで30分〜数時間かかる:
+
+```powershell
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261016-v5'
+$env:GEMINI_REQUESTS_PER_MINUTE = '100'; $env:GEMINI_ITEMS_PER_MINUTE = '1500'
+python scripts/build_seed_map.py --artifacts output/gemini-v5
+```
+
+手元と CI の E5（`kotoba-map-e5-v4`）は変わらない。
+
 **v4（2026-10-16）**：v3 の座標のまま、種類ちがいの例文（`scripts/seed_variants.jsonl`、5,397件）と新しい置き方（`core.config.SEED_PLACEMENT`）を足した版。学習はやり直さないので数分で済む（Gemini は例文の埋め込みが要る。キャッシュが無ければ約1時間）。元の版のフォルダを**コピーしてから**、コピーに対して実行する:
 
 ```powershell

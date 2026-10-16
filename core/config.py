@@ -10,10 +10,16 @@ import os
 
 GEMINI_MODEL_NAME = "gemini-embedding-2"
 GEMINI_DIMENSIONS = 384
-GEMINI_TASK = "sentence similarity"
+# The task prefix Gemini embeds for ("task: <this> | query: <text>"). Clustering
+# since map v5 (2026-10-16): on 838 topic-labelled posts, a post's nearest
+# neighbour shared its topic 83% of the time, against 62% for "sentence
+# similarity" (and 60% for OpenAI text-embedding-3-large); announcements 60% ->
+# 88%, "want to try" 51% -> 79%. More dimensions did not help (384 = 3072).
+# Part of the embedding spec: a map built with one task refuses the other.
+GEMINI_TASK = "clustering"
 
 MODEL_VERSION = "kotoba-map-v2"
-LAYOUT_VERSION = "seed-placed-isotropic-v2"
+LAYOUT_VERSION = "seed-placed-isotropic-v3"
 
 # One free-text self-introduction per person is the ONLY input signal.
 FEATURE_CONFIG = {
@@ -67,10 +73,17 @@ SEED_VARIANTS_FILE = "seed_variants.jsonl"   # in scripts/, see core.placement
 # left more sea between topics - on 478 labelled posts at reach x0.7, 18-29
 # islands with 106-150 posts on the biggest (0.05: 22-30 and 130-213), the
 # placement no less accurate (3 random seeds each).
+# repulsion_strength 2 and spread 0.5 since v6 (2026-10-16): searched over ~60
+# settings on the clustering vectors (2 random seeds each, the best 7 on 3 more
+# and with posts placed as serving places them). Placed the serving way, the
+# 838 labelled posts' islands were one family 61% -> 73% of the time and the
+# biggest island 29% -> 19% of them (3 seeds); laid out with the seeds, 71% ->
+# 81% (5 seeds, worst 77%). Seeds' 15 nearest kept on the map: 0.36 -> 0.35.
 LAYOUT_CONFIG = {
     "n_neighbors": 15,
     "min_dist": 0.0,
-    "spread": 1.0,
+    "spread": 0.5,
+    "repulsion_strength": 2.0,
     "n_epochs": 1000,
     "negative_sample_rate": 10,
     "metric": "cosine",

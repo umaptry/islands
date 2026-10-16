@@ -150,7 +150,7 @@ RPC（`interaction_events`・`profile_vectors`・`account_post_centroids`）で�
 特徴量設定、artifact版、seed/encoder/vectorizersのSHA-256を記録する。
 不一致は起動失敗。キーを置いただけでGeminiを選ばず、エラー時にE5へ切り替えない。
 
-Gemini移行先は `gemini-embedding-2` / 384次元 / `sentence similarity`。
+Gemini移行先は `gemini-embedding-2` / 384次元 / `clustering`（2026-10-16〜、v5。以前は `sentence similarity`）。
 本文・内容語を同一batchで送信し、ヘッダーでAPIキーを渡す。429や通信失敗の再試行は
 オンラインembedding batchについて45秒以内を目標とする。DB・キャッシュ・投影を含む
 リクエスト全体の厳密な45秒保証は未実装で、負荷・遅延試験が必要。
