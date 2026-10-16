@@ -908,13 +908,33 @@ def centred_units(vectors):
     return np.array(rows)
 
 
+# A smaller island whose genre a bigger one already holds is that genre's
+# neighbour when it stands within GENRE_NEAR world units of it ("南スポーツ島").
+# Farther away a second スポーツ would send people to the wrong side of the map,
+# so it keeps the name its own words give it (2026-10-17). On map v6 the two
+# topics of each of 12 families stood within 169 of each other (the median
+# distance between two topics was 406).
+GENRE_NEAR = 250.0
+DIRECTIONS = ("東", "南東", "南", "南西", "西", "北西", "北", "北東")   # screen y grows southwards
+
+
+def direction_from(holder, island):
+    """Which way `island` lies from `holder`, in eight compass points."""
+    angle = math.atan2(island["cy"] - holder["cy"], island["cx"] - holder["cx"])
+    return DIRECTIONS[int(round(angle / (math.pi / 4))) % 8]
+
+
 def name_by_genre(islands, posts_by_id):
     """Call each island by the activity genre closest to its words; word counts stay as the topics.
 
-    Islands arrive biggest first and each takes its best genre that no bigger
-    island holds, so names stay unique and the same posts give the same names
-    (ties go to the earlier genre). If the encoder is unavailable the islands
-    keep their word-count names ('terms'); this never raises.
+    Islands arrive biggest first. The first to want a genre gets it. A smaller
+    island wanting a genre already held is named after it with the direction
+    it lies in ("南スポーツ") when it is near the holder, and otherwise keeps its
+    word-count name: until 2026-10-17 it took its next best free genre, which
+    called a childcare island "IT" because 子育て was taken. Names stay unique
+    and the same posts give the same names (ties go to the earlier genre). If
+    the encoder is unavailable the islands keep their word-count names
+    ('terms'); this never raises.
     """
     if not islands:
         return islands
@@ -932,17 +952,26 @@ def name_by_genre(islands, posts_by_id):
             state["genre_warned"] = True
             _logger.warning("island genres unavailable, keeping word-count names (%s)", type(error).__name__)
         return islands
-    taken = set()
+    holders = {}   # genre -> the bigger island that has it
+    used = set()   # every name given this run, plain or with a direction
     for island, row in zip(islands, scores):
-        order = sorted(range(len(ISLAND_GENRES)), key=lambda k: (-round(float(row[k]), 6), k))  # rounding: float noise must not flip ties
-        genre = next((ISLAND_GENRES[k] for k in order if ISLAND_GENRES[k] not in taken), None)
-        if genre is None:
-            continue
-        taken.add(genre)
+        best = min(range(len(ISLAND_GENRES)), key=lambda k: (-round(float(row[k]), 6), k))  # rounding: float noise must not flip ties
+        genre = ISLAND_GENRES[best]
+        holder = holders.get(genre)
+        if holder is None:
+            holders[genre] = island
+            name = genre
+        else:
+            if math.hypot(island["cx"] - holder["cx"], island["cy"] - holder["cy"]) > GENRE_NEAR:
+                continue
+            name = direction_from(holder, island) + genre
+            if name in used:
+                continue
+        used.add(name)
         heading, topics = island.get("name") or "", list(island.get("topics") or [])
         island["topics"] = [word for word in [heading] + topics if word and word != genre][:len(topics) + 1]
-        island["name"] = genre
-        island["label"] = f"{genre}{island_namer.island_terrain(island)}"
+        island["name"] = name
+        island["label"] = f"{name}{island_namer.island_terrain(island)}"
         island["name_source"] = "genre"
     return islands
 

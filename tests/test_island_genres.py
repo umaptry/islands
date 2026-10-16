@@ -57,8 +57,9 @@ def app_module(fresh_client, monkeypatch):
     return application
 
 
-def island(name, post_ids, topics=(), cx=0.2):
-    return {"name": name, "topics": list(topics), "label": f"{name}島", "cx": cx, "cy": 0.5,
+def island(name, post_ids, topics=(), cx=200, cy=500):
+    """cx, cy in world units (0-1000), as name_landmasses gives them."""
+    return {"name": name, "topics": list(topics), "label": f"{name}島", "cx": cx, "cy": cy,
             "size": len(post_ids), "energy": 0, "cluster_id": 0, "post_ids": list(post_ids),
             "author_ids": ["u1", "u2", "u3"], "regions": [{"name": "北", "label": "北地方"}]}
 
@@ -83,15 +84,41 @@ def test_a_big_island_is_a_continent_with_its_genre(app_module):
     assert named["label"] == "音楽大陸"
 
 
-def test_two_islands_with_the_same_best_genre_the_smaller_gets_its_second_best(app_module):
-    a, b = ["a1", "a2", "a3", "a4"], ["b1", "b2"]
-    posts = posts_with({"a1": [], "b1": []})
-    big = island("スポーツ", a, ["釣り"])
-    small = island("スポーツ", b, ["旅"], cx=0.8)
-    app_module.name_by_genre([big, small], posts)         # biggest first, as name_landmasses returns them
+def test_a_smaller_island_near_one_of_its_genre_is_named_for_the_direction_it_lies_in(app_module):
+    """Basketball and baseball both want スポーツ: the smaller, close by, is 南スポーツ."""
+    big = island("バスケ", ["a1", "a2", "a3", "a4"], ["スポーツ"], cx=500, cy=500)
+    small = island("野球", ["b1", "b2"], ["スポーツ"], cx=520, cy=650)
+    app_module.name_by_genre([big, small], {})          # biggest first, as name_landmasses returns them
+    assert (big["name"], big["label"]) == ("スポーツ", "スポーツ島")
+    assert (small["name"], small["label"], small["name_source"]) == ("南スポーツ", "南スポーツ島", "genre")
+    assert small["topics"] == ["野球"], "its own words stay on the detail line"
+
+
+def test_a_smaller_island_far_from_one_of_its_genre_keeps_its_own_words(app_module):
+    """A second スポーツ on the other side of the map would mislead; and it is not
+    given an unrelated free genre either (a childcare island used to become IT)."""
+    big = island("バスケ", ["a1", "a2", "a3", "a4"], ["スポーツ"], cx=100, cy=100)
+    far = island("野球", ["b1", "b2"], ["スポーツ", "釣り"], cx=800, cy=800)
+    app_module.name_by_genre([big, far], {})
     assert big["name"] == "スポーツ"
-    assert small["name"] == "旅", "the second best, not a duplicate"
-    assert big["name"] != small["name"]
+    assert (far["name"], far["label"]) == ("野球", "野球島") and "name_source" not in far
+
+
+@pytest.mark.parametrize("dx, dy, word", [(150, 0, "東"), (0, 150, "南"), (-150, 0, "西"), (0, -150, "北"),
+                                          (100, 100, "南東"), (-100, -100, "北西")])
+def test_the_direction_is_taken_from_the_bigger_island_with_south_down_the_screen(app_module, dx, dy, word):
+    big = island("バスケ", ["a1", "a2", "a3"], ["スポーツ"], cx=500, cy=500)
+    small = island("野球", ["b1"], ["スポーツ"], cx=500 + dx, cy=500 + dy)
+    app_module.name_by_genre([big, small], {})
+    assert small["name"] == f"{word}スポーツ"
+
+
+def test_two_small_islands_on_the_same_side_do_not_share_a_name(app_module):
+    big = island("バスケ", ["a1", "a2", "a3", "a4"], ["スポーツ"], cx=500, cy=500)
+    one = island("野球", ["b1", "b2"], ["スポーツ"], cx=500, cy=640)
+    two = island("卓球", ["c1"], ["スポーツ"], cx=510, cy=700)
+    app_module.name_by_genre([big, one, two], {})
+    assert one["name"] == "南スポーツ" and two["name"] == "卓球", "the second keeps its own words"
 
 
 def test_genre_choice_is_the_same_every_time_and_ties_go_to_the_earlier_genre(app_module):
@@ -105,7 +132,7 @@ def test_genre_choice_is_the_same_every_time_and_ties_go_to_the_earlier_genre(ap
 
 def test_the_genres_are_encoded_once_per_process_and_the_islands_once_per_run(app_module):
     model = app_module.model_stub
-    app_module.name_by_genre([island("農業", ["p1"]), island("音楽", ["p2"], cx=0.7)], {})
+    app_module.name_by_genre([island("農業", ["p1"]), island("音楽", ["p2"], cx=700)], {})
     assert [len(call) for call in model.calls] == [len(ISLAND_GENRES), 2]
     app_module.name_by_genre([island("農業", ["p1"])], {})
     assert [len(call) for call in model.calls] == [len(ISLAND_GENRES), 2, 1]
@@ -155,7 +182,7 @@ def test_live_islands_are_named_by_genre_and_a_stored_ai_name_still_wins(people,
 def test_an_ai_name_equal_to_a_genre_of_a_smaller_island_takes_it_over():
     a, b = [f"a{i}" for i in range(10)], [f"b{i}" for i in range(4)]
     previous = [{"id": "1", "name": "農業", "name_source": "ai", "name_basis": a, "post_ids": a}]
-    live = [dict(island("トマト", a), name_source="genre"), dict(island("農業", b, cx=0.8), name_source="genre")]
+    live = [dict(island("トマト", a), name_source="genre"), dict(island("農業", b, cx=800), name_source="genre")]
     shown = island_namer.overlay(live, previous)
     assert shown[0]["name"] == "農業" and shown[0]["name_source"] == "ai"
     assert shown[1]["name"] == "" and "name_source" not in shown[1]
