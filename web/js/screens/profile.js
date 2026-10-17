@@ -304,6 +304,9 @@ export function setupProfileEdit() {
         $('editLink').value = account.link_url || '';
       }
       $('editEmail').value = session.email() || '';
+      // Signed in with LINE, which hands over no email unless asked: say how instead of a blank.
+      const via = { google: 'Google', 'custom:line': 'LINE' }[session.provider()];
+      $('editEmail').placeholder = via ? `${via} でログインしています` : '';
       $('editError').textContent = '';
       const settings = feedbackSettings();
       $('setSound').checked = settings.sound;

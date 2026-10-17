@@ -91,6 +91,7 @@ function store(payload) {
     expires_at: expiresAt,
     user_id: (payload.user && payload.user.id) || null,
     email: (payload.user && payload.user.email) || null,
+    provider: (payload.user && payload.user.provider) || null,   // 'google', 'custom:line'; null for the passcode
   };
   write(current);
   announce();
@@ -122,6 +123,8 @@ export const session = {
   signedIn: () => Boolean(current && current.access_token),
   userId: () => (current ? current.user_id : null),
   email: () => (current ? current.email : null),
+  /** How this session signed in: 'google', 'custom:line', or null (the passcode). */
+  provider: () => (current ? current.provider || null : null),
 
   async validateUser() {
     if (!current || isLocal()) return;
@@ -202,23 +205,35 @@ export const session = {
       `&redirect_to=${encodeURIComponent(redirect)}`;
   },
 
-  /** Pick up an OAuth redirect. Returns true when one was consumed. */
+  /** Pick up an OAuth redirect: 'adopted' when it signed somebody in, 'failed'
+   * when the provider or Supabase sent back an error (a cancel included), null
+   * when this page load is not a redirect. Either way the address is cleaned,
+   * or the router would read `#error=...` as a route. */
   adoptRedirect() {
-    if (!window.location.hash.includes('access_token=')) return false;
-    const params = new URLSearchParams(window.location.hash.slice(1));
-    const token = params.get('access_token');
-    if (!token) return false;
+    const fragment = new URLSearchParams(window.location.hash.slice(1));
+    const query = new URLSearchParams(window.location.search);
+    if (fragment.get('error') || query.get('error')) {
+      history.replaceState(null, '', window.location.pathname);
+      return 'failed';
+    }
+    const token = fragment.get('access_token');
+    if (!token) return null;
+    // Who and how are inside the token. Reading them here avoids a round trip,
+    // and the signature is checked by the server on every request anyway -
+    // nothing is trusted because of this decode; the email is only shown.
+    const claims = tokenClaims(token) || {};
     store({
       access_token: token,
-      refresh_token: params.get('refresh_token'),
-      expires_in: Number(params.get('expires_in') || 3600),
-      // The id is inside the token. Reading it here avoids a round trip just to
-      // learn who we are, and the signature is checked by the server on every
-      // request anyway - nothing is trusted because of this decode.
-      user: { id: decodeSub(token), email: null },
+      refresh_token: fragment.get('refresh_token'),
+      expires_in: Number(fragment.get('expires_in') || 3600),
+      user: {
+        id: claims.sub || null,
+        email: claims.email || null,
+        provider: (claims.app_metadata && claims.app_metadata.provider) || null,
+      },
     });
     history.replaceState(null, '', window.location.pathname);
-    return true;
+    return 'adopted';
   },
 
   signOut() {
@@ -233,11 +248,17 @@ export const session = {
   },
 };
 
-function decodeSub(token) {
+function tokenClaims(token) {
   try {
     const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(atob(part.padEnd(part.length + ((4 - part.length % 4) % 4), '='))).sub;
+    const bytes = Uint8Array.from(atob(part.padEnd(part.length + ((4 - part.length % 4) % 4), '=')), (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return null;
   }
+}
+
+function decodeSub(token) {
+  const claims = tokenClaims(token);
+  return claims ? claims.sub : null;
 }

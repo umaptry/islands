@@ -94,8 +94,9 @@ async function boot() {
   // An OAuth round trip comes back with the token in the fragment, which is
   // also where the router looks. Consume it before the router runs, or the
   // hash it left behind is read as a route.
-  const adopted = session.adoptRedirect();
-  if (!adopted) session.restore();
+  const redirect = session.adoptRedirect();
+  if (redirect !== 'adopted') session.restore();
+  if (redirect === 'failed') toast('ログインできませんでした。もう一度お試しください。');
 
   let invalidatedSession = false;
   if (session.signedIn()) {

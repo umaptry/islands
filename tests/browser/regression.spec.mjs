@@ -146,3 +146,27 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
   }, postId);
   expect(selected).toBe('fast-b');
 });
+
+
+test('a Google or LINE round trip: a failure is said and cleaned up, a success remembers how', async ({ page }) => {
+  // Cancelled at the provider: Supabase comes back with the error in the fragment.
+  await page.goto('/#error=access_denied&error_code=access_denied&error_description=User+cancelled');
+  await expect(page.locator('#toast')).toContainText('ログインできませんでした');
+  await expect(page.locator('#welcome')).toHaveClass(/active/);
+  expect(page.url()).not.toContain('error');
+
+  // A token as Supabase sends it back (not checked here: the server checks it on every request).
+  const claims = { sub: '00000000-0000-4000-8000-000000000001', email: 'someone@example.com', app_metadata: { provider: 'google' } };
+  const result = await page.evaluate(async (payload) => {
+    const encode = (value) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))))
+      .replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+    const token = `${encode({ alg: 'HS256' })}.${encode(payload)}.signature`;
+    history.replaceState(null, '', `/#access_token=${token}&expires_in=3600&refresh_token=r`);
+    const { session } = await import('/static/js/session.js');
+    const adopted = session.adoptRedirect();
+    const seen = { adopted, email: session.email(), provider: session.provider(), hash: location.hash };
+    session.signOut();
+    return seen;
+  }, claims);
+  expect(result).toEqual({ adopted: 'adopted', email: 'someone@example.com', provider: 'google', hash: '' });
+});
