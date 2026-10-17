@@ -33,8 +33,9 @@ class GenreModel:
         out = []
         for text in texts:
             vector = np.full(len(ISLAND_GENRES), 1e-3)
-            if text in ISLAND_GENRES:
-                vector[ISLAND_GENRES.index(text)] = 1.0
+            label = text.removeprefix("趣味は")
+            if label in ISLAND_GENRES:
+                vector[ISLAND_GENRES.index(label)] = 1.0
             else:
                 words = text.split("、")
                 for rank, word in enumerate(words):
@@ -51,6 +52,11 @@ def app_module(fresh_client, monkeypatch):
     monkeypatch.setitem(application.state, "cosine_centroid", None)   # no centring
     monkeypatch.setitem(application.state, "genre_vectors", None)
     monkeypatch.setitem(application.state, "genre_warned", False)
+    # The stub's 42-dim genres cannot be read against the real seeds: these tests
+    # name by words unless they set state["seed_genres"] themselves.
+    monkeypatch.setitem(application.state, "placement", None)
+    monkeypatch.setitem(application.state, "seed_genres", None)
+    monkeypatch.setitem(application.state, "post_genres", {})
     application.real_model = application.state["model"]
     monkeypatch.setitem(application.state, "model", model)
     application.model_stub = model
@@ -230,3 +236,43 @@ def test_falling_back_to_the_word_count_name_is_quiet_for_the_same_island():
     ids = [f"p{i}" for i in range(6)]
     first = tracked("農業", "genre", ids)
     assert renames(tracked("トマト", "terms", ids, first["states"])) == []
+
+
+# -- by position (2026-10-17) -------------------------------------------------
+
+def seeded(app_module, groups):
+    """Seeds standing in clumps, each clump of one genre: [(x, y, genre), ...]."""
+    spots, genres = [], []
+    for x, y, genre in groups:
+        for k in range(20):
+            spots.append([x + (k % 5), y + (k // 5)])
+            genres.append(ISLAND_GENRES.index(genre))
+    app_module.state["seed_genres"] = (np.array(spots, dtype=float), np.array(genres))
+
+
+def placed(points):
+    return {pid: {"id": pid, "x": x, "y": y, "terms": []} for pid, (x, y) in points.items()}
+
+
+def test_an_island_is_named_by_the_seeds_its_posts_stand_among(app_module):
+    """Not by its commonest words: an island of 子育て posts whose words read
+    like IT is still 子育て, because that is where its posts were placed."""
+    seeded(app_module, [(100, 100, "料理"), (800, 800, "音楽")])
+    posts = placed({"a1": (101, 101), "a2": (102, 103), "b1": (801, 802)})
+    food = island("IT", ["a1", "a2"], ["プログラミング"], cx=101, cy=102)
+    music = island("IT", ["b1"], ["プログラミング"], cx=801, cy=802)
+    app_module.name_by_genre([food, music], posts)
+    assert (food["name"], music["name"]) == ("料理", "音楽")
+
+
+def test_the_island_takes_the_genre_most_of_its_posts_stand_in(app_module):
+    seeded(app_module, [(100, 100, "料理"), (400, 100, "音楽")])
+    posts = placed({"p1": (101, 101), "p2": (102, 102), "p3": (103, 101), "p4": (401, 101)})
+    mixed = island("何か", ["p1", "p2", "p3", "p4"], cx=180, cy=100)
+    app_module.name_by_genre([mixed], posts)
+    assert mixed["name"] == "料理"
+
+
+def test_genres_are_put_to_the_encoder_as_a_hobby(app_module):
+    app_module.name_by_genre([island("農業", ["p1"])], {})
+    assert app_module.model_stub.calls[0][:2] == [f"趣味は{ISLAND_GENRES[0]}", f"趣味は{ISLAND_GENRES[1]}"]

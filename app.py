@@ -917,6 +917,62 @@ def centred_units(vectors):
 GENRE_NEAR = 250.0
 DIRECTIONS = ("東", "南東", "南", "南西", "西", "北西", "北", "北東")   # screen y grows southwards
 
+# How a genre is put to the encoder. A bare word ("料理") matched the right
+# genre for 71% of 838 labelled posts, "趣味は料理" for 85% (2026-10-17).
+GENRE_LABEL = "趣味は{}"
+# An island's genre is the vote of its posts, and a post's genre the vote of the
+# seeds standing nearest it on the map: a seed's genre is computed once from its
+# vector, and a post was placed among the seeds nearest it in meaning, so its
+# position alone tells (83% right). The island's own commonest words, encoded
+# as one sentence, named 44% of the posts of v6's islands rightly; this, 61%.
+GENRE_SEED_NEIGHBOURS = 15
+
+
+def genre_vectors(model):
+    if state.get("genre_vectors") is None:
+        state["genre_vectors"] = np.asarray(
+            model.encode([GENRE_LABEL.format(genre) for genre in ISLAND_GENRES], normalize_embeddings=True),
+            dtype=float)
+    return state["genre_vectors"]
+
+
+def seed_genres(model):
+    """(spots, genre index) of every seed, or None on a map not placed by its seeds."""
+    if state.get("seed_genres") is None:
+        placement = state.get("placement")
+        if not placement:
+            return None
+        count = len(state["seed_map"]["seed"])
+        dense = np.asarray(placement["vectors"][:count, :-SPARSE_DIM], dtype=float)
+        dense /= np.clip(np.linalg.norm(dense, axis=1, keepdims=True), 1e-12, None)
+        state["seed_genres"] = (np.asarray(placement["spots"][:count], dtype=float),
+                                (dense @ centred_units(genre_vectors(model)).T).argmax(axis=1))
+    return state["seed_genres"]
+
+
+def located_genre(posts, model):
+    """The genre index of each post with a position, by its nearest seeds; None without one."""
+    if not any(post.get("x") is not None and post.get("y") is not None for post in posts):
+        return {}
+    seeds = seed_genres(model)
+    if seeds is None:
+        return {}
+    spots, genres = seeds
+    cache = state.setdefault("post_genres", {})
+    todo = [post for post in posts if post.get("x") is not None and post.get("y") is not None
+            and (post["id"], post["x"], post["y"]) not in cache]
+    for start in range(0, len(todo), 256):
+        chunk = todo[start:start + 256]
+        xy = np.array([[float(post["x"]), float(post["y"])] for post in chunk])
+        distance = ((xy[:, None, :] - spots[None, :, :]) ** 2).sum(axis=2)
+        near = np.argpartition(distance, GENRE_SEED_NEIGHBOURS, axis=1)[:, :GENRE_SEED_NEIGHBOURS]
+        for post, row in zip(chunk, near):
+            votes = Counter(genres[row].tolist())
+            cache[(post["id"], post["x"], post["y"])] = min(votes, key=lambda k: (-votes[k], k))
+    if len(cache) > 50000:
+        state["post_genres"] = {}
+    return {post["id"]: cache.get((post["id"], post.get("x"), post.get("y"))) for post in posts}
+
 
 def direction_from(holder, island):
     """Which way `island` lies from `holder`, in eight compass points."""
@@ -940,13 +996,31 @@ def name_by_genre(islands, posts_by_id):
         return islands
     try:
         model = state["model"]
-        if state.get("genre_vectors") is None:
-            state["genre_vectors"] = np.asarray(
-                model.encode(list(ISLAND_GENRES), normalize_embeddings=True), dtype=float)
-        texts = [island_text(island, posts_by_id, [island.get("name") or ""] + list(island.get("topics") or []))
-                 for island in islands]
-        scores = centred_units(model.encode(texts, normalize_embeddings=True)) @ centred_units(
-            state["genre_vectors"]).T
+        genres = genre_vectors(model)
+        posts = [posts_by_id[post_id] for island in islands for post_id in island.get("post_ids") or []
+                 if post_id in posts_by_id]
+        try:
+            located = located_genre(posts, model)
+        except Exception as error:   # a map or encoder that does not fit: words, as before
+            if not state.get("located_warned"):
+                state["located_warned"] = True
+                _logger.warning("island genres by position unavailable, naming by words (%s)", type(error).__name__)
+            located = {}
+        bests = []
+        for island in islands:
+            votes = Counter(located[post_id] for post_id in island.get("post_ids") or []
+                            if located.get(post_id) is not None)
+            bests.append(min(votes, key=lambda k: (-votes[k], k)) if votes else None)
+        # Islands whose posts have no position (or a map without seed placement):
+        # by their words, as before.
+        wordy = [k for k, best in enumerate(bests) if best is None]
+        if wordy:
+            texts = [island_text(islands[k], posts_by_id,
+                                 [islands[k].get("name") or ""] + list(islands[k].get("topics") or []))
+                     for k in wordy]
+            scores = centred_units(model.encode(texts, normalize_embeddings=True)) @ centred_units(genres).T
+            for k, row in zip(wordy, scores):
+                bests[k] = min(range(len(ISLAND_GENRES)), key=lambda g: (-round(float(row[g]), 6), g))  # rounding: float noise must not flip ties
     except Exception as error:
         if not state.get("genre_warned"):
             state["genre_warned"] = True
@@ -954,8 +1028,7 @@ def name_by_genre(islands, posts_by_id):
         return islands
     holders = {}   # genre -> the bigger island that has it
     used = set()   # every name given this run, plain or with a direction
-    for island, row in zip(islands, scores):
-        best = min(range(len(ISLAND_GENRES)), key=lambda k: (-round(float(row[k]), 6), k))  # rounding: float noise must not flip ties
+    for island, best in zip(islands, bests):
         genre = ISLAND_GENRES[best]
         holder = holders.get(genre)
         if holder is None:

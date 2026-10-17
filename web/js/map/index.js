@@ -624,6 +624,12 @@ function pick(event) {
       const { post } = hit;
       playSe('pop');
       zoomTo(post.x, post.y, fit * 2.6, { ...tapSpot(), then: () => onPick(post) });
+    } else if (hit.dot) {
+      // A dot is a face still waiting for room: come closer - its face shows
+      // up on the way, or steps aside at full zoom - and open it there.
+      const { post } = hit;
+      playSe('pop');
+      zoomTo(post.x, post.y, clampScale(state.camera.scale * 2.5), { ...tapSpot(), then: () => onPick(post) });
     } else {
       playSe('pop');
       if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, state.camera.scale, tapSpot());
@@ -1734,6 +1740,26 @@ function drawTalk(talk) {
 const ANIMATED_FACES = 30;
 const FACE_GAP = { near: 16, deep: 10 };
 
+// At full zoom nothing more will part a crowd: posts placed by their seeds can
+// stand within a few world units of each other (264 of 500 on map v6 were
+// within 3 of another), and a face needs about 8 there. So the faces still
+// waiting step aside onto rings round their true place, a thin line back to it,
+// as a street map spreads pins that share a doorway (2026-10-17). Only drawn
+// there: the post itself does not move.
+const SPREAD_AT = 0.97;            // of the largest zoom
+const SPREAD_RINGS = [[1, 6], [2, 12], [3, 18]];   // [rings out, places on it]
+
+function spreadSpots(step) {
+  const spots = [];
+  SPREAD_RINGS.forEach(([ring, count]) => {
+    for (let k = 0; k < count; k += 1) {
+      const angle = -Math.PI / 2 + (k / count) * Math.PI * 2 + (ring % 2 ? 0 : Math.PI / count);
+      spots.push([Math.cos(angle) * step * ring, Math.sin(angle) * step * ring]);
+    }
+  });
+  return spots;
+}
+
 function drawFaces(visible, claim, level, motion, talk, stage, named) {
   const deep = level === 'deep';
   const full = deep ? FACE_DEEP : FACE_NEAR;
@@ -1754,19 +1780,29 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     tie: hashId(entry.post.id),
   })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy || a.tie - b.tie);
   const gap = deep ? FACE_GAP.deep : FACE_GAP.near;
+  const spread = deep && state.camera.scale >= clampScale(Infinity) * SPREAD_AT;
+  const spots = spread ? spreadSpots(full + gap) : [];
 
   ctx.save();
   ranked.forEach((entry) => {
     const { point, post } = entry;
-    const room = claim(point.x, point.y, full + gap, full + gap) || entry.rank <= 1;
+    let room = claim(point.x, point.y, full + gap, full + gap) || entry.rank <= 1;
+    entry.at = point;
+    if (!room && spread && !entry.dim) {
+      const free = spots.find(([dx, dy]) => claim(point.x + dx, point.y + dy, full + gap, full + gap));
+      if (free) {
+        room = true;
+        entry.at = { x: point.x + free[0], y: point.y + free[1] };
+      }
+    }
     entry.room = room;
     entry.size = full;
     // Other people's names only close up; yours always.
     if (!room || entry.dim || !(named || entry.mine)) return;
     ctx.font = SMALL_FONT;
     const name = clip(post.display_name, 6);
-    const nameY = point.y + full / 2 + 10;
-    if (claim(point.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
+    const nameY = entry.at.y + full / 2 + 10;
+    if (claim(entry.at.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
       entry.name = name;
       entry.nameY = nameY;
     }
@@ -1784,7 +1820,9 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     .map((entry) => entry.post.id));
 
   ranked.slice().reverse().forEach((entry) => {
-    const { post, point, mine, size, name, nameY, busy, dim, out } = entry;
+    const { post, mine, size, name, nameY, busy, dim, out } = entry;
+    const home = entry.point;
+    const point = entry.at;
     const r = size / 2;
     const phase = (hashId(post.id) % 628) / 100;
     const moving = motion !== null && (alive.has(post.id) || (mine && !dim));
@@ -1805,7 +1843,8 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       }
     }
     if (!entry.room) {
-      // Waiting for room: a dot in its heat's colour, not a face, not a target.
+      // Waiting for room: a dot in its heat's colour. A tap on it comes closer
+      // and opens it (pick: `dot`); it used to be no target at all.
       ctx.beginPath();
       ctx.arc(point.x, point.y, deep ? 3.5 : 3, 0, Math.PI * 2);
       ctx.fillStyle = heatColor(post.motivation);
@@ -1814,7 +1853,23 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
       if (!plain) ctx.restore();
+      if (!dim) hits.push({ x: point.x, y: point.y, r: 12, post, dot: true });
       return;
+    }
+    if (point !== home) {
+      // Stepped aside at full zoom: a line back to where it really stands.
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(home.x, home.y);
+      ctx.lineTo(point.x, point.y);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(home.x, home.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = heatColor(post.motivation);
+      ctx.fill();
+      ctx.restore();
     }
     if (mine && !dim) radar(point.x, cy, r, motion);
     if (mine && !dim && isRecruiting(post)) recruitRing(point.x, cy, r + 3);
