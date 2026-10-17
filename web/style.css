@@ -601,6 +601,21 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 }
 
 .sheet-thread { padding-bottom: 8px; }
+
+/* Several posts on one spot at full zoom (2026-10-18). */
+.stack-title { margin: 2px 2px 8px; font-size: 15px; font-weight: 800; }
+.stack-list { list-style: none; margin: 0; padding: 0; }
+.stack-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 12px 4px; border-bottom: 1px solid var(--line); font-size: 13.5px; color: var(--ink);
+}
+.stack-heat { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.stack-who { flex: none; width: 5.5em; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.stack-text { flex: 1; min-width: 0; color: var(--ink-2); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.stack-go { flex: none; color: var(--ink-3); font-size: 18px; }
+.sheet-back {
+  display: block; margin: 0 0 8px; padding: 6px 2px; font-size: 13px; font-weight: 700; color: var(--sea);
+}
 .thread-open {
   width: 100%; text-align: center; padding: 13px;
   border-radius: var(--radius-sm); background: var(--surface-2);

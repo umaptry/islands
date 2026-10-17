@@ -43,6 +43,7 @@ let height = 0;
 let raf = 0;
 let started = 0;
 let onPick = () => {};
+let onStack = () => {};
 let hits = [];
 
 // Three distances, measured against the zoom that frames everything (Q57・Q59):
@@ -117,10 +118,11 @@ function measureChrome() {
     }));
 }
 
-export function initMap(element, { onSelect }) {
+export function initMap(element, { onSelect, onSelectMany }) {
   canvas = element;
   ctx = canvas.getContext('2d');
   onPick = onSelect || (() => {});
+  onStack = onSelectMany || ((posts) => onPick(posts[0]));
   started = performance.now();
   preloadSprites();
   resize();
@@ -230,9 +232,12 @@ export function showAll({ then } = {}) {
 }
 
 /** How far in and out a gesture may go, relative to the fitted view. */
+// Three times further in since 2026-10-18 (was max(6, fit x 8)): posts placed by
+// their seeds stand close, and of 496 on map v6, 227 could show a face at the
+// old limit and 354 at this one. Closer than that is a stack (drawFaces).
 function clampScale(value) {
   const fit = state.camera.fit || state.camera.scale;
-  return Math.max(fit * 0.5, Math.min(value, Math.max(6, fit * 8)));
+  return Math.max(fit * 0.5, Math.min(value, Math.max(18, fit * 24)));
 }
 
 function seedBounds() {
@@ -624,6 +629,11 @@ function pick(event) {
       const { post } = hit;
       playSe('pop');
       zoomTo(post.x, post.y, fit * 2.6, { ...tapSpot(), then: () => onPick(post) });
+    } else if (hit.stack) {
+      // Several posts on one spot at full zoom: the list of them.
+      playSe('pop');
+      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, state.camera.scale, tapSpot());
+      onStack(hit.stack);
     } else if (hit.dot) {
       // A dot is a face still waiting for room: come closer - its face shows
       // up on the way, or steps aside at full zoom - and open it there.
@@ -1740,25 +1750,12 @@ function drawTalk(talk) {
 const ANIMATED_FACES = 30;
 const FACE_GAP = { near: 16, deep: 10 };
 
-// At full zoom nothing more will part a crowd: posts placed by their seeds can
-// stand within a few world units of each other (264 of 500 on map v6 were
-// within 3 of another), and a face needs about 8 there. So the faces still
-// waiting step aside onto rings round their true place, a thin line back to it,
-// as a street map spreads pins that share a doorway (2026-10-17). Only drawn
-// there: the post itself does not move.
-const SPREAD_AT = 0.97;            // of the largest zoom
-const SPREAD_RINGS = [[1, 6], [2, 12], [3, 18]];   // [rings out, places on it]
-
-function spreadSpots(step) {
-  const spots = [];
-  SPREAD_RINGS.forEach(([ring, count]) => {
-    for (let k = 0; k < count; k += 1) {
-      const angle = -Math.PI / 2 + (k / count) * Math.PI * 2 + (ring % 2 ? 0 : Math.PI / count);
-      spots.push([Math.cos(angle) * step * ring, Math.sin(angle) * step * ring]);
-    }
-  });
-  return spots;
-}
+// At full zoom nothing more will part a crowd: some posts stand almost on one
+// spot (two of v6's were 0.06 world units apart). Whoever is still waiting
+// there joins the face it is under, which wears "+N" and opens the list of the
+// spot's posts when tapped, as a map lists the shops in one building
+// (2026-10-18; the day before they stepped aside onto rings with lines).
+const STACK_AT = 0.97;             // of the largest zoom
 
 function drawFaces(visible, claim, level, motion, talk, stage, named) {
   const deep = level === 'deep';
@@ -1780,34 +1777,46 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     tie: hashId(entry.post.id),
   })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy || a.tie - b.tie);
   const gap = deep ? FACE_GAP.deep : FACE_GAP.near;
-  const spread = deep && state.camera.scale >= clampScale(Infinity) * SPREAD_AT;
-  const spots = spread ? spreadSpots(full + gap) : [];
+  const stacking = deep && state.camera.scale >= clampScale(Infinity) * STACK_AT;
 
   ctx.save();
   ranked.forEach((entry) => {
     const { point, post } = entry;
-    let room = claim(point.x, point.y, full + gap, full + gap) || entry.rank <= 1;
-    entry.at = point;
-    if (!room && spread && !entry.dim) {
-      const free = spots.find(([dx, dy]) => claim(point.x + dx, point.y + dy, full + gap, full + gap));
-      if (free) {
-        room = true;
-        entry.at = { x: point.x + free[0], y: point.y + free[1] };
-      }
-    }
+    const room = claim(point.x, point.y, full + gap, full + gap) || entry.rank <= 1;
     entry.room = room;
     entry.size = full;
+    entry.stack = null;
     // Other people's names only close up; yours always.
     if (!room || entry.dim || !(named || entry.mine)) return;
     ctx.font = SMALL_FONT;
     const name = clip(post.display_name, 6);
-    const nameY = entry.at.y + full / 2 + 10;
-    if (claim(entry.at.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
+    const nameY = point.y + full / 2 + 10;
+    if (claim(point.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
       entry.name = name;
       entry.nameY = nameY;
     }
   });
   ctx.restore();
+  if (stacking) {
+    // The face each one is under; first in line first, so the list keeps order.
+    const faces = ranked.filter((entry) => entry.room && !entry.dim);
+    ranked.forEach((entry) => {
+      if (entry.room || entry.dim) return;
+      let under = null;
+      let nearest = full + gap;
+      faces.forEach((face) => {
+        const distance = Math.hypot(face.point.x - entry.point.x, face.point.y - entry.point.y);
+        if (distance < nearest) {
+          nearest = distance;
+          under = face;
+        }
+      });
+      if (!under) return;
+      if (!under.stack) under.stack = [under.post];
+      under.stack.push(entry.post);
+      entry.stacked = true;
+    });
+  }
   rollTalk(ranked, stage);
 
   // Only the people nearest the middle of the screen move; the rest of a crowd
@@ -1820,9 +1829,8 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     .map((entry) => entry.post.id));
 
   ranked.slice().reverse().forEach((entry) => {
-    const { post, mine, size, name, nameY, busy, dim, out } = entry;
-    const home = entry.point;
-    const point = entry.at;
+    const { post, point, mine, size, name, nameY, busy, dim, out } = entry;
+    if (entry.stacked) return;   // in the list of the face it is under
     const r = size / 2;
     const phase = (hashId(post.id) % 628) / 100;
     const moving = motion !== null && (alive.has(post.id) || (mine && !dim));
@@ -1856,21 +1864,6 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       if (!dim) hits.push({ x: point.x, y: point.y, r: 12, post, dot: true });
       return;
     }
-    if (point !== home) {
-      // Stepped aside at full zoom: a line back to where it really stands.
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(home.x, home.y);
-      ctx.lineTo(point.x, point.y);
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(home.x, home.y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = heatColor(post.motivation);
-      ctx.fill();
-      ctx.restore();
-    }
     if (mine && !dim) radar(point.x, cy, r, motion);
     if (mine && !dim && isRecruiting(post)) recruitRing(point.x, cy, r + 3);
     const reach = drawHeatSprite(point.x, point.y, r, post.motivation, own, phase);
@@ -1878,7 +1871,12 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     if (isUnreadRecruit(post, meId) && !dim) starAura(point.x, cy, r, motion, phase);
     if (isOpen(post)) openMark(point.x - size * 0.42, cy - size * 0.42, deep);
     // How much it has been answered: always when deep, only when busy at near.
-    if (busy > 0 && (deep || busy >= 5)) countChip(point.x + size * 0.42, cy - size * 0.42, busy);
+    // A stack's "+N" takes the top right corner; the count then sits below.
+    const stack = entry.stack;
+    if (stack) stackChip(point.x + size * 0.46, cy - size * 0.42, stack.length - 1);
+    if (busy > 0 && (deep || busy >= 5)) {
+      countChip(point.x + size * 0.42, stack ? cy + size * 0.42 : cy - size * 0.42, busy);
+    }
     if (post.id === selectedId) selectionRing(ctx, point.x, cy, r + 4, islandColor(post.cluster_id));
 
     if (name) {
@@ -1898,9 +1896,29 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
 
     if (bubbles.has(post.id) && !dim) talk.push({ post, x: point.x, y: cy - reach - 14 });
     if (!dim && (!landing || landing.marker > 0.5)) {
-      hits.push({ x: point.x, y: cy, r: Math.max(18, size * 0.7), post });
+      hits.push({ x: point.x, y: cy, r: Math.max(18, size * 0.7), post, ...(stack ? { stack } : {}) });
     }
   });
+}
+
+/** "+N" on a face with N more posts under it at full zoom. */
+function stackChip(x, y, more) {
+  const text = `+${more > 99 ? 99 : more}`;
+  ctx.save();
+  ctx.font = '700 11px system-ui, sans-serif';
+  const w = Math.max(22, ctx.measureText(text).width + 12);
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - 9, w, 18, 9);
+  ctx.fillStyle = '#16324f';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y + 0.5);
+  ctx.restore();
 }
 
 function countChip(x, y, count) {

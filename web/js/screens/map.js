@@ -12,7 +12,7 @@ import {
   hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, upsertPost, notify,
 } from '../state.js';
 import {
-  $, clear, closeSheet, confirmAction, el, expandSheet, openSheet, sheetExpanded,
+  $, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
   sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
@@ -411,8 +411,29 @@ function setupChrome() {
 
 // ---------------------------------------------------------------- sheet
 
-/** Open a post's sheet. `expand` opens the sheet at full height. */
-export async function openPost(postId, { expand = false } = {}) {
+/** Several posts on one spot at full zoom (map/index.js): a list to pick from.
+ * Picking one opens it with a way back to this list. */
+export function openStack(posts) {
+  const body = openSheet({ onClose: () => { state.selected = null; } });
+  clear($('sheetFoot'));
+  clear(body).append(
+    el('h3', { className: 'stack-title', text: `この場所の投稿（${posts.length}件）` }),
+    el('ul', { className: 'stack-list' }, posts.map((post) => el('li', {},
+      el('button', {
+        className: 'stack-row',
+        attrs: { type: 'button' },
+        on: { click: () => openPost(post.id, { back: posts }) },
+      },
+      el('i', { className: 'stack-heat', style: { background: motivationColor(post.motivation) } }),
+      el('span', { className: 'stack-who', text: clip(post.display_name || '', 8) }),
+      el('span', { className: 'stack-text', text: post.body || '' }),
+      el('span', { className: 'stack-go', text: '›', attrs: { 'aria-hidden': 'true' } }))))),
+  );
+}
+
+/** Open a post's sheet. `expand` opens the sheet at full height; `back`, the
+ * list of a spot's posts it was picked from (openStack). */
+export async function openPost(postId, { expand = false, back = null } = {}) {
   if (sheetOpen()) closeSheet();
   const generation = ++selectionGeneration;
   let post = state.postsById.get(postId);
@@ -447,11 +468,18 @@ export async function openPost(postId, { expand = false } = {}) {
   // Looking at a post puts its star out - except while looking at who joined,
   // when the sheet is only a way to read the writer's words.
   if (!participantView()) markRead(post.id);
-  await renderSheet(post, generation);
+  await renderSheet(post, generation, back);
 }
 
-async function renderSheet(post, generation) {
+async function renderSheet(post, generation, back = null) {
   const body = clear($('sheetBody'));
+  if (back) {
+    body.append(el('button', {
+      className: 'sheet-back', attrs: { type: 'button' },
+      text: `‹ この場所の投稿（${back.length}件）に戻る`,
+      on: { click: () => openStack(back) },
+    }));
+  }
   const mine = state.account && post.author_id === state.account.id;
 
   // 似てる度 against my active post. Asking the
@@ -757,7 +785,10 @@ export function setupMapScreen() {
       startMap();   // no-op the first time: initMap starts the loop itself
       if (!booted) {
         booted = true;
-        initMap($('stage'), { onSelect: (post) => (post ? openPost(post.id) : closeSheet()) });
+        initMap($('stage'), {
+          onSelect: (post) => (post ? openPost(post.id) : closeSheet()),
+          onSelectMany: (posts) => openStack(posts),
+        });
         // A pan that ends somewhere new should pull in what is there. Debounced
         // inside the map module, so a long drag is one request and not fifty.
         onCameraSettled(() => refreshMap());

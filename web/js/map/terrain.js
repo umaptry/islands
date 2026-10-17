@@ -323,7 +323,7 @@ function sameRegion(a, b) {
 // own resolution (up to DETAIL_MAX_UNIT texture pixels per world unit and
 // DETAIL_MAX_TEXTURE on a side). Not cached here: the map keeps the last one
 // while it still covers the screen, and builds it only once the camera stops.
-const DETAIL_MAX_UNIT = 16;
+const DETAIL_MAX_UNIT = 48;   // 16 until the zoom went three times further (2026-10-18)
 const DETAIL_MAX_TEXTURE = 2048;
 
 export function buildDetail({ posts, cells = [], region, scale, pixelRatio = 1 }) {
