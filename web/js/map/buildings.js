@@ -50,7 +50,7 @@ function calmColor(hex) {
 /** A canvas context that also keeps track of what it drew (bounds, lights).
  * With ctx = null it only measures. `vis` is what the eye sees (the returned
  * box); `all` also holds the soft shadows (the off-screen canvas size). */
-function makePen(ctx, { calm, night, px }) {
+function makePen(ctx, { calm, night, px, soft = 1 }) {
   const empty = () => ({ l: Infinity, t: Infinity, r: -Infinity, b: -Infinity });
   const vis = empty();
   const all = empty();
@@ -132,9 +132,11 @@ function makePen(ctx, { calm, night, px }) {
       pts.forEach(([x, y]) => seen(x, y, 2));
       shadowMode = false;
       if (!ctx) return;
-      ctx.globalAlpha = 0.26;
+      // `soft` grows with the picture: a big building gets a wider, lighter
+      // shadow instead of the same hard edge scaled up (1 = the small look).
+      ctx.globalAlpha = 0.26 / soft ** 0.3;
       ctx.fillStyle = dark(PALETTE.forest, 0.75);
-      if ('filter' in ctx) ctx.filter = `blur(${(0.9 * px).toFixed(2)}px)`;
+      if ('filter' in ctx) ctx.filter = `blur(${(0.9 * px * soft).toFixed(2)}px)`;
       path(pts);
       ctx.fill();
       if ('filter' in ctx) ctx.filter = 'none';
@@ -812,11 +814,25 @@ function treeShadowScene(p, kind) {
 
 // ---------------------------------------------------------------- cache
 const MAX_ENTRIES = 600;
+const SOFT_FROM = 40; // shadows are blurred more from this width (px) on
 const cache = new Map();
 const fitCache = new Map();
 
-/** Sizes are cached in 2 px steps. */
-export const roundSize = (size) => Math.max(2, Math.round(size / 2) * 2);
+// Sizes are cached in steps of ~15% up to a ceiling, and a stamp is drawn at
+// its real size by stretching the nearest step (at most ~7% off). Buildings now
+// grow with the map, so a pinch crosses many sizes: with the old 2 px steps
+// every few frames would have painted a new picture. Above the ceiling the
+// ceiling's picture is enlarged (it softens, but costs nothing).
+const STEP_MIN = 6;
+const STEP_RATIO = 1.15;
+const STEP_MAX = 160;
+const STEP_COUNT = Math.round(Math.log(STEP_MAX / STEP_MIN) / Math.log(STEP_RATIO));
+
+/** The size a picture is painted at for a stamp that is `size` px wide. */
+export const stepSize = (size) => {
+  const n = Math.round(Math.log(Math.max(size, STEP_MIN) / STEP_MIN) / Math.log(STEP_RATIO));
+  return Math.round(STEP_MIN * STEP_RATIO ** Math.min(n, STEP_COUNT) * 10) / 10;
+};
 
 /** The device scale a ctx paints at, in quarter steps (so a smooth zoom does
  * not make a new cache entry every frame). */
@@ -829,7 +845,7 @@ function scaleOf(ctx) {
 
 /** The cache key of a stamp. */
 export function cacheKey({ shape, id, size, calm = false, night = false, dpr = 1, seed = 0 }) {
-  return [shape, id, roundSize(size), calm ? 1 : 0, night ? 1 : 0, dpr, seed | 0].join('|');
+  return [shape, id, stepSize(size), calm ? 1 : 0, night ? 1 : 0, dpr, seed | 0].join('|');
 }
 
 /** The box a stamp covers when its foot is at (x, foot): `rel` holds the
@@ -851,8 +867,8 @@ function makeCanvas(w, h) {
 
 /** Paint a scene into a new entry. `fit` = how the scale is chosen: a function
  * of the measured bounds at scale 1. */
-function render({ scene, shadows, size, calm, night, dpr, fitKey, fitMode, lightsOnly = false }) {
-  const flags = { calm, night, px: dpr };
+function render({ scene, shadows, size, calm, night, dpr, fitKey, fitMode, lightsOnly = false, sharp = false }) {
+  const flags = { calm, night, px: dpr, soft: Math.max(1, size / SOFT_FROM) };
   // 1. measure at scale 1
   let w0 = fitCache.get(fitKey);
   if (w0 === undefined) {
@@ -873,13 +889,15 @@ function render({ scene, shadows, size, calm, night, dpr, fitKey, fitMode, light
   const m = 4;
   const cl = Math.floor(all.l * k - m);
   const ct = Math.floor(all.t * k + shiftY - m);
-  const cw = Math.min(700, Math.ceil(all.r * k + m - cl));
-  const ch = Math.min(700, Math.ceil(all.b * k + shiftY + m - ct));
+  const cap = sharp ? Infinity : 700;
+  const cw = Math.min(cap, Math.ceil(all.r * k + m - cl));
+  const ch = Math.min(cap, Math.ceil(all.b * k + shiftY + m - ct));
   const rel = { l: vis.l * k, r: vis.r * k, t: vis.t * k + shiftY, b: 0 };
   const scaleLights = (list) => list.map((l) => ({ ...l, x: l.x * k, y: l.y * k + shiftY, r: l.r * k }));
   // The night layer only needs where the lights are, which the measuring pass
   // already knows: no picture of the building itself.
-  if (lightsOnly) return { canvas: null, cl, ct, cw: 0, ch: 0, dpr, rel, lights: scaleLights(probe.lights), glow: null };
+  if (sharp && !lightsOnly && cw * ch * dpr * dpr > MAX_ONE_PX) return null; // too big to keep: the stretched one is used
+  if (lightsOnly) return { canvas: null, cl, ct, cw: 0, ch: 0, dpr, rel, step: size, lights: scaleLights(probe.lights), glow: null };
   let canvas = null;
   let pen = null;
   try {
@@ -894,9 +912,9 @@ function render({ scene, shadows, size, calm, night, dpr, fitKey, fitMode, light
     scene(pen);
   } catch {
     // Out of memory or no context: draw nothing for this one, keep the map going.
-    return { canvas: null, cl, ct, cw: 0, ch: 0, dpr, rel, lights: [], glow: null };
+    return { canvas: null, cl, ct, cw: 0, ch: 0, dpr, rel, step: size, lights: [], glow: null };
   }
-  return { canvas, cl, ct, cw, ch, dpr, rel, lights: scaleLights(pen.lights), glow: null };
+  return { canvas, cl, ct, cw, ch, dpr, rel, step: size, lights: scaleLights(pen.lights), glow: null };
 }
 
 /** Find or paint the entry for a stamp; evict the oldest when the cache is full. */
@@ -913,14 +931,89 @@ function entryFor(key, make) {
   return e;
 }
 
-function stamp(ctx, e, x, foot, alpha) {
-  const dx = Math.round((x + e.cl) * e.dpr) / e.dpr;
-  const dy = Math.round((foot + e.ct) * e.dpr) / e.dpr;
+// Pictures at their real size. While the camera moves, a big stamp is the
+// 160 px picture stretched (cheap, soft). Once the camera has been still for a
+// moment (setSettled), a stamp wider than that is painted at its real size, so
+// a close-up is crisp. Such pictures are few but large, so they live in their
+// own cache with a budget in pixels (phones have little memory), and only a
+// few are painted per frame so the first still frame does not stall.
+const SHARP_BUDGET_PX = 24e6;   // all kept pictures together (~96 MB at 4 bytes)
+const MAX_ONE_PX = 6e6;         // one picture; a bigger one stays stretched
+const MAX_BUILDS_PER_FRAME = 3;
+const sharpCache = new Map();
+let sharpPx = 0;
+let settled = false;
+let builds = 0;
+
+/** Called once per frame: is the camera still, so big stamps are painted
+ * sharp? Also resets the per-frame painting allowance. */
+export function setSettled(still) {
+  settled = !!still;
+  builds = 0;
+}
+
+function dropSharp(key) {
+  const e = sharpCache.get(key);
+  if (e) { sharpPx -= e.px || 0; sharpCache.delete(key); }
+}
+
+function trimSharp(keep) {
+  for (const k of sharpCache.keys()) {
+    if (sharpPx <= SHARP_BUDGET_PX) break;
+    if (k !== keep) dropSharp(k);
+  }
+}
+
+/** The real-size entry for this stamp, or null (not settled, small, too big,
+ * or the frame's painting allowance is used up: use the stretched one). */
+function sharpEntry(parts, size, make) {
+  if (!settled || !(size > STEP_MAX)) return null;
+  const s = Math.round(size * 2) / 2;
+  const key = `${cacheKey({ ...parts, size: STEP_MAX })}|x${s}`;
+  let e = sharpCache.get(key);
+  if (e) {
+    sharpCache.delete(key);
+    sharpCache.set(key, e);
+    return e.skip ? null : e;
+  }
+  if (builds >= MAX_BUILDS_PER_FRAME) return null;
+  builds++;
+  const made = make(s);
+  e = made && made.canvas !== undefined ? made : { skip: true, px: 0 };
+  // A failed paint (canvas null on a picture that should have one) is not kept.
+  e.px = made && made.canvas ? made.canvas.width * made.canvas.height : 0;
+  e.key = key;
+  sharpCache.set(key, e);
+  sharpPx += e.px;
+  trimSharp(key);
+  return e.skip ? null : e;
+}
+
+/** The entry to use for a stamp: real size when settled, else the nearest step. */
+function pickEntry(parts, size, make) {
+  return sharpEntry(parts, size, make)
+    || entryFor(cacheKey({ ...parts, size }), () => make(stepSize(size)));
+}
+
+/** Stamp an entry at its real `size` (the picture is painted at e.step). */
+function stamp(ctx, e, x, foot, alpha, size) {
+  const f = size / e.step;
+  const dx = Math.round((x + e.cl * f) * e.dpr) / e.dpr;
+  const dy = Math.round((foot + e.ct * f) * e.dpr) / e.dpr;
   const prev = ctx.globalAlpha;
   if (alpha < 1) ctx.globalAlpha = prev * alpha;
-  if (e.canvas) ctx.drawImage(e.canvas, dx, dy, e.cw, e.ch);
+  if (e.canvas) {
+    // Stretched pictures need smoothing, or the outline turns into dots.
+    const smooth = ctx.imageSmoothingEnabled;
+    const quality = ctx.imageSmoothingQuality;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(e.canvas, dx, dy, e.cw * f, e.ch * f);
+    ctx.imageSmoothingEnabled = smooth;
+    ctx.imageSmoothingQuality = quality;
+  }
   if (alpha < 1) ctx.globalAlpha = prev;
-  return placeBox(e.rel, x, foot);
+  return placeBox({ l: e.rel.l * f, r: e.rel.r * f, t: e.rel.t * f, b: 0 }, x, foot);
 }
 
 // ---------------------------------------------------------------- the public drawing
@@ -931,13 +1024,11 @@ export function drawSettlement(ctx, tier, x, foot, size, opts = {}) {
   const { alpha = 1, calm = false, night = false, seed = 0 } = opts;
   const t = Math.max(0, Math.min(TIER_COUNT - 1, Math.round(tier) || 0));
   const dpr = scaleOf(ctx);
-  const s = roundSize(size);
-  const key = cacheKey({ shape: 'settlement', id: t, size: s, calm, night, dpr, seed });
-  const e = entryFor(key, () => render({
+  const e = pickEntry({ shape: 'settlement', id: t, calm, night, dpr, seed }, size, (s) => render({
     scene: (p) => settlementScene(p, t, seed | 0),
-    size: s, calm, night, dpr, fitMode: 'width', fitKey: `s|${t}|${seed | 0}|${night ? 1 : 0}`,
+    size: s, calm, night, dpr, fitMode: 'width', fitKey: `s|${t}|${seed | 0}|${night ? 1 : 0}`, sharp: s > STEP_MAX,
   }));
-  return stamp(ctx, e, x, foot, alpha);
+  return stamp(ctx, e, x, foot, alpha, size);
 }
 
 /** Draw a landmark standing on (x, foot); `size` is the width of its footprint
@@ -946,14 +1037,12 @@ export function drawLandmark(ctx, name, x, foot, size, opts = {}) {
   if (!ctx || !(size > 0)) return null;
   const { alpha = 1, calm = false, night = false } = opts;
   const dpr = scaleOf(ctx);
-  const s = roundSize(size);
   const id = LANDMARKS.has(name) ? name : 'default';
-  const key = cacheKey({ shape: 'landmark', id, size: s, calm, night, dpr, seed: 0 });
-  const e = entryFor(key, () => render({
+  const e = pickEntry({ shape: 'landmark', id, calm, night, dpr, seed: 0 }, size, (s) => render({
     scene: (p) => landmarkScene(p, name),
-    size: s, calm, night, dpr, fitMode: 26, fitKey: `l|${id}`,
+    size: s, calm, night, dpr, fitMode: 26, fitKey: `l|${id}`, sharp: s > STEP_MAX,
   }));
-  return stamp(ctx, e, x, foot, alpha);
+  return stamp(ctx, e, x, foot, alpha, size);
 }
 
 /** Draw a tree, pine, bush or rock standing on (x, foot); `size` is its width. */
@@ -962,15 +1051,13 @@ export function drawTree(ctx, kind, x, foot, size, opts = {}) {
   const { alpha = 1, calm = false, seed = 0 } = opts;
   const k = TREE_KINDS.includes(kind) ? kind : 'tree';
   const dpr = scaleOf(ctx);
-  const s = roundSize(size);
   const tone = Math.abs(seed | 0) % 3;
-  const key = cacheKey({ shape: 'tree', id: k, size: s, calm, night: false, dpr, seed: tone });
-  const e = entryFor(key, () => render({
+  const e = pickEntry({ shape: 'tree', id: k, calm, night: false, dpr, seed: tone }, size, (s) => render({
     scene: (p) => treeScene(p, k, tone),
     shadows: (p) => treeShadowScene(p, k),
-    size: s, calm, night: false, dpr, fitMode: 'width', fitKey: `t|${k}`,
+    size: s, calm, night: false, dpr, fitMode: 'width', fitKey: `t|${k}`, sharp: s > STEP_MAX,
   }));
-  return stamp(ctx, e, x, foot, alpha);
+  return stamp(ctx, e, x, foot, alpha, size);
 }
 
 /** The night's lights only: call after the dark colour has been laid over the
@@ -979,22 +1066,42 @@ export function drawTree(ctx, kind, x, foot, size, opts = {}) {
 export function drawNightLights(ctx, what, x, foot, size) {
   if (!ctx || !what || !(size > 0)) return;
   const dpr = scaleOf(ctx);
-  const s = roundSize(size);
-  let e;
+  const calm = !!what.calm;
+  let parts;
+  let make;
   if (what.landmark !== undefined) {
     const id = LANDMARKS.has(what.landmark) ? what.landmark : 'default';
-    e = entryFor(cacheKey({ shape: 'lights-landmark', id, size: s, calm: !!what.calm, night: true, dpr, seed: 0 }), () => render({
+    parts = { shape: 'lights-landmark', id, calm, night: true, dpr, seed: 0 };
+    make = (s) => render({
       scene: (p) => landmarkScene(p, what.landmark), lightsOnly: true,
-      size: s, calm: !!what.calm, night: true, dpr, fitMode: 26, fitKey: `l|${id}`,
-    }));
+      size: s, calm, night: true, dpr, fitMode: 26, fitKey: `l|${id}`,
+    });
   } else {
     const t = Math.max(0, Math.min(TIER_COUNT - 1, Math.round(what.tier) || 0));
     const seed = what.seed | 0;
-    e = entryFor(cacheKey({ shape: 'lights-settlement', id: t, size: s, calm: !!what.calm, night: true, dpr, seed }), () => render({
+    parts = { shape: 'lights-settlement', id: t, calm, night: true, dpr, seed };
+    make = (s) => render({
       scene: (p) => settlementScene(p, t, seed), lightsOnly: true,
-      size: s, calm: !!what.calm, night: true, dpr, fitMode: 'width', fitKey: `s|${t}|${seed}|1`,
-    }));
+      size: s, calm, night: true, dpr, fitMode: 'width', fitKey: `s|${t}|${seed}|1`,
+    });
   }
+  let e = sharpEntry(parts, size, make);
+  if (e && e.lights.length && !e.glow) {
+    // The glow is a picture too: count it in the budget, and give up on the
+    // real-size one if it would be huge.
+    try { e.glow = makeGlow(e); } catch { e.glow = null; }
+    const px = e.glow ? e.glow.canvas.width * e.glow.canvas.height : 0;
+    if (!e.glow || px > MAX_ONE_PX) {
+      e.glow = null;
+      e.skip = true;
+      e = null;
+    } else {
+      e.px = px;
+      sharpPx += px;
+      trimSharp(e.key);
+    }
+  }
+  if (!e) e = entryFor(cacheKey({ ...parts, size }), () => make(stepSize(size)));
   if (!e.lights.length) return;
   if (!e.glow) {
     try { e.glow = makeGlow(e); } catch { e.glow = null; }
@@ -1004,7 +1111,10 @@ export function drawNightLights(ctx, what, x, foot, size) {
   if (!g) return;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.drawImage(g.canvas, x + g.left, foot + g.top, g.w, g.h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  const f = size / e.step;
+  ctx.drawImage(g.canvas, x + g.left * f, foot + g.top * f, g.w * f, g.h * f);
   ctx.restore();
 }
 
@@ -1036,4 +1146,5 @@ function makeGlow(e) {
 
 /** For tests and tuning. */
 export const _cacheSize = () => cache.size;
-export const _clearCache = () => { cache.clear(); fitCache.clear(); };
+export const _clearCache = () => { cache.clear(); fitCache.clear(); sharpCache.clear(); sharpPx = 0; };
+export const _sharpPixels = () => sharpPx;

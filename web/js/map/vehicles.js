@@ -1,4 +1,4 @@
-// The planes and boats on the map, drawn in code in the same design as the
+// The planes, boats and cars on the map, drawn in code in the same design as the
 // buildings (buildings.js): no outline, white as the main colour with the roof
 // red as the accent, faces lit from the top-left, pale-blue windows, and a soft
 // shadow that always falls to the bottom-right.
@@ -8,8 +8,8 @@
 // facing right (heading 0) and without a shadow: the shadow is a second picture
 // of the silhouette that is turned with the vehicle but placed by a fixed
 // screen offset, so it stays at the bottom-right whichever way the vehicle
-// goes. A plane flies, so its shadow lies well apart from it; a boat's lies
-// right under its hull.
+// goes. A plane flies, so its shadow lies well apart from it; a boat's or car's lies
+// right under it.
 //
 // This file has no DOM use at load time (the tests import it as it is).
 
@@ -40,6 +40,12 @@ const SPECS = {
     bounds: { l: -22, r: 11.5, t: -7, b: 7 },
     // Right under the hull.
     shadow: { dx: 0.07, dy: 0.11, alpha: 0.28, blur: 0.5, scale: 1 },
+  },
+  car: {
+    length: 20,
+    bounds: { l: -11, r: 11, t: -5.2, b: 5.2 },
+    // On the ground, right under the body.
+    shadow: { dx: 0.06, dy: 0.1, alpha: 0.3, blur: 0.45, scale: 1 },
   },
 };
 const PAD = 4;
@@ -205,7 +211,55 @@ function boatBody(ctx, shade, night) {
   poly(ctx, [[3.4, -1.7], [4.6, -1.5], [4.6, 1.5], [3.4, 1.7]], night ? WARM : GLASS);
 }
 
-const PAINT = { plane: planeBody, boat: boatBody };
+function carShell(ctx, k = 1) {
+  const x = 10 * k;
+  const y = 4.1 * k;
+  const r = 2.8 * k;
+  ctx.beginPath();
+  ctx.moveTo(-x + r, -y);
+  ctx.lineTo(x - r, -y);
+  ctx.quadraticCurveTo(x, -y, x, -y + r);
+  ctx.lineTo(x, y - r);
+  ctx.quadraticCurveTo(x, y, x - r, y);
+  ctx.lineTo(-x + r, y);
+  ctx.quadraticCurveTo(-x, y, -x, y - r);
+  ctx.lineTo(-x, -y + r);
+  ctx.quadraticCurveTo(-x, -y, -x + r, -y);
+  ctx.closePath();
+}
+
+function carBody(ctx, shade, night) {
+  const c = (color) => (shade ? SHADOW : color);
+  const roof = PALETTE.roof;
+  // Body: the lit side, the half in shade, a white top inside (as the boat's hull).
+  ctx.fillStyle = c(WALL[1]);
+  carShell(ctx);
+  ctx.fill();
+  ctx.save();
+  carShell(ctx);
+  ctx.clip();
+  poly(ctx, [[-12, 0], [12, 0], [12, 6], [-12, 6]], c(WALL[2]));
+  ctx.restore();
+  ctx.fillStyle = c(WALL[0]);
+  carShell(ctx, 0.8);
+  ctx.fill();
+  // The cabin: a small red roof, lit from the top-left like the cabin of a boat.
+  poly(ctx, [[-5, -3.2], [2.6, -3.2], [2.6, 0], [-5, 0]], c(light(roof, 0.16)));
+  poly(ctx, [[-5, 0], [2.6, 0], [2.6, 3.2], [-5, 3.2]], c(dark(roof, 0.16)));
+  if (shade) return;
+  // Pale glass: the windscreen ahead of the roof, a thinner one behind it.
+  poly(ctx, [[3.1, -2.7], [5, -3.1], [5, 3.1], [3.1, 2.7]], GLASS);
+  poly(ctx, [[-6.4, -2.5], [-5.4, -2.6], [-5.4, 2.6], [-6.4, 2.5]], GLASS);
+  if (night) {
+    ctx.fillStyle = WARM;
+    ctx.beginPath();
+    ctx.arc(9.4, -2.5, 0.9, 0, Math.PI * 2);
+    ctx.arc(9.4, 2.5, 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+const PAINT = { plane: planeBody, boat: boatBody, car: carBody };
 
 // ---------------------------------------------------------------- stamps
 /** One picture of the design, painted at scale k px per design unit * dpr. */
@@ -286,6 +340,13 @@ export function drawPlane(ctx, x, y, size, heading = 0, opts = {}) {
  * behind it. `size` is the hull's length in CSS px. */
 export function drawBoat(ctx, x, y, size, heading = 0, opts = {}) {
   return drawVehicle('boat', ctx, x, y, size, heading, opts);
+}
+
+/** A car seen from above, centred on (x, y), nose to `heading`. `size` is its
+ * length in CSS px. White body, red roof, pale windows; opts: alpha, night
+ * (headlights on). */
+export function drawCar(ctx, x, y, size, heading = 0, opts = {}) {
+  return drawVehicle('car', ctx, x, y, size, heading, opts);
 }
 
 export const _cacheSize = () => cache.size;

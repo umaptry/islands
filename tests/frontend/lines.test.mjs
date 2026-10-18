@@ -2,18 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-let source = await readFile(new URL('../../web/js/map/lines.js', import.meta.url), 'utf8');
-source = source
-  .replace("import { REDUCED_MOTION, hashId } from './decor.js';", () =>
-    'const REDUCED_MOTION = false; const hashId = (id) => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);')
-  .replace("import { drawBoat, drawPlane } from './vehicles.js';", () =>
-    `const drawPlane = (...args) => { (globalThis.planesDrawn ||= []).push(args); return true; };
-     const drawBoat = (...args) => { (globalThis.boatsDrawn ||= []).push(args); return true; };`)
+// land.js, with the config and the ground stubbed, as a module lines.js can import.
+const landSource = (await readFile(new URL('../../web/js/map/land.js', import.meta.url), 'utf8'))
   .replace("import { groundOf } from './coast.js';", () =>
     'const groundOf = (post, x, y) => { const d = Math.hypot(x - post.x, y - post.y); return d < post.radius ? post.energy * (1 - d / post.radius) : 0; };')
   .replace("import { config, energyOf, radiusOf } from '../config.js';", () =>
     `const config = () => ({ energy: { biome_thresholds: { desert: 30 }, radius_factor: 1, radius_base: 10, radius_scale: 1, radius_trim: 1 } });
      const energyOf = (post) => post.energy; const radiusOf = (post) => post.radius;`);
+const landUrl = `data:text/javascript;base64,${Buffer.from(landSource).toString('base64')}`;
+
+let source = await readFile(new URL('../../web/js/map/lines.js', import.meta.url), 'utf8');
+source = source
+  .replace("import { REDUCED_MOTION, hashId } from './decor.js';", () =>
+    'const REDUCED_MOTION = false; const hashId = (id) => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);')
+  .replace("import { drawBoat, drawCar, drawPlane } from './vehicles.js';", () =>
+    `const drawPlane = (...args) => { (globalThis.planesDrawn ||= []).push(args); return true; };
+     const drawBoat = (...args) => { (globalThis.boatsDrawn ||= []).push(args); return true; };
+     const drawCar = (...args) => { (globalThis.carsDrawn ||= []).push(args); return true; };`)
+  .replace("from './land.js';", () => `from '${landUrl}';`)
+  .replace("import { config, energyOf } from '../config.js';", () =>
+    "const config = () => ({ energy: { radius_factor: 1 } }); const energyOf = (post) => post.energy;");
 const lines = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const islands = [
@@ -228,8 +236,11 @@ test('a route gets one to three boats by tier, and the screen has a cap', () => 
   assert.deepEqual([0, 1, 2, 3, 4, undefined].map(lines.boatCount), [1, 1, 2, 3, 3, 1]);
   const count = (view) => {
     globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
     lines.drawPlanes(fakeCanvas().ctx, view, lines.drawLinks(fakeCanvas().ctx, view), 30);
-    return globalThis.boatsDrawn.length;
+    // A boat and a car handing over at the beach are one vehicle drawn twice.
+    const spots = new Set([...globalThis.boatsDrawn, ...globalThis.carsDrawn].map(([, x, y]) => `${x}|${y}`));
+    return spots.size;
   };
   const posts = [post('w', 100, 100), post('e', 800, 100)];
   [1, 2, 3].forEach((tier) => assert.equal(count(seaView(posts, [seaRow({ tier })])), tier));
@@ -284,4 +295,69 @@ test('a like that grows an island on the route is a new answer, with the same po
   assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), ['sea']);
   posts[2].energy = 120;
   assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), ['arch']);
+});
+
+test('over land a sea route is driven by a car, over the water sailed by a boat, from the clock alone', () => {
+  // Land reaches 84 units from each end here, so the water runs 184 to 716 on x.
+  const view = seaView([post('w', 100, 100), post('e', 800, 100)], [seaRow({ tier: 3 })]);
+  const plan = lines.drawLinks(fakeCanvas().ctx, view);
+  const run = (time) => {
+    globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
+    lines.drawPlanes(fakeCanvas().ctx, view, plan, time);
+    return { boats: globalThis.boatsDrawn.slice(), cars: globalThis.carsDrawn.slice() };
+  };
+  assert.deepEqual(run(41), run(41), 'the same moment shows the same vehicles');
+  let cars = 0;
+  let boats = 0;
+  for (let time = 0; time < 400; time += 1.3) {
+    const seen = run(time);
+    seen.cars.forEach(([, x]) => {
+      cars += 1;
+      // The screen is the world halved; a car may reach 14 px (7 here) past a beach.
+      assert.ok(x * 2 < 184 + 30 || x * 2 > 716 - 30, `a car at world x ${x * 2} is on the water`);
+    });
+    seen.boats.forEach(([, x]) => {
+      boats += 1;
+      assert.ok(x * 2 > 84 + 100 - 30 && x * 2 < 800 - 84 + 30, `a boat at world x ${x * 2} is on land`);
+    });
+  }
+  assert.ok(cars > 0 && boats > 0, `both kinds appear over a round trip (${cars} cars, ${boats} boats)`);
+  // Standing still (reduced motion, no clock): spread along the route, so the
+  // middle one is a boat and the ones near the ends are on the water too at tier 3.
+  const still = run(null);
+  assert.equal(still.cars.length, 0);
+  assert.equal(still.boats.length, 3);
+});
+
+test('a route with only tiny beaches at its ends has boats on almost all of it', () => {
+  const open = seaView([post('w', 100, 100, 100, 10), post('e', 800, 100, 100, 10)], [seaRow({ tier: 2 })]);
+  const plan = lines.drawLinks(fakeCanvas().ctx, open);
+  assert.equal(plan.lines[0].runs.filter((r) => r.land).length, 2, 'two tiny beaches at the ends');
+  globalThis.boatsDrawn = [];
+  globalThis.carsDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, open, plan, null);
+  assert.equal(globalThis.carsDrawn.length, 0);
+  assert.equal(globalThis.boatsDrawn.length, 2);
+});
+
+test('the stretches of a line are the same walked from either end', () => {
+  const posts = [post('w', 100, 100), post('e', 800, 100)];
+  const view = seaView(posts, [seaRow({ a: 'u9', b: 'u1' })]);   // a > b: drawn from the other end
+  const [line] = lines.drawLinks(fakeCanvas().ctx, view).lines;
+  assert.deepEqual(line.runs.map((r) => r.land), [true, false, true]);
+  assert.equal(line.runs[0].from, 0);
+  assert.equal(line.runs[2].to, 1);
+});
+
+test('a piece of an arc keeps its ends and its curve', () => {
+  const shape = lines.arc({ x: 0, y: 0 }, { x: 100, y: 0 }, 1, 0.3);
+  const part = lines.slice(shape, 0.25, 0.75);
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  [0, 0.3, 1].forEach((u) => {
+    const whole = lines.pointOn(shape, 0.25 + u * 0.5);
+    const piece = lines.pointOn(part, u);
+    near(piece.x, whole.x);
+    near(piece.y, whole.y);
+  });
 });

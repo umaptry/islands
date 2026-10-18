@@ -32,19 +32,28 @@ test('an unknown name is a manor, even a name that is an object key', () => {
   assert.equal(B.landmarkForm(undefined).type, 'manor');
 });
 
-test('sizes round to 2 px steps', () => {
-  assert.equal(B.roundSize(36), 36);
-  assert.equal(B.roundSize(36.9), 36);
-  assert.equal(B.roundSize(37.1), 38);
-  assert.equal(B.roundSize(0.2), 2);
+test('sizes snap to ~15% steps with a ceiling, never more than 8% off', () => {
+  assert.equal(B.stepSize(6), 6);
+  assert.equal(B.stepSize(0.2), 6);
+  for (let size = 7; size <= 160; size += 0.37) {
+    const step = B.stepSize(size);
+    assert.ok(Math.abs(step / size - 1) < 0.08, `${size} -> ${step}`);
+  }
+  assert.equal(B.stepSize(400), B.stepSize(160));
+  assert.equal(B.stepSize(5000), B.stepSize(400));
+  // A smooth zoom from 36 to 400 px touches only a few dozen sizes.
+  const seen = new Set();
+  for (let size = 36; size <= 400; size *= 1.003) seen.add(B.stepSize(size));
+  assert.ok(seen.size <= 14, `${seen.size} sizes`);
 });
 
 test('the cache key tells shapes, sizes, looks and seeds apart', () => {
   const base = { shape: 'settlement', id: 2, size: 36, calm: false, night: false, dpr: 2, seed: 1 };
   const k = B.cacheKey(base);
   assert.equal(k, B.cacheKey({ ...base, size: 36.8 }));
+  assert.equal(k, B.cacheKey({ ...base, size: 35 }));
   assert.notEqual(k, B.cacheKey({ ...base, id: 3 }));
-  assert.notEqual(k, B.cacheKey({ ...base, size: 40 }));
+  assert.notEqual(k, B.cacheKey({ ...base, size: 60 }));
   assert.notEqual(k, B.cacheKey({ ...base, calm: true }));
   assert.notEqual(k, B.cacheKey({ ...base, night: true }));
   assert.notEqual(k, B.cacheKey({ ...base, dpr: 1 }));
@@ -64,4 +73,24 @@ test('without a canvas nothing is drawn and null comes back', () => {
 test('drawNightLights does nothing without a canvas or with a bad size', () => {
   assert.equal(B.drawNightLights(null, { tier: 1 }, 0, 0, 40), undefined);
   assert.equal(B.drawNightLights({ getTransform: () => ({ a: 1 }) }, { tier: 1 }, 0, 0, 0), undefined);
+});
+
+test('a settled camera paints big stamps at real size, within a pixel budget, and never throws', () => {
+  const calls = [];
+  const ctx = {
+    getTransform: () => ({ a: 2 }), globalAlpha: 1, imageSmoothingEnabled: false, imageSmoothingQuality: 'low',
+    drawImage: (...a) => calls.push(a), save() {}, restore() {},
+  };
+  B._clearCache();
+  B.setSettled(true);
+  for (let size = 170; size < 900; size += 40) {
+    assert.ok(B.drawSettlement(ctx, 4, 100, 200, size));
+    assert.ok(B.drawLandmark(ctx, '灯台', 100, 200, size));
+    B.drawNightLights(ctx, { tier: 3, seed: 1 }, 100, 200, size);
+  }
+  assert.ok(B._sharpPixels() <= 24e6);
+  B.setSettled(false);
+  assert.ok(B.drawTree(ctx, 'tree', 0, 0, 400));
+  // Smoothing is restored after a stamp, so other drawing is not changed.
+  assert.equal(ctx.imageSmoothingEnabled, false);
 });

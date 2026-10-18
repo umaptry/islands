@@ -23,7 +23,7 @@ import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
 import { kinLines } from './kin.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, drawMiniPin, pinColor, pinGeometry, pinScale, pinTier } from './pins.js';
-import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree } from './buildings.js';
+import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
 import { buildDetail, buildTerrain, gridTerrain, toCanvas } from './terrain.js';
 import { offThread } from './offthread.js';
 import { groundOf } from './coast.js';
@@ -747,9 +747,10 @@ function paintTimeOfDay() {
 
 /** At night the dark layer took the land down with the sea, and an island's
  * shape was hard to tell from the water (review, 2026-10-18). The ground
- * texture again, screened on faintly: the open sea in it is transparent, so
- * only the land and its shallows come back up. */
-const NIGHT_LAND = 0.24;
+ * texture again, screened on before the dark layer comes: the open sea in it
+ * is transparent, so only the land and its shallows are lifted, and they stay
+ * lighter than the water once the night is over them. */
+const NIGHT_LAND = 0.42;
 
 function liftLandAtNight(terrain, closeUp, grid, alpha) {
   ctx.save();
@@ -775,7 +776,7 @@ function paintNightLights(places, townShow, calmOf) {
   places.forEach((place) => {
     if (!place.town) return;
     const calm = calmOf(place.island);
-    ctx.globalAlpha = place.fade * townShow;
+    ctx.globalAlpha = place.fade * place.show;
     drawNightLights(ctx, { tier: place.tier, seed: place.seed, calm }, place.x, place.foot, place.size);
     (place.marks || []).forEach((mark) => {
       drawNightLights(ctx, { landmark: mark.name, calm }, mark.x, mark.foot, mark.size);
@@ -939,6 +940,17 @@ const LANDMARK_MIN_TIER = 1;
 // land. Zoomed out they crowded the names and faces; and pushed aside to make
 // room for the faces they used to end up in the sea (2026-10-12).
 const TOWN_ZOOM = [2.3, 2.6];
+// Towns and landmarks are as big as the island they stand on: their size is a
+// length in the world, so they grow and shrink with the map (a pinch scales them
+// with the ground). TIER_SIZES are screen px at the reference scale below - the
+// phone's whole-map scale (~0.4) x TOWN_ZOOM, between the phone and a desktop -
+// and are turned into world lengths once, so a phone and a desktop see the same
+// town on the same island.
+const TOWN_REF_SCALE = 0.55 * TOWN_ZOOM[1];
+const worldSize = (px) => px / TOWN_REF_SCALE;
+// A town shows once it is wide enough on screen to read (fading in over this
+// range of px), as well as past TOWN_ZOOM.
+const TOWN_PX = [30, 38];
 const MINE = PALETTE.accent;
 const LABEL_FONT = '700 13px system-ui, sans-serif';
 const SMALL_FONT = '600 11px system-ui, sans-serif';
@@ -978,7 +990,13 @@ function kinPlan(meId, sifting) {
 }
 
 function renderMap(time) {
-  const view = { sea: seaBox(), toScreen, width, height, scale: state.camera.scale };
+  // The same posts and coarse layer the ground is drawn from, so the sea's
+  // moving things can keep off the land the way the routes do.
+  const ground = groundPosts();
+  const view = {
+    sea: seaBox(), toScreen, width, height, scale: state.camera.scale,
+    posts: ground, cells: state.saturated ? state.cells : NO_CELLS,
+  };
   const { scale } = state.camera;
   const { z, level } = zoomLevel();
   const far = level === 'far';
@@ -1011,7 +1029,6 @@ function renderMap(time) {
   // The ground. Built from every post the client holds, not just the ones on
   // screen, so panning does not make a coastline appear out of nothing.
   const grid = gridTerrain(state.terrainGrid);
-  const ground = groundPosts();
   // While the camera moves, the ground stays at the zoom it was built for and is
   // only stretched: a pinch crossed a texture step every ~19% and rebuilt the
   // whole map mid-gesture (0.2-0.4 s stalls; about a second on a phone).
@@ -1022,6 +1039,8 @@ function renderMap(time) {
     cameraStill = now;
   }
   if (now - cameraStill >= GROUND_SETTLE_MS || groundScale === null) groundScale = scale;
+  // Same idea for buildings: stretched small pictures while moving, real-size ones once still.
+  setSettled(now - cameraStill >= GROUND_SETTLE_MS);
   const buildGround = (list, revision = null) => buildTerrain({
     posts: list,
     cells: state.saturated ? state.cells : NO_CELLS,
@@ -1062,10 +1081,15 @@ function renderMap(time) {
     paintGround(terrain, before ? stage.land : 1, closeUp);
     if (closeUp) paintGround(closeUp, 1);
   }
+  // At night the land is lifted before anything stands on it: screened on after
+  // the dark layer it also washed over the buildings and trees, which then
+  // looked half transparent.
+  if (tod === 'night') liftLandAtNight(terrain, closeUp, grid, before ? stage.land : 1);
 
   // Where each island's settlement stands. Placed before the trees so the trees
   // can keep out of the way.
-  const townShow = clamp01((z - TOWN_ZOOM[0]) / (TOWN_ZOOM[1] - TOWN_ZOOM[0]));
+  const zShow = clamp01((z - TOWN_ZOOM[0]) / (TOWN_ZOOM[1] - TOWN_ZOOM[0]));
+  const townShow = zShow;
   const calmOf = (island) => Boolean(island.quiet);
   const places = state.islands.map((island) => {
     const members = new Set(island.post_ids || []);
@@ -1075,22 +1099,22 @@ function renderMap(time) {
     const forced = forcedTier();
     const tier = forced !== null ? forced : Math.max(0, Math.min(TIER_COUNT - 1, Number(island.tier) || 0));
     // A quiet island keeps its buildings, a size smaller and with the colour
-    // let out of them.
-    const size = TIER_SIZES[tier] * (island.quiet ? 0.85 : 1);
-    // The town stands at one fixed world point per island; it only shows where
-    // its box fits on the land. A grown island (tier 1+ or 8+ people) asks only
-    // that the town's feet and middle are on land, as before.
-    const home = townShow > 0 ? townHome(island, members) : null;
-    const base = home ? toScreen(home.x, home.y) : null;
+    // let out of them. `span` is the town's width in the world, `size` on screen.
+    const span = worldSize(TIER_SIZES[tier]) * (island.quiet ? 0.85 : 1);
+    const size = span * scale;
+    const show = Math.min(zShow, clamp01((size - TOWN_PX[0]) / (TOWN_PX[1] - TOWN_PX[0])));
+    // The town stands at one fixed world point per island; where it fits on the
+    // land is decided in the world too, so it never comes and goes as you zoom.
     const grown = tier >= 1 || members.size >= 8;
-    const at = base && standsOnLand(base.x, base.y, size, members, grown) ? base : null;
+    const home = show > 0 ? townHome(island, members, span, grown) : null;
+    const at = home ? toScreen(home.x, home.y) : null;
     // The island the new post stands on comes up with its ground.
     const fade = stage && members.has(reveal.id) ? stage.land : 1;
     if (!at) {
       // No town: the name and the head count sit on the island's middle.
-      return { island, members, tier, size, seed, x: spot.x, foot: spot.y + 4, fade, town: false };
+      return { island, members, tier, size, span, seed, x: spot.x, foot: spot.y + 4, fade, show: 0, town: false };
     }
-    return { island, members, tier, size, seed, x: at.x, foot: at.y, fade, town: true, home };
+    return { island, members, tier, size, span, seed, x: at.x, foot: at.y, fade, show, town: true, home };
   }).filter(Boolean);
   const towns = places.filter((place) => place.town);
 
@@ -1135,7 +1159,8 @@ function renderMap(time) {
     }
     const calm = Boolean(island.quiet);
     const marked = place.tier >= LANDMARK_MIN_TIER;
-    const markSize = Math.max(36, size * 0.8);
+    const markSpan = Math.max(worldSize(36), place.span * 0.8);
+    const markSize = markSpan * scale;
     // Landmarks stand at fixed world points round the town (townHome); a slot
     // that is not on land is never drawn, at any zoom.
     place.marks = [];
@@ -1148,7 +1173,7 @@ function renderMap(time) {
       });
     }
     const pieces = [...place.marks, { main: true, x, foot }].sort((a, b) => a.foot - b.foot);
-    const alpha = place.fade * townShow;
+    const alpha = place.fade * place.show;
     pieces.forEach((piece) => {
       const box = piece.main
         ? drawSettlement(ctx, place.tier, piece.x, piece.foot, size, { alpha, calm, seed: place.seed })
@@ -1163,10 +1188,7 @@ function renderMap(time) {
   // night colour with the rest of the sea.
   drawFog(ctx, view);
   paintTimeOfDay();
-  if (tod === 'night') {
-    liftLandAtNight(terrain, closeUp, grid, before ? stage.land : 1);
-    paintNightLights(places, townShow, calmOf);
-  }
+  if (tod === 'night') paintNightLights(places, townShow, calmOf);
 
   const claim = makeLabelSpace();
   chromeBoxes().forEach((box) => claim.block(box.x, box.y, box.w, box.h));
@@ -1466,13 +1488,16 @@ function sharpGround(base, posts) {
 const homeCache = new Map();
 
 /** World point of the town's foot, and the world points of its landmark slots.
- * The island's middle if that is land with land all round, else the nearest post
- * with the most land round it. Null if the island has no land to stand on. */
-function townHome(island, members) {
+ * `span` is the town's width in the world, `grown` whether it must be built
+ * somewhere. The island's middle if the town fits there, else the nearest post
+ * where it fits with the most land round it. A grown island that fits nowhere
+ * takes its best land point anyway; any other, with nothing that fits, gets no
+ * town. Null if there is no land to stand on. Everything is in world units, so
+ * the answer does not depend on the zoom. */
+function townHome(island, members, span, grown) {
   const posts = [...members].map((id) => state.postsById.get(id)).filter(Boolean);
-  const fit = state.camera.fit || state.camera.scale;
   const key = islandKey(island);
-  const sig = `${island.cx},${island.cy},${posts.length},${fit.toFixed(3)}`;
+  const sig = `${island.cx},${island.cy},${posts.length},${span.toFixed(2)},${grown ? 1 : 0}`;
   const held = homeCache.get(key);
   if (held && held.sig === sig) return held.home;
   const { biome_order: order, biome_thresholds: thresholds } = config().energy;
@@ -1482,29 +1507,34 @@ function townHome(island, members) {
     posts.forEach((post) => { sum += groundOf(post, x, y); });
     return sum >= sand;
   };
-  // Screen pixels at the zoom where towns appear, as world distance.
-  const unit = 1 / (fit * TOWN_ZOOM[1]);
-  const ring = TIER_SIZES[1] * 0.4 * unit;
+  const ring = worldSize(TIER_SIZES[1]) * 0.4;
   const near = posts.slice()
     .sort((a, b) => Math.hypot(a.x - island.cx, a.y - island.cy) - Math.hypot(b.x - island.cx, b.y - island.cy))
     .slice(0, 40);
-  let best = null;
+  let best = null;      // best point where the town fits
   let bestScore = -1;
+  let spare = null;     // best land point at all, for a grown island
+  let spareScore = -1;
   [{ x: island.cx, y: island.cy }, ...near].some((c) => {
     if (!land(c.x, c.y)) return false;
     let score = 0;
     for (let k = 0; k < 8; k += 1) {
       if (land(c.x + Math.cos(k * Math.PI / 4) * ring, c.y + Math.sin(k * Math.PI / 4) * ring)) score += 1;
     }
-    if (score > bestScore) { best = { x: c.x, y: c.y }; bestScore = score; }
-    return score === 8;
+    if (score > spareScore) { spare = { x: c.x, y: c.y }; spareScore = score; }
+    if (score > bestScore && standsOnLand(c.x, c.y, span, land, grown)) {
+      best = { x: c.x, y: c.y };
+      bestScore = score;
+    }
+    return bestScore === 8;
   });
+  if (!best && grown) best = spare;
   let home = null;
   if (best) {
-    // Landmark offsets are the on-screen ones at the zoom towns appear.
+    // Landmarks stand round the town in town-sized steps.
     const slots = LANDMARK_SPOTS.map(([dx, dy]) => {
-      const x = best.x + dx * TIER_SIZES[2] * unit;
-      const y = best.y + dy * TIER_SIZES[2] * unit;
+      const x = best.x + dx * worldSize(TIER_SIZES[2]);
+      const y = best.y + dy * worldSize(TIER_SIZES[2]);
       return { x, y, land: land(x, y) };
     });
     home = { x: best.x, y: best.y, slots };
@@ -1513,26 +1543,17 @@ function townHome(island, members) {
   return home;
 }
 
-/** Whether a sprite `size` wide with its foot at screen (x, foot) stands on
- * land - sand or higher - of the island made of `members`: both bottom corners,
- * the middle of its foot, both sides half way up and its top (`loose`: the
- * foot and the middle only). The ground is summed the way terrain.js sums it, from these posts' cones. */
-function standsOnLand(x, foot, size, members, loose = false) {
-  const { biome_order: order, biome_thresholds: thresholds } = config().energy;
-  const sand = thresholds[order[1]];
-  const posts = [...members].map((id) => state.postsById.get(id)).filter(Boolean);
-  const land = (sx, sy) => {
-    const at = toWorld(sx, sy);
-    let sum = 0;
-    posts.forEach((post) => { sum += groundOf(post, at.x, at.y); });
-    return sum >= sand;
-  };
-  const half = size * 0.45;
-  const tall = size * 0.85;
-  if (loose) return land(x, foot) && land(x - half, foot) && land(x + half, foot) && land(x, foot - tall * 0.5);
-  return land(x, foot) && land(x - half, foot) && land(x + half, foot)
-    && land(x - half * 0.9, foot - tall * 0.5) && land(x + half * 0.9, foot - tall * 0.5)
-    && land(x, foot - tall);
+/** Whether a town `span` wide with its foot at world (x, y) stands on land -
+ * sand or higher: both bottom corners, the middle of its foot, both sides half
+ * way up and its top (`loose`: the foot, its corners and half way up the
+ * middle). `land` sums the island's own posts' cones, the way terrain.js does. */
+function standsOnLand(x, y, span, land, loose = false) {
+  const half = span * 0.45;
+  const tall = span * 0.85;
+  if (loose) return land(x, y) && land(x - half, y) && land(x + half, y) && land(x, y - tall * 0.5);
+  return land(x, y) && land(x - half, y) && land(x + half, y)
+    && land(x - half * 0.9, y - tall * 0.5) && land(x + half * 0.9, y - tall * 0.5)
+    && land(x, y - tall);
 }
 
 // ?tier=0..4 in the address draws every island as that growth stage - the same
@@ -1596,15 +1617,21 @@ function landAtWorld(list, x, y) {
 /** Trees, bushes and rocks from the terrain's scatter, kept off the
  * settlements and out from under faces, and off the water: a crown reaching over
  * the shore stays home. Zoomed out, every other one. */
+const TREE_MAX = 44;
+
 function drawTrees(trees, places, posts, thin, alpha = 1) {
-  const base = Math.max(9, Math.min(24, state.camera.scale * 11));
+  // Up to 24 px as before; closer than that they keep growing with the map, at
+  // the rate the buildings do, so the two stay in proportion - but only to
+  // TREE_MAX: at full zoom the scatter left one giant pine in the middle of an
+  // island, which read as a mistake, not as a tree.
+  const base = Math.max(9, state.camera.scale * 11);
   // With the coarse layer in play some land is not any post's cone: skip the check.
   const check = !state.saturated && groundList.length > 0;
   trees.forEach((tree) => {
     if (thin && tree.k < 1) return;
     const p = toScreen(tree.x, tree.y);
     if (p.x < -30 || p.x > width + 30 || p.y < -30 || p.y > height + 40) return;
-    const size = base * tree.k * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
+    const size = Math.min(TREE_MAX, base * tree.k) * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
     const foot = p.y + size * 0.35;
     const covered = places.some((place) => Math.abs(p.x - place.x) < place.size * 1.45
       && foot > place.foot - place.size * 1.15 && foot < place.foot + place.size * 0.55);

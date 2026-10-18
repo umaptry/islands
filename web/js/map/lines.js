@@ -8,6 +8,9 @@
 //                  since the map opened grows out from one end.
 //   across water   a sea route: a thin white dashed line, nearly straight, with
 //                  little boats going back and forth (more people, more boats).
+//                  The line starts and ends on land, though: those stretches
+//                  are a quiet road with a car on it, and the boat takes over
+//                  at the beach (land.js says which stretch is which).
 //                  But when the straight line between the two posts would run
 //                  over a third island, a boat cannot go that way: the line is a
 //                  thin white arch instead, and one plane flies back and forth
@@ -28,9 +31,9 @@
 // tab or a dropped frame cannot leave one stranded.
 
 import { REDUCED_MOTION, hashId } from './decor.js';
-import { drawBoat, drawPlane } from './vehicles.js';
-import { config, energyOf, radiusOf } from '../config.js';
-import { groundOf } from './coast.js';
+import { drawBoat, drawCar, drawPlane } from './vehicles.js';
+import { config, energyOf } from '../config.js';
+import { blockedBy, mixAt, runsOf, sampleLand } from './land.js';
 
 const ROUTE = '#ffffff';
 const PATH = '#f1deb3';
@@ -68,16 +71,15 @@ const BOAT_SLOWER = 2;
 const BOAT_CAP = { phone: 8, wide: 18 };
 const BOAT_LENGTH = 17;
 const BOAT_LENGTH_DEEP = 20;
-// Does the straight line between two posts run over land? Sampled every STEP
-// world units (so a thin strip of land is not skipped on a long line), at least
-// MIN_SAMPLES and at most MAX_SAMPLES points; one at or above the beach
-// threshold of the ground is land.
-const STEP = 4;
-const MIN_SAMPLES = 12;
-const MAX_SAMPLES = 260;
-// The coarse layer's cell size (ENERGY_CELL_SIZE, as in terrain.js).
-const CELL_SIZE = 20;
-
+// Cars on the stretches of a sea route that run over land (the road from the
+// town to the beach): a little smaller than a boat. The width of that road, a
+// thin quiet line, and how far (CSS px) along the route a car and a boat cross-
+// fade where it meets the water.
+const CAR_LENGTH = 15;
+const CAR_LENGTH_DEEP = 18;
+const SHORE_ROAD_WIDTHS = [0, 0.9, 1.1, 1.3];
+const SHORE_ROAD_UNDER = 'rgba(74, 52, 38, .32)';
+const HANDOVER_PX = 14;
 // ---------------------------------------------------------------- geometry
 
 /** A quadratic arc from p to q. `seed` picks which side it bows to; `bend` is
@@ -91,6 +93,13 @@ export function arc(p, q, seed, bend = 0.16) {
     c: { x: (p.x + q.x) / 2 - dy * bend * side, y: (p.y + q.y) / 2 + dx * bend * side },
     length: Math.hypot(dx, dy),
   };
+}
+
+/** The control point arc() would use for [x, y] ends, so the ground can be read
+ * along the very curve that is drawn (the map's scale and shift do not change a curve). */
+function bowOf(from, to, seed, bend) {
+  const { c } = arc({ x: from[0], y: from[1] }, { x: to[0], y: to[1] }, seed, bend);
+  return [c.x, c.y];
 }
 
 export function pointOn({ p, c, q }, t) {
@@ -124,6 +133,22 @@ function onScreen({ p, c, q }, width, height, margin = 30) {
   const ys = [p.y, c.y, q.y];
   return Math.max(...xs) > -margin && Math.min(...xs) < width + margin
     && Math.max(...ys) > -margin && Math.min(...ys) < height + margin;
+}
+
+/** The part of an arc from t0 to t1, as an arc of its own. */
+export function slice(shape, t0, t1) {
+  const { p, c, q } = shape;
+  const a = pointOn(shape, t0);
+  const b = pointOn(shape, t1);
+  // The curve's control point beyond t0, then the share of it that is kept.
+  const rest = { x: c.x + (q.x - c.x) * t0, y: c.y + (q.y - c.y) * t0 };
+  const keep = t0 >= 1 ? 0 : (t1 - t0) / (1 - t0);
+  return {
+    p: a,
+    c: { x: a.x + (rest.x - a.x) * keep, y: a.y + (rest.y - a.y) * keep },
+    q: b,
+    length: shape.length * (t1 - t0),
+  };
 }
 
 function stroke(ctx, { p, c, q }, { color, under, width, alpha = 1, dash = null }) {
@@ -208,66 +233,15 @@ export function buildRoutes(rows, islandOf) {
 // ---------------------------------------------------------------- blocked
 
 /** Does the straight line from `from` to `to` (world coordinates) run over land
- * between its two ends? The ground is the one terrain.js draws: every post adds a
- * cone of energy (groundOf, coast wobble included), highest at the post and
- * falling to nothing at its reach, and where the sum reaches the beach threshold
- * there is land. `cells` is the coarse layer a saturated map has instead of
- * posts in the dense parts; its cones are plain circles, as in terrain.js. The
- * stretch still on the first end's land and the stretch already on the last
- * end's land are the line leaving and reaching its own shore, so they do not
- * count; any land between them (another island, or a bay of the ends' own coast)
- * does, and so does a line with no open water on it at all. The line is sampled
- * every few world units, so only a sliver thinner than that can slip through.
- * (Not "leave out the ends' islands": one island is often several pieces of
- * land, and the line between two of them crosses the sea only some of the way.) */
+ * between its two ends? The ground is the one terrain.js draws (land.js, which
+ * also says what "between its ends" leaves out: the line leaving and reaching
+ * its own shore). `cells` is the coarse layer a saturated map has instead of
+ * posts in the dense parts. The line is sampled every few world units, so only a
+ * sliver thinner than that can slip through. (Not "leave out the ends' islands":
+ * one island is often several pieces of land, and the line between two of them
+ * crosses the sea only some of the way.) */
 export function crossesLand(posts, from, to, cells = []) {
-  const beach = config().energy.biome_thresholds.desert;
-  const lo = [Math.min(from[0], to[0]), Math.min(from[1], to[1])];
-  const hi = [Math.max(from[0], to[0]), Math.max(from[1], to[1])];
-  // Only posts whose circle touches the segment's box can matter (the coast only
-  // ever shortens the reach, never past the radius).
-  const near = [];
-  posts.forEach((post) => {
-    const radius = radiusOf(post);
-    if (!(energyOf(post) > 0) || !(radius > 0)) return;
-    if (post.x < lo[0] - radius || post.x > hi[0] + radius
-      || post.y < lo[1] - radius || post.y > hi[1] + radius) return;
-    near.push(post);
-  });
-  const cones = [];
-  if (cells.length) {
-    const { radius_base: base, radius_scale: rate, radius_trim: trim, radius_factor: factor = 1 } = config().energy;
-    cells.forEach((cell) => {
-      const energy = Number(cell.sum_energy) || 0;
-      const radius = (base + energy * rate) * trim * factor;
-      const x = (cell.cell_x + 0.5) * CELL_SIZE;
-      const y = (cell.cell_y + 0.5) * CELL_SIZE;
-      if (!(energy > 0) || !(radius > 0)) return;
-      if (x < lo[0] - radius || x > hi[0] + radius || y < lo[1] - radius || y > hi[1] + radius) return;
-      cones.push([x, y, energy, radius]);
-    });
-  }
-  const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
-  const samples = Math.max(MIN_SAMPLES, Math.min(MAX_SAMPLES, Math.ceil(length / STEP)));
-  const land = [];
-  for (let i = 0; i < samples; i += 1) {
-    const t = (i + 0.5) / samples;
-    const x = from[0] + (to[0] - from[0]) * t;
-    const y = from[1] + (to[1] - from[1]) * t;
-    let sum = 0;
-    for (const post of near) sum += groundOf(post, x, y);
-    for (const [cx, cy, energy, radius] of cones) {
-      const distance = Math.hypot(x - cx, y - cy);
-      if (distance < radius) sum += energy * (1 - distance / radius);
-    }
-    land.push(sum >= beach);
-  }
-  let first = 0;
-  while (first < samples && land[first]) first += 1;
-  if (first === samples) return true;
-  let last = samples - 1;
-  while (land[last]) last -= 1;
-  return land.slice(first, last + 1).some(Boolean);
+  return blockedBy(sampleLand(posts, from, to, cells));
 }
 
 // The answers are kept per line until the ground changes, so no frame computes
@@ -296,7 +270,18 @@ function blockedOf(view, row, print) {
   }
   const key = `${row.a_post}|${row.b_post}|${row.a_at}|${row.b_at}`;
   const { answers } = blockedCache;
-  if (!answers.has(key)) answers.set(key, crossesLand(view.posts, row.a_at, row.b_at, cells));
+  if (!answers.has(key)) {
+    // Blocked or not is asked of the straight line (an arch is judged the same
+    // way). The stretches - a sea route's two ends (its own shores) are roads for
+    // cars, the water between is for boats - are found along the bowed curve the
+    // route is drawn on, in the drawn direction (the end with the smaller id first).
+    const blocked = blockedBy(sampleLand(view.posts, row.a_at, row.b_at, cells));
+    const flip = String(row.a) > String(row.b);
+    const from = flip ? row.b_at : row.a_at;
+    const to = flip ? row.a_at : row.b_at;
+    const bow = bowOf(from, to, hashId(`${row.a}|${row.b}`), SEA_BEND);
+    answers.set(key, { blocked, runs: runsOf(sampleLand(view.posts, from, to, cells, bow)) });
+  }
   return answers.get(key);
 }
 
@@ -395,9 +380,12 @@ function layout(view) {
     let group = route ? route.key : linkKey(row);
     if (!route && !sameIsland && landA && landB) group = [landKey(landA), landKey(landB)].sort().join('|');
     // Over water with posts to check: a sea route unless land is in the way.
-    const sea = !sameIsland && Boolean(route) && Boolean(view.posts) && !blockedOf(view, row, print);
+    const ground = !sameIsland && Boolean(route) && Boolean(view.posts) ? blockedOf(view, row, print) : null;
+    const sea = Boolean(ground) && !ground.blocked;
     lines.push({
       row, sameIsland, route, group,
+      // The stretches of a sea route, along the way it is drawn (from -> to).
+      runs: sea ? ground.runs : null,
       kind: sameIsland ? 'road' : sea ? 'sea' : 'arch',
       world: Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]),
       arc: sameIsland
@@ -417,10 +405,28 @@ export function drawLinks(ctx, view) {
   const now = Date.now();
   const tick = performance.now();
   const grow = level === 'deep' ? 1.3 : 1;
-  plan.lines.forEach(({ row, sameIsland, kind, arc: shape }) => {
+  plan.lines.forEach(({ row, sameIsland, kind, arc: shape, runs }) => {
     if (!onScreen(shape, width, height)) return;
     const share = growthOf(linkKey(row), tick);
     const tier = row.tier || 1;
+    if (kind === 'sea' && runs) {
+      // Over the water the white dashes; over the land at its two ends a quiet
+      // road (a car drives it, drawPlanes), so no boat is drawn on land.
+      const alpha = freshness(row, now);
+      runs.forEach(({ from, to, land }) => {
+        const end = Math.min(to, share);
+        if (end - from < 1e-4) return;
+        const part = from === 0 && end === 1 ? shape : slice(shape, from, end);
+        stroke(ctx, part, land ? {
+          color: PATH, under: SHORE_ROAD_UNDER, alpha,
+          width: row.faint ? FAINT_WIDTH.road * 0.8 : SHORE_ROAD_WIDTHS[tier] * grow,
+        } : {
+          color: ROUTE, dash: SEA_DASH, alpha,
+          width: row.faint ? FAINT_WIDTH.sea : SEA_WIDTHS[tier] * grow,
+        });
+      });
+      return;
+    }
     stroke(ctx, share < 1 ? partOf(shape, share) : shape, kind === 'sea' ? {
       color: ROUTE, dash: SEA_DASH,
       width: row.faint ? FAINT_WIDTH.sea : SEA_WIDTHS[tier] * grow,
@@ -470,27 +476,28 @@ export function boatAt(time, { duration, offset = 0, index = 0, count = 1 }) {
   return planeAt(time, { duration: slow, offset: offset + index * (slow * 2 / count) });
 }
 
-/** Boats on the sea routes: one to three per route by its tier, the strongest
+/** Cars and boats on the sea routes: one to three per route by its tier, the strongest
  * routes first until the screen's cap is used up. `time` null: standing still. */
 function drawBoats(ctx, view, plan, time) {
   const { width, height, span, phone, level } = view;
   const boatLength = level === 'deep' ? BOAT_LENGTH_DEEP : BOAT_LENGTH;
+  const carLength = level === 'deep' ? CAR_LENGTH_DEEP : CAR_LENGTH;
   const still = REDUCED_MOTION || time === null || time === undefined;
   let room = phone ? BOAT_CAP.phone : BOAT_CAP.wide;
   const routes = new Map();
-  plan.lines.forEach(({ row, kind, group: key, arc: shape, world }) => {
+  plan.lines.forEach(({ row, kind, group: key, arc: shape, world, runs }) => {
     if (kind !== 'sea' || row.faint || !onScreen(shape, width, height)) return;
     if (growthOf(linkKey(row)) < 1) return;
     const strength = Number(row.strength) || 0;
     const held = routes.get(key);
     if (!held) {
-      routes.set(key, { key, shape, world, strength, tier: row.tier || 1 });
+      routes.set(key, { key, shape, world, strength, runs, tier: row.tier || 1 });
       return;
     }
     held.tier = Math.max(held.tier, row.tier || 1);
-    if (strength > held.strength) Object.assign(held, { shape, world, strength });
+    if (strength > held.strength) Object.assign(held, { shape, world, strength, runs });
   });
-  [...routes.values()].sort((a, b) => b.strength - a.strength).forEach(({ shape, key, world, tier }) => {
+  [...routes.values()].sort((a, b) => b.strength - a.strength).forEach(({ shape, key, world, tier, runs }) => {
     const count = Math.min(boatCount(tier), room);
     room -= count;
     const seed = hashId(key);
@@ -503,12 +510,16 @@ function drawBoats(ctx, view, plan, time) {
       if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
       const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
       const alpha = still ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
-      drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha });
+      // A car on the land stretches, a boat on the water: from the clock and the
+      // ground alone, handing over across a short stretch at the beach.
+      const [car, boat] = runs ? mixAt(runs, t, HANDOVER_PX / Math.max(1, shape.length)) : [0, 1];
+      if (car > 0.01) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
+      if (boat > 0.01) drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha: alpha * boat });
     }
   });
 }
 
-/** Boats on the sea routes, planes on the arches that are alive now (over the towns). */
+/** Cars and boats on the sea routes, planes on the arches that are alive now (over the towns). */
 export function drawPlanes(ctx, view, plan, time) {
   const { width, height, far, level, span, phone } = view;
   if (far || !plan) return;

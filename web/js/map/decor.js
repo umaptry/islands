@@ -13,6 +13,7 @@
 
 import { drawSpriteTurned, fogImage } from './sprites.js';
 import { drawBoat } from './vehicles.js';
+import { beachThreshold, conesNear, conesOf, groundSum, postsNear } from './land.js';
 
 export const SYSTEM_REDUCED_MOTION = Boolean(
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -143,6 +144,30 @@ export function drawSeaMarks(ctx, view, time) {
   ctx.restore();
 }
 
+// An ornamental boat wanders over the whole sea and so would cross islands: it
+// is left out while it is over land, fading over this many screen px at the shore
+// (the ground is asked at five spots round the boat, so one is a handful of
+// cheap checks a frame).
+const SHORE_FADE = 6;
+
+/** How much of a boat at world (x, y) shows: 1 on the water, 0 on land. */
+function seaShare(view, x, y) {
+  const { posts, cells, scale } = view;
+  if (!posts) return 1;
+  const reach = SHORE_FADE / Math.max(scale || 1, 1e-6);
+  // Only the posts near the boat count: look them up once for the five spots.
+  const lo = [x - reach, y - reach];
+  const hi = [x + reach, y + reach];
+  const near = postsNear(posts, lo, hi);
+  const cones = conesNear(conesOf(cells), lo, hi);
+  const beach = beachThreshold();
+  let wet = 0;
+  [[0, 0], [reach, 0], [-reach, 0], [0, reach], [0, -reach]].forEach(([dx, dy]) => {
+    if (groundSum(near, cones, x + dx, y + dy) < beach) wet += 1;
+  });
+  return wet / 5;
+}
+
 export function drawBoats(ctx, view, time) {
   if (REDUCED_MOTION) return;
   const { sea, toScreen, width, height } = view;
@@ -151,7 +176,8 @@ export function drawBoats(ctx, view, time) {
     const spot = drift(sea, seed, time + noise(seed, 5) * 2000, BOAT_DRIFT);
     const point = toScreen(spot.x, spot.y);
     if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
-    drawBoat(ctx, point.x, point.y, BOAT_LENGTH, spot.angle, { alpha: 0.9 });
+    const share = seaShare(view, spot.x, spot.y);
+    if (share > 0) drawBoat(ctx, point.x, point.y, BOAT_LENGTH, spot.angle, { alpha: 0.9 * share });
   }
 }
 
