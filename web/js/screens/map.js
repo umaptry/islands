@@ -18,6 +18,7 @@ import {
 import { postCard } from '../components/postcard.js';
 import { chatInput, postChat } from '../components/chat.js';
 import { loadDigest, paintMarks, setupMeet } from './meet.js';
+import { refreshExtras, setupMapExtras } from './map-extras.js';
 import {
   abortReveal, fitCamera, focusOn, initMap, landmassOf, onCameraSettled, participantView, playReveal,
   resize, ripple, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
@@ -53,7 +54,7 @@ function paintMapStatus() {
     : filtering ? `${state.posts.filter(matchesFilters).length}件が該当・検索対象は読み込み済みの範囲です${terrainNote}`
     : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
     : worldCount === 0 && !state.myPosts.length ? 'まだ投稿がありません。最初の投稿で島をつくりましょう。'
-    : 'この範囲には投稿がありません。🌐で全体を見られます';
+    : 'この範囲には投稿がありません。右下の全体表示ボタンで全体を見られます';
 }
 
 // The map is redrawn every frame from state.filters: posts that do not match
@@ -233,9 +234,11 @@ export async function refreshConnections({ fresh = false } = {}) {
     // A road that was not there a moment ago grows, and says so.
     // A sound only for a road that is mine; other people's roads grow silently.
     const meId = state.account ? state.account.id : null;
-    const fresh = noteLinks(state.connections);
+    // Not `fresh`: that name is the parameter above, and a const of the same
+    // name in this block shadowed it, so reading it threw and no line was drawn.
+    const grown = noteLinks(state.connections);
     const mineNow = meId ? state.connections.filter((row) => row.a === meId || row.b === meId).length : 0;
-    if (fresh > 0 && myLinks.owner === meId && mineNow > myLinks.count) playSe('success');
+    if (grown > 0 && myLinks.owner === meId && mineNow > myLinks.count) playSe('success');
     myLinks = { owner: meId, count: mineNow };
   } catch {
     /* keep the lines already drawn */
@@ -294,6 +297,7 @@ export async function refreshMyPosts() {
 
 function paintBadge() {
   paintMarks();
+  if (booted) refreshExtras();
   const badge = $('islandBadge');
   const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
   if (!mine) {
@@ -792,6 +796,7 @@ export function setupMapScreen() {
         // A pan that ends somewhere new should pull in what is there. Debounced
         // inside the map module, so a long drag is one request and not fifty.
         onCameraSettled(() => refreshMap());
+        setupMapExtras({ openPost });
         const ok = await refreshMap({ fitFirst: true });
         if (!ok) toast('地図を読み込めませんでした。再試行しています…');
         await Promise.all([

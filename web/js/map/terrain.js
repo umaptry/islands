@@ -67,6 +67,11 @@ function bandOf(energy) {
   return steps.length - 1;
 }
 
+const smooth01 = (a, b, x) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
 const mix = (a, b, t) => [
   Math.round(a[0] + (b[0] - a[0]) * t),
   Math.round(a[1] + (b[1] - a[1]) * t),
@@ -141,6 +146,17 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
   const foam = Math.max(1.5, 2.6 * k);
   const ringFrom = foam + 2.2 * k;
   const ringTo = ringFrom + 1.4 * k;
+  // Design 05: light from the top-left, so land throws a soft shadow to the
+  // bottom-right onto the water (its mask read from up-left), and a higher band
+  // throws a small one onto the lower band beside it (the "lift").
+  // Not while the texture is stretched (perScreen < 0.3): a 2 px floor would be
+  // a 15 px shadow on screen, and it would jump when the sharp texture arrives.
+  const lit = perScreen >= 0.3;
+  const dropX = lit ? Math.max(1, Math.round(5 * perScreen)) : 0;
+  const dropY = lit ? Math.max(1, Math.round(6.5 * perScreen)) : 0;
+  const rim = 14 * k;   // texture px over which a slope's light and shade fade out from the band edge
+  const liftX = Math.max(1, Math.round(1.2 * k));
+  const liftY = Math.max(1, Math.round(1.8 * k));
 
   const n = width * height;
   const band = new Int8Array(n);
@@ -164,24 +180,36 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
         rgb = steps[own].rgb;
         if (own >= 2 && x > 0 && y > 0 && x < width - 1 && y < height - 1) {
           // Slope towards the bottom-right, per world unit. Ground rising away
-          // from the light faces it.
-          const slope = ((field[i + 1] - field[i - 1]) + (field[i + width] - field[i - width]))
-            * 0.3536 * perWorld;
-          if (slope > 0.35) rgb = mix(rgb, WHITE, 0.14);
-          else if (slope < -0.35) rgb = mix(rgb, SHADE, 0.17);
-          // A thin contour where the ground changes band.
-          const right = band[i + 1];
-          const below = band[i + width];
-          if ((right >= 1 && right < own) || (below >= 1 && below < own)) rgb = mix(rgb, SHADE, 0.22);
+          // from the light faces it. It shows only close to the band's lower edge
+          // (a rim of a few px), and fades in smoothly: a hard threshold made a
+          // sharp diagonal split of every wide slope when zoomed right in.
+          const gx = (field[i + 1] - field[i - 1]) * 0.5;
+          const gy = (field[i + width] - field[i - width]) * 0.5;
+          const slope = (gx + gy) * 0.7072 * perWorld;
+          const t = smooth01(0.15, 1.2, Math.abs(slope));
+          if (t > 0) {
+            const edge = (field[i] - steps[own - 1].limit) / Math.max(1e-4, Math.hypot(gx, gy));
+            const w = t * (1 - smooth01(0, rim, edge));
+            if (w > 0) rgb = slope > 0 ? mix(rgb, WHITE, 0.14 * w) : mix(rgb, [rgb[0] * 0.82, rgb[1] * 0.84, rgb[2] * 0.84], w);
+          }
+        }
+        // No contour line: a higher band up-left of this pixel shades it softly.
+        if (own >= 1 && x >= liftX && y >= liftY && band[i - liftY * width - liftX] > own) {
+          rgb = mix(rgb, SHADE, 0.14);
         }
       } else if (toLand[i] <= foam) {
         rgb = FOAM;
       } else if (band[i] === 0) {
         rgb = field[i] < shelfLimit ? shelf : shallow;
         if (toLand[i] >= ringFrom && toLand[i] <= ringTo && field[i] >= shelfLimit) rgb = ring;
+        if (lit && x >= dropX && y >= dropY && land[i - dropY * width - dropX]) rgb = mix(rgb, SHADE, 0.18);
         // Fade the outer edge of the shelf in over the first half-unit, or the
         // edge of the water is a staircase.
         alpha = Math.min(255, Math.round(((field[i] - floor) / 0.5) * 255));
+      } else if (lit && x >= dropX && y >= dropY && land[i - dropY * width - dropX]) {
+        // Open sea is transparent; only the shadow is painted on it.
+        rgb = SHADE;
+        alpha = 46;
       } else {
         pixels[at + 3] = 0;   // open sea: the canvas below shows through
         continue;
@@ -231,8 +259,8 @@ function smoothEdges(pixels, width, height) {
 }
 
 /** A stable key for "would this produce the same texture". */
-function signature(posts, cells, region, unit) {
-  return JSON.stringify([posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2),
+function signature(posts, cells, region, unit, scale) {
+  return JSON.stringify([posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2), isLit(unit, scale),
     config().energy.radius_factor ?? 1]);
 }
 
@@ -264,16 +292,17 @@ export function gridTerrain(grid) {
 export function buildTerrain({ posts, cells = [], region, scale, revision = null, elsewhere = null }) {
   const unit = groundUnit(scale);
   const factor = config().energy.radius_factor ?? 1;
+  const lit = isLit(unit, scale);
   const same = (entry) => Boolean(entry) && entry.revision === revision && entry.unit === unit
-    && entry.factor === factor && entry.cells === cells && sameRegion(entry.region, region);
+    && entry.factor === factor && entry.lit === lit && entry.cells === cells && sameRegion(entry.region, region);
   // Asked every frame: when the caller's revision says nothing changed, skip
   // serialising every post into the key (most of a millisecond on a phone).
   if (revision !== null && cache && (same(cache) || same(pending))) return cache;
-  const key = signature(posts, cells, region, unit);
+  const key = signature(posts, cells, region, unit, scale);
   if (cache && cache.key === key) {
     pending = null;
     // In place: the map keeps its sharp close-up while the ground is this one.
-    Object.assign(cache, { revision, unit, factor, cells, region });
+    Object.assign(cache, { revision, unit, factor, cells, region, lit });
     return cache;
   }
   // With a ground already on screen and somewhere else to build (index.js hands
@@ -281,7 +310,7 @@ export function buildTerrain({ posts, cells = [], region, scale, revision = null
   // stretched, until it arrives: the stop after a pinch, or a poll bringing new
   // posts, no longer stalls the map for 0.2 s (2026-10-16).
   if (elsewhere && cache && revision !== null) {
-    const wanted = { revision, unit, factor, cells, region };
+    const wanted = { revision, unit, factor, cells, region, lit };
     const sent = elsewhere({ posts, cells, region, scale }, (built, ok) => {
       if (pending !== wanted) return;   // a newer ground was asked for meanwhile
       pending = null;
@@ -294,7 +323,7 @@ export function buildTerrain({ posts, cells = [], region, scale, revision = null
   }
   pending = null;
   const built = render({ posts, cells, region, scale, unit, padding: PADDING, limit: MAX_TEXTURE, trees: true });
-  if (built) cache = { ...built, key, revision, unit, factor, cells, region };
+  if (built) cache = { ...built, key, revision, unit, factor, cells, region, lit };
   return built ? cache : null;
 }
 
@@ -308,6 +337,11 @@ export function groundPixels({ posts, cells = [], region, scale }) {
 
 // Quarter-octave steps: a pinch crosses a step every ~19% of zoom instead of
 // rebuilding the field on every frame of the gesture.
+/** Whether a texture built at this zoom is sharp enough for the soft shadow (see paint). */
+function isLit(unit, scale) {
+  return unit / (scale || 1) >= 0.3;
+}
+
 function groundUnit(scale) {
   const stepped = 2 ** (Math.round(Math.log2(scale || 1) * 4) / 4);
   return Math.max(MIN_UNIT, Math.min(MAX_UNIT, stepped));

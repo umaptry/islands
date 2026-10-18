@@ -214,13 +214,13 @@ BIOME_THRESHOLDS = {
 
 # Drawn on the client; defined here so the server and the browser cannot drift.
 BIOME_COLORS = {
-    "sea": "#1F8FE8",
-    "shallow": "#63CDF9",
-    "desert": "#E6CF9B",
-    "savanna": "#C8B676",
-    "plains": "#81C784",
-    "forest": "#41A873",
-    "mountain": "#34806C",
+    "sea": "#46AEE6",
+    "shallow": "#9DD9F5",
+    "desert": "#FFF6E3",
+    "savanna": "#E4F1C9",
+    "plains": "#C5E6AB",
+    "forest": "#8CCC92",
+    "mountain": "#72B986",
 }
 
 # Settlement glyph by interaction count. islands' table, unchanged.

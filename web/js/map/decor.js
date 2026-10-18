@@ -26,12 +26,13 @@ export function setReducedMotion(on) {
 }
 
 export const INK = {
-  seaMark: 'rgba(255, 255, 255, .17)',
-  surf: 'rgba(255, 255, 255, .58)',
+  seaMark: 'rgba(255, 255, 255, .30)',
+  surf: 'rgba(255, 255, 255, .7)',
   bird: 'rgba(255, 255, 255, .62)',
   boat: 'rgba(255, 255, 255, .92)',
   wake: 'rgba(255, 255, 255, .3)',
-  halo: 'rgba(23, 46, 74, .55)',
+  halo: 'rgba(29, 95, 144, .6)',   // palette.js halo
+  glint: 'rgba(255, 255, 255, .85)',
   label: '#ffffff',
 };
 
@@ -69,6 +70,22 @@ const BIRD_SIZE = 2.5;   // halved 2026-10-13, with the flock's spacing and line
 const BOAT_DRIFT = { period: 900, reach: 0.4 };
 const BIRD_DRIFT = { period: 370, reach: 0.4 };
 
+const GLINT_CELL = 300;   // screen px: about one sparkle candidate per cell of this size
+const GLINT_CHANCE = 0.75;
+const GLINT_SIZE = 3;   // screen px, half the star's width
+
+/** A four-pointed star that swells and fades once per period, never at rest. */
+function drawGlint(ctx, x, y, size) {
+  const pinch = size * 0.18;
+  ctx.beginPath();
+  ctx.moveTo(x, y - size);
+  ctx.quadraticCurveTo(x + pinch, y - pinch, x + size, y);
+  ctx.quadraticCurveTo(x + pinch, y + pinch, x, y + size);
+  ctx.quadraticCurveTo(x - pinch, y + pinch, x - size, y);
+  ctx.quadraticCurveTo(x - pinch, y - pinch, x, y - size);
+  ctx.fill();
+}
+
 export function drawSeaMarks(ctx, view, time) {
   const { sea, toScreen, width, height } = view;
   ctx.save();
@@ -90,6 +107,37 @@ export function drawSeaMarks(ctx, view, time) {
       ctx.quadraticCurveTo(x + unit * 0.5, y + 1.5, x + unit, y);
     }
     ctx.stroke();
+  }
+  if (!REDUCED_MOTION) {
+    // Sparkles on the water, each lit for the first third of its own 3.2 s cycle.
+    // One candidate per cell of a grid in WORLD units, hashed from the cell index,
+    // so a sparkle stays put while you pan; the cell size follows the zoom (in
+    // octave steps) so there are always a handful on screen, however far in.
+    // (The ground is drawn over them, so none shows on land.)
+    ctx.fillStyle = INK.glint;
+    const first = toScreen(0, 0);
+    const pixel = toScreen(1, 0).x - first.x;   // screen px per world unit
+    if (pixel > 0) {
+      const cell = 2 ** Math.round(Math.log2(GLINT_CELL / pixel));
+      const fromX = Math.floor((-first.x / pixel) / cell);
+      const toX = Math.ceil(((width - first.x) / pixel) / cell);
+      const fromY = Math.floor((-first.y / pixel) / cell);
+      const toY = Math.ceil(((height - first.y) / pixel) / cell);
+      for (let gy = fromY; gy <= toY; gy += 1) {
+        for (let gx = fromX; gx <= toX; gx += 1) {
+          const seed = 611953 * (((gx * 73856093) ^ (gy * 19349663)) >>> 0 || 1);
+          if (noise(seed, 6) > GLINT_CHANCE) continue;
+          const wx = (gx + noise(seed, 1)) * cell;
+          const wy = (gy + noise(seed, 2)) * cell;
+          if (wx < sea.x || wx > sea.x + sea.w || wy < sea.y || wy > sea.y + sea.h) continue;
+          const phase = ((time + noise(seed, 4) * 3.2) % 3.2) / 3.2;
+          if (phase > 0.3) continue;
+          const spot = toScreen(wx, wy);
+          if (spot.x < -10 || spot.x > width + 10 || spot.y < -10 || spot.y > height + 10) continue;
+          drawGlint(ctx, spot.x, spot.y, GLINT_SIZE * Math.sin((phase / 0.3) * Math.PI));
+        }
+      }
+    }
   }
   ctx.restore();
 }

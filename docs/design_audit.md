@@ -38,7 +38,7 @@ PNG、同梱デザイン画像、以前の production build を比較基準に�
 | モバイルパネル | 同上 | 50/90dvh、入力を下端に配置、Escapeとフォーカス管理 | visualViewport対応を追加。2026-10-16 から非モーダル（背後の地図を触れる・半分の高さでは中身をスクロールしない）。実機キーボード、横画面、safe areaは未検証 |
 | 投稿 | `src/app/post/page.tsx` | 本文→文字数→スライダー→画像→タグ。リングを隠し1～60字を簡潔に案内 | `screens/compose.js`。画面往復の下書き、送信再試行キーを保持 |
 | 投稿カード | `src/components/domain/PostCard.tsx` | 著者→タグ→本文→熱量→実画像→反応。casual/hardcore維持 | `components/postcard.js`。類似度は後段の開閉式補足、画像全体へのリンク |
-| 地図 | `src/components/domain/MapApp.tsx` | 単色バイオームと拠点表示。顔・船・鳥などの地図装飾を抑制 | `map/index.js`, `map/terrain.js`。意味座標はサーバー由来のまま |
+| 地図 | `src/components/domain/MapApp.tsx` | 単色バイオームと拠点表示。顔・船・鳥などの地図装飾を抑制 | `map/index.js`, `map/terrain.js`。意味座標はサーバー由来のまま。（2026-10-18 に見た目を「05 リアル・レリーフ」＋「03 クリア・スカイ」へ作り直し、ピン・建物・航路・島カードなどを追加した。現在の仕様は REQUIREMENTS.md 4.3・4.4・4.7） |
 | プロフィール | `src/app/profile/page.tsx`, `[userId]/page.tsx`, `edit/page.tsx` | 3タブ、実件数、共通リアクション、本人メール読み取り表示 | `screens/profile.js`。協働は反応の集計と説明。プロフィール編集の下書き保持は未実装 |
 | 入口・認証 | `src/app/page.tsx`, `register/page.tsx`, `login/page.tsx` | islands入口、登録/ログインへの入口を分離、設定済OAuthのみ | `index.html`, `screens/auth.js`。OTP処理は既存共通フローを維持。参照の登録案内の完全移植は未完了 |
 | 通知 | `src/app/notifications/page.tsx` | 線画と反応別の色、未読の左罫線 | `screens/notifications.js`, CSS。既読・投稿遷移は実データ |

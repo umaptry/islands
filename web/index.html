@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light">
-<meta name="theme-color" content="#2FA6FF">
+<meta name="theme-color" content="#46AEE6">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/img/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +14,7 @@
 <title>islands — 好きが集う、新たな世界がここに。</title>
 <meta name="description" content="書いた一言だけで地図の上に島ができる。近くにいる人ほど、似た話をしている。">
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232FA6FF'/><ellipse cx='12' cy='20' rx='8' ry='5' fill='%2341A873'/><ellipse cx='22' cy='12' rx='6' ry='4' fill='%2381C784'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2346AEE6'/><ellipse cx='12' cy='20' rx='8' ry='5' fill='%238CCC92'/><ellipse cx='22' cy='12' rx='6' ry='4' fill='%23C5E6AB'/></svg>">
 </head>
 <body>
 
@@ -299,17 +299,18 @@
   <div class="map-top">
     <div class="search-row">
       <div class="search">
-        <span class="search-icon" aria-hidden="true">🔍</span>
+        <span class="search-icon" aria-hidden="true"></span>
         <input class="search-input" id="mapSearch" type="search" placeholder="検索..." autocomplete="off">
         <button class="search-clear" id="mapSearchClear" aria-label="検索を消す" hidden>✕</button>
       </div>
       <div class="filter" id="mapFilter">
         <button class="filter-button" id="mapFilterBtn" aria-label="タグで絞り込む">
-          <span aria-hidden="true">⇅</span><span class="filter-count num" id="mapFilterCount" hidden>0</span>
+          <span aria-hidden="true"></span><span class="filter-count num" id="mapFilterCount" hidden>0</span>
         </button>
         <div class="filter-panel" id="mapFilterPanel" hidden></div>
       </div>
     </div>
+    <div class="near-islands" id="nearIslands" aria-label="近くの島" hidden></div>
     <button class="digest-pill" id="mapDigest" type="button" hidden></button>
     <button class="participant-stop" id="participantStop" type="button" hidden>
       <span>参加者表示を中止</span><span aria-hidden="true">✕</span>
@@ -321,12 +322,21 @@
     </div>
   </div>
 
+  <div class="mini-map" id="miniMap" aria-hidden="true" hidden><canvas id="miniMapCanvas"></canvas></div>
+  <div class="map-compass" id="mapCompass" aria-hidden="true"></div>
+  <div class="island-card" id="islandCard" role="dialog" aria-label="島の紹介" hidden></div>
+
   <div class="island-badge" id="islandBadge" hidden>
     <i class="island-swatch" id="islandSwatch"></i><span id="islandText"></span>
   </div>
 
   <div class="map-controls">
-    <button class="round-button" id="mapOverview" type="button" aria-label="地図全体を見る">🌐</button>
+    <button class="busy-toggle" id="busyToggle" type="button" role="switch" aria-checked="false" hidden>
+      <i class="busy-switch" aria-hidden="true"></i><span class="busy-text" id="busyText">今週の動き</span>
+    </button>
+    <button class="round-button" id="mapOverview" type="button" aria-label="地図全体を見る">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.9 5.6 3.9 9S14.600 18.400 12 21c-2.600-2.600-3.900-5.600-3.900-9S9.400 5.600 12 3Z"/></svg>
+    </button>
   </div>
   <div class="map-status" id="mapStatus" role="status" hidden>
     <span id="mapStatusText"></span>

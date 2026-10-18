@@ -6,7 +6,11 @@
 //
 //   same island    a road, drawn straight between the two. A road that is new
 //                  since the map opened grows out from one end.
-//   across water   a thin white arch, no outline. One plane flies back and forth
+//   across water   a sea route: a thin white dashed line, nearly straight, with
+//                  little boats going back and forth (more people, more boats).
+//                  But when the straight line between the two posts would run
+//                  over a third island, a boat cannot go that way: the line is a
+//                  thin white arch instead, and one plane flies back and forth
 //                  per route (the pair of islands), however many arches run
 //                  between them.
 //
@@ -25,6 +29,8 @@
 
 import { REDUCED_MOTION, hashId } from './decor.js';
 import { drawSpriteTurned } from './sprites.js';
+import { config, energyOf, radiusOf } from '../config.js';
+import { groundOf } from './coast.js';
 
 const ROUTE = '#ffffff';
 const PATH = '#f1deb3';
@@ -35,7 +41,12 @@ const PATH_UNDER = 'rgba(74, 52, 38, .5)';
 // (2026-10-13), the weakest kept just visible.
 const ROAD_WIDTHS = [0, 1.6, 2.6, 3.8];
 const ROUTE_WIDTHS = [0, 0.7, 0.85, 1.05];
-const FAINT_WIDTH = { road: 1, route: 0.6 };
+const FAINT_WIDTH = { road: 1, route: 0.6, sea: 0.8 };
+// A dashed sea route needs a little more than the arch's hairline to read.
+const SEA_WIDTHS = [0, 1, 1.15, 1.3];
+const SEA_DASH = [5, 5];
+// The sea route bows a little, as a share of its length (the arch's is 0.3).
+const SEA_BEND = 0.04;
 const FAINT_ALPHA = 0.26;
 const FRESH_DAYS = 30;
 
@@ -50,6 +61,23 @@ const PLANE_CAP = { phone: 12, wide: 24 };
 // or slower than two minutes. In world units, so a crossing does not speed up as
 // you zoom. (A fifth of the first speed: quicker read as traffic, not as a map.)
 const CROSSING = { span: 300, min: 45, max: 120 };
+// Boats: this many times slower than a plane over the same distance, one per tier
+// of the route (1 to 3), at most this many on the screen, drawn this long in CSS
+// px whatever the zoom (the hull below is 16 long).
+const BOAT_SLOWER = 2;
+const BOAT_CAP = { phone: 8, wide: 18 };
+const BOAT_LENGTH = 17;
+const BOAT_LENGTH_DEEP = 20;
+const HULL_LENGTH = 16;
+// Does the straight line between two posts run over land? Sampled every STEP
+// world units (so a thin strip of land is not skipped on a long line), at least
+// MIN_SAMPLES and at most MAX_SAMPLES points; one at or above the beach
+// threshold of the ground is land.
+const STEP = 4;
+const MIN_SAMPLES = 12;
+const MAX_SAMPLES = 260;
+// The coarse layer's cell size (ENERGY_CELL_SIZE, as in terrain.js).
+const CELL_SIZE = 20;
 
 // ---------------------------------------------------------------- geometry
 
@@ -178,6 +206,101 @@ export function buildRoutes(rows, islandOf) {
   return [...routes.values()];
 }
 
+// ---------------------------------------------------------------- blocked
+
+/** Does the straight line from `from` to `to` (world coordinates) run over land
+ * between its two ends? The ground is the one terrain.js draws: every post adds a
+ * cone of energy (groundOf, coast wobble included), highest at the post and
+ * falling to nothing at its reach, and where the sum reaches the beach threshold
+ * there is land. `cells` is the coarse layer a saturated map has instead of
+ * posts in the dense parts; its cones are plain circles, as in terrain.js. The
+ * stretch still on the first end's land and the stretch already on the last
+ * end's land are the line leaving and reaching its own shore, so they do not
+ * count; any land between them (another island, or a bay of the ends' own coast)
+ * does, and so does a line with no open water on it at all. The line is sampled
+ * every few world units, so only a sliver thinner than that can slip through.
+ * (Not "leave out the ends' islands": one island is often several pieces of
+ * land, and the line between two of them crosses the sea only some of the way.) */
+export function crossesLand(posts, from, to, cells = []) {
+  const beach = config().energy.biome_thresholds.desert;
+  const lo = [Math.min(from[0], to[0]), Math.min(from[1], to[1])];
+  const hi = [Math.max(from[0], to[0]), Math.max(from[1], to[1])];
+  // Only posts whose circle touches the segment's box can matter (the coast only
+  // ever shortens the reach, never past the radius).
+  const near = [];
+  posts.forEach((post) => {
+    const radius = radiusOf(post);
+    if (!(energyOf(post) > 0) || !(radius > 0)) return;
+    if (post.x < lo[0] - radius || post.x > hi[0] + radius
+      || post.y < lo[1] - radius || post.y > hi[1] + radius) return;
+    near.push(post);
+  });
+  const cones = [];
+  if (cells.length) {
+    const { radius_base: base, radius_scale: rate, radius_trim: trim, radius_factor: factor = 1 } = config().energy;
+    cells.forEach((cell) => {
+      const energy = Number(cell.sum_energy) || 0;
+      const radius = (base + energy * rate) * trim * factor;
+      const x = (cell.cell_x + 0.5) * CELL_SIZE;
+      const y = (cell.cell_y + 0.5) * CELL_SIZE;
+      if (!(energy > 0) || !(radius > 0)) return;
+      if (x < lo[0] - radius || x > hi[0] + radius || y < lo[1] - radius || y > hi[1] + radius) return;
+      cones.push([x, y, energy, radius]);
+    });
+  }
+  const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+  const samples = Math.max(MIN_SAMPLES, Math.min(MAX_SAMPLES, Math.ceil(length / STEP)));
+  const land = [];
+  for (let i = 0; i < samples; i += 1) {
+    const t = (i + 0.5) / samples;
+    const x = from[0] + (to[0] - from[0]) * t;
+    const y = from[1] + (to[1] - from[1]) * t;
+    let sum = 0;
+    for (const post of near) sum += groundOf(post, x, y);
+    for (const [cx, cy, energy, radius] of cones) {
+      const distance = Math.hypot(x - cx, y - cy);
+      if (distance < radius) sum += energy * (1 - distance / radius);
+    }
+    land.push(sum >= beach);
+  }
+  let first = 0;
+  while (first < samples && land[first]) first += 1;
+  if (first === samples) return true;
+  let last = samples - 1;
+  while (land[last]) last -= 1;
+  return land.slice(first, last + 1).some(Boolean);
+}
+
+// The answers are kept per line until the ground changes, so no frame computes
+// them. The ground is the list of posts (a new array when the map fetches or the
+// ground is rebuilt), the coarse cells, the islands and the reach factor; a post
+// whose energy changed in place (a like) shows in the fingerprint, which is one
+// cheap pass over the posts. The line's key holds both ends and where they
+// stand: a moved post is a new question.
+let blockedCache = { posts: null, cells: null, islands: null, factor: null, print: null, answers: new Map() };
+
+
+function fingerprint(posts) {
+  let sum = 0;
+  posts.forEach((post) => { sum += (energyOf(post) || 0) + post.x * 0.001 + post.y * 0.0001; });
+  return `${posts.length}|${sum.toFixed(4)}`;
+}
+
+const NO_CELLS = [];
+
+function blockedOf(view, row, print) {
+  const factor = config().energy.radius_factor ?? 1;
+  const cells = view.cells || NO_CELLS;
+  if (blockedCache.posts !== view.posts || blockedCache.cells !== cells || blockedCache.islands !== view.islands
+    || blockedCache.factor !== factor || blockedCache.print !== print) {
+    blockedCache = { posts: view.posts, cells, islands: view.islands, factor, print, answers: new Map() };
+  }
+  const key = `${row.a_post}|${row.b_post}|${row.a_at}|${row.b_at}`;
+  const { answers } = blockedCache;
+  if (!answers.has(key)) answers.set(key, crossesLand(view.posts, row.a_at, row.b_at, cells));
+  return answers.get(key);
+}
+
 // ---------------------------------------------------------------- new lines
 
 export const linkKey = (row) => `${row.a}|${row.b}`;
@@ -250,6 +373,8 @@ function layout(view) {
   const routeOf = new Map();
   routes.forEach((route) => route.rows.forEach((row) => routeOf.set(row, route)));
 
+  // Once per frame, not per line.
+  const print = view.posts ? fingerprint(view.posts) : null;
   const lines = [];
   rows.forEach((row) => {
     if (!row.a_at || !row.b_at) return;
@@ -270,18 +395,21 @@ function layout(view) {
     // an arch between two pieces of land of one island, the pair of pieces.
     let group = route ? route.key : linkKey(row);
     if (!route && !sameIsland && landA && landB) group = [landKey(landA), landKey(landB)].sort().join('|');
+    // Over water with posts to check: a sea route unless land is in the way.
+    const sea = !sameIsland && Boolean(route) && Boolean(view.posts) && !blockedOf(view, row, print);
     lines.push({
       row, sameIsland, route, group,
+      kind: sameIsland ? 'road' : sea ? 'sea' : 'arch',
       world: Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]),
       arc: sameIsland
         ? arc(p, q, 0, 0)
-        : arc(p, q, hashId(`${row.a}|${row.b}`), ARCH_BEND),
+        : arc(p, q, hashId(`${row.a}|${row.b}`), sea ? SEA_BEND : ARCH_BEND),
     });
   });
   return { lines };
 }
 
-/** Roads and arches (under the towns). Returns the layout the planes reuse,
+/** Roads, sea routes and arches (under the towns). Returns the layout the planes and boats reuse,
  * or null from far away, where neither is drawn. */
 export function drawLinks(ctx, view) {
   const { width, height, far, level } = view;
@@ -290,11 +418,15 @@ export function drawLinks(ctx, view) {
   const now = Date.now();
   const tick = performance.now();
   const grow = level === 'deep' ? 1.3 : 1;
-  plan.lines.forEach(({ row, sameIsland, arc: shape }) => {
+  plan.lines.forEach(({ row, sameIsland, kind, arc: shape }) => {
     if (!onScreen(shape, width, height)) return;
     const share = growthOf(linkKey(row), tick);
     const tier = row.tier || 1;
-    stroke(ctx, share < 1 ? partOf(shape, share) : shape, sameIsland ? {
+    stroke(ctx, share < 1 ? partOf(shape, share) : shape, kind === 'sea' ? {
+      color: ROUTE, dash: SEA_DASH,
+      width: row.faint ? FAINT_WIDTH.sea : SEA_WIDTHS[tier] * grow,
+      alpha: freshness(row, now),
+    } : sameIsland ? {
       color: PATH, under: PATH_UNDER,
       width: row.faint ? FAINT_WIDTH.road : ROAD_WIDTHS[tier] * grow,
       alpha: freshness(row, now),
@@ -327,10 +459,118 @@ export function drawKin(ctx, view, kin) {
   });
 }
 
-/** Planes on the arches that are alive now (over the towns). */
+/** How many boats a route gets: one per tier, 1 to 3. */
+export function boatCount(tier) {
+  return Math.max(1, Math.min(3, Math.round(Number(tier)) || 1));
+}
+
+/** Where a boat is on its route: like a plane, only slower, and boat `index` of
+ * `count` starts that share of the round trip after the one before it. */
+export function boatAt(time, { duration, offset = 0, index = 0, count = 1 }) {
+  const slow = duration * BOAT_SLOWER;
+  return planeAt(time, { duration: slow, offset: offset + index * (slow * 2 / count) });
+}
+
+/** A boat seen from above, bow to the right: a white hull with a soft shadow and
+ * a thin edge (so it shows over the white dashes too), a deck line, and a
+ * widening wake behind. */
+function drawBoat(ctx, x, y, heading, alpha, length) {
+  const k = length / HULL_LENGTH;
+  const hull = () => {
+    ctx.beginPath();
+    ctx.moveTo(-7, -2.6);
+    ctx.lineTo(3, -3.2);
+    ctx.quadraticCurveTo(7, -2.4, 9, 0);
+    ctx.quadraticCurveTo(7, 2.4, 3, 3.2);
+    ctx.lineTo(-7, 2.6);
+    ctx.quadraticCurveTo(-8.2, 0, -7, -2.6);
+    ctx.closePath();
+  };
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(heading);
+  ctx.scale(k, k);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalAlpha *= alpha;
+  // Wake: two lines opening out behind the stern.
+  ctx.save();
+  ctx.globalAlpha *= 0.6;
+  ctx.strokeStyle = ROUTE;
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.moveTo(-8, -1.4);
+  ctx.lineTo(-17, -4.6);
+  ctx.moveTo(-8, 1.4);
+  ctx.lineTo(-17, 4.6);
+  ctx.stroke();
+  ctx.restore();
+  // A soft shadow round the hull (a wide faint stroke), then the hull itself.
+  hull();
+  ctx.strokeStyle = 'rgba(20, 55, 90, .22)';
+  ctx.lineWidth = 3.2;
+  ctx.stroke();
+  hull();
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(30, 70, 110, .45)';
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  // Deck: a pale cabin and a centre line.
+  ctx.fillStyle = 'rgba(120, 160, 200, .45)';
+  ctx.fillRect(-3.8, -1.7, 4.6, 3.4);
+  ctx.strokeStyle = 'rgba(30, 70, 110, .3)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(1.5, 0);
+  ctx.lineTo(7, 0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Boats on the sea routes: one to three per route by its tier, the strongest
+ * routes first until the screen's cap is used up. `time` null: standing still. */
+function drawBoats(ctx, view, plan, time) {
+  const { width, height, span, phone, level } = view;
+  const boatLength = level === 'deep' ? BOAT_LENGTH_DEEP : BOAT_LENGTH;
+  const still = REDUCED_MOTION || time === null || time === undefined;
+  let room = phone ? BOAT_CAP.phone : BOAT_CAP.wide;
+  const routes = new Map();
+  plan.lines.forEach(({ row, kind, group: key, arc: shape, world }) => {
+    if (kind !== 'sea' || row.faint || !onScreen(shape, width, height)) return;
+    if (growthOf(linkKey(row)) < 1) return;
+    const strength = Number(row.strength) || 0;
+    const held = routes.get(key);
+    if (!held) {
+      routes.set(key, { key, shape, world, strength, tier: row.tier || 1 });
+      return;
+    }
+    held.tier = Math.max(held.tier, row.tier || 1);
+    if (strength > held.strength) Object.assign(held, { shape, world, strength });
+  });
+  [...routes.values()].sort((a, b) => b.strength - a.strength).forEach(({ shape, key, world, tier }) => {
+    const count = Math.min(boatCount(tier), room);
+    room -= count;
+    const seed = hashId(key);
+    const duration = crossingSeconds(world, span);
+    for (let index = 0; index < count; index += 1) {
+      const { t, forward, leg } = still
+        ? { t: (index + 1) / (count + 1), forward: true, leg: 0.5 }
+        : boatAt(time, { duration, offset: (seed % 997) / 997 * duration * 2, index, count });
+      const point = pointOn(shape, t);
+      if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
+      const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
+      const alpha = still ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
+      drawBoat(ctx, point.x, point.y, heading, alpha, boatLength);
+    }
+  });
+}
+
+/** Boats on the sea routes, planes on the arches that are alive now (over the towns). */
 export function drawPlanes(ctx, view, plan, time) {
   const { width, height, far, level, span, phone } = view;
   if (far || !plan) return;
+  drawBoats(ctx, view, plan, time);
   const cap = phone ? PLANE_CAP.phone : PLANE_CAP.wide;
   const size = PLANE_SIZE[level] || PLANE_SIZE.near;
 
@@ -339,8 +579,8 @@ export function drawPlanes(ctx, view, plan, time) {
   // screen. Keyed by the route, so it keeps its place in the schedule while you
   // pan from one of its arches to another.
   const best = new Map();
-  plan.lines.forEach(({ row, sameIsland, group: key, arc: shape, world }) => {
-    if (sameIsland || row.faint || !onScreen(shape, width, height)) return;
+  plan.lines.forEach(({ row, sameIsland, kind, group: key, arc: shape, world }) => {
+    if (sameIsland || kind === 'sea' || row.faint || !onScreen(shape, width, height)) return;
     if (growthOf(linkKey(row)) < 1) return;
     const strength = Number(row.strength) || 0;
     const held = best.get(key);
