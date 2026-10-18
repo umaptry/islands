@@ -12,6 +12,7 @@
 // drift the fleet or leave a bird somewhere it should not be.
 
 import { drawSpriteTurned, fogImage } from './sprites.js';
+import { drawBoat } from './vehicles.js';
 
 export const SYSTEM_REDUCED_MOTION = Boolean(
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -56,7 +57,7 @@ export function hashId(id) {
 const BOAT_COUNT = 6;
 // Screen pixels at every zoom. A boat that grew with the map would compete with
 // the islands; the point is that it stays tiny.
-const BOAT_LENGTH = 9;
+const BOAT_LENGTH = 11;   // the hull; the drawing is vehicles.js, as for the route boats
 const SEA_MARK_COUNT = 44;
 const BIRD_SKEINS = 2;
 // Half a gull's wingspan, seen from above.
@@ -150,44 +151,8 @@ export function drawBoats(ctx, view, time) {
     const spot = drift(sea, seed, time + noise(seed, 5) * 2000, BOAT_DRIFT);
     const point = toScreen(spot.x, spot.y);
     if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
-    drawBoat(ctx, point.x, point.y, spot.angle);
+    drawBoat(ctx, point.x, point.y, BOAT_LENGTH, spot.angle, { alpha: 0.9 });
   }
-}
-
-/** A small boat from above, bow first along `angle`, with its wake fanning out behind. */
-function drawBoat(ctx, x, y, angle) {
-  const unit = BOAT_LENGTH;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-
-  // The wake: two lines opening out from the stern, fading as they go.
-  const wake = ctx.createLinearGradient(-unit * 2.4, 0, -unit * 0.4, 0);
-  wake.addColorStop(0, 'rgba(255, 255, 255, 0)');
-  wake.addColorStop(1, INK.wake);
-  ctx.strokeStyle = wake;
-  ctx.lineWidth = 1;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-unit * 0.4, -unit * 0.12);
-  ctx.lineTo(-unit * 2.4, -unit * 0.5);
-  ctx.moveTo(-unit * 0.4, unit * 0.12);
-  ctx.lineTo(-unit * 2.4, unit * 0.5);
-  ctx.stroke();
-
-  // The hull: pointed at the bow, square at the stern.
-  ctx.fillStyle = INK.boat;
-  ctx.beginPath();
-  ctx.moveTo(unit * 0.55, 0);
-  ctx.quadraticCurveTo(unit * 0.2, -unit * 0.24, -unit * 0.45, -unit * 0.2);
-  ctx.lineTo(-unit * 0.45, unit * 0.2);
-  ctx.quadraticCurveTo(unit * 0.2, unit * 0.24, unit * 0.55, 0);
-  ctx.closePath();
-  ctx.fill();
-  // A cabin on the deck, so it reads as a boat and not as a grain of rice.
-  ctx.fillStyle = 'rgba(23, 46, 74, .35)';
-  ctx.fillRect(-unit * 0.28, -unit * 0.09, unit * 0.34, unit * 0.18);
-  ctx.restore();
 }
 
 export function drawBirds(ctx, view, time) {

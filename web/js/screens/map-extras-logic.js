@@ -2,25 +2,6 @@
 // import) so tests can run them directly.
 
 export const MINI_SHOW_ZOOM = 1.7;
-export const BAR_MIN = 24;
-export const BAR_MAX = 110;
-
-// The bar is a rough guide: the real islands differ a lot in size, so every
-// label says "about" (約).
-export const SCALE_STEPS = [[0.25, '島の約4分の1'], [0.5, '島の約半分'], [1, '島約1つ分'], [3, '島約3つ分'],
-  [10, '島約10個分'], [30, '島約30個分'], [100, '島約100個分']];
-
-/** Which step the scale bar shows. `unit` is one island in world units. */
-export function scaleChoice(scale, unit) {
-  let best = SCALE_STEPS[2];
-  for (const step of SCALE_STEPS) {
-    const px = unit * step[0] * scale;
-    if (px >= BAR_MIN && px <= BAR_MAX) { best = step; if (step[0] >= 1) break; }
-  }
-  const px = unit * best[0] * scale;
-  return { label: best[1], px: Math.max(BAR_MIN, Math.min(BAR_MAX, px)) };
-}
-
 export const miniVisible = (z) => z >= MINI_SHOW_ZOOM;
 
 const finite = (value) => Number.isFinite(value);

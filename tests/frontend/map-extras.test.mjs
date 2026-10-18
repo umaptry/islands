@@ -6,20 +6,11 @@ import { readFile } from 'node:fs/promises';
 // The folder has no package.json "type", so load the module as a data: URL like the other tests.
 const source = await readFile(new URL('../../web/js/screens/map-extras-logic.js', import.meta.url), 'utf8');
 const {
-  miniToWorld, miniVisible, myIslands, pickNear, recentPosts, scaleChoice,
+  miniToWorld, miniVisible, myIslands, pickNear, recentPosts,
 } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const isle = (id, cx, cy, people = 3, post_ids = []) => ({ island_id: id, cx, cy, people, post_ids });
 const ids = (list) => list.map((island) => island.island_id);
-
-test('scaleChoice picks the largest step that fits the bar, and says "about"', () => {
-  const { label, px } = scaleChoice(1, 70);   // one island = 70px
-  assert.equal(label, '島約1つ分');
-  assert.equal(px, 70);
-  assert.match(scaleChoice(0.2, 70).label, /約/);
-  assert.equal(scaleChoice(0.0001, 70).px, 24);   // far out: clamped to the minimum bar
-  assert.ok(scaleChoice(50, 70).px <= 110);
-});
 
 test('miniVisible switches on at zoom 1.7', () => {
   assert.equal(miniVisible(1.69), false);

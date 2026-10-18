@@ -1,23 +1,21 @@
-// The small parts around the map: nearby islands, the island card, the compass
-// and scale, the mini map and the "this week" switch. map.js owns the screen;
+// The small parts around the map: nearby islands, the island card,
+// the mini map and the "this week" switch. map.js owns the screen;
 // this file only draws these parts and calls the map module.
 //
 // The map module is imported as a namespace on purpose: a name it does not
 // export yet is then `undefined` (and the part stays hidden) instead of
 // stopping the whole page from loading.
 
-import { config } from '../config.js';
 import { state } from '../state.js';
 import { $, clear, clip, closeSheet, el, sheetOpen } from '../ui.js';
 import { icon } from '../icons.js';
 import { PALETTE, TIMES } from '../map/palette.js';
 import * as mapApi from '../map/index.js';
-import { MINI_SHOW_ZOOM, miniToWorld, miniVisible, pickNear, recentPosts, scaleChoice } from './map-extras-logic.js';
+import { MINI_SHOW_ZOOM, miniToWorld, miniVisible, pickNear, recentPosts } from './map-extras-logic.js';
 
 const NEAR_COUNT = 3;
 const MINI_SIZE = 96;
 const NEAR_SETTLE_MS = 400;   // wait for the camera to stop before choosing "near" again
-const ISLAND_DIAMETER = 70;   // world units at radius_factor 1: 2 x 35
 
 let handlers = { openPost: () => {} };
 let nearSignature = '';
@@ -128,28 +126,6 @@ function openIslandCard(island, key = islandKey(island)) {
   card.hidden = false;
   document.body.classList.add('island-card-open');
   enter.focus({ preventScroll: true });
-}
-
-// ---------------------------------------------------------------- compass and scale
-
-function buildCompass() {
-  const box = $('mapCompass');
-  const north = el('span', { className: 'compass-north' },
-    el('i', { className: 'compass-needle' }), el('span', { text: '北' }));
-  box.append(north,
-    el('span', { className: 'compass-scale' },
-      el('i', { className: 'compass-bar', attrs: { id: 'mapScaleBar' } }),
-      el('span', { className: 'compass-scale-text', attrs: { id: 'mapScaleText' } })));
-}
-
-function updateScale() {
-  const snap = snapshot();
-  if (!snap || !(snap.scale > 0)) return;
-  const { label, px } = scaleChoice(snap.scale, ISLAND_DIAMETER * (config().energy?.radius_factor || 1));
-  const bar = $('mapScaleBar');
-  const text = $('mapScaleText');
-  bar.style.width = `${Math.round(px)}px`;
-  if (text.textContent !== label) text.textContent = label;
 }
 
 // ---------------------------------------------------------------- mini map
@@ -284,13 +260,11 @@ function syncTopHeight() {
 export function refreshExtras() {
   refreshNearIslands();
   paintBusy();
-  updateScale();
   scheduleMini();
   syncTopHeight();
 }
 
 function onCamera() {
-  updateScale();
   scheduleMini();
   clearTimeout(nearTimer);
   nearTimer = setTimeout(refreshNearIslands, NEAR_SETTLE_MS);
@@ -299,7 +273,6 @@ function onCamera() {
 
 export function setupMapExtras({ openPost }) {
   handlers = { openPost };
-  buildCompass();
   setupMini();
 
   if (typeof mapApi.onIslandTap === 'function') {

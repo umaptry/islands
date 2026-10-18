@@ -28,7 +28,7 @@
 // tab or a dropped frame cannot leave one stranded.
 
 import { REDUCED_MOTION, hashId } from './decor.js';
-import { drawSpriteTurned } from './sprites.js';
+import { drawBoat, drawPlane } from './vehicles.js';
 import { config, energyOf, radiusOf } from '../config.js';
 import { groundOf } from './coast.js';
 
@@ -62,13 +62,12 @@ const PLANE_CAP = { phone: 12, wide: 24 };
 // you zoom. (A fifth of the first speed: quicker read as traffic, not as a map.)
 const CROSSING = { span: 300, min: 45, max: 120 };
 // Boats: this many times slower than a plane over the same distance, one per tier
-// of the route (1 to 3), at most this many on the screen, drawn this long in CSS
-// px whatever the zoom (the hull below is 16 long).
+// of the route (1 to 3), at most this many on the screen, with a hull this long
+// in CSS px whatever the zoom (the drawing is vehicles.js, like the plane's).
 const BOAT_SLOWER = 2;
 const BOAT_CAP = { phone: 8, wide: 18 };
 const BOAT_LENGTH = 17;
 const BOAT_LENGTH_DEEP = 20;
-const HULL_LENGTH = 16;
 // Does the straight line between two posts run over land? Sampled every STEP
 // world units (so a thin strip of land is not skipped on a long line), at least
 // MIN_SAMPLES and at most MAX_SAMPLES points; one at or above the beach
@@ -471,63 +470,6 @@ export function boatAt(time, { duration, offset = 0, index = 0, count = 1 }) {
   return planeAt(time, { duration: slow, offset: offset + index * (slow * 2 / count) });
 }
 
-/** A boat seen from above, bow to the right: a white hull with a soft shadow and
- * a thin edge (so it shows over the white dashes too), a deck line, and a
- * widening wake behind. */
-function drawBoat(ctx, x, y, heading, alpha, length) {
-  const k = length / HULL_LENGTH;
-  const hull = () => {
-    ctx.beginPath();
-    ctx.moveTo(-7, -2.6);
-    ctx.lineTo(3, -3.2);
-    ctx.quadraticCurveTo(7, -2.4, 9, 0);
-    ctx.quadraticCurveTo(7, 2.4, 3, 3.2);
-    ctx.lineTo(-7, 2.6);
-    ctx.quadraticCurveTo(-8.2, 0, -7, -2.6);
-    ctx.closePath();
-  };
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(heading);
-  ctx.scale(k, k);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.globalAlpha *= alpha;
-  // Wake: two lines opening out behind the stern.
-  ctx.save();
-  ctx.globalAlpha *= 0.6;
-  ctx.strokeStyle = ROUTE;
-  ctx.lineWidth = 0.9;
-  ctx.beginPath();
-  ctx.moveTo(-8, -1.4);
-  ctx.lineTo(-17, -4.6);
-  ctx.moveTo(-8, 1.4);
-  ctx.lineTo(-17, 4.6);
-  ctx.stroke();
-  ctx.restore();
-  // A soft shadow round the hull (a wide faint stroke), then the hull itself.
-  hull();
-  ctx.strokeStyle = 'rgba(20, 55, 90, .22)';
-  ctx.lineWidth = 3.2;
-  ctx.stroke();
-  hull();
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(30, 70, 110, .45)';
-  ctx.lineWidth = 0.7;
-  ctx.stroke();
-  // Deck: a pale cabin and a centre line.
-  ctx.fillStyle = 'rgba(120, 160, 200, .45)';
-  ctx.fillRect(-3.8, -1.7, 4.6, 3.4);
-  ctx.strokeStyle = 'rgba(30, 70, 110, .3)';
-  ctx.lineWidth = 0.5;
-  ctx.beginPath();
-  ctx.moveTo(1.5, 0);
-  ctx.lineTo(7, 0);
-  ctx.stroke();
-  ctx.restore();
-}
-
 /** Boats on the sea routes: one to three per route by its tier, the strongest
  * routes first until the screen's cap is used up. `time` null: standing still. */
 function drawBoats(ctx, view, plan, time) {
@@ -561,7 +503,7 @@ function drawBoats(ctx, view, plan, time) {
       if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
       const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
       const alpha = still ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
-      drawBoat(ctx, point.x, point.y, heading, alpha, boatLength);
+      drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha });
     }
   });
 }
@@ -598,6 +540,6 @@ export function drawPlanes(ctx, view, plan, time) {
     const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
     // Fade in leaving the airfield and out arriving, rather than popping.
     const alpha = REDUCED_MOTION ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
-    drawSpriteTurned(ctx, 'plane', point.x, point.y, size, heading, { alpha });
+    drawPlane(ctx, point.x, point.y, size, heading, { alpha });
   });
 }

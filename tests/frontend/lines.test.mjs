@@ -6,8 +6,9 @@ let source = await readFile(new URL('../../web/js/map/lines.js', import.meta.url
 source = source
   .replace("import { REDUCED_MOTION, hashId } from './decor.js';", () =>
     'const REDUCED_MOTION = false; const hashId = (id) => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);')
-  .replace("import { drawSpriteTurned } from './sprites.js';", () =>
-    'const drawSpriteTurned = (...args) => { (globalThis.planesDrawn ||= []).push(args); return true; };')
+  .replace("import { drawBoat, drawPlane } from './vehicles.js';", () =>
+    `const drawPlane = (...args) => { (globalThis.planesDrawn ||= []).push(args); return true; };
+     const drawBoat = (...args) => { (globalThis.boatsDrawn ||= []).push(args); return true; };`)
   .replace("import { groundOf } from './coast.js';", () =>
     'const groundOf = (post, x, y) => { const d = Math.hypot(x - post.x, y - post.y); return d < post.radius ? post.energy * (1 - d / post.radius) : 0; };')
   .replace("import { config, energyOf, radiusOf } from '../config.js';", () =>
@@ -226,13 +227,9 @@ test('a sea route is dashed and has boats, not planes', () => {
 test('a route gets one to three boats by tier, and the screen has a cap', () => {
   assert.deepEqual([0, 1, 2, 3, 4, undefined].map(lines.boatCount), [1, 1, 2, 3, 3, 1]);
   const count = (view) => {
-    const fills = { n: 0 };
-    const ctx = new Proxy({}, {
-      get: (t, k) => (k === 'fill' ? () => { fills.n += 1; } : k in t ? t[k] : () => {}),
-      set: (t, k, v) => { t[k] = v; return true; },
-    });
-    lines.drawPlanes(ctx, view, lines.drawLinks(fakeCanvas().ctx, view), 30);
-    return fills.n;
+    globalThis.boatsDrawn = [];
+    lines.drawPlanes(fakeCanvas().ctx, view, lines.drawLinks(fakeCanvas().ctx, view), 30);
+    return globalThis.boatsDrawn.length;
   };
   const posts = [post('w', 100, 100), post('e', 800, 100)];
   [1, 2, 3].forEach((tier) => assert.equal(count(seaView(posts, [seaRow({ tier })])), tier));
@@ -260,17 +257,15 @@ test('where a boat is depends on the clock alone, slower than a plane, and boats
 
 test('with no clock the boats stand still where they are drawn', () => {
   const view = seaView([post('w', 100, 100), post('e', 800, 100)], [seaRow({ tier: 2 })]);
-  const spots = [];
-  const ctx = new Proxy({}, {
-    get: (t, k) => (k === 'translate' ? (x, y) => spots.push([x, y]) : k in t ? t[k] : () => {}),
-    set: (t, k, v) => { t[k] = v; return true; },
-  });
   const plan = lines.drawLinks(fakeCanvas().ctx, view);
-  lines.drawPlanes(ctx, view, plan, null);
-  const first = spots.slice();
-  lines.drawPlanes(ctx, view, plan, null);
+  const spots = () => globalThis.boatsDrawn.map(([, x, y]) => [x, y]);
+  globalThis.boatsDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, view, plan, null);
+  const first = spots();
+  globalThis.boatsDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, view, plan, null);
   assert.equal(first.length, 2);
-  assert.deepEqual(spots.slice(2), first);
+  assert.deepEqual(spots(), first);
 });
 
 test('coarse cells block like posts, and a thin island on a long line is not skipped', () => {

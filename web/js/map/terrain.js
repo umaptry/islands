@@ -158,6 +158,8 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
   const liftX = Math.max(1, Math.round(1.2 * k));
   const liftY = Math.max(1, Math.round(1.8 * k));
 
+  const desertIdx = steps.findIndex((s) => s.name === 'desert');
+
   const n = width * height;
   const band = new Int8Array(n);
   const land = new Uint8Array(n);
@@ -178,7 +180,7 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
       if (land[i]) {
         const own = band[i];
         rgb = steps[own].rgb;
-        if (own >= 2 && x > 0 && y > 0 && x < width - 1 && y < height - 1) {
+        if (own >= 2 && own !== desertIdx && x > 0 && y > 0 && x < width - 1 && y < height - 1) {
           // Slope towards the bottom-right, per world unit. Ground rising away
           // from the light faces it. It shows only close to the band's lower edge
           // (a rim of a few px), and fades in smoothly: a hard threshold made a
@@ -194,7 +196,8 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
           }
         }
         // No contour line: a higher band up-left of this pixel shades it softly.
-        if (own >= 1 && x >= liftX && y >= liftY && band[i - liftY * width - liftX] > own) {
+        // The desert band is flat sand: no light, shade or lift shadow on it.
+        if (own !== desertIdx && own >= 1 && x >= liftX && y >= liftY && band[i - liftY * width - liftX] > own) {
           rgb = mix(rgb, SHADE, 0.14);
         }
       } else if (toLand[i] <= foam) {

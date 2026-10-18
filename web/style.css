@@ -433,6 +433,9 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
 }
 .filter-button.on { background: #fff; color: var(--sea); }
+/* The icon span is a flex item but its svg is inline, so it sat on a text baseline (a few px high). */
+.filter-button > span:first-child { display: flex; align-items: center; justify-content: center; }
+.filter-button svg { display: block; }
 .filter-count {
   background: #fff; color: var(--sea); font-size: 11px; font-weight: 800;
   border-radius: 999px; padding: 0 6px; min-width: 18px; text-align: center;
@@ -1306,25 +1309,11 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .island-card-enter { width: 100%; min-height: 44px; background: var(--ui); color: #fff; font-weight: 800; }
 .island-card-open .island-badge { visibility: hidden; }
 
-/* compass and scale, bottom left (above the "you are on" badge on a phone) */
-.map-compass {
-  position: absolute; z-index: 3; left: 14px; pointer-events: none;
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 64px);
-  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
-  font-size: 11px; font-weight: 800; color: #0f3d5e;
-  /* a small white pill, so the dark text reads on light land as well as on sea */
-  padding: 6px 11px 7px; border-radius: 12px; background: rgb(255 255 255 / .86); box-shadow: var(--float-shadow);
-}
-.compass-north { display: inline-flex; align-items: center; gap: 5px; }
-.compass-needle {
-  width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-bottom: 12px solid #0f3d5e;
-}
-.compass-scale { display: flex; flex-direction: column; gap: 2px; }
-.compass-bar { display: block; height: 5px; width: 40px; border: 2px solid #0f3d5e; border-top: 0; }
-.island-card-open .map-compass, .island-card-open .map-controls { visibility: hidden; }
-@media (min-width: 768px) {
-  .map-compass { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px); left: 16px; }
+.island-card-open .map-controls { visibility: hidden; }
+/* On a phone the controls row (switch + globe) takes the bottom right, so the badge rides above it. */
+@media (max-width: 767px) {
+  .island-badge { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 76px); max-width: calc(100% - 32px); }
+  .island-badge #islandText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* mini map, top right under the strip */
@@ -1343,8 +1332,8 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   .mini-on .map-status { left: 16px; transform: none; max-width: calc(100% - 140px); width: auto; }
 }
 
-/* "this week" switch above the overview button */
-.map-controls { align-items: flex-end; }
+/* "this week" switch to the left of the overview button, centred on it */
+.map-controls { flex-direction: row; align-items: center; gap: 8px; }
 .busy-toggle {
   display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 13px 0 8px;
   border-radius: 999px; background: #fff; color: var(--ink-2);

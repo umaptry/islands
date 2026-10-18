@@ -107,7 +107,7 @@ function chromeBoxes() {
 function measureChrome() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #islandBadge, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #mapCompass, #busyToggle, #islandCard')]
+  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #islandBadge, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #busyToggle, #islandCard')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -924,8 +924,10 @@ export function panTo(x, y) {
 
 // ---------------------------------------------------------------- map view
 
-// Settlement sprite size by growth tier (小屋 → 都市), far view, CSS px.
-const TIER_SIZES = [40, 48, 56, 64, 72];
+// Settlement sprite size by growth tier (小屋 → 都市), CSS px. Fixed whatever the
+// zoom: a house has to stay readable on a phone, and a size that grew with the
+// zoom made the town look as if it moved.
+const TIER_SIZES = [48, 56, 64, 72, 80];
 // Where up to three landmarks stand around the settlement, in settlement sizes:
 // behind, then front-left, then front-right.
 const LANDMARK_SPOTS = [[0.2, -0.4], [-0.8, 0.14], [0.82, 0.16]];
@@ -1063,7 +1065,6 @@ function renderMap(time) {
 
   // Where each island's settlement stands. Placed before the trees so the trees
   // can keep out of the way.
-  const grow = far ? 1 : Math.min(1.5, Math.sqrt(z / NEAR_AT) * 1.2);
   const townShow = clamp01((z - TOWN_ZOOM[0]) / (TOWN_ZOOM[1] - TOWN_ZOOM[0]));
   const calmOf = (island) => Boolean(island.quiet);
   const places = state.islands.map((island) => {
@@ -1075,15 +1076,21 @@ function renderMap(time) {
     const tier = forced !== null ? forced : Math.max(0, Math.min(TIER_COUNT - 1, Number(island.tier) || 0));
     // A quiet island keeps its buildings, a size smaller and with the colour
     // let out of them.
-    const size = Math.min(96, TIER_SIZES[tier] * grow * (island.quiet ? 0.85 : 1));
-    const at = townShow > 0 ? besideFaces(spot, size, members, visible, tier) : null;
+    const size = TIER_SIZES[tier] * (island.quiet ? 0.85 : 1);
+    // The town stands at one fixed world point per island; it only shows where
+    // its box fits on the land. A grown island (tier 1+ or 8+ people) asks only
+    // that the town's feet and middle are on land, as before.
+    const home = townShow > 0 ? townHome(island, members) : null;
+    const base = home ? toScreen(home.x, home.y) : null;
+    const grown = tier >= 1 || members.size >= 8;
+    const at = base && standsOnLand(base.x, base.y, size, members, grown) ? base : null;
     // The island the new post stands on comes up with its ground.
     const fade = stage && members.has(reveal.id) ? stage.land : 1;
     if (!at) {
       // No town: the name and the head count sit on the island's middle.
       return { island, members, tier, size, seed, x: spot.x, foot: spot.y + 4, fade, town: false };
     }
-    return { island, members, tier, size, seed, x: at.x, foot: at.y + size * 0.3, fade, town: true };
+    return { island, members, tier, size, seed, x: at.x, foot: at.y, fade, town: true, home };
   }).filter(Boolean);
   const towns = places.filter((place) => place.town);
 
@@ -1129,12 +1136,17 @@ function renderMap(time) {
     const calm = Boolean(island.quiet);
     const marked = place.tier >= LANDMARK_MIN_TIER;
     const markSize = Math.max(36, size * 0.8);
-    place.marks = (marked ? landmarksOf(island, place) : []).slice(0, LANDMARK_SPOTS.length).map((name, index) => ({
-      name,
-      size: markSize,
-      x: x + LANDMARK_SPOTS[index][0] * size,
-      foot: foot + LANDMARK_SPOTS[index][1] * size,
-    })).filter((mark) => standsOnLand(mark.x, mark.foot, markSize, place.members));
+    // Landmarks stand at fixed world points round the town (townHome); a slot
+    // that is not on land is never drawn, at any zoom.
+    place.marks = [];
+    if (marked) {
+      landmarksOf(island, place).slice(0, LANDMARK_SPOTS.length).forEach((name, index) => {
+        const slot = place.home.slots[index];
+        if (!slot || !slot.land) return;
+        const at = toScreen(slot.x, slot.y);
+        place.marks.push({ name, size: markSize, x: at.x, foot: at.y });
+      });
+    }
     const pieces = [...place.marks, { main: true, x, foot }].sort((a, b) => a.foot - b.foot);
     const alpha = place.fade * townShow;
     pieces.forEach((piece) => {
@@ -1448,65 +1460,57 @@ function sharpGround(base, posts) {
   return sharp;
 }
 
-/** Zoomed in, the town steps aside for the people.
- *
- * An island with one post has its centre on that post, so the town and the
- * face would stack. Try the centre, then either side, then above and below,
- * and take the first spot that leaves every face of the island clear - or, if
- * none does, the one that leaves the most room.
- *
- * A grown island is full of faces, so no spot is ever clear of all of them and
- * its town used to vanish exactly where it had the most to show (2026-10-19):
- * the search then widens over the island's land, and an island that has grown
- * takes the best spot it has - the pins are painted after the town, so a town
- * partly behind a pin is better than none.
- */
-function besideFaces(spot, size, members, visible, tier = 0) {
-  const faces = visible.filter(({ post }) => members.has(post.id)).map(({ point }) => point);
-  const tries = [[0, 0], [-1, 0.1], [1, 0.1], [0, -0.9], [0, 0.85], [-1.1, -0.6], [1.1, -0.6], [-0.6, 0.8], [0.6, 0.8]];
-  // A pin stands about 16px above its point: measure from the middle of the pin.
-  const want = size * 0.45 + 14;
-  let best = null;
-  let bestRoom = -1;
-  let loose = false;
-  const consider = (x, y) => {
-    // A town stands on its island's land or not at all.
-    if (!standsOnLand(x, y + size * 0.3, size, members, loose)) return false;
-    const room = faces.length
-      ? Math.min(...faces.map((point) => Math.hypot(point.x - x, point.y - 16 - (y - size * 0.2))))
-      : Infinity;
-    if (room >= want) { best = { x, y }; return true; }
-    if (room > bestRoom) { best = { x, y }; bestRoom = room; }
-    return false;
+// Each island's town stands at one fixed world point, found from the island's
+// own posts only, so panning, zooming and the faces on screen never move it.
+// Recomputed only when the island's make-up changes.
+const homeCache = new Map();
+
+/** World point of the town's foot, and the world points of its landmark slots.
+ * The island's middle if that is land with land all round, else the nearest post
+ * with the most land round it. Null if the island has no land to stand on. */
+function townHome(island, members) {
+  const posts = [...members].map((id) => state.postsById.get(id)).filter(Boolean);
+  const fit = state.camera.fit || state.camera.scale;
+  const key = islandKey(island);
+  const sig = `${island.cx},${island.cy},${posts.length},${fit.toFixed(3)}`;
+  const held = homeCache.get(key);
+  if (held && held.sig === sig) return held.home;
+  const { biome_order: order, biome_thresholds: thresholds } = config().energy;
+  const sand = thresholds[order[1]];
+  const land = (x, y) => {
+    let sum = 0;
+    posts.forEach((post) => { sum += groundOf(post, x, y); });
+    return sum >= sand;
   };
-  // Wider: rings round the middle, out to where the island's faces reach.
-  let reach = 0;
-  faces.forEach((point) => { reach = Math.max(reach, Math.hypot(point.x - spot.x, point.y - spot.y)); });
-  const rings = [1.7, 2.4, 3.2];
-  if (reach > size * 3.2) rings.push((reach * 0.5) / size, (reach * 0.8) / size);
-  const spots = tries.map(([dx, dy]) => [spot.x + dx * size, spot.y + dy * size]);
-  rings.forEach((ring) => {
+  // Screen pixels at the zoom where towns appear, as world distance.
+  const unit = 1 / (fit * TOWN_ZOOM[1]);
+  const ring = TIER_SIZES[1] * 0.4 * unit;
+  const near = posts.slice()
+    .sort((a, b) => Math.hypot(a.x - island.cx, a.y - island.cy) - Math.hypot(b.x - island.cx, b.y - island.cy))
+    .slice(0, 40);
+  let best = null;
+  let bestScore = -1;
+  [{ x: island.cx, y: island.cy }, ...near].some((c) => {
+    if (!land(c.x, c.y)) return false;
+    let score = 0;
     for (let k = 0; k < 8; k += 1) {
-      // Starting below the middle: a town sits more naturally under the faces.
-      const angle = Math.PI / 2 + (k * Math.PI) / 4;
-      spots.push([spot.x + Math.cos(angle) * ring * size, spot.y + Math.sin(angle) * ring * size * 0.8]);
+      if (land(c.x + Math.cos(k * Math.PI / 4) * ring, c.y + Math.sin(k * Math.PI / 4) * ring)) score += 1;
     }
+    if (score > bestScore) { best = { x: c.x, y: c.y }; bestScore = score; }
+    return score === 8;
   });
-  for (const [x, y] of spots) {
-    if (consider(x, y)) return best;
+  let home = null;
+  if (best) {
+    // Landmark offsets are the on-screen ones at the zoom towns appear.
+    const slots = LANDMARK_SPOTS.map(([dx, dy]) => {
+      const x = best.x + dx * TIER_SIZES[2] * unit;
+      const y = best.y + dy * TIER_SIZES[2] * unit;
+      return { x, y, land: land(x, y) };
+    });
+    home = { x: best.x, y: best.y, slots };
   }
-  // Half on top of a face is no place for a town on a small island; one that
-  // has grown (or is full of people) keeps its town wherever it fits.
-  const grown = tier >= 1 || members.size >= 8;
-  if (!best && grown) {
-    // A thin strip of land has no room for the whole roofline: ask only that
-    // the town's feet are on land.
-    loose = true;
-    for (const [x, y] of spots) {
-      if (consider(x, y)) return best;
-    }
-  }
-  return grown || bestRoom >= want * 0.6 ? best : null;
+  homeCache.set(key, { sig, home });
+  return home;
 }
 
 /** Whether a sprite `size` wide with its foot at screen (x, foot) stands on

@@ -1,5 +1,5 @@
-// The picture files the map still loads from web/img/map/: the whale's shadow,
-// the plane and the fog. (Towns, landmarks and trees are drawn in code now,
+// The picture files the map still loads from web/img/map/: the whale's shadow
+// and the fog. (Towns, landmarks and trees are drawn in code now,
 // buildings.js.)
 //
 // Images load on first use and a sprite that is not ready yet is simply not
@@ -8,10 +8,10 @@
 
 const BASE = '/static/img/map/';
 
-// Sea life and air traffic, seen from above and facing right: whale.png is the
-// whale's shadow, plane.png rides the arches between islands. Both may be
-// missing; they are then simply not drawn.
-const SEA_AND_SKY = ['whale', 'plane', 'fog'];
+// Sea life, seen from above and facing right: whale.png is the whale's shadow.
+// (The planes and boats are drawn in code now, vehicles.js; plane.png is no
+// longer loaded.) Either file may be missing; it is then simply not drawn.
+const SEA_AND_SKY = ['whale', 'fog'];
 
 const images = new Map();
 
