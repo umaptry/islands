@@ -216,11 +216,11 @@ BIOME_THRESHOLDS = {
 BIOME_COLORS = {
     "sea": "#46AEE6",
     "shallow": "#9DD9F5",
-    "desert": "#FFF6E3",
-    "savanna": "#E4F1C9",
-    "plains": "#C5E6AB",
-    "forest": "#8CCC92",
-    "mountain": "#72B986",
+    "desert": "#EAD39A",
+    "savanna": "#C4DC86",
+    "plains": "#94C973",
+    "forest": "#5AAE72",
+    "mountain": "#3F9468",
 }
 
 # Settlement glyph by interaction count. islands' table, unchanged.

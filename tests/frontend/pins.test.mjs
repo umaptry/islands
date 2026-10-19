@@ -62,3 +62,11 @@ test('drawPostPin gives back a flat result for a bad size and does not throw', (
   }
   assert.equal(pins.drawMiniPin(ctx, 10, 100, { size: -3 }), undefined);
 });
+
+test('the open pin hops up past its height, then settles lifted', () => {
+  assert.equal(pins.liftShare(0), 0);
+  const peak = Math.max(...[0.1, 0.15, 0.2, 0.25, 0.3].map((t) => pins.liftShare(t)));
+  assert.ok(peak > 1 && peak < 1.3, `a small overshoot, got ${peak}`);
+  assert.equal(pins.liftShare(1), 1);
+  assert.equal(pins.liftShare(null), 1);   // less motion: lifted, no hop
+});

@@ -54,8 +54,17 @@ const PAD = 4;
 const MAX_ENTRIES = 60;
 const cache = new Map();
 
-/** Sizes are cached in 2 px steps (as buildings.js). */
-export const roundSize = (size) => Math.max(2, Math.round(size / 2) * 2);
+// Sizes are cached in steps of about 1.15 times (as buildings.js stepSize): the
+// vehicles grow and shrink with the map, and a smooth pinch must not paint a new
+// picture every frame. The picture is stretched by drawImage to the real size.
+const STEP_MIN = 2;
+const STEP_RATIO = 1.15;
+const STEP_COUNT = Math.round(Math.log(48 / STEP_MIN) / Math.log(STEP_RATIO));
+/** The size a picture is painted at for a vehicle that is `size` px long. */
+export const roundSize = (size) => {
+  const n = Math.round(Math.log(Math.max(size, STEP_MIN) / STEP_MIN) / Math.log(STEP_RATIO));
+  return Math.round(STEP_MIN * STEP_RATIO ** Math.min(n, STEP_COUNT) * 10) / 10;
+};
 
 /** The device scale a ctx paints at, in quarter steps (so a smooth zoom does
  * not make a new cache entry every frame). */

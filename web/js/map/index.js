@@ -25,12 +25,13 @@ import { preloadSprites } from './sprites.js';
 import { drawPostPin, drawMiniPin, pinColor, pinGeometry, pinScale, pinTier } from './pins.js';
 import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
 import { buildDetail, buildTerrain, gridTerrain, toCanvas } from './terrain.js';
+import { drawSurf, surfShow } from './surf.js';
 import { offThread } from './offthread.js';
 import { groundOf } from './coast.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
-import { PALETTE, PIN, SUN, TIMES, timeOfDay } from './palette.js';
+import { PALETTE, PIN, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
 
 let canvas = null;
 let ctx = null;
@@ -363,19 +364,36 @@ export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = 
 }
 
 /** Open an island up: frame its posts at the near distance. */
+/** Open an island up: the whole island - its land, which reaches a post's
+ * radius beyond the post - fills the screen between the controls, at whatever
+ * zoom that takes (2026-10-20, the user: the old cap of 3.6x the whole map left
+ * a small island small). */
 function zoomToIsland(island) {
   const members = (island.post_ids || []).map((id) => state.postsById.get(id)).filter(Boolean);
-  const xs = members.length ? members.map((post) => post.x) : [island.cx];
-  const ys = members.length ? members.map((post) => post.y) : [island.cy];
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const fit = state.camera.fit || state.camera.scale;
-  const usableH = Math.max(120, height - frame.top - frame.bottom);
-  const room = Math.min((width - 64) / (maxX - minX + 40), (usableH - 90) / (maxY - minY + 40));
-  const target = Math.max(fit * 2.2, Math.min(fit * 3.6, room));
-  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, target, { lift: 0.55 });
+  let minX = island.cx;
+  let maxX = island.cx;
+  let minY = island.cy;
+  let maxY = island.cy;
+  members.forEach((post) => {
+    // A coast reaches 0.7-1 of the radius (coast.js); the full radius keeps it in.
+    const r = radiusOf(post);
+    minX = Math.min(minX, post.x - r);
+    maxX = Math.max(maxX, post.x + r);
+    minY = Math.min(minY, post.y - r);
+    maxY = Math.max(maxY, post.y + r);
+  });
+  const usableW = Math.max(120, width - 32);
+  const usableH = Math.max(120, height - frame.top - frame.bottom - 16);
+  const room = Math.min(usableW / Math.max(1, maxX - minX), usableH / Math.max(1, maxY - minY));
+  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, clampScale(room), { lift: 0.5 });
+}
+
+/** How close a tapped post is brought: near the largest zoom (2026-10-20, the
+ * user: the old 2.5x steps left it small). A post already closer stays so. */
+const POST_ZOOM = 0.85;
+
+function postZoom() {
+  return Math.max(state.camera.scale, clampScale(Infinity) * POST_ZOOM);
 }
 
 // ---------------------------------------------------------------- answers
@@ -642,10 +660,9 @@ function pick(event) {
       toast('お試しの場所です。ほかの人には見えていません');
     } else if (hit.approach) {
       // Your own post from far away: come in close first, then open it.
-      const fit = state.camera.fit || state.camera.scale;
       const { post } = hit;
       playSe('pop');
-      zoomTo(post.x, post.y, fit * 2.6, { ...tapSpot(), then: () => onPick(post) });
+      zoomTo(post.x, post.y, postZoom(), { ...tapSpot(), then: () => onPick(post) });
     } else if (hit.stack) {
       // Several posts on one spot at full zoom: the list of them.
       playSe('pop');
@@ -656,10 +673,10 @@ function pick(event) {
       // up on the way, or steps aside at full zoom - and open it there.
       const { post } = hit;
       playSe('pop');
-      zoomTo(post.x, post.y, clampScale(state.camera.scale * 2.5), { ...tapSpot(), then: () => onPick(post) });
+      zoomTo(post.x, post.y, postZoom(), { ...tapSpot(), then: () => onPick(post) });
     } else {
       playSe('pop');
-      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, state.camera.scale, tapSpot());
+      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, postZoom(), tapSpot());
       onPick(hit.post);
     }
     return;
@@ -717,12 +734,33 @@ function render() {
 const CLOCK_MS = 60000;
 let tod = null;
 let todAt = -Infinity;
+let todFor = null;
+
+/** The address as one string, to notice an edited ?tod= or ?tier= at once
+ * (comparing it is cheaper than the Date the clock would cost). */
+function addressKey() {
+  try {
+    return typeof location !== 'undefined' ? `${location.search}${location.hash}` : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+// A ?tod= seen in the address holds until the page is loaded again: the app's
+// own moves (the bottom nav, opening a post on the map) write `#/map` and drop
+// a ?tod= that was added after the route, and the map went back to the clock.
+let askedTod = null;
 
 function refreshClock() {
   const now = performance.now();
-  if (tod !== null && now - todAt < CLOCK_MS) return;
+  const address = addressKey();
+  if (tod !== null && now - todAt < CLOCK_MS && address === todFor) return;
   todAt = now;
-  tod = timeOfDay();
+  todFor = address;
+  let asked = null;
+  try { asked = addressParam('tod'); } catch (error) { asked = null; }
+  if (asked && Object.prototype.hasOwnProperty.call(TIMES, asked)) askedTod = asked;
+  tod = askedTod || timeOfDay();
 }
 
 /** 'morning' | 'day' | 'evening' | 'night' - what the map is painted in now. */
@@ -925,9 +963,9 @@ export function panTo(x, y) {
 
 // ---------------------------------------------------------------- map view
 
-// Settlement sprite size by growth tier (小屋 → 都市), CSS px. Fixed whatever the
-// zoom: a house has to stay readable on a phone, and a size that grew with the
-// zoom made the town look as if it moved.
+// Settlement size by growth tier (小屋 → 都市): screen px at TOWN_REF_SCALE,
+// turned into a world length by worldSize() below (so a town grows and shrinks
+// with the map, and TOWN_SCALE shrinks them all together).
 const TIER_SIZES = [48, 56, 64, 72, 80];
 // Where up to three landmarks stand around the settlement, in settlement sizes:
 // behind, then front-left, then front-right.
@@ -947,10 +985,13 @@ const TOWN_ZOOM = [2.3, 2.6];
 // and are turned into world lengths once, so a phone and a desktop see the same
 // town on the same island.
 const TOWN_REF_SCALE = 0.55 * TOWN_ZOOM[1];
-const worldSize = (px) => px / TOWN_REF_SCALE;
+// A tenth of that (2026-10-19, the user): at the size above a town covered most
+// of its island once you came close; now it is a village on the island's land.
+const TOWN_SCALE = 0.1;
+const worldSize = (px) => (px / TOWN_REF_SCALE) * TOWN_SCALE;
 // A town shows once it is wide enough on screen to read (fading in over this
-// range of px), as well as past TOWN_ZOOM.
-const TOWN_PX = [30, 38];
+// range of px), as well as past TOWN_ZOOM. Small, because the towns are small.
+const TOWN_PX = [14, 20];
 const MINE = PALETTE.accent;
 const LABEL_FONT = '700 13px system-ui, sans-serif';
 const SMALL_FONT = '600 11px system-ui, sans-serif';
@@ -994,7 +1035,7 @@ function renderMap(time) {
   // moving things can keep off the land the way the routes do.
   const ground = groundPosts();
   const view = {
-    sea: seaBox(), toScreen, width, height, scale: state.camera.scale,
+    sea: seaBox(), toScreen, width, height, scale: state.camera.scale, maxScale: clampScale(Infinity),
     posts: ground, cells: state.saturated ? state.cells : NO_CELLS,
   };
   const { scale } = state.camera;
@@ -1005,6 +1046,8 @@ function renderMap(time) {
   // Seconds for things that move, or null to hold still (less motion).
   const motion = REDUCED_MOTION ? null : time;
   const stage = revealStage(performance.now());
+  // Closed: the next post opened - the same one again too - hops up anew.
+  if (!state.selected) opened = { id: null, at: 0 };
 
   // The seed corpus is NOT drawn. It used to be a field of dots, which looked
   // like a second kind of island while meaning something entirely different -
@@ -1080,6 +1123,9 @@ function renderMap(time) {
     closeUp = stage || grid ? null : sharpGround(terrain, ground);
     paintGround(terrain, before ? stage.land : 1, closeUp);
     if (closeUp) paintGround(closeUp, 1);
+    // Incoming surf along the coasts, over the shallows and under the night layer
+    // and everything that stands on the land. Only from a view about one island wide.
+    if (closeUp && closeUp.surf && !stage) drawSurf(ctx, closeUp.surf, view, motion, tod === 'night' ? 0.55 : 1);
   }
   // At night the land is lifted before anything stands on it: screened on after
   // the dark layer it also washed over the buildings and trees, which then
@@ -1141,6 +1187,8 @@ function renderMap(time) {
     posts: ground, cells: state.saturated ? state.cells : NO_CELLS, toScreen, width, height, far, level,
     landOf: (postId) => landIndex().get(postId) || null,
     span: config().world.max - config().world.min, phone: width < 700,
+    // Vehicles shrink with the map: their size is by scale / maxScale.
+    scale, maxScale: clampScale(Infinity),
   };
   const linePlan = drawLinks(ctx, lineView);
   // Dotted lines to people like you: yours alone, only close up (DETAIL_AT),
@@ -1443,8 +1491,9 @@ function sharpWindow() {
 
 function sharpGround(base, posts) {
   const need = state.camera.scale * Math.min(dpr, SHARP_RATIO_CAP);
-  // The whole-map texture is sharp enough from here (the overview).
-  if (need <= base.scale * 1.3) {
+  // The whole-map texture is sharp enough from here (the overview) - unless the
+  // surf is showing, which is traced on the sharp one.
+  if (need <= base.scale * 1.3 && surfShow(state.camera.scale, width, height) <= 0) {
     sharp = null;
     return null;
   }
@@ -1458,12 +1507,15 @@ function sharpGround(base, posts) {
   if ((!covers || !fine) && !sharpTimer && now - cameraStill >= SHARP_SETTLE_MS) {
     const scale = state.camera.scale;
     const pixelRatio = Math.min(dpr, SHARP_RATIO_CAP);
-    const job = { posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale, pixelRatio };
+    const job = {
+      posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale, pixelRatio,
+      surf: surfShow(scale, width, height) > 0,
+    };
     // In the worker when there is one (offthread.js): the map keeps moving
     // while it is made. One job at a time; the answer clears sharpTimer.
     const sent = offThread('detail', job, (built, ok) => {
       sharpTimer = 0;
-      if (ok) sharp = built ? { ...toCanvas(built), base, unit: scale * pixelRatio } : null;
+      if (ok) sharp = built ? { ...toCanvas(built), surf: built.coast, base, unit: scale * pixelRatio } : null;
     });
     if (sent) {
       sharpTimer = -1;
@@ -1472,7 +1524,7 @@ function sharpGround(base, posts) {
       sharpTimer = setTimeout(() => {
         sharpTimer = 0;
         const built = buildDetail(job);
-        sharp = built ? { ...built, base, unit: scale * pixelRatio } : null;
+        sharp = built ? { ...built, surf: built.coast, base, unit: scale * pixelRatio } : null;
       }, 0);
     }
   }
@@ -1564,13 +1616,15 @@ let forcedTierFor = null;
 let forcedTierValue = null;
 
 function forcedTier() {
-  let search = '';
-  try { search = typeof location !== 'undefined' ? location.search : ''; } catch (error) { search = ''; }
-  if (search !== forcedTierFor) {
-    forcedTierFor = search;
-    const raw = new URLSearchParams(search || '').get('tier');
+  const address = addressKey();
+  if (address !== forcedTierFor) {
+    forcedTierFor = address;
+    let raw = null;
+    try { raw = addressParam('tier'); } catch (error) { raw = null; }
     const value = raw === null || raw.trim() === '' ? NaN : Number(raw);
-    forcedTierValue = Number.isInteger(value) && value >= 0 && value < TIER_COUNT ? value : null;
+    // Like ?tod=, a valid ?tier= holds until the page is loaded again, through
+    // the app's own `#/map` that drops it.
+    if (Number.isInteger(value) && value >= 0 && value < TIER_COUNT) forcedTierValue = value;
   }
   return forcedTierValue;
 }
@@ -1617,14 +1671,15 @@ function landAtWorld(list, x, y) {
 /** Trees, bushes and rocks from the terrain's scatter, kept off the
  * settlements and out from under faces, and off the water: a crown reaching over
  * the shore stays home. Zoomed out, every other one. */
-const TREE_MAX = 44;
+const TREE_WORLD = 1.1;   // world units per tree (k = 1)
+const TREE_MIN = 3;       // px: smaller than this is not drawn
+const TREE_MAX = 44;      // px: a ceiling for the largest zoom
 
 function drawTrees(trees, places, posts, thin, alpha = 1) {
-  // Up to 24 px as before; closer than that they keep growing with the map, at
-  // the rate the buildings do, so the two stay in proportion - but only to
-  // TREE_MAX: at full zoom the scatter left one giant pine in the middle of an
-  // island, which read as a mistake, not as a tree.
-  const base = Math.max(9, state.camera.scale * 11);
+  // A tree is a length in the world, like the towns, and a tenth of what it was
+  // (2026-10-19, the user): it grows with the map, and one too small to see on
+  // screen is not drawn - zoomed out there are no trees.
+  const base = state.camera.scale * TREE_WORLD;
   // With the coarse layer in play some land is not any post's cone: skip the check.
   const check = !state.saturated && groundList.length > 0;
   trees.forEach((tree) => {
@@ -1632,6 +1687,7 @@ function drawTrees(trees, places, posts, thin, alpha = 1) {
     const p = toScreen(tree.x, tree.y);
     if (p.x < -30 || p.x > width + 30 || p.y < -30 || p.y > height + 40) return;
     const size = Math.min(TREE_MAX, base * tree.k) * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
+    if (size < TREE_MIN) return;
     const foot = p.y + size * 0.35;
     const covered = places.some((place) => Math.abs(p.x - place.x) < place.size * 1.45
       && foot > place.foot - place.size * 1.15 && foot < place.foot + place.size * 0.55);
@@ -1828,6 +1884,17 @@ function radar(x, y, radius, motion) {
  * radiates. In 「参加者を見てみる」 only the writer and the people who joined are
  * pins; the rest are quiet dots.
  */
+// When the open post was opened, on the animation clock: its pin hops up off
+// the map over the first moments (pins.js liftShare). Null under less motion,
+// which holds the pin lifted without the hop.
+let opened = { id: null, at: 0 };
+
+function openedFor(id, motion) {
+  if (motion === null) return null;
+  if (opened.id !== id) opened = { id, at: motion };
+  return motion - opened.at;
+}
+
 function drawPinsFar(visible, places, claim, meId, motion) {
   const selectedId = state.selected ? state.selected.id : null;
   const night = tod === 'night';
@@ -1868,7 +1935,7 @@ function drawPinsFar(visible, places, claim, meId, motion) {
       return;
     }
     if (post.id === selectedId) {
-      const shown = pin(post, point, { size: 22, selected: true, mine, phase });
+      const shown = pin(post, point, { size: 22, selected: true, mine, phase, openedFor: openedFor(post.id, motion) });
       hits.push({ x: point.x, y: shown.headY, r: 20, post });
       return;
     }
@@ -2120,6 +2187,7 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     const shown = drawPostPin(ctx, point.x, point.y, {
       heat: post.motivation, initial: initialOf(post.display_name), size,
       time: own, phase, mine: mine && !dim, selected: post.id === selectedId,
+      openedFor: post.id === selectedId ? openedFor(post.id, motion) : null,
       recruit: unread, recruitQuiet: mine && !dim && isRecruiting(post), night,
     });
     const r = shown.headR;

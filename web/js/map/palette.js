@@ -8,10 +8,10 @@
 export const PALETTE = {
   sea: '#46AEE6',
   shallow: '#9DD9F5',
-  sand: '#FFF6E3',
-  grass: '#C5E6AB',
-  forest: '#8CCC92',
-  peak: '#72B986',
+  sand: '#EAD39A',
+  grass: '#94C973',
+  forest: '#5AAE72',
+  peak: '#3F9468',
   halo: '#1D5F90',      // the dark rim round white island names
   wall: '#FFFFFF',      // buildings
   roof: '#EE6B5A',
@@ -46,8 +46,8 @@ export function pinColor(value) {
 // `blend` a canvas globalCompositeOperation.
 export const TIMES = {
   morning: [
-    { color: '#FFD9B8', blend: 'multiply', alpha: 0.30 },
-    { color: '#FFF4E0', blend: 'screen', alpha: 0.22 },
+    { color: '#FFD9B8', blend: 'multiply', alpha: 0.26 },
+    { color: '#FFF4E0', blend: 'screen', alpha: 0.06 },
   ],
   day: [],
   // Golden hour: an overlay of amber warms the sand and the green while the sea
@@ -58,17 +58,30 @@ export const TIMES = {
     { color: '#FFDCC0', blend: 'multiply', alpha: 0.14 },
   ],
   night: [
-    { color: '#16214A', blend: 'multiply', alpha: 0.72 },
+    { color: '#2A3C78', blend: 'multiply', alpha: 0.62 },
   ],
 };
 
 export const TIME_NAMES = { morning: '朝', day: '昼', evening: '夕方', night: '夜' };
 
+/** A setting from the page's address: `?name=` before the `#`, or after the
+ * route (`#/map?name=`) - where it lands when it is added to the end of the
+ * address, and where it was first ignored (2026-10-19). */
+export function addressParam(name, place = (typeof location !== 'undefined' ? location : null)) {
+  if (!place) return null;
+  const before = new URLSearchParams(place.search || '').get(name);
+  if (before !== null) return before;
+  const hash = String(place.hash || '');
+  const at = hash.indexOf('?');
+  return at < 0 ? null : new URLSearchParams(hash.slice(at + 1)).get(name);
+}
+
 /** Which time of day it is on this device: 5-9 morning, 10-15 day, 16-18
  * evening, 19-4 night. `?tod=night` (morning/day/evening/night) in the page's
- * address overrides it, for checking how each looks. */
-export function timeOfDay(date = new Date(), search = (typeof location !== 'undefined' ? location.search : '')) {
-  const forced = new URLSearchParams(search || '').get('tod');
+ * address overrides it, for checking how each looks. `place` is anything with
+ * `search` and `hash`, like `location`. */
+export function timeOfDay(date = new Date(), place = (typeof location !== 'undefined' ? location : null)) {
+  const forced = addressParam('tod', place);
   if (forced && Object.prototype.hasOwnProperty.call(TIMES, forced)) return forced;
   const hour = date.getHours();
   if (hour >= 5 && hour < 10) return 'morning';
@@ -78,7 +91,7 @@ export function timeOfDay(date = new Date(), search = (typeof location !== 'unde
 }
 
 // Sunlight over the whole map, from the top-left: a radial wash of white.
-export const SUN = { color: '#FFFFFF', alpha: 0.22, at: [0.16, 0.06], reach: 1.05 };
+export const SUN = { color: '#FFFFFF', alpha: 0.08, at: [0.16, 0.06], reach: 1.05 };
 
 /** Mix two #RRGGBB colours, t = 0 (a) .. 1 (b). */
 export function mixHex(a, b, t) {

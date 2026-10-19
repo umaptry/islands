@@ -20,6 +20,7 @@
 
 import { config, energyOf, radiusOf } from '../config.js';
 import { coastOf, reachFrom, reachTable } from './coast.js';
+import { coastLines } from './surf.js';
 
 // Texture resolution, in device pixels per world unit, and the ceiling on the
 // texture itself. 1400 covers a phone at 3x without ever allocating something a
@@ -209,6 +210,7 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
       pixels[at + 3] = alpha;
     }
   }
+  return toLand;
 }
 
 /** Anti-aliasing for a texture shown at about its own size: every pixel that
@@ -350,14 +352,14 @@ export function buildDetail({ posts, cells = [], region, scale, pixelRatio = 1 }
 
 /** buildDetail without the canvas: plain pixels, so a Web Worker can build it
  * (terrain-worker.js, via offthread.js) and the page only puts them on a canvas. */
-export function detailPixels({ posts, cells = [], region, scale, pixelRatio = 1 }) {
+export function detailPixels({ posts, cells = [], region, scale, pixelRatio = 1, surf = false }) {
   const unit = Math.min(DETAIL_MAX_UNIT, (scale || 1) * pixelRatio);
   const built = compute({
-    posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, smooth: true,
+    posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, smooth: true, surf,
   });
   if (!built) return null;
   const { field: _field, ...pixels } = built;
-  return pixels;
+  return pixels;   // `coast` rides along: toCanvas ignores it, the page reads it
 }
 
 /** Pixels from detailPixels (or compute) on a canvas the map can draw. */
@@ -381,7 +383,7 @@ function render({ trees, ...options }) {
 }
 
 /** The field and its painted pixels; no canvas, no DOM. */
-function compute({ posts, cells, region, scale, unit, padding, limit, smooth = false }) {
+function compute({ posts, cells, region, scale, unit, padding, limit, smooth = false, surf = false }) {
   const minX = region.minX - padding;
   const minY = region.minY - padding;
   const spanX = (region.maxX - region.minX) + padding * 2;
@@ -446,9 +448,13 @@ function compute({ posts, cells, region, scale, unit, padding, limit, smooth = f
   }
 
   const pixels = new Uint8ClampedArray(width * height * 4);
-  paint(pixels, field, width, height, { perScreen: scaled / (scale || 1), perWorld: scaled });
+  const perScreen = scaled / (scale || 1);
+  const toLand = paint(pixels, field, width, height, { perScreen, perWorld: scaled });
   if (smooth) smoothEdges(pixels, width, height);
-  return { pixels, field, minX, minY, scale: scaled, width, height };
+  // The coast for the incoming surf (surf.js), found while the distance to the
+  // land is at hand; the page strokes it each frame.
+  const coast = surf ? coastLines(toLand, width, height, { perScreen, perWorld: scaled, minX, minY, scale: scale || 1 }) : null;
+  return { pixels, field, minX, minY, scale: scaled, width, height, coast };
 }
 
 // Trees, bushes and rocks stand on the ground the field already decided. A

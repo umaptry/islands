@@ -361,3 +361,32 @@ test('a piece of an arc keeps its ends and its curve', () => {
     near(piece.y, whole.y);
   });
 });
+
+test('vehicles are sized by scale / maxScale, and not drawn when under 3 px', () => {
+  assert.equal(lines.sizeShare({}), 1, 'a view without scales draws them full size');
+  assert.equal(lines.sizeShare({ scale: 12, maxScale: 24 }), 0.5);
+  assert.equal(lines.sizeShare({ scale: 30, maxScale: 24 }), 1);
+  const posts = [post('w', 100, 100), post('e', 800, 100)];
+  const sizes = (extra) => {
+    const view = seaView(posts, [seaRow({ tier: 1 })], extra);
+    globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
+    lines.drawPlanes(fakeCanvas().ctx, view, lines.drawLinks(fakeCanvas().ctx, view), 30);
+    return [...globalThis.boatsDrawn, ...globalThis.carsDrawn].map((args) => args[3]);
+  };
+  const full = sizes({ scale: 24, maxScale: 24 });
+  assert.ok(full.length > 0 && full.every((s) => s === 20 || s === 18), 'closest zoom: a boat is 20 px, a car 18 px');
+  assert.ok(sizes({ scale: 12, maxScale: 24 }).every((s) => s <= 10));
+  assert.equal(sizes({ scale: 2, maxScale: 24 }).length, 0, 'too small to draw');
+});
+
+test('an arch is a dotted line, not a solid one', () => {
+  const view = seaView([post('w', 100, 100), post('e', 800, 100), post('m', 450, 110)]);
+  const dashes = [];
+  const ctx = new Proxy(fakeCanvas().ctx, {
+    get: (target, key) => (key === 'setLineDash' ? (d) => dashes.push(d) : target[key]),
+  });
+  assert.deepEqual(kindsOf(lines.drawLinks(ctx, view)), ['arch']);
+  assert.equal(dashes.length, 1);
+  assert.ok(dashes[0][0] < 1 && dashes[0][1] > 2, 'round dots with gaps');
+});

@@ -11,14 +11,14 @@ const vehicles = await import(`data:text/javascript;base64,${Buffer.from(source)
 
 test('the cache key follows the kind, the rounded size, night and the device scale, not the heading', () => {
   const key = vehicles.vehicleKey;
-  assert.equal(key({ kind: 'plane', size: 25 }), key({ kind: 'plane', size: 26.4 }), 'sizes are rounded to 2 px steps');
+  assert.equal(key({ kind: 'plane', size: 25 }), key({ kind: 'plane', size: 26 }), 'sizes are rounded to about 1.15x steps');
   assert.notEqual(key({ kind: 'plane', size: 24 }), key({ kind: 'plane', size: 30 }));
   assert.notEqual(key({ kind: 'plane', size: 24 }), key({ kind: 'boat', size: 24 }));
   assert.notEqual(key({ kind: 'boat', size: 18 }), key({ kind: 'boat', size: 18, night: true }));
   assert.notEqual(key({ kind: 'boat', size: 18, dpr: 1 }), key({ kind: 'boat', size: 18, dpr: 2 }));
   assert.equal(key({ kind: 'boat', size: 18, heading: 0 }), key({ kind: 'boat', size: 18, heading: 2.5 }));
   assert.notEqual(key({ kind: 'car', size: 12 }), key({ kind: 'boat', size: 12 }));
-  assert.equal(key({ kind: 'car', size: 12 }), key({ kind: 'car', size: 12.8 }), 'a car is cached in 2 px steps too');
+  assert.equal(key({ kind: 'car', size: 12 }), key({ kind: 'car', size: 12.5 }), 'a car is cached in the same steps');
   assert.notEqual(key({ kind: 'car', size: 12 }), key({ kind: 'car', size: 12, night: true }));
 });
 
@@ -94,8 +94,8 @@ test('a car picture is painted once per size and then reused for every heading',
     assert.equal(made, 2, 'one body and one shadow, whatever the heading');
     assert.equal(vehicles._cacheSize(), 1);
     vehicles.drawCar(ctx, 50, 50, 12.9, 0);
-    assert.equal(made, 2, '12.9 px rounds to the same 2 px step');
-    vehicles.drawCar(ctx, 50, 50, 14, 0);
+    assert.equal(made, 2, '12.9 px rounds to the same step');
+    vehicles.drawCar(ctx, 50, 50, 16, 0);
     assert.equal(made, 4);
   } finally {
     delete globalThis.OffscreenCanvas;

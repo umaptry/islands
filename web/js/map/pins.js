@@ -205,14 +205,18 @@ function fillOf(tier) {
   };
 }
 
-/** The still picture of a pin (shadow, body, rim, letter) at scale s. */
+/** The still picture of a pin (shadow, body, rim, letter) at scale s. The
+ * open pin's picture has no shadow: it is lifted off the ground, and its
+ * shadow is drawn where the ground is (drawPostPin). */
 function paintPin(c, tier, frame, s, { gold, selected, initial }) {
   c.save();
   c.scale(s, s);
-  c.fillStyle = 'rgba(11,26,34,0.28)';
-  c.beginPath();
-  c.ellipse(1.2, 0.6, 4.2, 1.7, 0, 0, TAU);
-  c.fill();
+  if (!selected) {
+    c.fillStyle = 'rgba(11,26,34,0.28)';
+    c.beginPath();
+    c.ellipse(1.2, 0.6, 4.2, 1.7, 0, 0, TAU);
+    c.fill();
+  }
 
   const flame = TIERS[tier].flame;
   const shapeFrame = flame ? frame : null;
@@ -224,24 +228,20 @@ function paintPin(c, tier, frame, s, { gold, selected, initial }) {
   c.fillStyle = body;
   c.fill();
   c.lineJoin = 'round';
-  if (gold) {
+  // Every pin has its white rim - without it a pin was hard to pick out on the
+  // land (the user, 2026-10-19, after a day without). A recruiting pin's rim is
+  // gold, part of its shine. The open one is no longer ringed in white.
+  if (!gold) {
+    c.strokeStyle = PIN.rim;
+    c.lineWidth = selected ? 1.9 : 1.4;
+    c.stroke();
+  } else {
     const rim = c.createLinearGradient(0, top, 0, 0);
     rim.addColorStop(0, PIN.gold.light);
     rim.addColorStop(0.45, PIN.gold.main);
     rim.addColorStop(1, PIN.gold.dark);
     c.strokeStyle = rim;
     c.lineWidth = 1.9;
-  } else {
-    c.strokeStyle = PIN.rim;
-    c.lineWidth = 1.4;
-  }
-  c.stroke();
-
-  if (selected) {
-    c.beginPath();
-    c.arc(0, HEAD_Y, HEAD_R + 3.4, 0, TAU);
-    c.strokeStyle = '#FFFFFF';
-    c.lineWidth = 2;
     c.stroke();
   }
 
@@ -275,10 +275,24 @@ const wave = (t) => 0.5 - 0.5 * Math.cos(TAU * t);   // 0 -> 1 -> 0 over t = 0..
 /** Draw a post's pin with its tip at (x, y). Returns { top, headY, headR }:
  * `top` is the pin's highest y (the flame tip or the "あなた" tag included), and
  * the head circle is for hit tests and chips. See the file header for opts. */
+/** How far the open pin stands off the ground, in pin units (x s), and how it
+ * gets there: a little hop past the height and back, over LIFT_S seconds. */
+const LIFT = 6;
+const LIFT_S = 0.38;
+
+/** 0 (on the ground) .. 1 (lifted), with a small overshoot on the way up.
+ * `age` is seconds since the pin was opened; null holds it lifted. */
+export function liftShare(age) {
+  if (age == null || !(age >= 0)) return 1;
+  const t = Math.min(1, age / LIFT_S);
+  const k = 1.9;   // how far past the top the hop goes
+  return 1 + (k + 1) * (t - 1) ** 3 + k * (t - 1) ** 2;
+}
+
 export function drawPostPin(ctx, x, y, opts = {}) {
   const {
     heat = 0, size = 22, time = null, phase = 0, recruit = false, recruitQuiet = false,
-    mine = false, selected = false, night = false, alpha = 1, tag = true,
+    mine = false, selected = false, night = false, alpha = 1, tag = true, openedFor = null,
   } = opts;
   // A bad size would throw in arc() or poison the hit test with NaN.
   if (!(size > 0)) return { top: y, headY: y, headR: 0 };
@@ -307,6 +321,15 @@ export function drawPostPin(ctx, x, y, opts = {}) {
       angle = ((spec.deg * Math.PI) / 180) * (0.78 * Math.sin(th) + 0.22 * Math.sin(2 * th + 1.3));
     }
   }
+  // The open pin hops up off the map and stays lifted; its shadow stays on the
+  // ground, wider and softer the higher the pin is (2026-10-19, the user chose
+  // this over a ring). The lift rides on top of the bob, so all below moves up.
+  if (selected) {
+    const up = liftShare(openedFor);
+    const share = Math.max(0, Math.min(1.2, up));
+    paintGlow(ctx, '#0B1A22', x + 1.4 * s, y + 0.8 * s, (4.6 + 2.6 * share) * s, (1.9 + 0.9 * share) * s, 0.55 - 0.15 * share);
+    bob -= LIFT * s * up;
+  }
 
   // Ring spreading from the foot (yours).
   if (mine) {
@@ -333,7 +356,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   }
   if (spec.flame) {
     const a = live ? 0.25 + 0.3 * wave(time / spec.period + phase / TAU) : 0.4;
-    paintGlow(ctx, inner, x, y - 22 * s, (spec.sway < 1.5 ? 17 : 15) * s, (spec.sway < 1.5 ? 24 : 21) * s, a * 1.4);
+    paintGlow(ctx, inner, x, y + bob - 22 * s, (spec.sway < 1.5 ? 17 : 15) * s, (spec.sway < 1.5 ? 24 : 21) * s, a * 1.4);
   }
 
   // Sparks rising off a flame.
@@ -347,7 +370,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
       const [ex, ey] = spots[j];
       ctx.globalAlpha = prevAlpha * alpha * Math.sin(Math.PI * u);
       ctx.beginPath();
-      ctx.arc(x + (ex - 2 * u + 3 * u * u) * s, y + (ey - 13 * u) * s, 1.1 * s, 0, TAU);
+      ctx.arc(x + (ex - 2 * u + 3 * u * u) * s, y + bob + (ey - 13 * u) * s, 1.1 * s, 0, TAU);
       ctx.fill();
     }
     ctx.restore();
@@ -374,7 +397,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   if (showTag) {
     ctx.save();
     const ts = size / 18;
-    const ty = y - (spec.flame ? 44 : 33) * s;
+    const ty = y + bob - (spec.flame ? 44 : 33) * s;
     ctx.fillStyle = PALETTE.accent;
     ctx.beginPath();
     ctx.roundRect ? ctx.roundRect(x - 13 * ts, ty - 6.5 * ts, 26 * ts, 11 * ts, 5.5 * ts)

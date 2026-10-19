@@ -43,8 +43,11 @@ const PATH_UNDER = 'rgba(74, 52, 38, .5)';
 // plain white line and thinner than a road on land: at most half what it was
 // (2026-10-13), the weakest kept just visible.
 const ROAD_WIDTHS = [0, 1.6, 2.6, 3.8];
-const ROUTE_WIDTHS = [0, 0.7, 0.85, 1.05];
-const FAINT_WIDTH = { road: 1, route: 0.6, sea: 0.8 };
+// The arch is a fine dotted line (round dots), so it is told apart from the sea
+// route's dashes; the dots need a little more width than a hairline to read.
+const ROUTE_WIDTHS = [0, 1, 1.15, 1.3];
+const ARCH_DASH = [0.1, 4.4];
+const FAINT_WIDTH = { road: 1, route: 0.9, sea: 0.8 };
 // A dashed sea route needs a little more than the arch's hairline to read.
 const SEA_WIDTHS = [0, 1, 1.15, 1.3];
 const SEA_DASH = [5, 5];
@@ -57,8 +60,9 @@ const FRESH_DAYS = 30;
 const ARCH_BEND = 0.3;
 // A new road takes this long to grow, in ms.
 const GROW_MS = 660;
-// Planes: the longer side of the sprite in CSS px, and the cap per view.
-const PLANE_SIZE = { near: 24, deep: 30 };
+// Planes: the longer side of the sprite in CSS px at the closest zoom (it shrinks
+// with the map, see sizeFor), and the cap per view.
+const PLANE_SIZE = 30;
 const PLANE_CAP = { phone: 12, wide: 24 };
 // One crossing: the world's width in about five minutes, never quicker than 45 s
 // or slower than two minutes. In world units, so a crossing does not speed up as
@@ -69,14 +73,22 @@ const CROSSING = { span: 300, min: 45, max: 120 };
 // in CSS px whatever the zoom (the drawing is vehicles.js, like the plane's).
 const BOAT_SLOWER = 2;
 const BOAT_CAP = { phone: 8, wide: 18 };
-const BOAT_LENGTH = 17;
-const BOAT_LENGTH_DEEP = 20;
+const BOAT_LENGTH = 20;
 // Cars on the stretches of a sea route that run over land (the road from the
 // town to the beach): a little smaller than a boat. The width of that road, a
 // thin quiet line, and how far (CSS px) along the route a car and a boat cross-
 // fade where it meets the water.
-const CAR_LENGTH = 15;
-const CAR_LENGTH_DEEP = 18;
+const CAR_LENGTH = 18;
+// Vehicles are sized like the buildings: in proportion to the map's scale, the
+// sizes above being those at the closest zoom. Smaller than this on screen (CSS
+// px) and they are not drawn at all (else only a shadow or a wake would show).
+const MIN_VEHICLE_PX = 3;
+/** The share of the closest-zoom size to use now. 1 when the view does not say. */
+export function sizeShare(view) {
+  const { scale, maxScale } = view;
+  if (!(scale > 0) || !(maxScale > 0)) return 1;
+  return Math.min(1, scale / maxScale);
+}
 const SHORE_ROAD_WIDTHS = [0, 0.9, 1.1, 1.3];
 const SHORE_ROAD_UNDER = 'rgba(74, 52, 38, .32)';
 const HANDOVER_PX = 14;
@@ -436,7 +448,7 @@ export function drawLinks(ctx, view) {
       width: row.faint ? FAINT_WIDTH.road : ROAD_WIDTHS[tier] * grow,
       alpha: freshness(row, now),
     } : {
-      color: ROUTE,
+      color: ROUTE, dash: ARCH_DASH,
       width: row.faint ? FAINT_WIDTH.route : ROUTE_WIDTHS[tier] * grow,
       alpha: freshness(row, now),
     });
@@ -479,9 +491,11 @@ export function boatAt(time, { duration, offset = 0, index = 0, count = 1 }) {
 /** Cars and boats on the sea routes: one to three per route by its tier, the strongest
  * routes first until the screen's cap is used up. `time` null: standing still. */
 function drawBoats(ctx, view, plan, time) {
-  const { width, height, span, phone, level } = view;
-  const boatLength = level === 'deep' ? BOAT_LENGTH_DEEP : BOAT_LENGTH;
-  const carLength = level === 'deep' ? CAR_LENGTH_DEEP : CAR_LENGTH;
+  const { width, height, span, phone } = view;
+  const share = sizeShare(view);
+  const boatLength = BOAT_LENGTH * share;
+  const carLength = CAR_LENGTH * share;
+  if (boatLength < MIN_VEHICLE_PX && carLength < MIN_VEHICLE_PX) return;
   const still = REDUCED_MOTION || time === null || time === undefined;
   let room = phone ? BOAT_CAP.phone : BOAT_CAP.wide;
   const routes = new Map();
@@ -513,19 +527,20 @@ function drawBoats(ctx, view, plan, time) {
       // A car on the land stretches, a boat on the water: from the clock and the
       // ground alone, handing over across a short stretch at the beach.
       const [car, boat] = runs ? mixAt(runs, t, HANDOVER_PX / Math.max(1, shape.length)) : [0, 1];
-      if (car > 0.01) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
-      if (boat > 0.01) drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha: alpha * boat });
+      if (car > 0.01 && carLength >= MIN_VEHICLE_PX) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
+      if (boat > 0.01 && boatLength >= MIN_VEHICLE_PX) drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha: alpha * boat });
     }
   });
 }
 
 /** Cars and boats on the sea routes, planes on the arches that are alive now (over the towns). */
 export function drawPlanes(ctx, view, plan, time) {
-  const { width, height, far, level, span, phone } = view;
+  const { width, height, far, span, phone } = view;
   if (far || !plan) return;
   drawBoats(ctx, view, plan, time);
   const cap = phone ? PLANE_CAP.phone : PLANE_CAP.wide;
-  const size = PLANE_SIZE[level] || PLANE_SIZE.near;
+  const size = PLANE_SIZE * sizeShare(view);
+  if (size < MIN_VEHICLE_PX) return;
 
   // The arches between two islands are drawn one per pair of people, but the
   // plane is one per route: it flies the strongest arch of its route that is on

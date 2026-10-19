@@ -28,8 +28,6 @@ export function setReducedMotion(on) {
 }
 
 export const INK = {
-  seaMark: 'rgba(255, 255, 255, .30)',
-  surf: 'rgba(255, 255, 255, .7)',
   bird: 'rgba(255, 255, 255, .62)',
   boat: 'rgba(255, 255, 255, .92)',
   wake: 'rgba(255, 255, 255, .3)',
@@ -56,10 +54,11 @@ export function hashId(id) {
 }
 
 const BOAT_COUNT = 6;
-// Screen pixels at every zoom. A boat that grew with the map would compete with
-// the islands; the point is that it stays tiny.
-const BOAT_LENGTH = 11;   // the hull; the drawing is vehicles.js, as for the route boats
-const SEA_MARK_COUNT = 44;
+// The hull's length in screen px at the largest zoom; below that it shrinks in
+// proportion to scale / maxScale (as the route boats do), and under BOAT_MIN px
+// it is not drawn. The drawing is vehicles.js.
+const BOAT_LENGTH = 11;
+const BOAT_MIN = 3;
 const BIRD_SKEINS = 2;
 // Half a gull's wingspan, seen from above.
 const BIRD_SIZE = 2.5;   // halved 2026-10-13, with the flock's spacing and line
@@ -91,25 +90,8 @@ function drawGlint(ctx, x, y, size) {
 export function drawSeaMarks(ctx, view, time) {
   const { sea, toScreen, width, height } = view;
   ctx.save();
-  ctx.strokeStyle = INK.seaMark;
-  ctx.lineWidth = 1;
-  ctx.lineCap = 'round';
-  for (let i = 0; i < SEA_MARK_COUNT; i += 1) {
-    const seed = 104729 * (i + 1);
-    const spot = toScreen(sea.x + noise(seed, 1) * sea.w, sea.y + noise(seed, 2) * sea.h);
-    if (spot.x < -20 || spot.x > width + 20 || spot.y < -20 || spot.y > height + 20) continue;
-    const sway = REDUCED_MOTION ? 0 : Math.sin(time * 0.6 + noise(seed, 3) * Math.PI * 2) * 1.3;
-    const unit = 3.2;
-    ctx.beginPath();
-    for (let row = 0; row < 2; row += 1) {
-      const y = spot.y + row * 2.6;
-      const x = spot.x + sway + row * 1.4;
-      ctx.moveTo(x - unit, y);
-      ctx.quadraticCurveTo(x - unit * 0.5, y - 1.5, x, y);
-      ctx.quadraticCurveTo(x + unit * 0.5, y + 1.5, x + unit, y);
-    }
-    ctx.stroke();
-  }
+  // (The white crests that used to be here are gone: the incoming surf along the
+  // coasts, surf.js, replaces them.)
   if (!REDUCED_MOTION) {
     // Sparkles on the water, each lit for the first third of its own 3.2 s cycle.
     // One candidate per cell of a grid in WORLD units, hashed from the cell index,
@@ -170,14 +152,16 @@ function seaShare(view, x, y) {
 
 export function drawBoats(ctx, view, time) {
   if (REDUCED_MOTION) return;
-  const { sea, toScreen, width, height } = view;
+  const { sea, toScreen, width, height, scale, maxScale } = view;
+  const length = scale > 0 && maxScale > 0 ? BOAT_LENGTH * Math.min(1, scale / maxScale) : BOAT_LENGTH;
+  if (length < BOAT_MIN) return;
   for (let i = 0; i < BOAT_COUNT; i += 1) {
     const seed = 7919 * (i + 1);
     const spot = drift(sea, seed, time + noise(seed, 5) * 2000, BOAT_DRIFT);
     const point = toScreen(spot.x, spot.y);
     if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
     const share = seaShare(view, spot.x, spot.y);
-    if (share > 0) drawBoat(ctx, point.x, point.y, BOAT_LENGTH, spot.angle, { alpha: 0.9 * share });
+    if (share > 0) drawBoat(ctx, point.x, point.y, length, spot.angle, { alpha: 0.9 * share });
   }
 }
 

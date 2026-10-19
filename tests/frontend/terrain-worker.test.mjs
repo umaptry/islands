@@ -9,8 +9,9 @@ const asModule = (source) => `data:text/javascript;base64,${Buffer.from(source).
 const read = (path) => readFile(new URL(`../../web/js/${path}`, import.meta.url), 'utf8');
 const configUrl = asModule(await read('config.js'));
 const coastUrl = asModule((await read('map/coast.js')).replace("'../config.js'", `'${configUrl}'`));
+const surfUrl = asModule(await read('map/surf.js'));
 const terrainUrl = asModule((await read('map/terrain.js'))
-  .replace("'../config.js'", `'${configUrl}'`).replace("'./coast.js'", `'${coastUrl}'`));
+  .replace("'../config.js'", `'${configUrl}'`).replace("'./coast.js'", `'${coastUrl}'`).replace("'./surf.js'", `'${surfUrl}'`));
 const { config, setReachFactor, useConfig } = await import(configUrl);
 const { detailPixels, groundPixels } = await import(terrainUrl);
 
@@ -86,4 +87,18 @@ test('a new reach factor from the islands poll is a new config, and shrinks the 
   assert.ok(land(detailPixels(job)) < wide * 0.5);
   assert.equal(setReachFactor('nonsense'), false);
   setReachFactor(1);
+});
+
+test('detailPixels hands back the coast for the surf only when asked, as plain numbers', () => {
+  assert.equal(detailPixels(job).coast, null);
+  const built = detailPixels({ ...job, surf: true });
+  assert.ok(built.coast && built.coast.lines.length >= 1, 'a loop round the island');
+  const { closed, n, data } = built.coast.lines[0];
+  assert.equal(closed, true);
+  assert.ok(data instanceof Float32Array && data.length === n * 6);
+  // World units: every point is a stretch outside the land, inside the region.
+  for (let k = 0; k < n; k += 1) {
+    assert.ok(data[k * 6] > 0 && data[k * 6] < 200 && data[k * 6 + 1] > 0 && data[k * 6 + 1] < 200);
+  }
+  assert.deepEqual(detailPixels({ ...job, surf: true }).coast.lines[0].data, data, 'same job, same coast');
 });
