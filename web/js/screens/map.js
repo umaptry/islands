@@ -5,19 +5,20 @@
 // full height where the message thread appears with the input pinned to the
 // bottom. The half state is what lets you read a card without losing the map.
 
-import { config, islandColor, isLocal } from '../config.js';
+import { config, isLocal, islandColor, setReachFactor } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import {
   hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, upsertPost, notify,
 } from '../state.js';
 import {
-  $, clear, closeSheet, confirmAction, el, expandSheet, openSheet, sheetExpanded,
+  $, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
   sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
 import { chatInput, postChat } from '../components/chat.js';
 import { loadDigest, paintMarks, setupMeet } from './meet.js';
+import { refreshExtras, setupMapExtras } from './map-extras.js';
 import {
   abortReveal, fitCamera, focusOn, initMap, landmassOf, onCameraSettled, participantView, playReveal,
   resize, ripple, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
@@ -53,7 +54,7 @@ function paintMapStatus() {
     : filtering ? `${state.posts.filter(matchesFilters).length}件が該当・検索対象は読み込み済みの範囲です${terrainNote}`
     : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
     : worldCount === 0 && !state.myPosts.length ? 'まだ投稿がありません。最初の投稿で島をつくりましょう。'
-    : 'この範囲には投稿がありません。🌐で全体を見られます';
+    : 'この範囲には投稿がありません。右下の全体表示ボタンで全体を見られます';
 }
 
 // The map is redrawn every frame from state.filters: posts that do not match
@@ -70,7 +71,13 @@ function paintTrial() {
 export async function showTrial() {
   if (!await navigate('#/map')) return;
   paintTrial();
-  if (state.trialPost) focusOn(state.trialPost, { lift: 0.45 });
+  // Come in close, as for a new post, so the land under the tryout and its
+  // island name can be seen (a pan at the whole-map zoom left a speck).
+  const trial = state.trialPost;
+  if (trial) {
+    const fit = state.camera.fit || state.camera.scale;
+    zoomTo(trial.x, trial.y, fit * 3, { lift: 0.4 });
+  }
 }
 
 export async function openOnMap(postId) {
@@ -151,7 +158,7 @@ export async function refreshMap({ fitFirst = false } = {}) {
     if (generation !== mapRequest) return false;
     mapError = false;
     const saturated = posts.length >= limit;
-    setPosts(posts, { saturated });
+    setPosts(posts, { saturated, bounds });
     // A refresh that was asked for before the post existed must not take it
     // away while it is being introduced.
     if (landing && !state.postsById.has(landing.id)) upsertPost(landing);
@@ -187,6 +194,7 @@ export async function refreshIslands() {
   try {
     const result = await api.get('/api/islands', { auth: false });
     state.islands = result.islands || [];
+    setReachFactor(result.radius_factor);
     paintBadge();
   } catch {
     /* keep the previous names rather than blanking every label */
@@ -220,17 +228,23 @@ export async function refreshNeighbors({ force = false } = {}) {
   }));
 }
 
-/** Lines between people (段3). Public, and cached by the server for a while. */
-export async function refreshConnections() {
+/** Lines between people (段3). Public, and cached by the server for a while.
+ * `fresh` right after you reacted or wrote: the server recounts and nothing on
+ * the way may answer from a cache, so your road appears now and not on the next
+ * poll - it used to take 25-45 s, and longer in production. */
+export async function refreshConnections({ fresh = false } = {}) {
   try {
-    const result = await api.get('/api/connections', { auth: false });
+    const result = await api.get(fresh ? '/api/connections?fresh=1' : '/api/connections',
+      { auth: false, ...(fresh ? { cache: 'no-store' } : {}) });
     state.connections = result.connections || [];
     // A road that was not there a moment ago grows, and says so.
     // A sound only for a road that is mine; other people's roads grow silently.
     const meId = state.account ? state.account.id : null;
-    const fresh = noteLinks(state.connections);
+    // Not `fresh`: that name is the parameter above, and a const of the same
+    // name in this block shadowed it, so reading it threw and no line was drawn.
+    const grown = noteLinks(state.connections);
     const mineNow = meId ? state.connections.filter((row) => row.a === meId || row.b === meId).length : 0;
-    if (fresh > 0 && myLinks.owner === meId && mineNow > myLinks.count) playSe('success');
+    if (grown > 0 && myLinks.owner === meId && mineNow > myLinks.count) playSe('success');
     myLinks = { owner: meId, count: mineNow };
   } catch {
     /* keep the lines already drawn */
@@ -289,6 +303,7 @@ export async function refreshMyPosts() {
 
 function paintBadge() {
   paintMarks();
+  if (booted) refreshExtras();
   const badge = $('islandBadge');
   const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
   if (!mine) {
@@ -406,8 +421,29 @@ function setupChrome() {
 
 // ---------------------------------------------------------------- sheet
 
-/** Open a post's sheet. `expand` opens the sheet at full height. */
-export async function openPost(postId, { expand = false } = {}) {
+/** Several posts on one spot at full zoom (map/index.js): a list to pick from.
+ * Picking one opens it with a way back to this list. */
+export function openStack(posts) {
+  const body = openSheet({ onClose: () => { state.selected = null; } });
+  clear($('sheetFoot'));
+  clear(body).append(
+    el('h3', { className: 'stack-title', text: `この場所の投稿（${posts.length}件）` }),
+    el('ul', { className: 'stack-list' }, posts.map((post) => el('li', {},
+      el('button', {
+        className: 'stack-row',
+        attrs: { type: 'button' },
+        on: { click: () => openPost(post.id, { back: posts }) },
+      },
+      el('i', { className: 'stack-heat', style: { background: motivationColor(post.motivation) } }),
+      el('span', { className: 'stack-who', text: clip(post.display_name || '', 8) }),
+      el('span', { className: 'stack-text', text: post.body || '' }),
+      el('span', { className: 'stack-go', text: '›', attrs: { 'aria-hidden': 'true' } }))))),
+  );
+}
+
+/** Open a post's sheet. `expand` opens the sheet at full height; `back`, the
+ * list of a spot's posts it was picked from (openStack). */
+export async function openPost(postId, { expand = false, back = null } = {}) {
   if (sheetOpen()) closeSheet();
   const generation = ++selectionGeneration;
   let post = state.postsById.get(postId);
@@ -442,11 +478,18 @@ export async function openPost(postId, { expand = false } = {}) {
   // Looking at a post puts its star out - except while looking at who joined,
   // when the sheet is only a way to read the writer's words.
   if (!participantView()) markRead(post.id);
-  await renderSheet(post, generation);
+  await renderSheet(post, generation, back);
 }
 
-async function renderSheet(post, generation) {
+async function renderSheet(post, generation, back = null) {
   const body = clear($('sheetBody'));
+  if (back) {
+    body.append(el('button', {
+      className: 'sheet-back', attrs: { type: 'button' },
+      text: `‹ この場所の投稿（${back.length}件）に戻る`,
+      on: { click: () => openStack(back) },
+    }));
+  }
   const mine = state.account && post.author_id === state.account.id;
 
   // 似てる度 against my active post. Asking the
@@ -532,7 +575,7 @@ function paintThread(post, container) {
   container.append(el('div', { className: 'section-label', text: 'メッセージ' }), activeChat.node);
   if (state.account) {
     const chat = activeChat;
-    input = chatInput(post.id, { onSent: () => chat.refresh() });
+    input = chatInput(post.id, { onSent: () => { chat.refresh(); refreshConnections({ fresh: true }); } });
     $('sheetFoot').append(input.node);
   } else {
     $('sheetFoot').append(el('button', {
@@ -559,10 +602,12 @@ export async function react(postId, kind) {
   // back rather than leaving the button lying about what happened.
   if (on) state.reactions.delete(reactionKey(postId, kind));
   else state.reactions.add(reactionKey(postId, kind));
-  if (!on) {
+  const celebrate = () => {
     buzz('react');
     if (Number.isFinite(Number(post.x))) ripple(Number(post.x), Number(post.y), { color: islandColor(post.cluster_id) });
-  }
+  };
+  // 参加 can be refused (closed / full), so it celebrates only once accepted.
+  if (!on && kind !== 'join') celebrate();
   // A MINIMAL patch, not a spread of the whole row. Spreading would carry the
   // server's `energy` along with it, and upsertPost can only tell that the
   // energy is now stale by seeing that the patch moved a count without
@@ -573,7 +618,11 @@ export async function react(postId, kind) {
   }
   try {
     if (on) await data.removeReaction(postId, kind);
-    else await data.addReaction(postId, kind);
+    else {
+      await data.addReaction(postId, kind);
+      if (kind === 'join') celebrate();
+    }
+    refreshConnections({ fresh: true });
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));
     else state.reactions.delete(reactionKey(postId, kind));
@@ -649,7 +698,6 @@ function setupSheetGesture() {
 
   $('sheetGrip').addEventListener('click', () => expandSheet(!sheetExpanded()));
   $('sheetClose').addEventListener('click', closeSheet);
-  $('sheetBackdrop').addEventListener('pointerdown', closeSheet);
 }
 
 // ---------------------------------------------------------------- participants
@@ -714,8 +762,9 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     // A backgrounded tab should not keep polling; it catches up on visibility.
     if (document.hidden || document.querySelector('.screen.active').id !== 'map') return;
-    await refreshMap();
-    await Promise.all([refreshIslands(), refreshMyReactions(), refreshConnections()]);
+    // Lines alongside the map, not after it: a slow map refresh held them up.
+    await Promise.all([refreshMap(), refreshConnections()]);
+    await Promise.all([refreshIslands(), refreshMyReactions()]);
   }, POLL_MS);
 
   document.addEventListener('visibilitychange', async () => {
@@ -751,10 +800,14 @@ export function setupMapScreen() {
       startMap();   // no-op the first time: initMap starts the loop itself
       if (!booted) {
         booted = true;
-        initMap($('stage'), { onSelect: (post) => (post ? openPost(post.id) : closeSheet()) });
+        initMap($('stage'), {
+          onSelect: (post) => (post ? openPost(post.id) : closeSheet()),
+          onSelectMany: (posts) => openStack(posts),
+        });
         // A pan that ends somewhere new should pull in what is there. Debounced
         // inside the map module, so a long drag is one request and not fifty.
         onCameraSettled(() => refreshMap());
+        setupMapExtras({ openPost });
         const ok = await refreshMap({ fitFirst: true });
         if (!ok) toast('地図を読み込めませんでした。再試行しています…');
         await Promise.all([

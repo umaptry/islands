@@ -136,7 +136,9 @@ radius = (30 + energy × 0.45) × (2/3)
 
 そこで似てる度と「近い人」の並び順は、潰す前の448次元のコサインから計算します。
 0〜100への変換に使う2つの基準値は `artifacts/seed_map.json` の `cosine_anchors`
-（シード1,000件から測定）です。
+（シードから測定。2026-10-15 からシードは 10,182 件）です。2026-10-15 からは、地図の
+エンコーダも同じ見方（意味から重心を引き、語の重みを 0.20 に下げたもの、
+`core.similarity.map_view`）で読みます。
 
 **測る前に、シードコーパスの重心を引きます。** multilingual-e5-small は異方性が
 強く、全ペア499,500組を測ると密ブロックのコサインの9割が 0.847〜0.905 という幅
@@ -261,8 +263,9 @@ supabase db push
 すべて if-not-exists なので再実行しても安全です。
 
 - **Authentication → Providers → Email** を有効化。OTP（6桁コード）が使えることを確認
-- Google / Apple を使うならここで設定し、環境変数 `KOTOBA_OAUTH_GOOGLE=1` /
-  `KOTOBA_OAUTH_APPLE=1` を立てます（未設定ならログイン画面にボタンを出しません）
+- Google / LINE / Apple を使うならここで設定し、環境変数 `KOTOBA_OAUTH_GOOGLE=1` /
+  `KOTOBA_OAUTH_LINE=1` / `KOTOBA_OAUTH_APPLE=1` を立てます（未設定ならログイン画面にボタンを出しません）。
+  LINE は Custom Providers で `custom:line` として足します（手順は `docs/operations_runbook.md`）
 - **Project Settings → API Keys** から `URL` / publishable / secret キーを控えます
   （legacy の anon / service_role キーも利用可能）
 - Storage のバケット `post-images` は migration が作ります
@@ -550,7 +553,8 @@ web/
     components/         postcard.js / chat.js / heatobject.js
     screens/            auth / compose / map / notifications / profile
 scripts/
-  seed_corpus.jsonl     シード1,000件
+  seed_corpus.jsonl     シード10,182件（もとの1,000件＋分野つきの短い投稿9,182件。2026-10-15）
+  seed_variants.jsonl   種類ちがいの例文5,397件（お手本を昔・今・やってみたい・告知に書き換え、元の位置に立つ。2026-10-16）
   validate_corpus.py    ビルド前の検査
   build_seed_map.py     凍結マップ構築（1回だけ実行）/ --relabel / --verify
   build_similarity_calibration.py  似てる度の目盛りを校正（座標は動かない）

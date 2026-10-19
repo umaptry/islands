@@ -46,13 +46,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_seed_map as build  # noqa: E402
 
-from core.config import DENSE_WEIGHT, SPARSE_WEIGHT  # noqa: E402
+from core.config import DENSE_WEIGHT, SPARSE_WEIGHT, VIEW_DENSE_WEIGHT, VIEW_SPARSE_WEIGHT  # noqa: E402
 from core.features import build_hybrid_features  # noqa: E402
 from core.similarity import (  # noqa: E402
     CENTERED_SPACE,
+    MAP_VIEW_SPACE,
     QUANTILE_STEPS,
     SPARSE_DIM,
     cosine_percent,
+    map_view,
+    reads_map_view,
 )
 
 # The anchors, as percentiles of the measured seed distribution. Chosen so a
@@ -96,6 +99,8 @@ def centre(features):
 
     This moves NO coordinate. The map is drawn from the uncentred vector by a
     frozen encoder and never sees this function; only 似てる度 does.
+    (Older maps only: a map built by map_view_centroid below is drawn FROM the
+    centred view, and its centroid is part of the map.)
     """
     dense = normalise(features[:, :-SPARSE_DIM])
     sparse = normalise(features[:, -SPARSE_DIM:])
@@ -112,19 +117,55 @@ def centre(features):
     return centroid, centred
 
 
+def map_view_centroid(features):
+    """The centroid of a map built on the centred view, and the seeds in it.
+
+    The same centring as `centre`, but at the view weights (0.80 / 0.20) and
+    marked `map_input`: the teacher UMAP, the student encoder and serving all
+    read core.similarity.map_view through this one dict, and 似てる度 is
+    measured in that same view. The rounded mean is what gets stored, so the
+    view is computed from the rounded one - exactly what serving will compute.
+    """
+    dense = normalise(features[:, :-SPARSE_DIM])
+    centroid = {
+        "dense_mean": [round(float(value), 8) for value in dense.mean(axis=0)],
+        "dense_dim": int(dense.shape[1]),
+        "sparse_dim": int(SPARSE_DIM),
+        "seed_count": int(len(features)),
+        "dense_weight": VIEW_DENSE_WEIGHT,
+        "sparse_weight": VIEW_SPARSE_WEIGHT,
+        "space": MAP_VIEW_SPACE,
+        "map_input": True,
+    }
+    return centroid, map_view(features, centroid)
+
+
 def normalise(matrix):
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     return matrix / np.where(norms == 0.0, 1.0, norms)
 
 
-def measure(features):
-    """Anchors plus the full quantile table, from every seed pair."""
-    gram = features @ features.T
-    upper = np.triu_indices(len(features), k=1)
-    pairs = gram[upper]
+def measure(features, space=CENTERED_SPACE, block=1024):
+    """Anchors plus the full quantile table, from every seed pair.
 
-    np.fill_diagonal(gram, -2.0)
-    nearest = gram.max(axis=1)
+    A block of rows at a time, in float32: at 10,000 seeds the whole Gram matrix
+    with its upper-triangle indices took about 3 GB, and the pairs alone (52M)
+    fit in 200 MB.
+    """
+    matrix = np.asarray(features, dtype=np.float32)
+    count = len(matrix)
+    pairs = np.empty(count * (count - 1) // 2, dtype=np.float32)
+    nearest = np.empty(count, dtype=np.float32)
+    filled = 0
+    for start in range(0, count, block):
+        rows = matrix[start:start + block] @ matrix.T
+        for offset, row in enumerate(rows):
+            index = start + offset
+            tail = row[index + 1:]
+            pairs[filled:filled + tail.size] = tail
+            filled += tail.size
+            row[index] = -2.0
+            nearest[index] = row.max()
 
     anchors = {
         "cosine_floor": round(float(np.percentile(pairs, FLOOR_PERCENTILE)), 6),
@@ -135,7 +176,7 @@ def measure(features):
         # Says which space these two numbers were measured in. core.similarity
         # only centres when it sees this, so an artifact can never end up
         # reading a centred cosine off an uncentred ruler.
-        "space": CENTERED_SPACE,
+        "space": space,
     }
     quantiles = [
         round(float(value), 6)
@@ -209,6 +250,12 @@ def main():
     if not build.SEED_MAP_JSON.exists() or not build.VECTORIZERS_PICKLE.exists():
         print(f"[NG] artifacts がありません: {build.ARTIFACTS}")
         return 1
+    with open(build.SEED_MAP_JSON, encoding="utf-8") as handle:
+        if reads_map_view(json.load(handle).get("cosine_centroid")):
+            # The centroid is part of this map: re-centring would move every post.
+            print("[NG] この地図は中心化した見方で作られています（重心も地図の一部）。")
+            print("     似てる度の目盛りは build_seed_map.py が地図と一緒に作ります。再校正はできません。")
+            return 1
 
     centroid, centred = centre(seed_features())
     anchors, quantiles, pairs, nearest = measure(centred)

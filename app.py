@@ -56,6 +56,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from typing import Any
 from pydantic import BaseModel, Field
 
 from core import affinity as people
@@ -70,9 +71,12 @@ from core import quiet
 from core import webpush
 from core.clustering import assign_cluster, name_group
 from core.prompts import weekly_prompt
+from core import post_extras
 from core.config import (
     AWAY_DIGEST_COUNT,
     EXAMPLE_POSTS,
+    EXTRA_PROMPTS,
+    RECRUIT_TAG,
     PREVIEW_ISLAND_RADIUS,
     PREVIEW_NEIGHBORS,
     CONNECTION_CACHE_SECONDS,
@@ -118,13 +122,18 @@ from core.config import (
     TAGS,
 )
 from core.encoder import load_encoder
-from core.energy import constants as energy_constants
+from core.energy import constants as energy_constants, reach_factor
+from core.artifact_manifest import SEED_VECTORS
+from core.placement import place_by_seeds, placement_spots
 from core.energy import name_landmasses
 from core.features import build_hybrid_features, extract_label_terms, normalize_text
 from core.geometry import scale_projected_coordinate
 from core.similarity import (
+    SPARSE_DIM,
     cosine_percent,
     describe_relation,
+    map_view,
+    reads_map_view,
     resolve_scale,
     shared_keywords,
     similarity_view,
@@ -233,6 +242,26 @@ def load_artifacts():
     with io.open(ARTIFACTS / "vectorizers.pkl", "rb") as handle:
         sparse_artifacts = pickle.load(handle)
 
+    # A map placed by its seeds (core.placement) needs their map-view vectors.
+    placement = None
+    if (seed_map.get("placement") or {}).get("method") == "seed_mode":
+        vectors = np.load(ARTIFACTS / SEED_VECTORS).astype(float)
+        spots = placement_spots(seed_map)   # seeds, then their variants
+        if vectors.shape != (len(spots), encoder.input_dim):
+            raise RuntimeError("seed_vectors.npy がシードの数・次元と合いません。")
+        placement = dict(seed_map["placement"], vectors=vectors, spots=spots)
+
+    # A map built on the centred view needs its centroid to place anything at
+    # all, so it is taken here unconditionally - not through resolve_scale,
+    # which may drop it for 似てる度 and fall back, and must never do that to
+    # the encoder's input (core.similarity.map_view).
+    centroid = seed_map.get("cosine_centroid")
+    map_centroid = centroid if reads_map_view(centroid) else None
+    if map_centroid is not None and len(map_centroid.get("dense_mean") or []) + SPARSE_DIM != encoder.input_dim:
+        raise RuntimeError("seed_map.json の cosine_centroid がエンコーダの入力と合いません。")
+    if placement is not None and map_centroid is None:
+        raise RuntimeError("シードで置く地図には中心化した見方（cosine_centroid.map_input）が要ります。")
+
     seed = np.array(seed_map["seed"], dtype=float)
     # The client frames the camera on the corpus but never draws it, so it needs
     # the extent and not the 1,000 points.
@@ -247,6 +276,8 @@ def load_artifacts():
         "encoder": encoder,
         "scale_bounds": scale_bounds,
         "sparse_artifacts": sparse_artifacts,
+        "map_centroid": map_centroid,
+        "placement": placement,
         "seed_coords": seed[:, :2],
         "seed_clusters": seed[:, 2].astype(int),
         "islands": seed_map["islands"],
@@ -364,6 +395,12 @@ class PostCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     motivation: int = MOTIVATION_DEFAULT
     image_path: str | None = None
+    # 2026-10-20. prompt: "weekly" | "past" | "now" | "future" | null. The recruit_*
+    # fields count only for a post tagged 参加者募集中. Checked by core.post_extras
+    # (Any, so a wrong type gets the same Japanese message as a wrong value).
+    prompt: str | None = None
+    recruit_deadline: Any = None
+    recruit_capacity: Any = None
 
 
 class PostPreview(BaseModel):
@@ -380,6 +417,10 @@ class PostPatch(BaseModel):
     tags: list[str] | None = None
     motivation: int | None = None
     image_path: str | None = None
+    # 2026-10-20. Absent leaves the value alone; null erases it.
+    prompt: str | None = None
+    recruit_deadline: Any = None
+    recruit_capacity: Any = None
     # Explicit rather than a DELETE-only path: islands' card menu offers edit
     # and delete from the same place, and both are the author changing their
     # own row.
@@ -482,6 +523,29 @@ def clean_tags(tags):
     return [tag for tag in TAGS if tag in chosen]
 
 
+def post_extras_on():
+    """Whether the database can keep the prompt / sign-up fields (2026-10-20).
+
+    False until supabase/migrations/20261020000000_post_prompts_and_recruit.sql has
+    been run on the production database; the memory store always can. While it is
+    False the fields are ignored (never sent to the database) and the screen is told
+    through features.post_extras."""
+    return bool(getattr(state["store"], "supports_post_extras", True))
+
+
+def extras_for_new_post(payload, tags):
+    """The prompt / sign-up columns of a new post. Raises HTTPException 422."""
+    try:
+        extras = {"prompt": post_extras.clean_prompt(payload.prompt),
+                  "recruit_deadline": None, "recruit_capacity": None}
+        if RECRUIT_TAG in tags:
+            extras["recruit_deadline"] = post_extras.clean_deadline(payload.recruit_deadline)
+            extras["recruit_capacity"] = post_extras.clean_capacity(payload.recruit_capacity)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    return extras
+
+
 def clean_motivation(value):
     try:
         number = int(value)
@@ -525,8 +589,15 @@ def project(text):
             detail="意味のある単語が見つかりませんでした。もう少し具体的に書いてみてください。",
         )
     vector = features[0]
-    raw = state["encoder"](vector)
-    x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), state["scale_bounds"])
+    placement = state.get("placement")
+    if placement is not None:
+        # Where its nearest seeds in meaning stand (core.placement).
+        x, y = (float(value) for value in place_by_seeds(
+            map_input(vector), placement["vectors"], placement["spots"], k=placement["k"],
+            temperature=placement["temperature"], bandwidth=placement["bandwidth"]))
+    else:
+        raw = state["encoder"](map_input(vector))
+        x, y = scale_projected_coordinate(float(raw[0]), float(raw[1]), state["scale_bounds"])
     cluster_id = assign_cluster(x, y, state["seed_coords"], state["seed_clusters"])
 
     # The vector similarity is measured in. Storing it lets Postgres rank
@@ -540,6 +611,29 @@ def project(text):
         round(x, 2), round(y, 2), int(cluster_id), extract_label_terms(text),
         vector, np.asarray(centred, dtype=float),
     )
+
+
+def map_input(vector):
+    """What the frozen encoder reads: the stored vector itself for a map built
+    that way, or its centred view for one built on that (manifest schema 2)."""
+    centroid = state.get("map_centroid")
+    return vector if centroid is None else map_view(vector, centroid)
+
+
+_reach_cache = {"stamp": 0.0, "value": 1.0}
+
+
+def current_reach_factor():
+    """core.energy.reach_factor for the posts on the map now, recounted at most
+    once a minute: the browser and the server's island grouping use it alike."""
+    now = time.time()
+    if now - _reach_cache["stamp"] >= ISLAND_CACHE_SECONDS:
+        try:
+            _reach_cache["value"] = reach_factor(state["store"].count_posts())
+        except StoreError:
+            pass  # keep the last one
+        _reach_cache["stamp"] = now
+    return _reach_cache["value"]
 
 
 def as_pgvector(values):
@@ -574,7 +668,7 @@ def live_islands(force=False):
     if len(posts) >= NAMING_POST_LIMIT:
         _logger.warning("island naming capped at %d posts; some posts will have no island membership", NAMING_POST_LIMIT)
 
-    named = name_landmasses(posts, state["idf"], name_group)
+    named = name_landmasses(posts, state["idf"], name_group, reach_factor(len(posts)))
     # Word counts only say what the islanders mention; the heading is the activity genre.
     named = name_by_genre(named, {post["id"]: post for post in posts})
     try:
@@ -757,6 +851,21 @@ def introduce(viewer_id, other_id, index, places, ranked=None):
     return {"reasons": found, "opener": introductions.opener(found, other, shared_topics)}
 
 
+CONNECTION_BROWSER_SECONDS = 10
+FRESH_LINES_MIN_SECONDS = 2.0
+_fresh_lines = {"stamp": 0.0}
+
+
+def fresh_lines_due():
+    """Whether a requested recount may run now: one every couple of seconds at most."""
+    now = time.time()
+    with _connections_lock:
+        if now - _fresh_lines["stamp"] < FRESH_LINES_MIN_SECONDS:
+            return False
+        _fresh_lines["stamp"] = now
+        return True
+
+
 def connection_lines(force=False):
     """Every line between two people, strongest first (cached briefly)."""
     now = time.time()
@@ -836,41 +945,143 @@ def centred_units(vectors):
     return np.array(rows)
 
 
+# A smaller island whose genre a bigger one already holds is that genre's
+# neighbour when it stands within GENRE_NEAR world units of it ("南スポーツ島").
+# Farther away a second スポーツ would send people to the wrong side of the map,
+# so it keeps the name its own words give it (2026-10-17). On map v6 the two
+# topics of each of 12 families stood within 169 of each other (the median
+# distance between two topics was 406).
+GENRE_NEAR = 250.0
+DIRECTIONS = ("東", "南東", "南", "南西", "西", "北西", "北", "北東")   # screen y grows southwards
+
+# How a genre is put to the encoder. A bare word ("料理") matched the right
+# genre for 71% of 838 labelled posts, "趣味は料理" for 85% (2026-10-17).
+GENRE_LABEL = "趣味は{}"
+# An island's genre is the vote of its posts, and a post's genre the vote of the
+# seeds standing nearest it on the map: a seed's genre is computed once from its
+# vector, and a post was placed among the seeds nearest it in meaning, so its
+# position alone tells (83% right). The island's own commonest words, encoded
+# as one sentence, named 44% of the posts of v6's islands rightly; this, 61%.
+GENRE_SEED_NEIGHBOURS = 15
+
+
+def genre_vectors(model):
+    if state.get("genre_vectors") is None:
+        state["genre_vectors"] = np.asarray(
+            model.encode([GENRE_LABEL.format(genre) for genre in ISLAND_GENRES], normalize_embeddings=True),
+            dtype=float)
+    return state["genre_vectors"]
+
+
+def seed_genres(model):
+    """(spots, genre index) of every seed, or None on a map not placed by its seeds."""
+    if state.get("seed_genres") is None:
+        placement = state.get("placement")
+        if not placement:
+            return None
+        count = len(state["seed_map"]["seed"])
+        dense = np.asarray(placement["vectors"][:count, :-SPARSE_DIM], dtype=float)
+        dense /= np.clip(np.linalg.norm(dense, axis=1, keepdims=True), 1e-12, None)
+        state["seed_genres"] = (np.asarray(placement["spots"][:count], dtype=float),
+                                (dense @ centred_units(genre_vectors(model)).T).argmax(axis=1))
+    return state["seed_genres"]
+
+
+def located_genre(posts, model):
+    """The genre index of each post with a position, by its nearest seeds; None without one."""
+    if not any(post.get("x") is not None and post.get("y") is not None for post in posts):
+        return {}
+    seeds = seed_genres(model)
+    if seeds is None:
+        return {}
+    spots, genres = seeds
+    cache = state.setdefault("post_genres", {})
+    todo = [post for post in posts if post.get("x") is not None and post.get("y") is not None
+            and (post["id"], post["x"], post["y"]) not in cache]
+    for start in range(0, len(todo), 256):
+        chunk = todo[start:start + 256]
+        xy = np.array([[float(post["x"]), float(post["y"])] for post in chunk])
+        distance = ((xy[:, None, :] - spots[None, :, :]) ** 2).sum(axis=2)
+        near = np.argpartition(distance, GENRE_SEED_NEIGHBOURS, axis=1)[:, :GENRE_SEED_NEIGHBOURS]
+        for post, row in zip(chunk, near):
+            votes = Counter(genres[row].tolist())
+            cache[(post["id"], post["x"], post["y"])] = min(votes, key=lambda k: (-votes[k], k))
+    if len(cache) > 50000:
+        state["post_genres"] = {}
+    return {post["id"]: cache.get((post["id"], post.get("x"), post.get("y"))) for post in posts}
+
+
+def direction_from(holder, island):
+    """Which way `island` lies from `holder`, in eight compass points."""
+    angle = math.atan2(island["cy"] - holder["cy"], island["cx"] - holder["cx"])
+    return DIRECTIONS[int(round(angle / (math.pi / 4))) % 8]
+
+
 def name_by_genre(islands, posts_by_id):
     """Call each island by the activity genre closest to its words; word counts stay as the topics.
 
-    Islands arrive biggest first and each takes its best genre that no bigger
-    island holds, so names stay unique and the same posts give the same names
-    (ties go to the earlier genre). If the encoder is unavailable the islands
-    keep their word-count names ('terms'); this never raises.
+    Islands arrive biggest first. The first to want a genre gets it. A smaller
+    island wanting a genre already held is named after it with the direction
+    it lies in ("南スポーツ") when it is near the holder, and otherwise keeps its
+    word-count name: until 2026-10-17 it took its next best free genre, which
+    called a childcare island "IT" because 子育て was taken. Names stay unique
+    and the same posts give the same names (ties go to the earlier genre). If
+    the encoder is unavailable the islands keep their word-count names
+    ('terms'); this never raises.
     """
     if not islands:
         return islands
     try:
         model = state["model"]
-        if state.get("genre_vectors") is None:
-            state["genre_vectors"] = np.asarray(
-                model.encode(list(ISLAND_GENRES), normalize_embeddings=True), dtype=float)
-        texts = [island_text(island, posts_by_id, [island.get("name") or ""] + list(island.get("topics") or []))
-                 for island in islands]
-        scores = centred_units(model.encode(texts, normalize_embeddings=True)) @ centred_units(
-            state["genre_vectors"]).T
+        genres = genre_vectors(model)
+        posts = [posts_by_id[post_id] for island in islands for post_id in island.get("post_ids") or []
+                 if post_id in posts_by_id]
+        try:
+            located = located_genre(posts, model)
+        except Exception as error:   # a map or encoder that does not fit: words, as before
+            if not state.get("located_warned"):
+                state["located_warned"] = True
+                _logger.warning("island genres by position unavailable, naming by words (%s)", type(error).__name__)
+            located = {}
+        bests = []
+        for island in islands:
+            votes = Counter(located[post_id] for post_id in island.get("post_ids") or []
+                            if located.get(post_id) is not None)
+            bests.append(min(votes, key=lambda k: (-votes[k], k)) if votes else None)
+        # Islands whose posts have no position (or a map without seed placement):
+        # by their words, as before.
+        wordy = [k for k, best in enumerate(bests) if best is None]
+        if wordy:
+            texts = [island_text(islands[k], posts_by_id,
+                                 [islands[k].get("name") or ""] + list(islands[k].get("topics") or []))
+                     for k in wordy]
+            scores = centred_units(model.encode(texts, normalize_embeddings=True)) @ centred_units(genres).T
+            for k, row in zip(wordy, scores):
+                bests[k] = min(range(len(ISLAND_GENRES)), key=lambda g: (-round(float(row[g]), 6), g))  # rounding: float noise must not flip ties
     except Exception as error:
         if not state.get("genre_warned"):
             state["genre_warned"] = True
             _logger.warning("island genres unavailable, keeping word-count names (%s)", type(error).__name__)
         return islands
-    taken = set()
-    for island, row in zip(islands, scores):
-        order = sorted(range(len(ISLAND_GENRES)), key=lambda k: (-round(float(row[k]), 6), k))  # rounding: float noise must not flip ties
-        genre = next((ISLAND_GENRES[k] for k in order if ISLAND_GENRES[k] not in taken), None)
-        if genre is None:
-            continue
-        taken.add(genre)
+    holders = {}   # genre -> the bigger island that has it
+    used = set()   # every name given this run, plain or with a direction
+    for island, best in zip(islands, bests):
+        genre = ISLAND_GENRES[best]
+        holder = holders.get(genre)
+        if holder is None:
+            holders[genre] = island
+            name = genre
+        else:
+            if math.hypot(island["cx"] - holder["cx"], island["cy"] - holder["cy"]) > GENRE_NEAR:
+                continue
+            name = direction_from(holder, island) + genre
+            if name in used:
+                continue
+        used.add(name)
         heading, topics = island.get("name") or "", list(island.get("topics") or [])
         island["topics"] = [word for word in [heading] + topics if word and word != genre][:len(topics) + 1]
-        island["name"] = genre
-        island["label"] = f"{genre}{island_namer.island_terrain(island)}"
+        island["name"] = name
+        island["label"] = f"{name}{island_namer.island_terrain(island)}"
         island["name_source"] = "genre"
     return islands
 
@@ -1306,17 +1517,24 @@ def config():
         "oauth": [
             name for name, flag in (
                 ("google", os.environ.get("KOTOBA_OAUTH_GOOGLE") == "1"),
+                ("line", os.environ.get("KOTOBA_OAUTH_LINE") == "1"),
                 ("apple", os.environ.get("KOTOBA_OAUTH_APPLE") == "1"),
             ) if flag
         ],
         "world": {"min": MAP_MIN, "max": MAP_MAX, "seed_bounds": state["seed_bounds"]},
-        "energy": energy_constants(),
+        "energy": {**energy_constants(), "radius_factor": current_reach_factor()},
         "tags": list(TAGS),
         # Q45: the tag that says "話しかけていいよ". Named so the browser can
         # give it its own switch instead of finding it by its wording.
         "open_tag": TAGS[0],
         "weekly_prompt": weekly_prompt(),
+        # 2026-10-20: prompts that go away for a person once they posted with them
+        # (the browser decides from the `prompt` of that person's posts).
+        "extra_prompts": [dict(item) for item in EXTRA_PROMPTS],
         "example_posts": list(EXAMPLE_POSTS),
+        # post_extras: the database can keep the prompt / sign-up deadline / capacity.
+        # False on a production database the 2026-10-20 SQL has not reached yet.
+        "features": {"post_extras": post_extras_on()},
         "island_colors": list(ISLAND_COLORS),
         "limits": {
             "body_min": MIN_TEXT_LENGTH,
@@ -1385,6 +1603,12 @@ def health():
             island_names_ok = False
         if not island_names_ok:
             not_ready.append("islands_state.name_source column missing (run migration 20261012000000)")
+    # The 2026-10-20 post columns are NOT part of ready: without them the code
+    # simply keeps the prompt / sign-up features off, so production stays up.
+    try:
+        post_extras_ok = bool(state["store"].post_extras_ready()) if store_ok else False
+    except StoreError:
+        post_extras_ok = False
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
@@ -1399,6 +1623,7 @@ def health():
         "maintenance": runtime["maintenance"],
         "active_map_version": runtime["active_version"],
         "island_names_ready": island_names_ok,
+        "post_extras_ready": post_extras_ok,
         "ready": store_ok and compatible and not runtime["maintenance"] and island_names_ok,
         "not_ready_reasons": not_ready,
     }
@@ -1411,19 +1636,27 @@ def islands(response: Response):
     # Everyone looking at the map wants the same answer, and it changes on a
     # timer rather than per viewer. Worth a CDN hop if one is ever put in front.
     response.headers["Cache-Control"] = "public, max-age=30"
-    return {"islands": payload}
+    # The browser's ground follows the map's reach factor, which moves as the map
+    # fills: a page open for hours picks it up here (web/js/config.js).
+    return {"islands": payload, "radius_factor": current_reach_factor()}
 
 
 @app.get("/api/connections")
-def connections(response: Response, person: str = ""):
-    """Lines between people. Public: a line is visible to everybody, not just the two."""
+def connections(response: Response, person: str = "", fresh: str = ""):
+    """Lines between people. Public: a line is visible to everybody, not just the two.
+
+    `fresh` comes from somebody who just reacted or wrote. In production that
+    write goes to the database directly, so this server's cache cannot know of
+    it: recount now (at most once every few seconds, whoever asks).
+    """
     try:
-        rows = connection_lines()
+        rows = connection_lines(force=bool(fresh) and fresh_lines_due())
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     if person:
         rows = [row for row in rows if person in (row["a"], row["b"])]
-    response.headers["Cache-Control"] = f"public, max-age={CONNECTION_CACHE_SECONDS}"
+    # Short enough that the 15 s poll never reads a stale copy from the browser.
+    response.headers["Cache-Control"] = "no-store" if fresh else f"public, max-age={CONNECTION_BROWSER_SECONDS}"
     return {"connections": rows, "since": CONNECTIONS_SINCE}
 
 
@@ -1698,10 +1931,11 @@ def map_bounds():
         raise HTTPException(503, "地図の範囲を読み込めませんでした。") from exc
     if not posts:
         return {"bounds": None, "count": 0}
-    return {"bounds": [min(p["x"] - post_radius(p) for p in posts),
-                       min(p["y"] - post_radius(p) for p in posts),
-                       max(p["x"] + post_radius(p) for p in posts),
-                       max(p["y"] + post_radius(p) for p in posts)], "count": len(posts)}
+    factor = current_reach_factor()
+    return {"bounds": [min(p["x"] - post_radius(p, factor) for p in posts),
+                       min(p["y"] - post_radius(p, factor) for p in posts),
+                       max(p["x"] + post_radius(p, factor) for p in posts),
+                       max(p["y"] + post_radius(p, factor) for p in posts)], "count": len(posts)}
 
 
 @app.get("/api/terrain")
@@ -1724,7 +1958,7 @@ def terrain(min_x: float, min_y: float, max_x: float, max_y: float,
     posts = [p for p in posts if
              (not needle or needle in (p.get('body', '') + ' ' + p.get('display_name', '')).lower())
              and (not selected or any(tag in p.get('tags', []) for tag in selected))]
-    return energy_grid(posts, bounds)
+    return energy_grid(posts, bounds, factor=current_reach_factor())
 
 
 @app.post("/api/posts")
@@ -1745,9 +1979,13 @@ def create_post(payload: PostCreate, request: Request):
             uuid.UUID(request_key)
         except ValueError:
             raise HTTPException(422, "再試行キーが不正です。")
-        canonical = json.dumps({"body": body, "tags": clean_tags(payload.tags),
-            "motivation": clean_motivation(payload.motivation), "image_path": payload.image_path or None},
-            sort_keys=True, ensure_ascii=False)
+        canon = {"body": body, "tags": clean_tags(payload.tags),
+                 "motivation": clean_motivation(payload.motivation), "image_path": payload.image_path or None}
+        # Only when given, so a retry key made before 2026-10-20 still finds its post.
+        for name in ("prompt", "recruit_deadline", "recruit_capacity"):
+            if getattr(payload, name) is not None:
+                canon[name] = getattr(payload, name)
+        canonical = json.dumps(canon, sort_keys=True, ensure_ascii=False, default=str)
         stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id + ':' + request_key + ':' + canonical))
         try:
             existing = state["store"].get_post(stable_id)
@@ -1766,13 +2004,17 @@ def create_post(payload: PostCreate, request: Request):
     if not account or not account.get("display_name"):
         raise HTTPException(status_code=409, detail="先にプロフィールを作成してください。")
 
+    tags = clean_tags(payload.tags)
+    extras = extras_for_new_post(payload, tags) if post_extras_on() else {}
+
     x, y, cluster_id, terms, vector, centred = project(body)
     record = {
         "author_id": user_id,
         "body": body,
-        "tags": clean_tags(payload.tags),
+        "tags": tags,
         "motivation": clean_motivation(payload.motivation),
         "image_path": payload.image_path or None,
+        **extras,
         "x": x,
         "y": y,
         "cluster_id": cluster_id,
@@ -1903,8 +2145,12 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
 
     fields = {}
     terms = None
-    if payload.body is not None:
-        body = clean_body(payload.body)
+    sent = payload.model_fields_set
+    extras_sent = sent & {"prompt", "recruit_deadline", "recruit_capacity"}
+    extras_on = post_extras_on()
+    recruit_sent = bool(extras_on and sent & {"recruit_deadline", "recruit_capacity"})
+    existing = None
+    if payload.body is not None or recruit_sent:
         try:
             existing = store.get_post(post_id)
         except StoreError:
@@ -1913,6 +2159,8 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
             raise HTTPException(status_code=404, detail="見つかりませんでした。")
         if existing["author_id"] != user_id:
             raise HTTPException(status_code=403, detail="自分の投稿だけ編集できます。")
+    if payload.body is not None:
+        body = clean_body(payload.body)
         if body != existing["body"]:
             if not check_rate_limit(user_id):
                 raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
@@ -1927,6 +2175,24 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
 
     if payload.tags is not None:
         fields["tags"] = clean_tags(payload.tags)
+        if extras_on and RECRUIT_TAG not in fields["tags"]:
+            fields.update({"recruit_deadline": None, "recruit_capacity": None})
+    if extras_on:
+        try:
+            if "prompt" in sent:
+                fields["prompt"] = post_extras.clean_prompt(payload.prompt)
+            if recruit_sent:
+                tags_now = fields.get("tags", existing.get("tags") or [])
+                if RECRUIT_TAG not in tags_now:
+                    fields.update({"recruit_deadline": None, "recruit_capacity": None})
+                else:
+                    if "recruit_deadline" in sent:
+                        fields["recruit_deadline"] = post_extras.clean_deadline(
+                            payload.recruit_deadline, keep=existing.get("recruit_deadline"))
+                    if "recruit_capacity" in sent:
+                        fields["recruit_capacity"] = post_extras.clean_capacity(payload.recruit_capacity)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
     if payload.motivation is not None:
         fields["motivation"] = clean_motivation(payload.motivation)
     if payload.clear_image:
@@ -1934,6 +2200,15 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
     elif payload.image_path is not None:
         fields["image_path"] = payload.image_path
 
+    if not fields and extras_sent and not extras_on:
+        # The database cannot keep these yet: ignore them and still succeed.
+        try:
+            row = store.get_post(post_id)
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+        if not row or row["author_id"] != user_id:
+            raise HTTPException(status_code=403, detail="編集できませんでした。")
+        return {**row, "island": island_of(row["id"])}
     if not fields:
         raise HTTPException(status_code=422, detail="変更点がありません。")
 
@@ -2189,7 +2464,13 @@ def local_delete_comment(comment_id: str, request: Request):
 def local_add_reaction(payload: ReactionChange, request: Request):
     require_local()
     user_id = current_user(request)
-    created = state["store"].add_reaction(payload.post_id, user_id, payload.kind)
+    try:
+        created = state["store"].add_reaction(payload.post_id, user_id, payload.kind)
+    except StoreError as error:
+        # Same words the database trigger raises for the direct insert (2026-10-20).
+        if str(error) in (post_extras.ERROR_CLOSED, post_extras.ERROR_FULL):
+            raise HTTPException(status_code=409, detail=str(error))
+        raise
     invalidate_connections()
     return {"ok": True, "created": created}
 

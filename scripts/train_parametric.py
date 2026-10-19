@@ -271,7 +271,7 @@ def neighborhood_overlap(features, coords, query_features, query_coords, k=15):
 
 
 def evaluate_generalization(features, coords, graph_neighbors, ab_params, holdout=60,
-                            fit_epochs=FIT_EPOCHS, umap_epochs=UMAP_EPOCHS, k=15):
+                            fit_epochs=FIT_EPOCHS, umap_epochs=UMAP_EPOCHS, k=15, also_k=()):
     """Hold points out, retrain, and check they land among their semantic neighbours.
 
     Reported relative to the ceiling reached by the reference layout itself, so
@@ -303,8 +303,16 @@ def evaluate_generalization(features, coords, graph_neighbors, ab_params, holdou
     ceiling = neighborhood_overlap(
         features[train_index], coords[train_index], features[test_index], coords[test_index], k=k
     )
-    return {
+    result = {
         "holdout_neighborhood_overlap": round(achieved, 4),
         "reference_layout_ceiling": round(ceiling, 4),
         "overlap_vs_ceiling": round(achieved / max(ceiling, 1e-6), 4),
     }
+    # The same measure at other neighbourhood sizes, for the record only.
+    for other in also_k:
+        got = neighborhood_overlap(features[train_index], train_map, features[test_index], predicted, k=other)
+        top = neighborhood_overlap(
+            features[train_index], coords[train_index], features[test_index], coords[test_index], k=other)
+        result[f"at_k{other}"] = {"achieved": round(got, 4), "ceiling": round(top, 4),
+                                  "overlap_vs_ceiling": round(got / max(top, 1e-6), 4)}
+    return result

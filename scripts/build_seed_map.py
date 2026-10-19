@@ -6,6 +6,10 @@ somewhere else. Treat artifacts/ as immutable once the demo is live.
 
     python scripts/build_seed_map.py            # build
     python scripts/build_seed_map.py --verify   # re-check a build without touching it
+    python scripts/build_seed_map.py --add-variants --artifacts DIR
+        # an existing build, under a new MAP_BUILD_VERSION: the seed variants
+        # (scripts/seed_variants.jsonl) and the current SEED_PLACEMENT. No point
+        # of the layout moves.
 
 Pipeline (following pokeDB's build_map_data):
 
@@ -38,6 +42,8 @@ from core.config import (  # noqa: E402
     GEMINI_MODEL_NAME,
     LAYOUT_CONFIG,
     LAYOUT_VERSION,
+    SEED_PLACEMENT,
+    SEED_VARIANTS_FILE,
     MODEL_VERSION,
 )
 from core.encoder import load_encoder, save_encoder  # noqa: E402
@@ -47,20 +53,27 @@ from core.geometry import (  # noqa: E402
     isotropic_scale_coordinates,
     nearest_neighbor_stats,
 )
-from core.similarity import build_distance_quantiles, build_idf  # noqa: E402
+from core.similarity import build_distance_quantiles, build_idf, map_view  # noqa: E402
+from core.placement import neighbourhood_recall, place_by_seeds  # noqa: E402
+from core.artifact_manifest import SEED_VECTORS  # noqa: E402
 
 CORPUS_PATH = ROOT / "scripts" / "seed_corpus.jsonl"
+VARIANTS_PATH = ROOT / "scripts" / SEED_VARIANTS_FILE
 ARTIFACTS = ROOT / "artifacts"
 SEED_MAP_JSON = ARTIFACTS / "seed_map.json"
 VECTORIZERS_PICKLE = ARTIFACTS / "vectorizers.pkl"
 ENCODER_NPZ = ARTIFACTS / "encoder.npz"
 
 
-def use_paths(corpus=None, artifacts=None):
+def use_paths(corpus=None, artifacts=None, variants=None):
     """Point the build at a different corpus / output directory (used by tests)."""
-    global CORPUS_PATH, ARTIFACTS, SEED_MAP_JSON, VECTORIZERS_PICKLE, ENCODER_NPZ
+    global CORPUS_PATH, ARTIFACTS, SEED_MAP_JSON, VECTORIZERS_PICKLE, ENCODER_NPZ, VARIANTS_PATH
     if corpus:
         CORPUS_PATH = Path(corpus)
+        # Variants point at rows of the real corpus: another corpus brings its own or none.
+        VARIANTS_PATH = None
+    if variants:
+        VARIANTS_PATH = Path(variants)
     if artifacts:
         ARTIFACTS = Path(artifacts)
         SEED_MAP_JSON = ARTIFACTS / "seed_map.json"
@@ -70,6 +83,15 @@ def use_paths(corpus=None, artifacts=None):
 # Quality gates, identical to pokeDB's.
 MAX_MEAN_DRIFT_RATIO = 0.35
 MIN_OVERLAP_VS_CEILING = 0.65
+# The generalization gate compares each held-out seed's nearest neighbours in the
+# feature space and on the map. Its neighbourhood was 15 seeds when there were
+# 1,000 of them: 1.5% of the map. At 10,182 seeds, 15 is 0.15% - a far finer
+# question, and one even UMAP's own transform only answers at 0.74 of the
+# ceiling (the student: 0.37). So the neighbourhood is that same 1.5% share,
+# never under 15; the threshold is unchanged, and the k=15 figure is still
+# recorded next to it (2026-10-15, measured on the Gemini 10k build).
+GATE_NEIGHBOUR_SHARE = 0.015
+GATE_MIN_NEIGHBOURS = 15
 MAX_NUMPY_TORCH_DIFF = 1e-5
 HOLDOUT_SIZE = 60
 
@@ -88,6 +110,29 @@ def load_corpus(path):
             texts.append(record["text"])
             domains.append((record.get("domain") or "未分類").strip())
     return texts, domains
+
+
+def load_variants(path, seed_count):
+    """Same-topic rewrites of seeds as other kinds of post (core.placement).
+    None when there is no variants file: a build without them, as before v4."""
+    if path is None or not Path(path).exists():
+        return None
+    sources, texts = [], []
+    with io.open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                record = json.loads(line)
+                sources.append(int(record["source"]))
+                texts.append(record["text"])
+    if not sources or min(sources) < 0 or max(sources) >= seed_count:
+        raise SystemExit(f"[NG] {Path(path).name} の source がシードの範囲外です（シード {seed_count} 件）。")
+    return np.array(sources, dtype=int), texts
+
+
+def variant_views(texts, model, sparse_artifacts, centroid):
+    """The variants in the map view, read exactly as serving reads a new post."""
+    features, _, _, _ = build_hybrid_features(texts, model, fit_sparse=False, sparse_artifacts=sparse_artifacts)
+    return map_view(features, centroid)
 
 
 def atomic_write(path, write_callback, mode="w"):
@@ -145,19 +190,25 @@ def build(args):
         print("     python scripts/validate_corpus.py で該当行を特定してください。")
         return 1
     print(f"      shape={features.shape}")
+    # Everything from here on - teacher, student, gates, 似てる度 - reads the
+    # centred view (core.similarity.map_view), the vector serving will hand the
+    # encoder. The stored 448-dim vector itself is unchanged.
+    import build_similarity_calibration as calibration
+    centroid, view = calibration.map_view_centroid(features)
+    print(f"      中心化した見方（密 {centroid['dense_weight']} / 単語 {centroid['sparse_weight']}）で地図を作ります")
 
     print("[4/8] 教師UMAPを1回だけ実行中（この結果はお手本として使い、以後破棄）...")
     reducer = umap.UMAP(n_components=2, **LAYOUT_CONFIG)
-    reference_coords = reducer.fit_transform(features)
+    reference_coords = reducer.fit_transform(view)
 
     print("[5/8] エンコーダ f を学習中（448 -> 512 -> 256 -> 128 -> 2）...")
     ab_params = train_parametric._umap_ab(LAYOUT_CONFIG["spread"], LAYOUT_CONFIG["min_dist"])
     encoder, torch_artifacts, train_stats = train_parametric.train_encoder(
-        features, reference_coords, graph=None, ab_params=ab_params
+        view, reference_coords, graph=None, ab_params=ab_params
     )
     print(f"      {train_stats}")
 
-    predicted = train_parametric.predict(encoder, torch_artifacts, features)
+    predicted = train_parametric.predict(encoder, torch_artifacts, view)
     scaled, scale_bounds = isotropic_scale_coordinates(predicted)
     coords, moved = dejitter_exact_overlaps(scaled)
     print(f"[6/8] 等方スケール: scale={scale_bounds['scale']:.4f} / 完全重複を{moved}点ずらしました")
@@ -171,11 +222,24 @@ def build(args):
     for island in islands:
         print(f"      島{island['id']}: {island['name']}  ({island['size']}件)")
 
+    # New posts are placed by their seeds (core.placement), from the vectors as
+    # shipped: float16, so the gate below measures exactly what serving does.
+    # The variants follow the seeds' rows, each at its source seed's spot.
+    variants = load_variants(VARIANTS_PATH, len(texts))
+    sources = np.zeros(0, dtype=int)
+    rows = view
+    if variants is not None:
+        sources, variant_texts = variants
+        print(f"      種類ちがいの例文 {len(sources)} 件（元のシードの位置に置く）")
+        rows = np.vstack([view, variant_views(variant_texts, model, sparse_artifacts, centroid)])
+    seed_vectors = rows.astype(np.float16)
     print("[8/8] 品質ゲートを検証中...")
     gates, passed = run_gates(
-        features, reference_coords, encoder, torch_artifacts, train_stats, ab_params,
+        view, reference_coords, encoder, torch_artifacts, train_stats, ab_params,
         skip_holdout=args.fast,
     )
+    gates["placement"] = placement_gate(seed_vectors.astype(float), coords, sources)
+    passed = passed and gates["placement"][0]
     for name, (ok, detail) in gates.items():
         print(f"      [{'OK' if ok else 'NG'}] {name}: {detail}")
     if not passed:
@@ -189,6 +253,7 @@ def build(args):
         torch_artifacts["coord_mean"], torch_artifacts["coord_scale"], scale_bounds,
     )
     atomic_write(VECTORIZERS_PICKLE, lambda h: pickle.dump(sparse_artifacts, h), mode="wb")
+    atomic_write(ARTIFACTS / SEED_VECTORS, lambda h: np.save(h, seed_vectors), mode="wb")
 
     payload = {
         "meta": {
@@ -213,24 +278,27 @@ def build(args):
         ],
         "distance_quantiles": build_distance_quantiles(coords),
         "idf": build_idf(token_lists),
+        # How a new text is placed: by its nearest seeds (core.placement), whose
+        # spots are "seed" above and whose vectors are seed_vectors.npy; the
+        # variants' rows follow, each at its source seed's spot.
+        "placement": dict(SEED_PLACEMENT, variant_sources=sources.tolist()),
     }
+    # The centroid is part of the map now (the encoder reads through it), and
+    # 似てる度 is calibrated in the same view: all of it goes out in one write.
+    anchors, quantiles, _pairs, _nearest = calibration.measure(view, space=centroid["space"])
+    payload["cosine_anchors"] = anchors
+    payload["cosine_centroid"] = centroid
+    payload["cosine_quantiles"] = quantiles
     atomic_write(
         SEED_MAP_JSON,
         lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")),
     )
+    write_manifest(ARTIFACTS, spec)
 
     print()
     print(f"完了: {SEED_MAP_JSON.name} / {VECTORIZERS_PICKLE.name} / {ENCODER_NPZ.name}")
     print(f"      近傍距離 {payload['meta']['nearest_neighbor_stats']}")
-    # Calibration belongs to this exact feature space; publish it with the map.
-    import build_similarity_calibration as calibration
-    centroid, centred = calibration.centre(features)
-    anchors, quantiles, _pairs, _nearest = calibration.measure(centred)
-    payload["cosine_anchors"] = anchors
-    payload["cosine_centroid"] = centroid
-    payload["cosine_quantiles"] = quantiles
-    atomic_write(SEED_MAP_JSON, lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")))
-    write_manifest(ARTIFACTS, spec)
+    print(f"      似てる度の目盛り floor={anchors['cosine_floor']} ceiling={anchors['cosine_ceiling']}")
     print("\n*** このスクリプトは今後実行しないでください（実行するとマップが動きます） ***")
     return 0
 
@@ -296,19 +364,56 @@ def run_gates(features, reference_coords, encoder, torch_artifacts, train_stats,
         gates["generalization"] = (True, "--fast のためスキップ")
     else:
         print("      ホールドアウト検証中（60点を隠して再学習）...")
+        neighbours = max(GATE_MIN_NEIGHBOURS, round(GATE_NEIGHBOUR_SHARE * (len(features) - HOLDOUT_SIZE)))
         result = train_parametric.evaluate_generalization(
             features, reference_coords, LAYOUT_CONFIG["n_neighbors"], ab_params,
-            holdout=HOLDOUT_SIZE,
+            holdout=HOLDOUT_SIZE, k=neighbours,
+            also_k=(GATE_MIN_NEIGHBOURS,) if neighbours != GATE_MIN_NEIGHBOURS else (),
         )
         ratio = result["overlap_vs_ceiling"]
-        gates["generalization"] = (
-            ratio >= MIN_OVERLAP_VS_CEILING,
-            f"overlap_vs_ceiling={ratio} (>= {MIN_OVERLAP_VS_CEILING}), "
+        detail = (
+            f"overlap_vs_ceiling={ratio} (>= {MIN_OVERLAP_VS_CEILING}) at k={neighbours}, "
             f"achieved={result['holdout_neighborhood_overlap']}, "
-            f"ceiling={result['reference_layout_ceiling']}",
+            f"ceiling={result['reference_layout_ceiling']}"
         )
+        finer = result.get(f"at_k{GATE_MIN_NEIGHBOURS}")
+        if finer:
+            detail += (f"; at k={GATE_MIN_NEIGHBOURS}: overlap_vs_ceiling={finer['overlap_vs_ceiling']}, "
+                       f"achieved={finer['achieved']}, ceiling={finer['ceiling']}")
+        gates["generalization"] = (ratio >= MIN_OVERLAP_VS_CEILING, detail)
 
     return gates, all(ok for ok, _ in gates.values())
+
+
+GATE_SEED = 42   # train_parametric.SEED: the same 300 seeds as every build before
+
+
+def placement_gate(vectors, coords, sources=(), holdout=300):
+    """Hold seeds out, place them by the others, and compare their nearest
+    neighbours in meaning with their nearest on the map - the student's
+    generalization measure, for the placement serving actually uses.
+
+    `vectors` holds the seeds' rows and then the variants' (`sources`: each
+    variant's seed). A held-out seed's own variants are held out with it: they
+    stand on its spot and would hand it the answer."""
+    coords = np.asarray(coords, dtype=float)
+    sources = np.asarray(sources, dtype=int)
+    seeds = vectors[:len(coords)]
+    rng = np.random.default_rng(GATE_SEED)
+    order = rng.permutation(len(coords))
+    test, train = np.sort(order[:holdout]), np.sort(order[holdout:])
+    kept = np.where(~np.isin(sources, test))[0]
+    placed = place_by_seeds(seeds[test], np.vstack([seeds[train], vectors[len(coords) + kept]]),
+                            np.vstack([coords[train], coords[sources[kept]]]), k=SEED_PLACEMENT["k"],
+                            temperature=SEED_PLACEMENT["temperature"], bandwidth=SEED_PLACEMENT["bandwidth"])
+    neighbours = max(GATE_MIN_NEIGHBOURS, round(GATE_NEIGHBOUR_SHARE * len(train)))
+    ratios = {}
+    for k in sorted({GATE_MIN_NEIGHBOURS, neighbours}):
+        got = neighbourhood_recall(seeds[train], coords[train], seeds[test], placed, k=k)
+        top = neighbourhood_recall(seeds[train], coords[train], seeds[test], coords[test], k=k)
+        ratios[k] = (round(got, 4), round(top, 4), round(got / max(top, 1e-6), 4))
+    detail = "; ".join(f"k={k}: overlap_vs_ceiling={r[2]}, achieved={r[0]}, ceiling={r[1]}" for k, r in ratios.items())
+    return ratios[neighbours][2] >= MIN_OVERLAP_VS_CEILING, f"{detail} (>= {MIN_OVERLAP_VS_CEILING} at k={neighbours})"
 
 
 def relabel(_args):
@@ -361,6 +466,66 @@ def relabel(_args):
     return 0
 
 
+def add_variants(_args):
+    """An existing build with the seed variants and the current SEED_PLACEMENT.
+
+    Nothing of the layout moves: the seeds keep their spots and vectors, the
+    student and the islands stay, and the variants only join the placement. It
+    is still a different map for new posts, so it needs a new version name
+    (MAP_BUILD_VERSION) and is written over a COPY of the build it starts from.
+    """
+    from core.artifact_manifest import validate_manifest, write_manifest
+    from core.embedder import load_embedder
+
+    provider = os.environ.get("EMBEDDING_PROVIDER", "onnx")
+    manifest = validate_manifest(ARTIFACTS, provider)
+    version = os.environ.get("MAP_BUILD_VERSION", "")
+    if not version or version == manifest["artifact_version"]:
+        print(f"[NG] MAP_BUILD_VERSION に新しい版の名前を指定してください（いまは {manifest['artifact_version']}）。")
+        return 1
+    with io.open(SEED_MAP_JSON, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if (payload.get("placement") or {}).get("method") != "seed_mode":
+        print("[NG] お手本で置く地図（v3 以降）にだけ使えます。")
+        return 1
+    seed_count = payload["meta"]["seed_count"]
+    seeds = np.load(ARTIFACTS / SEED_VECTORS)[:seed_count]
+    variants = load_variants(VARIANTS_PATH, seed_count)
+    if variants is None:
+        print(f"[NG] {VARIANTS_PATH} がありません。")
+        return 1
+    sources, texts = variants
+    print(f"[1/3] 種類ちがいの例文 {len(sources)} 件を、{manifest['embedding']['model']} で読みます")
+    model = load_embedder(provider=provider)
+    if provider == "gemini":
+        from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
+        model = CachedEmbedder(model, SQLiteEmbeddingCache(os.environ.get(
+            "EMBEDDING_CACHE_PATH", str(ROOT / ".cache" / "embeddings.sqlite3"))), manifest["embedding"])
+    with io.open(VECTORIZERS_PICKLE, "rb") as handle:
+        sparse_artifacts = pickle.load(handle)
+    rows = np.vstack([seeds.astype(float), variant_views(texts, model, sparse_artifacts, payload["cosine_centroid"])])
+    seed_vectors = rows.astype(np.float16)
+
+    print("[2/3] 置き方の品質ゲート...")
+    coords = np.array([[row[0], row[1]] for row in payload["seed"]], dtype=float)
+    ok, detail = placement_gate(seed_vectors.astype(float), coords, sources)
+    print(f"      [{'OK' if ok else 'NG'}] placement: {detail}")
+    if not ok:
+        print("[NG] 品質ゲートを通過しませんでした。書き込みません。")
+        return 1
+
+    print("[3/3] 書き込み...")
+    payload["meta"]["model_version"] = version
+    payload["meta"]["gates"]["placement"] = detail
+    payload["meta"]["variants_from"] = manifest["artifact_version"]
+    payload["placement"] = dict(SEED_PLACEMENT, variant_sources=sources.tolist())
+    atomic_write(ARTIFACTS / SEED_VECTORS, lambda h: np.save(h, seed_vectors), mode="wb")
+    atomic_write(SEED_MAP_JSON, lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")))
+    write_manifest(ARTIFACTS, manifest["embedding"])
+    print(f"完了: {version}（{manifest['artifact_version']} の座標のまま、例文 {len(sources)} 件と置き方 {SEED_PLACEMENT}）")
+    return 0
+
+
 def verify(_args):
     """Re-check an existing build without rebuilding anything."""
     from core.artifact_manifest import validate_manifest
@@ -395,15 +560,20 @@ def main():
     parser.add_argument("--verify", action="store_true", help="既存ビルドの整合性だけ確認する")
     parser.add_argument("--relabel", action="store_true",
                         help="座標はそのままに、島の分け方と名前だけ付け直す")
+    parser.add_argument("--add-variants", action="store_true",
+                        help="既存の地図に種類ちがいの例文と今の置き方を足して新しい版にする（座標は不変）")
     parser.add_argument("--fast", action="store_true", help="ホールドアウト検証を省略（開発用）")
     parser.add_argument("--corpus", help="別のコーパスを使う（開発用）")
     parser.add_argument("--artifacts", help="別の出力先を使う（開発用）")
+    parser.add_argument("--variants", help="別の種類ちがい例文を使う（--corpus を変えたときは指定しないと使わない）")
     args = parser.parse_args()
-    use_paths(args.corpus, args.artifacts)
+    use_paths(args.corpus, args.artifacts, args.variants)
     if args.verify:
         return verify(args)
     if args.relabel:
         return relabel(args)
+    if args.add_variants:
+        return add_variants(args)
     return build(args)
 
 

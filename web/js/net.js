@@ -17,6 +17,7 @@
 import { config, isLocal } from './config.js';
 import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
+import { joinRefusal } from './recruit-rules.js';
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -27,7 +28,7 @@ export class ApiError extends Error {
 
 // keepalive lets a request outlive the page: "no longer on screen" is said as
 // the tab closes, and without it the browser would drop it on the floor.
-async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive } = {}) {
+async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive, cache } = {}) {
   const merged = { accept: 'application/json', ...headers };
   if (auth) {
     const token = await session.accessToken();
@@ -42,6 +43,7 @@ async function request(url, { method = 'GET', body, headers = {}, auth = true, r
       headers: merged,
       body: raw ? body : (body === undefined ? undefined : JSON.stringify(body)),
       ...(keepalive ? { keepalive: true } : {}),
+      ...(cache ? { cache } : {}),
     });
   } catch {
     throw new ApiError('接続できませんでした。通信環境をご確認ください。', 0);
@@ -99,6 +101,16 @@ const POST_AUTHOR_EMBED = 'accounts!posts_author_id_fkey(id,display_name,icon_id
 const POST_COLUMNS =
   'id,author_id,body,tags,motivation,image_path,x,y,cluster_id,' +
   'like_count,help_count,join_count,comment_count,energy,created_at,updated_at';
+// The new columns only exist once the migration has been run; asking for them
+// before that would be a 400 on every post read.
+const postColumns = () =>
+  (config().features?.post_extras ? `${POST_COLUMNS},prompt,recruit_deadline,recruit_capacity` : POST_COLUMNS);
+
+/** A refused join (recruit_closed / recruit_full) said in words for a person. */
+function joinError(error) {
+  const text = joinRefusal(error?.message);
+  return text ? new ApiError(text, error.status) : error;
+}
 
 /** PostgREST nests an embedded table; every screen wants it flat. */
 function flatten(row, into) {
@@ -132,7 +144,7 @@ const supabaseBackend = {
   async getPost(id) {
     const rows = await restCall('posts', {
       params: {
-        select: `${POST_COLUMNS},${POST_AUTHOR_EMBED}`,
+        select: `${postColumns()},${POST_AUTHOR_EMBED}`,
         id: `eq.${id}`, deleted_at: 'is.null', limit: '1',
       },
     });
@@ -141,7 +153,7 @@ const supabaseBackend = {
   async postsByAuthor(authorId) {
     const rows = await restCall('posts', {
       params: {
-        select: `${POST_COLUMNS},${POST_AUTHOR_EMBED}`,
+        select: `${postColumns()},${POST_AUTHOR_EMBED}`,
         author_id: `eq.${authorId}`, deleted_at: 'is.null', order: 'created_at.desc',
       },
     });
@@ -190,12 +202,16 @@ const supabaseBackend = {
   async addReaction(postId, kind) {
     // resolution=ignore-duplicates: two taps racing each other must not turn
     // the second one into an error the tapper sees.
-    await restCall('reactions', {
-      method: 'POST',
-      params: { on_conflict: 'post_id,actor_id,kind' },
-      prefer: 'return=minimal,resolution=ignore-duplicates',
-      body: { post_id: postId, actor_id: session.userId(), kind },
-    });
+    try {
+      await restCall('reactions', {
+        method: 'POST',
+        params: { on_conflict: 'post_id,actor_id,kind' },
+        prefer: 'return=minimal,resolution=ignore-duplicates',
+        body: { post_id: postId, actor_id: session.userId(), kind },
+      });
+    } catch (error) {
+      throw joinError(error);
+    }
     return true;
   },
   async removeReaction(postId, kind) {
@@ -297,7 +313,11 @@ const localBackend = {
   },
   myReactions: async () => (await api.get('/api/local/reactions/mine')).reactions,
   addReaction: async (postId, kind) => {
-    await api.post('/api/local/reactions', { post_id: postId, kind });
+    try {
+      await api.post('/api/local/reactions', { post_id: postId, kind });
+    } catch (error) {
+      throw joinError(error);
+    }
     return true;
   },
   removeReaction: async (postId, kind) => {

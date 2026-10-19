@@ -232,7 +232,7 @@ erDiagram
 
 | カラムグループ | 含まれるカラム | 何のためにあるか |
 |---|---|---|
-| **ユーザー入力** | `body`, `tags`, `motivation`, `image_path` | ユーザーが自分で書いたり選んだりした情報 |
+| **ユーザー入力** | `body`, `tags`, `motivation`, `image_path`, `prompt`, `recruit_deadline`, `recruit_capacity` | ユーザーが自分で書いたり選んだりした情報。`prompt`（お題）と `recruit_*`（申込期限・先着人数。タグ「参加者募集中」のときだけ）は 2026-10-20 に追加（移行 SQL `20261020000000_post_prompts_and_recruit.sql`） |
 | **サーバー計算** | `x`, `y`, `cluster_id`, `terms`, `vec`, `vec_c` | NLPとエンコーダが文章から**自動計算**した情報。ブラウザからは書き込めません |
 | **集計値** | `like_count`, `help_count`, `join_count`, `comment_count`, `energy` | データベースのトリガーが**自動で更新**する数値 |
 | **メタ情報** | `created_at`, `updated_at`, `deleted_at` | いつ作られ、いつ更新され、いつ消されたか |
@@ -314,7 +314,7 @@ PRIMARY KEY (post_id, actor_id, kind)
 |---|---|---|---|
 | `like` | ❤️ | いいね | `posts.like_count` +1、投稿の `energy` +5 |
 | `help` | 🤝 | 手伝えるかも | `posts.help_count` +1、投稿の `energy` +5 |
-| `join` | 🙋 | 参加したい | `posts.join_count` +1、投稿の `energy` +5 |
+| `join` | 🙋 | 参加したい | `posts.join_count` +1、投稿の `energy` +5。期限切れ・先着人数に達した投稿には、新しく入れられない（2026-10-20。トリガー `reactions_recruit_guard`。message は `recruit_closed` / `recruit_full`、HTTP 400・`P0001`）。取り消しはできる |
 
 ---
 
@@ -771,7 +771,7 @@ Host: localhost:7860
 | `supabase.url` | `string` | Supabase プロジェクトのURL。ローカルモードでは空文字 |
 | `supabase.anon_key` | `string` | ブラウザがSupabaseにアクセスするための公開鍵（秘密鍵ではない） |
 | `supabase.bucket` | `string` | 画像アップロード先のストレージバケット名 |
-| `oauth` | `string[]` | 有効なOAuthプロバイダー。`["google"]` や `["google", "apple"]` など |
+| `oauth` | `string[]` | 有効なOAuthプロバイダー（`google` / `line` / `apple`）。`["google"]` や `["google", "line"]` など。`line` は Supabase の `custom:line` へつなぐ |
 | `world.min` / `world.max` | `number` | 地図の座標範囲。常に `0.0`〜`1000.0` |
 | `world.seed_bounds` | `[minX, minY, maxX, maxY]` | シードコーパス（学習に使った1000件の文章）が分布している矩形範囲。カメラの初期位置決定に使用 |
 | `energy.thresholds` | `object` | 地形の見た目を決める閾値。たとえば合計エネルギーが 90以上なら「草原」、300以上なら「森」 |
@@ -781,7 +781,9 @@ Host: localhost:7860
 | `similarity.floor` / `ceiling` | `number\|null` | コサイン値を「似てる度 0〜100%」に変換するための校正パラメータ |
 | `open_tag` | `string` | 「話しかけていいよ」の切り替えが付けるタグ（`tags[0]`＝「気軽に話しかけて」）。Q45 |
 | `weekly_prompt` | `{key, text, until}` | 今週のお題（Q37）。月曜0時（日本時間）に替わる。`key` は `"2026-W41"` の形、`until` は次に替わる日時（UTC） |
-| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文） |
+| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文）。2026-10-20 から4種類（昔がんばってたこと／最近はまってること／今度やってみたいこと／イベントの告知）×2の8つ |
+| `extra_prompts` | `{key, text}[]` | 今週のお題のほかに出すお題（2026-10-20）。`past`＝昔がんばってたこと、`now`＝最近はまってること、`future`＝今度やってみたいこと。その人が一度そのお題で投稿したら、そのお題だけ出さない（画面が自分の投稿の `prompt` で判断する）。今週のお題（`weekly`）は対象外 |
+| `features.post_extras` | `boolean` | DB が投稿の `prompt`・`recruit_deadline`・`recruit_capacity` を持っているか。`false` の間（本番に移行 SQL `20261020000000` が未適用）は、画面はお題の記録・申込期限・先着人数の入力を出さず、サーバーも送られてきた値を無視して保存する。ローカルは常に `true`。約60秒キャッシュ |
 | `push.public_key` | `string\|null` | ブラウザが push を購読するときの VAPID 公開鍵。`null` なら push は使えない（設定の欄は「このブラウザは端末への通知に対応していません」と出し、ベルの通知だけになる） |
 | `push.presence_seconds` / `presence_hold` | `number` | 画面に出ている間、`presence_seconds`（30秒）ごとに「あと `presence_hold`（75秒）は画面にいる」と伝える（`mark_active`）。その間サーバーは push しない |
 
@@ -801,7 +803,7 @@ GET /api/health HTTP/1.1
 ```json
 {
   "ok": true,
-  "seed_count": 1000,
+  "seed_count": 10182,
   "regions": 8,
   "store": "supabase",
   "store_ok": true,
@@ -813,13 +815,14 @@ GET /api/health HTTP/1.1
 | フィールド | 型 | 何がわかるか |
 |---|---|---|
 | `ok` | `boolean` | `true` = サーバープロセス自体は正常に動作中 |
-| `seed_count` | `integer` | 地図の基盤となるシードコーパスの点数。通常は1000 |
+| `seed_count` | `integer` | 地図の基盤となるシードコーパスの点数。2026-10-15 の地図から 10182（それ以前は 1000） |
 | `regions` | `integer` | 初期状態での島（クラスタ）の数 |
 | `store` | `"supabase"` \| `"memory"` | 現在のデータストア種別 |
 | `store_ok` | `boolean` | データベースと正常に通信できているか。`false` なら DB 障害の可能性あり |
 | `posts` | `integer` \| `null` | 現在の投稿数。DBと通信できない場合は `null` |
 | `model_version` | `string` | 使用中のモデルバージョン識別子 |
 | `island_names_ready` | `boolean` | `islands_state` の `name_source` 列が読めるか（2026-10-12 の移行 SQL が流れているか）。ローカル（memory）は常に `true`。結果は約60秒キャッシュ |
+| `post_extras_ready` | `boolean` | `posts` に `prompt`・`recruit_deadline`・`recruit_capacity` 列があるか（2026-10-20 の移行 SQL が流れているか）。ローカル（memory）は常に `true`。**`ready` には含めない**（`false` でも新機能が止まるだけで、本番は動く） |
 | `ready` | `boolean` | 昇格してよい状態か。`store_ok`・版の一致・保守中でない・`island_names_ready` のすべてが `true` のとき `true`。CI の `verify_release.py --phase ready` が見る |
 | `not_ready_reasons` | `string[]` | `ready` が `false` の理由（`store_unreachable`・`artifact_version_mismatch`・`maintenance`・`islands_state.name_source column missing (run migration 20261012000000)`）。`ready` なら空 |
 
@@ -846,6 +849,8 @@ Cache-Control: public, max-age=30
 ```
 CDNがある場合は30秒キャッシュして共有できます。全員が同じ結果を見るためです。
 
+`radius_factor`（2026-10-16〜）は、いまの投稿数での島の届く範囲の倍率（`/api/config` の `energy.radius_factor` と同じ値）。地図が育つと小さくなるので、開いたままのページはこれで地形を合わせ直します。
+
 **レスポンス例** `200 OK`
 ```json
 {
@@ -866,7 +871,8 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
       "cluster_ids": [0, 1, 4],
       "top_terms": ["Python", "開発", "AI"]
     }
-  ]
+  ],
+  "radius_factor": 0.7
 }
 ```
 
@@ -895,9 +901,11 @@ CDNがある場合は30秒キャッシュして共有できます。全員が同
 #### `GET /api/connections` — 人と人の線
 
 > **いつ使うか**: 地図に人と人の線を引くとき。線は2人だけでなく誰にでも見えるので、認証は要りません。  
-> **キャッシュ**: `Cache-Control: public, max-age=30`
+> **キャッシュ**: `Cache-Control: public, max-age=10`（2026-10-16〜。15秒ごとの更新で古い写しを読まないため）
 
 `?person={account_id}` を付けると、その人の線だけを返します。
+
+`?fresh=1`（2026-10-16〜）は、リアクション・コメントの直後に画面が付けます。サーバーが線を数え直し（どこから来ても2秒に1回まで）、`Cache-Control: no-store` で返すので、自分の線がすぐ引かれます（以前は25〜75秒遅れた）。
 
 **レスポンス例** `200 OK`（値は架空）
 ```json
@@ -1250,7 +1258,11 @@ Content-Type: application/json
 | `tags` | `string[]` | ❌ | `[]` | 下記4種から | 自分の状況を伝えるバッジ。座標には一切影響しません |
 | `motivation` | `integer` | ❌ | `50` | 0〜100 | エンジョイ(0)〜ガチ(100)のスライダー値。座標には影響しないが、`energy` の初期値に直結する |
 | `image_path` | `string\|null` | ❌ | `null` | — | 事前にアップロードした画像のパス |
+| `prompt` | `string\|null` | ❌ | `null` | `"weekly"` `"past"` `"now"` `"future"` | どのお題で書いたか（2026-10-20）。それ以外は 422。座標には影響しない |
+| `recruit_deadline` | `string\|null` | ❌ | `null` | `"YYYY-MM-DD"`・今日〜1年後（日本時間） | 申込期限。その日の終わりまで受け付ける。タグ「参加者募集中」の投稿だけ（無ければ `null` にする）。過去の日付・形が違うものは 422 |
+| `recruit_capacity` | `integer\|null` | ❌ | `null` | 1〜999 | 先着人数。同上。範囲外・整数でないものは 422 |
 
+> 列が無い DB の間（`features.post_extras` が `false`）、`prompt`・`recruit_*` は検査せず無視して保存が成功する。応答の投稿には `prompt`・`recruit_deadline`・`recruit_capacity`（無ければ `null`）と `recruit_closed`（`null`＝受付中／`"deadline"`＝期限切れ／`"full"`＝先着人数に達した）が付く。自分の投稿の一覧・地図の投稿・投稿の詳細も同じ。
 **選択可能なタグ（複数選択OK、順番はシステムが正規化）**
 
 | タグ | 意味 | こういうとき選ぶ |
@@ -1332,7 +1344,11 @@ Content-Type: application/json
 | `motivation` | `integer` | 熱量を変更。座標は変わらないが `energy` は変わる |
 | `image_path` | `string` | 新しい画像パスを設定 |
 | `clear_image` | `boolean` | `true` を送ると画像をクリア（`image_path` を `null` にする） |
+| `prompt` | `string\|null` | お題を差し替え。`null` で消す（2026-10-20） |
+| `recruit_deadline` | `string\|null` | 申込期限を差し替え。`null` で消す。**すでに入っている期限と同じ値なら、過ぎていても通る**。ほかは作成と同じ検査 |
+| `recruit_capacity` | `integer\|null` | 先着人数を差し替え。`null` で消す。人数を今の参加者数より少なくしてもよい（受付終了になるだけ） |
 
+> `tags` から「参加者募集中」を外すと `recruit_deadline`・`recruit_capacity` は `null` に戻る。タグが無い投稿にこの2つを送っても `null` のまま。
 **レスポンス例** `200 OK`
 ```json
 {
@@ -1674,6 +1690,9 @@ Content-Type: application/json
 
 > [!TIP]
 > 同じリアクションを2回送っても、主キーの一意制約によりエラーではなく**無視**されます（冪等性）。2回目は「既存」として扱われ、`created: false` が返ります。
+
+> [!NOTE]
+> **受付終了（2026-10-20）**: `kind: "join"` は、投稿の申込期限（日本時間でその日の終わり）を過ぎているか、`join_count` が `recruit_capacity` に達していると、新しくはできません。ローカルでは HTTP `409`・`{"detail": "recruit_closed"}`（期限切れ）または `{"detail": "recruit_full"}`（先着人数に達した）。取り消し（`DELETE`）はいつでもできます。本番は画面が Supabase の `reactions` へ直接 insert するので、同じ決まりを DB のトリガー `reactions_recruit_guard` が守ります（PostgREST は HTTP 400・`{"code": "P0001", "message": "recruit_closed" | "recruit_full"}`）。すでに参加している人の再 insert は断られません。
 
 ##### `POST /api/local/notifications/read` — 通知の既読化
 

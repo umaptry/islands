@@ -3,7 +3,7 @@
 // islands' terrain, drawn on かさなり's coordinates. Posts contribute overlapping
 // cones of energy, the sum decides the ground, and the landmasses that emerge are
 // named after the words of the people standing on them. People stand on it as
-// faces wrapped in a ball or a flame that says how fired up they are (heat.js);
+// teardrop pins whose colour and flame say how fired up they are (pins.js);
 // lines between them are roads inside an island and planes across the water
 // (lines.js).
 //
@@ -12,9 +12,8 @@
 // re-projected client-side.
 
 import { config, energyOf, interactionsOf, islandColor, radiusOf } from '../config.js';
-import { drawFace } from '../avatars.js';
 import { matchesFilters, state, filtering } from '../state.js';
-import { clip, toast } from '../ui.js';
+import { clip, desktopSheet, sheetOpen, toast } from '../ui.js';
 import {
   INK, REDUCED_MOTION, drawBirds, drawBoats, drawFog, drawSeaMarks, drawWhales,
   hashId, makeLabelSpace,
@@ -22,15 +21,17 @@ import {
 import { detectLandmasses, membership } from './landmass.js';
 import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
 import { kinLines } from './kin.js';
-import { TIER_SPRITES, drawSprite, landmarkSprite, preloadSprites } from './sprites.js';
-import { buildDetail, buildTerrain, gridTerrain } from './terrain.js';
-import { isUnreadRecruit } from './reads.js';
-import {
-  drawHeat, faceLift, getHeatTier, heatColor, heatFrameAt, heatFrameTime,
-  heatSpriteHalf, heatSpriteValue, isFlameTier,
-} from '../heat.js';
+import { preloadSprites } from './sprites.js';
+import { drawPostPin, drawMiniPin, pinColor, pinGeometry, pinScale, pinTier } from './pins.js';
+import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
+import { buildDetail, buildTerrain, gridTerrain, toCanvas } from './terrain.js';
+import { drawSurf, surfShow } from './surf.js';
+import { offThread } from './offthread.js';
+import { groundOf } from './coast.js';
+import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
+import { PALETTE, PIN, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
 
 let canvas = null;
 let ctx = null;
@@ -41,17 +42,18 @@ let height = 0;
 let raf = 0;
 let started = 0;
 let onPick = () => {};
+let onStack = () => {};
 let hits = [];
 
 // Three distances, measured against the zoom that frames everything (Q57・Q59):
 //
-//   far   the whole map. Continents, their towns and names, a few faces each;
+//   far   the whole map. Continents, their towns and names, a few pins each;
 //         your own posts send out radar rings, and a post asking for people you
 //         have not opened wears a gold star. Tapping an island or one of those
 //         flies you in.
-//   near  everybody's face where they wrote, wrapped in its heat, with names
-//         where they fit. Now and then a face says the start of what it wrote.
-//   deep  bigger faces, how much each was answered.
+//   near  everybody's pin where they wrote, in its heat, with names where they
+//         fit. Now and then a pin says the start of what it wrote.
+//   deep  bigger pins, how much each was answered.
 //
 // Zoomed out you want to see where the activity is; zoomed in you want to see
 // who. Two views of the same fact, and the switch is what keeps a busy map
@@ -90,11 +92,23 @@ function insets() {
 }
 
 /** The controls floating over the map, in canvas px. Labels keep out of them
- * so a name or a speech bubble is never half under the search bar. */
+ * so a name or a speech bubble is never half under the search bar. Measured at
+ * most every CHROME_MS: querying and measuring eight elements on every frame
+ * was 8% of a phone's frame time while panning (2026-10-16). */
+const CHROME_MS = 300;
+let chromeCache = { at: -Infinity, boxes: [] };
+
 function chromeBoxes() {
+  const now = performance.now();
+  if (now - chromeCache.at < CHROME_MS) return chromeCache.boxes;
+  chromeCache = { at: now, boxes: measureChrome() };
+  return chromeCache.boxes;
+}
+
+function measureChrome() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #islandBadge, #map .map-controls, #mapStatus')]
+  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #islandBadge, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #busyToggle, #islandCard')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -103,10 +117,11 @@ function chromeBoxes() {
     }));
 }
 
-export function initMap(element, { onSelect }) {
+export function initMap(element, { onSelect, onSelectMany }) {
   canvas = element;
   ctx = canvas.getContext('2d');
   onPick = onSelect || (() => {});
+  onStack = onSelectMany || ((posts) => onPick(posts[0]));
   started = performance.now();
   preloadSprites();
   resize();
@@ -154,13 +169,17 @@ export function resize() {
  */
 let fitExtent = null;
 
-function fitTarget(posts, extent) {
+/** The world box the whole-map camera frames (also what the mini map shows). */
+function fitBounds(posts, extent) {
   const valid = posts.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-  const bounds = extent || (valid.length ? [
+  return extent || (valid.length ? [
     Math.min(...valid.map((p) => p.x - radiusOf(p))), Math.min(...valid.map((p) => p.y - radiusOf(p))),
     Math.max(...valid.map((p) => p.x + radiusOf(p))), Math.max(...valid.map((p) => p.y + radiusOf(p))),
   ] : seedBounds());
-  const [minX, minY, maxX, maxY] = bounds;
+}
+
+function fitTarget(posts, extent) {
+  const [minX, minY, maxX, maxY] = fitBounds(posts, extent);
   const spanX = Math.max(1, maxX - minX);
   const spanY = Math.max(1, maxY - minY);
   // Edge to edge across, and between the top bar and the bottom controls down:
@@ -216,9 +235,12 @@ export function showAll({ then } = {}) {
 }
 
 /** How far in and out a gesture may go, relative to the fitted view. */
+// Three times further in since 2026-10-18 (was max(6, fit x 8)): posts placed by
+// their seeds stand close, and of 496 on map v6, 227 could show a face at the
+// old limit and 354 at this one. Closer than that is a stack (drawFaces).
 function clampScale(value) {
   const fit = state.camera.fit || state.camera.scale;
-  return Math.max(fit * 0.5, Math.min(value, Math.max(6, fit * 8)));
+  return Math.max(fit * 0.5, Math.min(value, Math.max(18, fit * 24)));
 }
 
 function seedBounds() {
@@ -309,13 +331,15 @@ let tween = 0;
  * the ground neither lurches nor drifts sideways on the way. Any touch stops it
  * where it is. Reduced motion jumps straight there.
  */
-export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, then } = {}) {
+export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = null, then } = {}) {
   cancelAnimationFrame(tween);
   frame = insets();
   const from = { ...state.camera };
   const to = clampScale(targetScale);
-  const anchorX = width / 2;
-  const anchorY = frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
+  const anchorX = x ?? width / 2;
+  // `y`, in canvas px, puts the point exactly there instead of `lift` of the
+  // way down the free frame.
+  const anchorY = y ?? frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
   const start = toWorld(anchorX, anchorY);
   const duration = REDUCED_MOTION ? 0 : 480;
   const began = performance.now();
@@ -340,19 +364,36 @@ export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, then } = {}) {
 }
 
 /** Open an island up: frame its posts at the near distance. */
+/** Open an island up: the whole island - its land, which reaches a post's
+ * radius beyond the post - fills the screen between the controls, at whatever
+ * zoom that takes (2026-10-20, the user: the old cap of 3.6x the whole map left
+ * a small island small). */
 function zoomToIsland(island) {
   const members = (island.post_ids || []).map((id) => state.postsById.get(id)).filter(Boolean);
-  const xs = members.length ? members.map((post) => post.x) : [island.cx];
-  const ys = members.length ? members.map((post) => post.y) : [island.cy];
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const fit = state.camera.fit || state.camera.scale;
-  const usableH = Math.max(120, height - frame.top - frame.bottom);
-  const room = Math.min((width - 64) / (maxX - minX + 40), (usableH - 90) / (maxY - minY + 40));
-  const target = Math.max(fit * 2.2, Math.min(fit * 3.6, room));
-  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, target, { lift: 0.55 });
+  let minX = island.cx;
+  let maxX = island.cx;
+  let minY = island.cy;
+  let maxY = island.cy;
+  members.forEach((post) => {
+    // A coast reaches 0.7-1 of the radius (coast.js); the full radius keeps it in.
+    const r = radiusOf(post);
+    minX = Math.min(minX, post.x - r);
+    maxX = Math.max(maxX, post.x + r);
+    minY = Math.min(minY, post.y - r);
+    maxY = Math.max(maxY, post.y + r);
+  });
+  const usableW = Math.max(120, width - 32);
+  const usableH = Math.max(120, height - frame.top - frame.bottom - 16);
+  const room = Math.min(usableW / Math.max(1, maxX - minX), usableH / Math.max(1, maxY - minY));
+  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, clampScale(room), { lift: 0.5 });
+}
+
+/** How close a tapped post is brought: near the largest zoom (2026-10-20, the
+ * user: the old 2.5x steps left it small). A post already closer stays so. */
+const POST_ZOOM = 0.85;
+
+function postZoom() {
+  return Math.max(state.camera.scale, clampScale(Infinity) * POST_ZOOM);
 }
 
 // ---------------------------------------------------------------- answers
@@ -381,6 +422,17 @@ let emphasis = { id: null, until: 0 };
 
 function islandKey(island) {
   return island.island_id || island.label;
+}
+
+// A screen that wants to show its own card for a tapped island registers here;
+// with no handler the map flies in as before.
+let islandTapHandler = null;
+export function onIslandTap(handler) { islandTapHandler = typeof handler === 'function' ? handler : null; }
+
+/** Fly in to an island by its key (the card's enter button). */
+export function enterIsland(key) {
+  const island = state.islands.find((entry) => islandKey(entry) === key);
+  if (island) openIsland(island);
 }
 
 function openIsland(island) {
@@ -569,6 +621,23 @@ function zoomAround(point, requested, absolute = false) {
   state.camera.y = cy - localY * next;
 }
 
+// Tapped with no post open, the face slides to the middle of the screen, a
+// quarter of the way down (25vh), clear of the half-height sheet opening under
+// it. With a post already open the map stays put, so you can go from face to
+// face without the ground moving each time (2026-10-16).
+const TAP_SPOT = 0.25;
+
+function tapSpot() {
+  const box = canvas.getBoundingClientRect();
+  let x = width / 2;
+  if (desktopSheet()) {
+    // A window just wide enough for the side panel has its middle under it.
+    const panel = document.getElementById('sheet').getBoundingClientRect();
+    x = Math.max(x, panel.right - box.left + 48);
+  }
+  return { x, y: window.innerHeight * TAP_SPOT - box.top };
+}
+
 function pick(event) {
   const rect = canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
@@ -581,18 +650,33 @@ function pick(event) {
       ? x >= hit.box.left && x <= hit.box.right && y >= hit.box.top && y <= hit.box.bottom
       : Math.hypot(hit.x - x, hit.y - y) <= hit.r;
     if (!inside) continue;
-    if (hit.island) {
-      openIsland(hit.island);
+    if (hit.islandName) {
+      // The name of an island seen from near or deep: the card, never a fly-in.
+      if (islandTapHandler) islandTapHandler({ key: islandKey(hit.islandName), island: hit.islandName, x, y });
+    } else if (hit.island) {
+      if (islandTapHandler) islandTapHandler({ key: islandKey(hit.island), island: hit.island, x, y });
+      else openIsland(hit.island);
     } else if (hit.trial) {
       toast('お試しの場所です。ほかの人には見えていません');
     } else if (hit.approach) {
       // Your own post from far away: come in close first, then open it.
-      const fit = state.camera.fit || state.camera.scale;
       const { post } = hit;
       playSe('pop');
-      zoomTo(post.x, post.y, fit * 2.6, { lift: 0.4, then: () => onPick(post) });
+      zoomTo(post.x, post.y, postZoom(), { ...tapSpot(), then: () => onPick(post) });
+    } else if (hit.stack) {
+      // Several posts on one spot at full zoom: the list of them.
+      playSe('pop');
+      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, state.camera.scale, tapSpot());
+      onStack(hit.stack);
+    } else if (hit.dot) {
+      // A dot is a face still waiting for room: come closer - its face shows
+      // up on the way, or steps aside at full zoom - and open it there.
+      const { post } = hit;
+      playSe('pop');
+      zoomTo(post.x, post.y, postZoom(), { ...tapSpot(), then: () => onPick(post) });
     } else {
       playSe('pop');
+      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, postZoom(), tapSpot());
       onPick(hit.post);
     }
     return;
@@ -637,13 +721,252 @@ function render() {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = config().energy.biome_colors.sea;
   ctx.fillRect(0, 0, width, height);
+  refreshClock();
+  refreshActivity();
   renderMap(time);
+  notifyCamera();
+}
+
+// ---------------------------------------------------------------- time of day
+
+// Looked up at most once a minute: the layers are a few fillRects, but a Date
+// per frame is not worth it.
+const CLOCK_MS = 60000;
+let tod = null;
+let todAt = -Infinity;
+let todFor = null;
+
+/** The address as one string, to notice an edited ?tod= or ?tier= at once
+ * (comparing it is cheaper than the Date the clock would cost). */
+function addressKey() {
+  try {
+    return typeof location !== 'undefined' ? `${location.search}${location.hash}` : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+// A ?tod= seen in the address holds until the page is loaded again: the app's
+// own moves (the bottom nav, opening a post on the map) write `#/map` and drop
+// a ?tod= that was added after the route, and the map went back to the clock.
+let askedTod = null;
+
+function refreshClock() {
+  const now = performance.now();
+  const address = addressKey();
+  if (tod !== null && now - todAt < CLOCK_MS && address === todFor) return;
+  todAt = now;
+  todFor = address;
+  let asked = null;
+  try { asked = addressParam('tod'); } catch (error) { asked = null; }
+  if (asked && Object.prototype.hasOwnProperty.call(TIMES, asked)) askedTod = asked;
+  tod = askedTod || timeOfDay();
+}
+
+/** 'morning' | 'day' | 'evening' | 'night' - what the map is painted in now. */
+export function timeOfDayNow() {
+  refreshClock();
+  return tod;
+}
+
+/** The time-of-day layers over the whole screen (see palette.js TIMES). */
+function paintTimeOfDay() {
+  const layers = TIMES[tod] || [];
+  if (!layers.length) return;
+  ctx.save();
+  layers.forEach((layer) => {
+    ctx.globalCompositeOperation = layer.blend;
+    ctx.globalAlpha = layer.alpha;
+    ctx.fillStyle = layer.color;
+    ctx.fillRect(0, 0, width, height);
+  });
+  ctx.restore();
+}
+
+/** At night the dark layer took the land down with the sea, and an island's
+ * shape was hard to tell from the water (review, 2026-10-18). The ground
+ * texture again, screened on before the dark layer comes: the open sea in it
+ * is transparent, so only the land and its shallows are lifted, and they stay
+ * lighter than the water once the night is over them. */
+const NIGHT_LAND = 0.42;
+
+function liftLandAtNight(terrain, closeUp, grid, alpha) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  if (grid) {
+    ctx.globalAlpha = NIGHT_LAND;
+    const origin = toScreen(grid.minX, grid.minY);
+    const { scale } = state.camera;
+    ctx.drawImage(grid.canvas, origin.x, origin.y, (grid.maxX - grid.minX) * scale, (grid.maxY - grid.minY) * scale);
+  }
+  if (terrain) {
+    paintGround(terrain, NIGHT_LAND * alpha, closeUp);
+    if (closeUp) paintGround(closeUp, NIGHT_LAND);
+  }
+  ctx.restore();
+}
+
+/** Windows lit at night, over the dark layer: every settlement and landmark
+ * that was drawn, with the seed it was drawn with. */
+function paintNightLights(places, townShow, calmOf) {
+  if (townShow <= 0) return;
+  ctx.save();
+  places.forEach((place) => {
+    if (!place.town) return;
+    const calm = calmOf(place.island);
+    ctx.globalAlpha = place.fade * place.show;
+    drawNightLights(ctx, { tier: place.tier, seed: place.seed, calm }, place.x, place.foot, place.size);
+    (place.marks || []).forEach((mark) => {
+      drawNightLights(ctx, { landmark: mark.name, calm }, mark.x, mark.foot, mark.size);
+    });
+  });
+  ctx.restore();
+}
+
+/** Sunlight from the top left: a radial wash over the ground and trees, in
+ * screen coordinates (it does not move with the map). */
+function paintSun() {
+  const cx = width * SUN.at[0];
+  const cy = height * SUN.at[1];
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, SUN.reach * Math.hypot(width, height));
+  gradient.addColorStop(0, SUN.color);
+  gradient.addColorStop(1, `${SUN.color}00`);
+  ctx.save();
+  ctx.globalAlpha = SUN.alpha;
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- this week
+
+// The week's activity switch: with it on, only the posts that saw something in
+// the last seven days are drawn as usual; the rest step back like posts a
+// filter left out.
+const WEEK_MS = 7 * 24 * 3600 * 1000;
+const WHOLE_MAP_Z = 1.2;   // zoomed out this far, the loaded posts are all of them
+let busyOn = false;
+let busyIds = new Set();
+let busyIslands = new Set();   // islandKey of the islands holding one of them
+let busyTotal = 0;
+let busyWhole = null;   // the count last made with the whole map in view
+let activitySeen = { posts: null, connections: null, islands: null, revision: -1, minute: -1 };
+
+export function setBusyMode(on) { busyOn = Boolean(on); }
+export function busyMode() { return busyOn; }
+/** How many posts saw something in the last seven days. Counted over what is
+ * loaded; the map holds only the posts near the screen when zoomed in, so the
+ * number last made with (nearly) the whole map in view is kept and returned while
+ * zoomed in, rather than a count that shrinks as you come closer. */
+export function busyCount() {
+  refreshActivity();
+  return busyWhole === null ? busyTotal : busyWhole;
+}
+
+/** Counted again only when the posts, lines or islands changed (or a minute
+ * went by), never every frame. */
+function refreshActivity() {
+  const minute = Math.floor(Date.now() / CLOCK_MS);
+  const was = activitySeen;
+  if (was.posts === state.posts && was.connections === state.connections
+      && was.islands === state.islands && was.revision === state.revision
+      && was.minute === minute) return;
+  activitySeen = {
+    posts: state.posts, connections: state.connections, islands: state.islands,
+    revision: state.revision, minute,
+  };
+  const since = Date.now() - WEEK_MS;
+  const recent = (stamp) => { const at = Date.parse(stamp); return Number.isFinite(at) && at >= since; };
+  const ids = new Set();
+  state.posts.forEach((post) => { if (recent(post.created_at)) ids.add(post.id); });
+  (state.connections || []).forEach((row) => {
+    if (!recent(row.last_at)) return;
+    ids.add(row.a_post);
+    ids.add(row.b_post);
+  });
+  busyIds = ids;
+  busyTotal = [...ids].filter((id) => state.postsById.has(id)).length;
+  if (zoomLevel().z <= WHOLE_MAP_Z) busyWhole = busyTotal;
+  busyIslands = new Set(state.islands
+    .filter((island) => (island.post_ids || []).some((id) => ids.has(id))).map(islandKey));
+}
+
+/** Whether a post is drawn faint and cannot be tapped: left out by the filter,
+ * or quiet this week while the week switch is on. */
+function steppedBack(post, sifting) {
+  return (sifting && !matchesFilters(post)) || (busyOn && !busyIds.has(post.id));
+}
+
+/** Zoomed out: a soft warm light breathing on each island with something going on. */
+function drawBusyGlow(places, motion) {
+  const breath = motion === null ? 0.5 : (Math.sin(motion * 1.8) + 1) / 2;
+  ctx.save();
+  places.forEach((place) => {
+    if (!busyIslands.has(islandKey(place.island))) return;
+    const spot = toScreen(place.island.cx, place.island.cy);
+    const radius = 46 + breath * 14;
+    const gradient = ctx.createRadialGradient(spot.x, spot.y, 0, spot.x, spot.y, radius);
+    gradient.addColorStop(0, PIN.mid);
+    gradient.addColorStop(1, `${PIN.mid}00`);
+    ctx.globalAlpha = 0.5 + breath * 0.25;
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- outside views
+
+let lastGround = null;
+const cameraHandlers = [];
+let cameraSeen = '';
+
+/** Called after a frame in which the camera moved (not while it stands still). */
+export function onCameraChange(handler) {
+  if (typeof handler === 'function') cameraHandlers.push(handler);
+}
+
+function notifyCamera() {
+  const camera = state.camera;
+  const mark = `${camera.x},${camera.y},${camera.scale},${width},${height}`;
+  if (mark === cameraSeen) return;
+  cameraSeen = mark;
+  cameraHandlers.forEach((handler) => {
+    try { handler(); } catch (error) { console.error(error); }
+  });
+}
+
+/** What the mini map, compass and scale bar need to know about the view. */
+export function mapSnapshot() {
+  const [minX, minY, maxX, maxY] = fitBounds(state.posts, fitExtent);
+  const topLeft = toWorld(0, frame.top);
+  const bottomRight = toWorld(width, height - frame.bottom);
+  const { z, level } = zoomLevel();
+  return {
+    world: { minX, minY, maxX, maxY },
+    view: { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y },
+    scale: state.camera.scale, z, level,
+    ground: lastGround,
+    mine: state.myPosts.filter((post) => Number.isFinite(post.x) && Number.isFinite(post.y))
+      .map((post) => ({ x: post.x, y: post.y })),
+  };
+}
+
+/** Glide so that world point (x, y) is in the middle of the free part of the
+ * screen, at the zoom the map has now. */
+export function panTo(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  zoomTo(x, y, state.camera.scale, { lift: 0.5 });
 }
 
 // ---------------------------------------------------------------- map view
 
-// Settlement sprite size by growth tier (小屋 → 都市), far view, CSS px.
-const TIER_SIZES = [28, 32, 36, 42, 48];
+// Settlement size by growth tier (小屋 → 都市): screen px at TOWN_REF_SCALE,
+// turned into a world length by worldSize() below (so a town grows and shrinks
+// with the map, and TOWN_SCALE shrinks them all together).
+const TIER_SIZES = [48, 56, 64, 72, 80];
 // Where up to three landmarks stand around the settlement, in settlement sizes:
 // behind, then front-left, then front-right.
 const LANDMARK_SPOTS = [[0.2, -0.4], [-0.8, 0.14], [0.82, 0.16]];
@@ -655,8 +978,21 @@ const LANDMARK_MIN_TIER = 1;
 // land. Zoomed out they crowded the names and faces; and pushed aside to make
 // room for the faces they used to end up in the sea (2026-10-12).
 const TOWN_ZOOM = [2.3, 2.6];
-const OUTLINE = '#4a3426';
-const MINE = '#ff8a1f';
+// Towns and landmarks are as big as the island they stand on: their size is a
+// length in the world, so they grow and shrink with the map (a pinch scales them
+// with the ground). TIER_SIZES are screen px at the reference scale below - the
+// phone's whole-map scale (~0.4) x TOWN_ZOOM, between the phone and a desktop -
+// and are turned into world lengths once, so a phone and a desktop see the same
+// town on the same island.
+const TOWN_REF_SCALE = 0.55 * TOWN_ZOOM[1];
+// A tenth of that (2026-10-19, the user): at the size above a town covered most
+// of its island once you came close; now it is a village on the island's land.
+const TOWN_SCALE = 0.1;
+const worldSize = (px) => (px / TOWN_REF_SCALE) * TOWN_SCALE;
+// A town shows once it is wide enough on screen to read (fading in over this
+// range of px), as well as past TOWN_ZOOM. Small, because the towns are small.
+const TOWN_PX = [14, 20];
+const MINE = PALETTE.accent;
 const LABEL_FONT = '700 13px system-ui, sans-serif';
 const SMALL_FONT = '600 11px system-ui, sans-serif';
 
@@ -695,7 +1031,13 @@ function kinPlan(meId, sifting) {
 }
 
 function renderMap(time) {
-  const view = { sea: seaBox(), toScreen, width, height, scale: state.camera.scale };
+  // The same posts and coarse layer the ground is drawn from, so the sea's
+  // moving things can keep off the land the way the routes do.
+  const ground = withTrialGround(groundPosts());
+  const view = {
+    sea: seaBox(), toScreen, width, height, scale: state.camera.scale, maxScale: clampScale(Infinity),
+    posts: ground, cells: state.saturated ? state.cells : NO_CELLS,
+  };
   const { scale } = state.camera;
   const { z, level } = zoomLevel();
   const far = level === 'far';
@@ -704,6 +1046,8 @@ function renderMap(time) {
   // Seconds for things that move, or null to hold still (less motion).
   const motion = REDUCED_MOTION ? null : time;
   const stage = revealStage(performance.now());
+  // Closed: the next post opened - the same one again too - hops up anew.
+  if (!state.selected) opened = { id: null, at: 0 };
 
   // The seed corpus is NOT drawn. It used to be a field of dots, which looked
   // like a second kind of island while meaning something entirely different -
@@ -716,7 +1060,7 @@ function renderMap(time) {
     if (point.x < -80 || point.x > width + 80 || point.y < -80 || point.y > height + 80) return;
     visible.push({
       post, point, mine: Boolean(meId) && post.author_id === meId,
-      out: sifting && !matchesFilters(post),
+      out: steppedBack(post, sifting),
     });
   });
 
@@ -728,12 +1072,25 @@ function renderMap(time) {
   // The ground. Built from every post the client holds, not just the ones on
   // screen, so panning does not make a coastline appear out of nothing.
   const grid = gridTerrain(state.terrainGrid);
-  const ground = state.posts;
-  const buildGround = (list) => buildTerrain({
+  // While the camera moves, the ground stays at the zoom it was built for and is
+  // only stretched: a pinch crossed a texture step every ~19% and rebuilt the
+  // whole map mid-gesture (0.2-0.4 s stalls; about a second on a phone).
+  const now = performance.now();
+  const mark = `${state.camera.x.toFixed(1)},${state.camera.y.toFixed(1)},${state.camera.scale.toFixed(5)}`;
+  if (mark !== cameraMark) {
+    cameraMark = mark;
+    cameraStill = now;
+  }
+  if (now - cameraStill >= GROUND_SETTLE_MS || groundScale === null) groundScale = scale;
+  // Same idea for buildings: stretched small pictures while moving, real-size ones once still.
+  setSettled(now - cameraStill >= GROUND_SETTLE_MS);
+  const buildGround = (list, revision = null) => buildTerrain({
     posts: list,
-    cells: state.saturated ? state.cells : [],
-    region: postsRegion(),
-    scale,
+    cells: state.saturated ? state.cells : NO_CELLS,
+    region: groundRegion(ground),
+    scale: groundScale,
+    revision,
+    elsewhere: (job, answer) => offThread('ground', job, answer),
   });
   let terrain = null;
   let before = null;   // the ground as it was without the new post, while it rises
@@ -747,41 +1104,63 @@ function renderMap(time) {
       reveal.before = before;
       terrain = buildGround(ground);
     } else {
-      terrain = buildGround(ground);
+      terrain = buildGround(ground, groundRev);
     }
   }
   if (grid) {
+    lastGround = { canvas: grid.canvas, minX: grid.minX, minY: grid.minY, maxX: grid.maxX, maxY: grid.maxY };
     const origin = toScreen(grid.minX, grid.minY);
     ctx.drawImage(grid.canvas, origin.x, origin.y, (grid.maxX - grid.minX) * scale, (grid.maxY - grid.minY) * scale);
   }
   if (before) paintGround(before, 1);
+  let closeUp = null;
   if (terrain) {
+    lastGround = {
+      canvas: terrain.canvas, minX: terrain.minX, minY: terrain.minY,
+      maxX: terrain.minX + terrain.width / terrain.scale, maxY: terrain.minY + terrain.height / terrain.scale,
+    };
     // Close up, a sharp texture of the area on screen goes over the whole-map one.
-    const closeUp = stage || grid ? null : sharpGround(terrain, ground);
+    closeUp = stage || grid ? null : sharpGround(terrain, ground);
     paintGround(terrain, before ? stage.land : 1, closeUp);
     if (closeUp) paintGround(closeUp, 1);
+    // Incoming surf along the coasts, over the shallows and under the night layer
+    // and everything that stands on the land. Only from a view about one island wide.
+    if (closeUp && closeUp.surf && !stage) drawSurf(ctx, closeUp.surf, view, motion, tod === 'night' ? 0.55 : 1);
   }
+  // At night the land is lifted before anything stands on it: screened on after
+  // the dark layer it also washed over the buildings and trees, which then
+  // looked half transparent.
+  if (tod === 'night') liftLandAtNight(terrain, closeUp, grid, before ? stage.land : 1);
 
   // Where each island's settlement stands. Placed before the trees so the trees
   // can keep out of the way.
-  const grow = far ? 1 : Math.min(1.5, Math.sqrt(z / NEAR_AT) * 1.2);
-  const townShow = clamp01((z - TOWN_ZOOM[0]) / (TOWN_ZOOM[1] - TOWN_ZOOM[0]));
+  const zShow = clamp01((z - TOWN_ZOOM[0]) / (TOWN_ZOOM[1] - TOWN_ZOOM[0]));
+  const townShow = zShow;
+  const calmOf = (island) => Boolean(island.quiet);
   const places = state.islands.map((island) => {
     const members = new Set(island.post_ids || []);
     const spot = toScreen(island.cx, island.cy);
     if (spot.x < -160 || spot.x > width + 160 || spot.y < -160 || spot.y > height + 160) return null;
-    const tier = Math.max(0, Math.min(TIER_SPRITES.length - 1, Number(island.tier) || 0));
+    const seed = hashId(islandKey(island));
+    const forced = forcedTier();
+    const tier = forced !== null ? forced : Math.max(0, Math.min(TIER_COUNT - 1, Number(island.tier) || 0));
     // A quiet island keeps its buildings, a size smaller and with the colour
-    // let out of them.
-    const size = Math.min(72, TIER_SIZES[tier] * grow * (island.quiet ? 0.85 : 1));
-    const at = townShow > 0 ? besideFaces(spot, size, members, visible) : null;
+    // let out of them. `span` is the town's width in the world, `size` on screen.
+    const span = worldSize(TIER_SIZES[tier]) * (island.quiet ? 0.85 : 1);
+    const size = span * scale;
+    const show = Math.min(zShow, clamp01((size - TOWN_PX[0]) / (TOWN_PX[1] - TOWN_PX[0])));
+    // The town stands at one fixed world point per island; where it fits on the
+    // land is decided in the world too, so it never comes and goes as you zoom.
+    const grown = tier >= 1 || members.size >= 8;
+    const home = show > 0 ? townHome(island, members, span, grown) : null;
+    const at = home ? toScreen(home.x, home.y) : null;
     // The island the new post stands on comes up with its ground.
     const fade = stage && members.has(reveal.id) ? stage.land : 1;
     if (!at) {
       // No town: the name and the head count sit on the island's middle.
-      return { island, members, tier, size, x: spot.x, foot: spot.y + 4, fade, town: false };
+      return { island, members, tier, size, span, seed, x: spot.x, foot: spot.y + 4, fade, show: 0, town: false };
     }
-    return { island, members, tier, size, x: at.x, foot: at.y + size * 0.3, fade, town: true };
+    return { island, members, tier, size, span, seed, x: at.x, foot: at.y, fade, show, town: true, home };
   }).filter(Boolean);
   const towns = places.filter((place) => place.town);
 
@@ -797,17 +1176,26 @@ function renderMap(time) {
     }
   }
 
+  paintSun();
+
   // Lines between people run over the ground and under the towns and faces;
   // the planes that fly them go over the towns.
   const lineView = {
-    rows: sifting ? connectionsInFilter() : state.connections, islands: state.islands, toScreen, width, height, far, level,
+    rows: sifting ? connectionsInFilter() : state.connections, islands: state.islands,
+    // The same posts and coarse layer the ground is drawn from, so whether a route crosses
+    // land does not change with the latest viewport fetch.
+    posts: ground, cells: state.saturated ? state.cells : NO_CELLS, toScreen, width, height, far, level,
     landOf: (postId) => landIndex().get(postId) || null,
     span: config().world.max - config().world.min, phone: width < 700,
+    // Vehicles shrink with the map: their size is by scale / maxScale.
+    scale, maxScale: clampScale(Infinity),
   };
   const linePlan = drawLinks(ctx, lineView);
   // Dotted lines to people like you: yours alone, only close up (DETAIL_AT),
   // and not while the map is showing who joined a post.
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting));
+
+  if (far && busyOn) drawBusyGlow(places, motion);
 
   // Settlements and their landmarks, back to front.
   places.sort((a, b) => a.foot - b.foot).forEach((place) => {
@@ -819,23 +1207,36 @@ function renderMap(time) {
     }
     const calm = Boolean(island.quiet);
     const marked = place.tier >= LANDMARK_MIN_TIER;
-    place.marks = (marked ? island.landmarks || [] : []).slice(0, LANDMARK_SPOTS.length).map((name, index) => ({
-      name,
-      sprite: landmarkSprite(name),
-      x: x + LANDMARK_SPOTS[index][0] * size,
-      foot: foot + LANDMARK_SPOTS[index][1] * size,
-    })).filter((mark) => mark.sprite && standsOnLand(mark.x, mark.foot, size * 0.72, place.members));
+    const markSpan = Math.max(worldSize(36), place.span * 0.8);
+    const markSize = markSpan * scale;
+    // Landmarks stand at fixed world points round the town (townHome); a slot
+    // that is not on land is never drawn, at any zoom.
+    place.marks = [];
+    if (marked) {
+      landmarksOf(island, place).slice(0, LANDMARK_SPOTS.length).forEach((name, index) => {
+        const slot = place.home.slots[index];
+        if (!slot || !slot.land) return;
+        const at = toScreen(slot.x, slot.y);
+        place.marks.push({ name, size: markSize, x: at.x, foot: at.y });
+      });
+    }
     const pieces = [...place.marks, { main: true, x, foot }].sort((a, b) => a.foot - b.foot);
+    const alpha = place.fade * place.show;
     pieces.forEach((piece) => {
       const box = piece.main
-        ? drawSprite(ctx, TIER_SPRITES[place.tier], piece.x, piece.foot, size, { calm, alpha: place.fade * townShow })
-        : drawSprite(ctx, piece.sprite, piece.x, piece.foot, size * 0.72, { calm, alpha: place.fade * townShow });
+        ? drawSettlement(ctx, place.tier, piece.x, piece.foot, size, { alpha, calm, seed: place.seed })
+        : drawLandmark(ctx, piece.name, piece.x, piece.foot, markSize, { alpha, calm });
       if (piece.main) place.box = box;
       else piece.box = box;
     });
     place.box = place.box || { left: x - size / 2, right: x + size / 2, top: foot - size, bottom: foot };
   });
   drawPlanes(ctx, lineView, linePlan, time);
+  // The fog goes under the time-of-day layers so its edge takes the evening or
+  // night colour with the rest of the sea.
+  drawFog(ctx, view);
+  paintTimeOfDay();
+  if (tod === 'night') paintNightLights(places, townShow, calmOf);
 
   const claim = makeLabelSpace();
   chromeBoxes().forEach((box) => claim.block(box.x, box.y, box.w, box.h));
@@ -844,17 +1245,23 @@ function renderMap(time) {
   const keepOnScreen = (x, w) => Math.max(w / 2 + 8, Math.min(width - w / 2 - 8, x));
 
   // Island names claim their space before anything else: they are the
-  // headline. A name never disappears, but it moves - and it moves along its
-  // own island, never off into the sea, and never up under the search bar.
-  const face = level === 'deep' ? FACE_DEEP : FACE_NEAR;
+  // headline. A name moves before it gives way - along its own island, never
+  // off into the sea, and never up under the search bar - and the busiest
+  // islands choose first. Only a name with no room anywhere near its island
+  // waits until you come closer; yours and a lit one are always drawn
+  // (2026-10-16: two names used to print over each other at the overview).
+  const face = level === 'deep' ? PIN_DEEP : PIN_NEAR;
+  const minePosts = new Set(visible.filter((entry) => entry.mine).map((entry) => entry.post.id));
+  const weight = (place) => Number(place.island.people) || place.members.size;
   nameBoxes = [];
   ctx.save();
-  places.forEach((place) => {
+  [...places].sort((a, b) => weight(b) - weight(a)).forEach((place) => {
     const { island, box } = place;
     if (box.bottom < ceiling - 4) return;
     ctx.font = LABEL_FONT;
     const textWidth = ctx.measureText(island.label).width;
-    const x = keepOnScreen(place.x, textWidth);
+    const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
+    const mine = [...place.members].some((id) => minePosts.has(id));
     // Zoomed in, a line of people and topics hangs under the name: the pair
     // stands clear of the town and of the faces as one block.
     const detail = z >= DETAIL_AT;
@@ -864,19 +1271,32 @@ function renderMap(time) {
       // Zoomed in, the name rides above the island's highest face, so it is
       // over the people it names rather than over whoever happens to be next.
       const tops = visible.filter(({ post }) => place.members.has(post.id))
-        .map(({ point }) => point.y - face / 2 - 14 - 12 - under);
+        .map(({ post, point, mine: yours }) => point.y + pinTopOf(post, face, yours) - 8 - under);
       if (tops.length) anchor = Math.min(anchor, Math.min(...tops));
     }
-    let y = Math.max(ceiling, anchor);
-    for (const offset of [0, -16, -32, 16, 32]) {
-      // The controls hold their own space in `claim`, so beside them (a wide
-      // screen) a name may rise to the top edge.
-      const candidate = Math.max(14, anchor + offset);
-      if (claim(x, candidate, textWidth, 15)) { y = candidate; break; }
+    let x = null;
+    let y = null;
+    // Up and down first, then a little to either side (a third of the name).
+    spots: for (const shift of [0, -0.35, 0.35]) {
+      for (const offset of [0, -16, -32, 16, 32]) {
+        // The controls hold their own space in `claim`, so beside them (a wide
+        // screen) a name may rise to the top edge.
+        const spotX = keepOnScreen(place.x + shift * textWidth, textWidth);
+        const candidate = Math.max(14, anchor + offset);
+        if (claim(spotX, candidate, textWidth, 15)) {
+          x = spotX;
+          y = candidate;
+          break spots;
+        }
+      }
+    }
+    if (y === null) {
+      if (!lit && !mine) return;
+      x = keepOnScreen(place.x, textWidth);
+      y = Math.max(ceiling, anchor);
     }
     place.labelBox = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 10, bottom: y + 10 };
     nameBoxes.push(place.labelBox);
-    const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
     label(island.label, x, y, LABEL_FONT, {
       alpha: place.fade,
       ...(lit ? { lit: islandColor(island.cluster_id), width: textWidth } : {}),
@@ -911,13 +1331,18 @@ function renderMap(time) {
     });
     drawPinsFar(visible, places, claim, meId, motion);
   } else {
+    // Under the faces in the hit list, so a post on a name wins the tap.
+    if (islandTapHandler) {
+      places.forEach((place) => {
+        if (place.labelBox) hits.push({ box: place.labelBox, islandName: place.island });
+      });
+    }
     drawFaces(visible, claim, level, motion, talk, stage, z >= DETAIL_AT);
     if (level === 'near') landmarkNames(places, claim, label);
     regionNames(places, claim, label);
   }
 
   drawBirds(ctx, view, time);
-  drawFog(ctx, view);
   drawChangeMarks(time);
   drawTrial(time);
   drawRipples();
@@ -981,6 +1406,96 @@ function paintGround(terrain, alpha, hole = null) {
 // the camera moves, the last sharp one is kept for as long as it is the same
 // ground; outside it the coarse one shows until the next stop.
 const SHARP_SETTLE_MS = 160;
+const GROUND_SETTLE_MS = 160;
+const NO_CELLS = [];         // one empty list, so the terrain cache can tell nothing changed
+let groundScale = null;      // the zoom the whole-map ground is built for
+
+// The ground is drawn from every post seen this session, not only the ones the
+// latest viewport fetch returned. A settled pan used to swap state.posts for a
+// new subset, which changed the terrain key and rebuilt the whole map (28-230 ms
+// on a desktop, close to a second on a phone) and threw away the sharp close-up
+// too (2026-10-16). Deleted posts are dropped (state.removed).
+const seen = new Map();
+let seenRevision = -1;
+let groundRev = 0;
+let groundList = [];
+
+function groundPosts() {
+  if (state.revision !== seenRevision) {
+    seenRevision = state.revision;
+    let changed = false;
+    // Every fetch brings new objects for the same posts: only a move or a change
+    // of energy is a new ground. Rebuilding on every poll also threw away the
+    // sharp close-up each time.
+    state.posts.forEach((post) => {
+      const known = seen.get(post.id);
+      if (known === post) return;
+      if (!known || known.x !== post.x || known.y !== post.y || energyOf(known) !== energyOf(post)) changed = true;
+      seen.set(post.id, post);
+    });
+    state.removed.forEach((id) => { if (seen.delete(id)) changed = true; });
+    // A post deleted or hidden by someone else just stops coming back: anything
+    // inside the area last fetched in full that is no longer in it is gone.
+    const area = state.fetched;
+    if (area) {
+      seen.forEach((post, id) => {
+        if (!state.postsById.has(id) && post.x > area.minX && post.x < area.maxX
+            && post.y > area.minY && post.y < area.maxY) {
+          seen.delete(id);
+          changed = true;
+        }
+      });
+    }
+    if (changed) {
+      groundRev += 1;
+      groundList = [...seen.values()];
+    }
+  }
+  return groundList;
+}
+
+// The tryout (Q40) is kept, so the land it would raise is drawn under it: the
+// ground the sentence would make if it were a post. Never sent anywhere, and
+// the list is rebuilt only when the posts or the tryout change (terrain cache key).
+// Not added while the terrain grid is in use (800+ posts in view): the grid is a
+// ready-made picture, so there only the pin and its sea effect show the tryout.
+let trialGround = { base: null, key: '', list: [] };
+const TRIAL_MOTIVATION = 50;
+
+function withTrialGround(list) {
+  const trial = state.trialPost;
+  if (!trial || !Number.isFinite(trial.x) || !Number.isFinite(trial.y)) {
+    // The tryout was closed: the ground goes back to what is saved.
+    if (trialGround.base) {
+      trialGround = { base: null, key: '', list: [] };
+      groundRev += 1;
+    }
+    return list;
+  }
+  const key = `${trial.x},${trial.y},${trial.motivation ?? TRIAL_MOTIVATION}`;
+  if (trialGround.base !== list || trialGround.key !== key) {
+    const stand = { id: 'trial', x: trial.x, y: trial.y, motivation: trial.motivation ?? TRIAL_MOTIVATION };
+    trialGround = { base: list, key, list: [...list, stand] };
+    groundRev += 1;
+  }
+  return trialGround.list;
+}
+
+function groundRegion(list) {
+  if (!list.length) return postsRegion();
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  list.forEach((post) => {
+    const reach = radiusOf(post);
+    minX = Math.min(minX, post.x - reach);
+    minY = Math.min(minY, post.y - reach);
+    maxX = Math.max(maxX, post.x + reach);
+    maxY = Math.max(maxY, post.y + reach);
+  });
+  return { minX, minY, maxX, maxY };
+}
 const SHARP_RATIO_CAP = 2;
 const SHARP_MARGIN = 0.25;   // of the screen's size, on every side
 let sharp = null;            // { ...texture, base, unit }
@@ -1003,17 +1518,13 @@ function sharpWindow() {
 
 function sharpGround(base, posts) {
   const need = state.camera.scale * Math.min(dpr, SHARP_RATIO_CAP);
-  // The whole-map texture is sharp enough from here (the overview).
-  if (need <= base.scale * 1.3) {
+  // The whole-map texture is sharp enough from here (the overview) - unless the
+  // surf is showing, which is traced on the sharp one.
+  if (need <= base.scale * 1.3 && surfShow(state.camera.scale, width, height) <= 0) {
     sharp = null;
     return null;
   }
   const now = performance.now();
-  const mark = `${state.camera.x.toFixed(1)},${state.camera.y.toFixed(1)},${state.camera.scale.toFixed(5)}`;
-  if (mark !== cameraMark) {
-    cameraMark = mark;
-    cameraStill = now;
-  }
   const valid = sharp && sharp.base === base;
   const a = toWorld(0, 0);
   const b = toWorld(width, height);
@@ -1021,186 +1532,203 @@ function sharpGround(base, posts) {
     && b.x <= sharp.minX + sharp.width / sharp.scale && b.y <= sharp.minY + sharp.height / sharp.scale;
   const fine = valid && sharp.unit >= need * 0.8;
   if ((!covers || !fine) && !sharpTimer && now - cameraStill >= SHARP_SETTLE_MS) {
-    // Out of the frame being painted: the next frame shows it.
-    sharpTimer = setTimeout(() => {
+    const scale = state.camera.scale;
+    const pixelRatio = Math.min(dpr, SHARP_RATIO_CAP);
+    const job = {
+      posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale, pixelRatio,
+      surf: surfShow(scale, width, height) > 0,
+    };
+    // In the worker when there is one (offthread.js): the map keeps moving
+    // while it is made. One job at a time; the answer clears sharpTimer.
+    const sent = offThread('detail', job, (built, ok) => {
       sharpTimer = 0;
-      const scale = state.camera.scale;
-      const unit = scale * Math.min(dpr, SHARP_RATIO_CAP);
-      const built = buildDetail({
-        posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale,
-        pixelRatio: Math.min(dpr, SHARP_RATIO_CAP),
-      });
-      sharp = built ? { ...built, base, unit } : null;
-    }, 0);
+      if (ok) sharp = built ? { ...toCanvas(built), surf: built.coast, base, unit: scale * pixelRatio } : null;
+    });
+    if (sent) {
+      sharpTimer = -1;
+    } else {
+      // Out of the frame being painted: the next frame shows it.
+      sharpTimer = setTimeout(() => {
+        sharpTimer = 0;
+        const built = buildDetail(job);
+        sharp = built ? { ...built, surf: built.coast, base, unit: scale * pixelRatio } : null;
+      }, 0);
+    }
   }
-  return valid ? sharp : null;
+  // The last sharp texture keeps showing until its replacement is ready, even if
+  // the ground under it was rebuilt: the coarse one flashing up in between read
+  // as a blur followed by a second freeze.
+  return sharp;
 }
 
-/** Zoomed in, the town steps aside for the people.
- *
- * An island with one post has its centre on that post, so the town and the
- * face would stack. Try the centre, then either side, then above and below,
- * and take the first spot that leaves every face of the island clear - or, if
- * none does, the one that leaves the most room.
- */
-function besideFaces(spot, size, members, visible) {
-  const faces = visible.filter(({ post }) => members.has(post.id)).map(({ point }) => point);
-  const tries = [[0, 0], [-1, 0.1], [1, 0.1], [0, -0.9], [0, 0.85], [-1.1, -0.6], [1.1, -0.6]];
-  const want = size * 0.55 + 16;
-  let best = null;
-  let bestRoom = -1;
-  for (const [dx, dy] of tries) {
-    const x = spot.x + dx * size;
-    const y = spot.y + dy * size;
-    // A town stands on its island's land or not at all.
-    if (!standsOnLand(x, y + size * 0.3, size, members)) continue;
-    const room = faces.length
-      ? Math.min(...faces.map((point) => Math.hypot(point.x - x, point.y - (y - size * 0.2))))
-      : Infinity;
-    if (room >= want) return { x, y };
-    if (room > bestRoom) { best = { x, y }; bestRoom = room; }
-  }
-  // Half on top of a face is no place for a town either.
-  return bestRoom >= want * 0.6 ? best : null;
-}
+// Each island's town stands at one fixed world point, found from the island's
+// own posts only, so panning, zooming and the faces on screen never move it.
+// Recomputed only when the island's make-up changes.
+const homeCache = new Map();
 
-/** Whether a sprite `size` wide with its foot at screen (x, foot) stands on
- * land - sand or higher - of the island made of `members`: both bottom corners,
- * the middle of its foot and its middle. The ground is summed the way
- * terrain.js sums it, from these posts' cones. */
-function standsOnLand(x, foot, size, members) {
+/** World point of the town's foot, and the world points of its landmark slots.
+ * `span` is the town's width in the world, `grown` whether it must be built
+ * somewhere. The island's middle if the town fits there, else the nearest post
+ * where it fits with the most land round it. A grown island that fits nowhere
+ * takes its best land point anyway; any other, with nothing that fits, gets no
+ * town. Null if there is no land to stand on. Everything is in world units, so
+ * the answer does not depend on the zoom. */
+function townHome(island, members, span, grown) {
+  const posts = [...members].map((id) => state.postsById.get(id)).filter(Boolean);
+  const key = islandKey(island);
+  const sig = `${island.cx},${island.cy},${posts.length},${span.toFixed(2)},${grown ? 1 : 0}`;
+  const held = homeCache.get(key);
+  if (held && held.sig === sig) return held.home;
   const { biome_order: order, biome_thresholds: thresholds } = config().energy;
   const sand = thresholds[order[1]];
-  const posts = [...members].map((id) => state.postsById.get(id)).filter(Boolean);
-  const land = (sx, sy) => {
-    const at = toWorld(sx, sy);
+  const land = (x, y) => {
     let sum = 0;
-    posts.forEach((post) => {
-      const r = radiusOf(post);
-      const d = Math.hypot(post.x - at.x, post.y - at.y);
-      if (r > 0 && d < r) sum += energyOf(post) * (1 - d / r);
-    });
+    posts.forEach((post) => { sum += groundOf(post, x, y); });
     return sum >= sand;
   };
-  return land(x - size * 0.4, foot) && land(x + size * 0.4, foot) && land(x, foot) && land(x, foot - size * 0.5);
+  const ring = worldSize(TIER_SIZES[1]) * 0.4;
+  const near = posts.slice()
+    .sort((a, b) => Math.hypot(a.x - island.cx, a.y - island.cy) - Math.hypot(b.x - island.cx, b.y - island.cy))
+    .slice(0, 40);
+  let best = null;      // best point where the town fits
+  let bestScore = -1;
+  let spare = null;     // best land point at all, for a grown island
+  let spareScore = -1;
+  [{ x: island.cx, y: island.cy }, ...near].some((c) => {
+    if (!land(c.x, c.y)) return false;
+    let score = 0;
+    for (let k = 0; k < 8; k += 1) {
+      if (land(c.x + Math.cos(k * Math.PI / 4) * ring, c.y + Math.sin(k * Math.PI / 4) * ring)) score += 1;
+    }
+    if (score > spareScore) { spare = { x: c.x, y: c.y }; spareScore = score; }
+    if (score > bestScore && standsOnLand(c.x, c.y, span, land, grown)) {
+      best = { x: c.x, y: c.y };
+      bestScore = score;
+    }
+    return bestScore === 8;
+  });
+  if (!best && grown) best = spare;
+  let home = null;
+  if (best) {
+    // Landmarks stand round the town in town-sized steps.
+    const slots = LANDMARK_SPOTS.map(([dx, dy]) => {
+      const x = best.x + dx * worldSize(TIER_SIZES[2]);
+      const y = best.y + dy * worldSize(TIER_SIZES[2]);
+      return { x, y, land: land(x, y) };
+    });
+    home = { x: best.x, y: best.y, slots };
+  }
+  homeCache.set(key, { sig, home });
+  return home;
+}
+
+/** Whether a town `span` wide with its foot at world (x, y) stands on land -
+ * sand or higher: both bottom corners, the middle of its foot, both sides half
+ * way up and its top (`loose`: the foot, its corners and half way up the
+ * middle). `land` sums the island's own posts' cones, the way terrain.js does. */
+function standsOnLand(x, y, span, land, loose = false) {
+  const half = span * 0.45;
+  const tall = span * 0.85;
+  if (loose) return land(x, y) && land(x - half, y) && land(x + half, y) && land(x, y - tall * 0.5);
+  return land(x, y) && land(x - half, y) && land(x + half, y)
+    && land(x - half * 0.9, y - tall * 0.5) && land(x + half * 0.9, y - tall * 0.5)
+    && land(x, y - tall);
+}
+
+// ?tier=0..4 in the address draws every island as that growth stage - the same
+// kind of aid as ?tod=: the server's islands are mostly tier 0, so a grown town
+// is otherwise never seen on the data at hand.
+const DEMO_LANDMARKS = ['灯台', '風車', '時計塔', '図書館', '市場', '温室', '天文台', '工房'];
+let forcedTierFor = null;
+let forcedTierValue = null;
+
+function forcedTier() {
+  const address = addressKey();
+  if (address !== forcedTierFor) {
+    forcedTierFor = address;
+    let raw = null;
+    try { raw = addressParam('tier'); } catch (error) { raw = null; }
+    const value = raw === null || raw.trim() === '' ? NaN : Number(raw);
+    // Like ?tod=, a valid ?tier= holds until the page is loaded again, through
+    // the app's own `#/map` that drops it.
+    if (Number.isInteger(value) && value >= 0 && value < TIER_COUNT) forcedTierValue = value;
+  }
+  return forcedTierValue;
+}
+
+/** The landmarks to draw for an island: its own, or - under ?tier= - enough
+ * made-up ones for that stage (1 for 小屋・村, 2 for 港町・町, 3 for 都市). */
+function landmarksOf(island, place) {
+  const own = island.landmarks || [];
+  if (forcedTier() === null) return own;
+  const count = place.tier <= 1 ? 1 : place.tier <= 3 ? 2 : 3;
+  if (own.length >= count) return own;
+  return Array.from({ length: count }, (_, i) => DEMO_LANDMARKS[(place.seed + i * 3) % DEMO_LANDMARKS.length]);
+}
+
+// Land at a world point, summed over every post whose cone can reach it: posts
+// are kept in buckets as wide as the largest radius so a tree asks a handful of
+// posts, not all of them.
+let landIndexOf = null;
+
+function landAtWorld(list, x, y) {
+  if (!landIndexOf || landIndexOf.list !== list) {
+    let cell = 1;
+    list.forEach((post) => { cell = Math.max(cell, radiusOf(post)); });
+    const buckets = new Map();
+    list.forEach((post) => {
+      const r = radiusOf(post);
+      for (let gx = Math.floor((post.x - r) / cell); gx <= Math.floor((post.x + r) / cell); gx += 1) {
+        for (let gy = Math.floor((post.y - r) / cell); gy <= Math.floor((post.y + r) / cell); gy += 1) {
+          const key = `${gx},${gy}`;
+          if (!buckets.has(key)) buckets.set(key, []);
+          buckets.get(key).push(post);
+        }
+      }
+    });
+    landIndexOf = { list, cell, buckets };
+  }
+  const { cell, buckets } = landIndexOf;
+  const { biome_order: order, biome_thresholds: thresholds } = config().energy;
+  let sum = 0;
+  (buckets.get(`${Math.floor(x / cell)},${Math.floor(y / cell)}`) || []).forEach((post) => { sum += groundOf(post, x, y); });
+  return sum >= thresholds[order[1]];
 }
 
 /** Trees, bushes and rocks from the terrain's scatter, kept off the
- * settlements and out from under faces. Zoomed out, every other one. */
+ * settlements and out from under faces, and off the water: a crown reaching over
+ * the shore stays home. Zoomed out, every other one. */
+const TREE_WORLD = 1.1;   // world units per tree (k = 1)
+const TREE_MIN = 3;       // px: smaller than this is not drawn
+const TREE_MAX = 44;      // px: a ceiling for the largest zoom
+
 function drawTrees(trees, places, posts, thin, alpha = 1) {
-  const base = Math.max(9, Math.min(24, state.camera.scale * 11));
+  // A tree is a length in the world, like the towns, and a tenth of what it was
+  // (2026-10-19, the user): it grows with the map, and one too small to see on
+  // screen is not drawn - zoomed out there are no trees.
+  const base = state.camera.scale * TREE_WORLD;
+  // With the coarse layer in play some land is not any post's cone: skip the check.
+  const check = !state.saturated && groundList.length > 0;
   trees.forEach((tree) => {
     if (thin && tree.k < 1) return;
     const p = toScreen(tree.x, tree.y);
     if (p.x < -30 || p.x > width + 30 || p.y < -30 || p.y > height + 40) return;
-    const size = base * tree.k * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
+    const size = Math.min(TREE_MAX, base * tree.k) * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
+    if (size < TREE_MIN) return;
     const foot = p.y + size * 0.35;
     const covered = places.some((place) => Math.abs(p.x - place.x) < place.size * 1.45
       && foot > place.foot - place.size * 1.15 && foot < place.foot + place.size * 0.55);
     if (covered) return;
     if (posts.some(({ point }) => Math.abs(point.x - p.x) < 15 && Math.abs(point.y - p.y) < 18)) return;
-    drawSprite(ctx, tree.name, p.x, foot, size, { alpha });
+    if (check) {
+      const wet = [-0.35, 0, 0.35].some((dx) => {
+        const at = toWorld(p.x + dx * size, foot);
+        return !landAtWorld(groundList, at.x, at.y);
+      });
+      if (wet) return;
+    }
+    drawTree(ctx, tree.name, p.x, foot, size, { alpha, seed: Math.round(tree.x * 7 + tree.y * 13) });
   });
-}
-
-/** A white disc with the person's face, outlined like the buildings. */
-function faceBadge(who, x, y, size, { ring = OUTLINE, glow = 0 } = {}) {
-  paintFaceBadge(ctx, who, x, y, size, ring, glow);
-}
-
-function paintFaceBadge(c, who, x, y, size, ring, glow = 0) {
-  c.save();
-  if (glow > 0) {
-    c.shadowColor = 'rgba(255, 138, 31, .9)';
-    c.shadowBlur = glow;
-  }
-  c.beginPath();
-  c.arc(x, y, size / 2, 0, Math.PI * 2);
-  c.fillStyle = '#fffaf0';
-  c.fill();
-  c.shadowBlur = 0;
-  c.lineWidth = ring === OUTLINE ? Math.max(1.4, size * 0.07) : Math.max(2.2, size * 0.12);
-  c.strokeStyle = ring;
-  c.stroke();
-  c.restore();
-  drawFace(c, who, x, y, size * 0.74, ring);
-}
-
-// ---------------------------------------------------------------- face sprites
-//
-// In a crowd every face is a disc, a ring, a photo or emoji, and a ball or a
-// flame: dozens of fills each. They are painted once onto small canvases (at the
-// screen's pixel density) and stamped with one drawImage. The cache is dropped
-// when the density changes and when a photo finishes loading.
-
-const SPRITE_LIMIT = 700;
-const sprites = new Map();
-let spriteDpr = 0;
-
-if (typeof document !== 'undefined') {
-  document.addEventListener('avatar:loaded', () => sprites.clear());
-}
-
-function makeCanvas(w, h) {
-  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
-  const el = document.createElement('canvas');
-  el.width = w;
-  el.height = h;
-  return el;
-}
-
-/** A sprite of `w` x `h` CSS px, painted by `paint(c, midX, midY)` on first
- * use. Returns { canvas, w, h, extra }, or null if a canvas cannot be had. */
-function sprite(key, w, h, paint) {
-  if (spriteDpr !== dpr) {
-    sprites.clear();
-    spriteDpr = dpr;
-  }
-  let entry = sprites.get(key);
-  if (entry) return entry;
-  try {
-    const canvas = makeCanvas(Math.max(1, Math.ceil(w * dpr)), Math.max(1, Math.ceil(h * dpr)));
-    const c = canvas.getContext('2d');
-    if (!c) return null;
-    c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    entry = { canvas, w, h, extra: paint(c, w / 2, h / 2) };
-  } catch {
-    return null;
-  }
-  if (sprites.size >= SPRITE_LIMIT) sprites.clear();
-  sprites.set(key, entry);
-  return entry;
-}
-
-function stamp(entry, x, y) {
-  ctx.drawImage(entry.canvas, x - entry.w / 2, y - entry.h / 2, entry.w, entry.h);
-}
-
-/** The disc with its face, from the cache. */
-function drawFaceSprite(post, x, y, size, mine) {
-  const ring = mine ? MINE : OUTLINE;
-  const side = Math.ceil(size + 8);
-  const key = `f|${post.avatar_path || ''}|${post.icon_id ?? ''}|${size}|${mine ? 1 : 0}`;
-  const entry = sprite(key, side, side, (c, mx, my) => paintFaceBadge(c, post, mx, my, size, ring));
-  if (entry) stamp(entry, x, y);
-  else paintFaceBadge(ctx, post, x, y, size, ring);
-}
-
-/** The ball or flame round a face, from the cache. Returns how far it reaches
- * above the face's centre. `time` null holds it still. */
-function drawHeatSprite(x, y, radius, value, time, phase) {
-  const v = heatSpriteValue(value);
-  const tier = getHeatTier(v);
-  const frame = heatFrameAt(tier, time, phase);
-  const half = heatSpriteHalf(radius, v);
-  const key = `h|${v}|${radius}|${frame}`;
-  const entry = sprite(key, half * 2, half * 2, (c, mx, my) => (
-    drawHeat(c, mx, my, radius, v, heatFrameTime(tier, frame), 0)));
-  if (!entry) return drawHeat(ctx, x, y, radius, value, time, phase);
-  // A ball floats with its face; a flame stays put.
-  const lift = isFlameTier(tier) ? 0 : faceLift(value, radius, time, phase);
-  stamp(entry, x, y - lift);
-  return entry.extra;
 }
 
 /** Who is on each island, zoomed out: a few faces and the head count. While
@@ -1214,7 +1742,7 @@ function drawCrowds(places, claim, meId, sifting) {
     place.members.forEach((id) => {
       const post = state.postsById.get(id);
       if (!post) return;
-      if (!sifting || matchesFilters(post)) matching.add(post.author_id);
+      if (!steppedBack(post, sifting)) matching.add(post.author_id);
       if (!authors.has(post.author_id)) authors.set(post.author_id, post);
     });
     const people = [...authors.values()]
@@ -1233,7 +1761,7 @@ function drawCrowds(places, claim, meId, sifting) {
       const at = left + size / 2 + (people.length - 1 - index) * step;
       ctx.save();
       if (!matching.has(post.author_id)) ctx.globalAlpha *= FILTERED_OUT;
-      faceBadge(post, at, y, size, { ring: post.author_id === meId ? MINE : OUTLINE });
+      drawMiniPin(ctx, at, y, { heat: post.motivation, initial: initialOf(post.display_name), size, mine: post.author_id === meId });
       ctx.restore();
     });
     ctx.textAlign = 'left';
@@ -1251,8 +1779,13 @@ function drawCrowds(places, claim, meId, sifting) {
 
 // ---------------------------------------------------------------- who is shown
 
-const FACE_NEAR = 30;
-const FACE_DEEP = 42;
+// Diameter of a pin's head (pins.js); the pin itself stands a good deal taller.
+const PIN_NEAR = 22;
+const PIN_DEEP = 30;
+const PIN_FAR = 18;
+
+/** The letter a pin wears: the first character of the name. */
+const initialOf = (name) => Array.from(String(name || '').trim())[0] || '・';
 const DIM = 0.2;
 
 // 「参加者を見てみる」: only the post's writer and the people who joined it stay
@@ -1347,10 +1880,11 @@ function revealStage(now) {
 
 // ---------------------------------------------------------------- pins
 
-/** Rings that spread from your post and fade: "you are here". */
+/** Rings that spread from your post and fade: "you are here". Only for a post
+ * hidden under a town, where it is a dot; a pin carries its own ring. */
 function radar(x, y, radius, motion) {
   ctx.save();
-  const base = ctx.globalAlpha;   // a face that is fading in or out takes its rings with it
+  const base = ctx.globalAlpha;
   ctx.lineWidth = 2.2;
   ctx.strokeStyle = MINE;
   if (motion === null) {
@@ -1370,89 +1904,41 @@ function radar(x, y, radius, motion) {
   ctx.restore();
 }
 
-const GOLD = '#ffd700';
-
-/** A four-pointed sparkle centred on (x, y), `r` to its tips. */
-function sparkle(x, y, r, turn = 0) {
-  ctx.beginPath();
-  for (let i = 0; i < 8; i += 1) {
-    const angle = turn + (i * Math.PI) / 4 - Math.PI / 2;
-    const reach = i % 2 === 0 ? r : r * 0.34;
-    const px = x + Math.cos(angle) * reach;
-    const py = y + Math.sin(angle) * reach;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-}
-
-/** Zoomed out: a gold pin with a star, for a post asking for people that this
- * device has not opened. The point stands at (x, y). */
-function starPin(x, y, motion, phase) {
-  const k = motion === null ? 1 : 1 + Math.sin(motion * 6 + phase) * 0.15;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y - 9, 8.5 * k, 0, Math.PI * 2);
-  ctx.fillStyle = GOLD;
-  ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = '#ffffff';
-  ctx.stroke();
-  sparkle(x, y - 9, 6.5 * k);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.lineWidth = 0.8;
-  ctx.strokeStyle = '#b8860b';
-  ctx.stroke();
-  ctx.restore();
-}
-
-/** Zoomed in: a gold ring round the face with four stars turning about it. */
-function starAura(x, y, radius, motion, phase) {
-  const a = radius / 18;
-  const turn = motion === null ? 0 : motion * 0.9 + phase;
-  const k = motion === null ? 1 : 1 + Math.sin(motion * 5 + phase) * 0.1;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y, radius + 4 * a + 1, 0, Math.PI * 2);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = GOLD;
-  ctx.globalAlpha *= 0.9;
-  ctx.stroke();
-  ctx.restore();
-  ctx.save();
-  const orbit = radius + 12 * a;
-  for (let i = 0; i < 4; i += 1) {
-    const angle = turn + (i * Math.PI) / 2;
-    sparkle(x + Math.cos(angle) * orbit, y + Math.sin(angle) * orbit, Math.max(4, 7 * a) * k, turn);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-    ctx.lineWidth = 0.8;
-    ctx.strokeStyle = '#b8860b';
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
 /** Your posts, the posts asking for people, and the open post, zoomed out.
  *
- * Yours send out radar rings; a tap flies you to them. Your face goes on the
- * post only where it would not sit on a town - over a town, the orange face in
- * the crowd row already says you are there. In 「参加者を見てみる」 only the
- * writer and the people who joined are shown as faces; the rest are quiet dots.
+ * Yours carry the "あなた" tag and a ring at their foot; a tap flies you to them.
+ * Over a town a pin would hide the buildings, so there yours is a dot that
+ * radiates. In 「参加者を見てみる」 only the writer and the people who joined are
+ * pins; the rest are quiet dots.
  */
+// When the open post was opened, on the animation clock: its pin hops up off
+// the map over the first moments (pins.js liftShare). Null under less motion,
+// which holds the pin lifted without the hop.
+let opened = { id: null, at: 0 };
+
+function openedFor(id, motion) {
+  if (motion === null) return null;
+  if (opened.id !== id) opened = { id, at: motion };
+  return motion - opened.at;
+}
+
 function drawPinsFar(visible, places, claim, meId, motion) {
   const selectedId = state.selected ? state.selected.id : null;
+  const night = tod === 'night';
   const onTown = (point) => places.some(({ box }) => box
     && point.x > box.left - 6 && point.x < box.right + 6 && point.y > box.top - 6 && point.y < box.bottom + 6);
+  const pin = (post, point, extra = {}) => drawPostPin(ctx, point.x, point.y, {
+    heat: post.motivation, initial: initialOf(post.display_name), size: PIN_FAR, night, ...extra,
+  });
+  const claimPin = (point, head) => claim(point.x, (point.y + head) / 2, 24, Math.abs(point.y - head) + 26);
   visible.forEach(({ post, point, mine, out }) => {
     const phase = (hashId(post.id) % 628) / 100;
     if (out) {
       // Filtered out: the same pin, faint, and nothing to tap.
       ctx.save();
       ctx.globalAlpha *= FILTERED_OUT;
-      if (mine) faceBadge(post, point.x, point.y, 22, { ring: MINE });
-      else if (isUnreadRecruit(post, meId)) starPin(point.x, point.y, null, phase);
+      if (mine) pin(post, point, { mine: true });
+      else if (isUnreadRecruit(post, meId)) pin(post, point, { recruit: true, phase });
       ctx.restore();
       return;
     }
@@ -1462,7 +1948,7 @@ function drawPinsFar(visible, places, claim, meId, motion) {
         ctx.globalAlpha = DIM;
         ctx.beginPath();
         ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = heatColor(post.motivation);
+        ctx.fillStyle = pinColor(post.motivation);
         ctx.fill();
         ctx.lineWidth = 1.2;
         ctx.strokeStyle = '#ffffff';
@@ -1470,22 +1956,24 @@ function drawPinsFar(visible, places, claim, meId, motion) {
         ctx.restore();
         return;
       }
-      faceBadge(post, point.x, point.y, 24, { ring: heatColor(post.motivation) });
-      claim(point.x, point.y, 26, 26);
-      hits.push({ x: point.x, y: point.y, r: 22, post, approach: true });
+      const shown = pin(post, point, { size: 20, mine, phase });
+      claimPin(point, shown.headY);
+      hits.push({ x: point.x, y: shown.headY, r: 22, post, approach: true });
       return;
     }
     if (post.id === selectedId) {
-      drawPin(ctx, point.x, point.y, 22);
-      hits.push({ x: point.x, y: point.y, r: 20, post });
+      const shown = pin(post, point, { size: 22, selected: true, mine, phase, openedFor: openedFor(post.id, motion) });
+      hits.push({ x: point.x, y: shown.headY, r: 20, post });
       return;
     }
     if (mine) {
-      radar(point.x, point.y, 11, motion);
+      let hitY = point.y - 12;
       if (!onTown(point)) {
-        faceBadge(post, point.x, point.y, 22, { ring: MINE, glow: 8 });
-        claim(point.x, point.y, 24, 24);
+        const shown = pin(post, point, { mine: true, recruitQuiet: isRecruiting(post), time: motion, phase });
+        claimPin(point, shown.headY);
+        hitY = shown.headY;
       } else {
+        radar(point.x, point.y, 11, motion);
         ctx.save();
         ctx.beginPath();
         ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
@@ -1495,13 +1983,14 @@ function drawPinsFar(visible, places, claim, meId, motion) {
         ctx.strokeStyle = '#ffffff';
         ctx.stroke();
         ctx.restore();
+        hitY = point.y;
       }
-      hits.push({ x: point.x, y: point.y, r: 22, post, approach: true });
+      hits.push({ x: point.x, y: hitY, r: 22, post, approach: true });
       return;
     }
     if (isUnreadRecruit(post, meId)) {
-      starPin(point.x, point.y, motion, phase);
-      hits.push({ x: point.x, y: point.y - 9, r: 20, post, approach: true });
+      const shown = pin(post, point, { recruit: true, time: motion, phase });
+      hits.push({ x: point.x, y: shown.headY, r: 20, post, approach: true });
     }
   });
 }
@@ -1528,9 +2017,17 @@ function rollTalk(entries, stage) {
   const covered = [...chromeBoxes().map((b) => ({
     left: b.x - b.w / 2, right: b.x + b.w / 2, top: b.y - b.h / 2, bottom: b.y + b.h / 2,
   })), ...nameBoxes];
-  const clear = (point, reach) => {
+  // The pins that hold a place are in the way too: a bubble over a neighbour's
+  // head hides it.
+  const pins = entries.filter((entry) => entry.room && !entry.dim).map((entry) => ({
+    entry, left: entry.point.x - entry.size * 0.5, right: entry.point.x + entry.size * 0.5,
+    top: entry.point.y - entry.size * 1.6, bottom: entry.point.y,
+  }));
+  const clear = (self, reach) => {
+    const point = self.point;
     const box = { left: point.x - 50, right: point.x + 50, top: point.y - reach - 44, bottom: point.y - reach };
-    return !covered.some((c) => box.left < c.right && box.right > c.left && box.top < c.bottom && box.bottom > c.top);
+    const hit = (c) => box.left < c.right && box.right > c.left && box.top < c.bottom && box.bottom > c.top;
+    return !covered.some(hit) && !pins.some((c) => c.entry !== self && hit(c));
   };
   // A post that has just been written has no face on the map until it lands.
   const landing = (entry) => reveal && stage && entry.post.id === reveal.id && stage.marker < 1;
@@ -1539,7 +2036,7 @@ function rollTalk(entries, stage) {
     && String(entry.post.body || '').trim()
     && entry.point.x > 36 && entry.point.x < width - 36
     && entry.point.y > frame.top + 36 && entry.point.y < height - frame.bottom - 12
-    && clear(entry.point, 40));
+    && clear(entry, entry.size * 1.7));
   if (pool.length) bubbles.set(pool[Math.floor(Math.random() * pool.length)].post.id, now);
 }
 
@@ -1570,45 +2067,105 @@ function drawTalk(talk) {
 
 // ---------------------------------------------------------------- faces
 
-/** Zoomed in: everybody's face where they wrote, wrapped in its heat, names
- * where they fit (`named`: other people's names too, close up; yours always).
+/** How far above its point a pin reaches (negative px): the flame's tip, or the
+ * 「あなた」 tag over yours - what an island's name has to clear. */
+function pinTopOf(post, size, yours) {
+  const top = pinGeometry(size, post.motivation).top;
+  if (!yours) return top;
+  const flame = pinTier(post.motivation) === 'flame' || pinTier(post.motivation) === 'top';
+  const s = pinScale(size, post.motivation);
+  return Math.min(top, -(flame ? 44 : 33) * s - (6.5 * size) / 18);
+}
+
+/** Zoomed in: faces where people wrote, wrapped in their heat, names where they
+ * fit (`named`: other people's names too, close up; yours always).
  *
- * Room is handed out in order - you, then the people closest to you, then the
- * busiest - and whoever does not get room is drawn smaller and unnamed rather
- * than not at all. Paint runs the other way, so the first in line ends on top
- * and the finger finds them first.
+ * Like a street map's pins (2026-10-16): a face needs a clear patch of screen
+ * (its size plus FACE_GAP), handed out in order - yours, the open one, unread
+ * 「参加者募集中」, then the busiest, ties broken by the post so the choice holds
+ * still while you pan. Whoever gets no patch waits as a small dot and becomes a
+ * face as zooming in spreads the crowd apart; every face used to be drawn, small
+ * if need be, and a busy island at near zoom was a jumble. Paint runs the other
+ * way, so the first in line ends on top and the finger finds them first.
  */
 const ANIMATED_FACES = 30;
+const FACE_GAP = { near: 16, deep: 10 };
+
+// At full zoom nothing more will part a crowd: some posts stand almost on one
+// spot (two of v6's were 0.06 world units apart). Whoever is still waiting
+// there joins the face it is under, which wears "+N" and opens the list of the
+// spot's posts when tapped, as a map lists the shops in one building
+// (2026-10-18; the day before they stepped aside onto rings with lines).
+const STACK_AT = 0.97;             // of the largest zoom
 
 function drawFaces(visible, claim, level, motion, talk, stage, named) {
   const deep = level === 'deep';
-  const full = deep ? FACE_DEEP : FACE_NEAR;
+  const full = deep ? PIN_DEEP : PIN_NEAR;
+  const night = tod === 'night';
   const meId = state.account ? state.account.id : null;
   const selectedId = state.selected ? state.selected.id : null;
+  const landingId = stage ? reveal.id : null;
+  const firstInLine = (entry) => {
+    if (entry.mine || entry.post.id === landingId) return 0;
+    if (entry.post.id === selectedId) return 1;
+    if (isUnreadRecruit(entry.post, meId)) return 2;
+    return 3;
+  };
   const ranked = visible.map((entry) => ({
     ...entry,
     dim: entry.out || dimmed(entry.post),
-    rank: entry.mine ? 0 : 1,
+    rank: firstInLine(entry),
     busy: interactionsOf(entry.post),
-  })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy);
+    tie: hashId(entry.post.id),
+  })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy || a.tie - b.tie);
+  const gap = deep ? FACE_GAP.deep : FACE_GAP.near;
+  const stacking = deep && state.camera.scale >= clampScale(Infinity) * STACK_AT;
+  // A pin stands about 1.4 heads tall on its point: the room it claims is that
+  // column, centred half way up.
+  const roomW = full + gap;
+  const roomH = full * 1.4 + gap;
+  const roomY = (point) => point.y - full * 0.6;
 
   ctx.save();
   ranked.forEach((entry) => {
     const { point, post } = entry;
-    const room = claim(point.x, point.y, full + 2, full + 2) || entry.mine;
+    const room = claim(point.x, roomY(point), roomW, roomH) || entry.rank <= 1;
     entry.room = room;
-    entry.size = room ? full : Math.round(full * 0.65);
+    entry.size = full;
+    entry.stack = null;
     // Other people's names only close up; yours always.
     if (!room || entry.dim || !(named || entry.mine)) return;
     ctx.font = SMALL_FONT;
     const name = clip(post.display_name, 6);
-    const nameY = point.y + full / 2 + 10;
+    const nameY = point.y + 11;
     if (claim(point.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
       entry.name = name;
       entry.nameY = nameY;
     }
   });
   ctx.restore();
+  if (stacking) {
+    // The pin each one is under; first in line first, so the list keeps order.
+    const faces = ranked.filter((entry) => entry.room && !entry.dim);
+    ranked.forEach((entry) => {
+      if (entry.room || entry.dim) return;
+      let under = null;
+      // Under a pin means inside the column the pin claimed (roomW x roomH), so
+      // the test is that rectangle's own shape, not a circle.
+      let nearest = 1;
+      faces.forEach((face) => {
+        const distance = Math.hypot((face.point.x - entry.point.x) / roomW, (face.point.y - entry.point.y) / roomH);
+        if (distance < nearest) {
+          nearest = distance;
+          under = face;
+        }
+      });
+      if (!under) return;
+      if (!under.stack) under.stack = [under.post];
+      under.stack.push(entry.post);
+      entry.stacked = true;
+    });
+  }
   rollTalk(ranked, stage);
 
   // Only the people nearest the middle of the screen move; the rest of a crowd
@@ -1622,12 +2179,10 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
 
   ranked.slice().reverse().forEach((entry) => {
     const { post, point, mine, size, name, nameY, busy, dim, out } = entry;
-    const r = size / 2;
+    if (entry.stacked) return;   // in the list of the pin it is under
     const phase = (hashId(post.id) % 628) / 100;
     const moving = motion !== null && (alive.has(post.id) || (mine && !dim));
     const own = moving ? motion : null;
-    const lift = entry.room && moving ? faceLift(post.motivation, r, motion, phase) : 0;
-    const cy = point.y - lift;
     const landing = stage && post.id === reveal.id ? stage : null;
     const plain = !dim && !landing;
 
@@ -1641,18 +2196,37 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
         ctx.translate(-point.x, -point.y);
       }
     }
-    if (mine && !dim) radar(point.x, cy, r, motion);
-    // Crowded: a face that got no room is drawn small and bare - no ball or
-    // flame, no count, no mark, no aura.
-    const reach = entry.room ? drawHeatSprite(point.x, point.y, r, post.motivation, own, phase) : 0;
-    drawFaceSprite(post, point.x, cy, size, mine);
-    if (entry.room) {
-      if (isUnreadRecruit(post, meId) && !dim) starAura(point.x, cy, r, motion, phase);
-      if (isOpen(post)) openMark(point.x - size * 0.42, cy - size * 0.42, deep);
-      // How much it has been answered: always when deep, only when busy at near.
-      if (busy > 0 && (deep || busy >= 5)) countChip(point.x + size * 0.42, cy - size * 0.42, busy);
+    if (!entry.room) {
+      // Waiting for room: a dot in its heat's colour. A tap on it comes closer
+      // and opens it (pick: `dot`); it used to be no target at all.
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, deep ? 3.5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = pinColor(post.motivation);
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      if (!plain) ctx.restore();
+      if (!dim) hits.push({ x: point.x, y: point.y, r: 12, post, dot: true });
+      return;
     }
-    if (post.id === selectedId) selectionRing(ctx, point.x, cy, r + 4, islandColor(post.cluster_id));
+    const unread = isUnreadRecruit(post, meId) && !dim;
+    const shown = drawPostPin(ctx, point.x, point.y, {
+      heat: post.motivation, initial: initialOf(post.display_name), size,
+      time: own, phase, mine: mine && !dim, selected: post.id === selectedId,
+      openedFor: post.id === selectedId ? openedFor(post.id, motion) : null,
+      recruit: unread, recruitQuiet: mine && !dim && isRecruiting(post), night,
+    });
+    const r = shown.headR;
+    const headY = shown.headY;
+    if (isOpen(post)) openMark(point.x - r * 0.95, headY - r * 0.85, deep);
+    // How much it has been answered: always when deep, only when busy at near.
+    // A stack's "+N" takes the top right corner; the count then sits below.
+    const stack = entry.stack;
+    if (stack) stackChip(point.x + r * 1.05, headY - r * 0.85, stack.length - 1);
+    if (busy > 0 && (deep || busy >= 5)) {
+      countChip(point.x + r * 0.95, stack ? headY + r * 0.75 : headY - r * 0.85, busy);
+    }
 
     if (name) {
       ctx.save();
@@ -1669,11 +2243,31 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     }
     if (!plain) ctx.restore();
 
-    if (bubbles.has(post.id) && !dim) talk.push({ post, x: point.x, y: cy - reach - 14 });
+    if (bubbles.has(post.id) && !dim) talk.push({ post, x: point.x, y: shown.top - 16 });
     if (!dim && (!landing || landing.marker > 0.5)) {
-      hits.push({ x: point.x, y: cy, r: Math.max(18, size * 0.7), post });
+      hits.push({ x: point.x, y: headY, r: Math.max(18, r * 1.6), post, ...(stack ? { stack } : {}) });
     }
   });
+}
+
+/** "+N" on a face with N more posts under it at full zoom. */
+function stackChip(x, y, more) {
+  const text = `+${more > 99 ? 99 : more}`;
+  ctx.save();
+  ctx.font = '700 11px system-ui, sans-serif';
+  const w = Math.max(22, ctx.measureText(text).width + 12);
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - 9, w, 18, 9);
+  ctx.fillStyle = '#16324f';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y + 0.5);
+  ctx.restore();
 }
 
 function countChip(x, y, count) {
@@ -1702,11 +2296,13 @@ function speechBubble(tail, { text, width: w, y, x = tail }) {
   ctx.moveTo(tail - 4, y + 10);
   ctx.lineTo(tail, y + 15);
   ctx.lineTo(tail + 4, y + 10);
+  // No outline (2026-10-13); a soft shadow keeps it off pale sand.
+  ctx.shadowColor = 'rgba(40, 30, 20, 0.22)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 1;
   ctx.fillStyle = '#fffaf0';
   ctx.fill();
-  ctx.lineWidth = 1.3;
-  ctx.strokeStyle = OUTLINE;
-  ctx.stroke();
+  ctx.shadowColor = 'transparent';
   ctx.font = '500 11px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -1747,20 +2343,6 @@ function regionNames(places, claim, label) {
       }
     });
   });
-  ctx.restore();
-}
-
-const EMOJI_STACK =
-  'system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-
-/** islands' marker for the post that is open. Bigger than the glyph it hides,
- * because the point of it is to be findable from across the screen. */
-function drawPin(ctx, x, y, size) {
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = `${Math.max(15, Math.round(size * 1.05))}px ${EMOJI_STACK}`;
-  ctx.fillText('📍', x, y);
   ctx.restore();
 }
 
@@ -1816,22 +2398,24 @@ function drawTrial(time) {
   const point = toScreen(trial.x, trial.y);
   if (point.x < -60 || point.y < -60 || point.x > width + 60 || point.y > height + 60) return;
   const breathe = REDUCED_MOTION ? 0.5 : (Math.sin(time * 2.4) + 1) / 2;
-  const size = 34;
   ctx.save();
   ctx.beginPath();
-  ctx.arc(point.x, point.y, size / 2 + 6 + breathe * 4, 0, Math.PI * 2);
+  ctx.ellipse(point.x, point.y, 14 + breathe * 4, 6 + breathe * 2, 0, 0, Math.PI * 2);
   ctx.setLineDash([5, 4]);
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = MINE;
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.globalAlpha = 0.75;
-  faceBadge(trial, point.x, point.y, size, { ring: MINE });
+  drawPostPin(ctx, point.x, point.y, {
+    heat: trial.motivation, initial: initialOf(trial.display_name || (state.account && state.account.display_name)),
+    size: 26, mine: true, tag: false, night: tod === 'night',
+  });
   ctx.globalAlpha = 1;
   ctx.font = '700 11px system-ui, sans-serif';
   const text = 'お試し';
   const w = ctx.measureText(text).width + 14;
-  const y = point.y + size / 2 + 16;
+  const y = point.y + 20;
   ctx.beginPath();
   ctx.roundRect(point.x - w / 2, y - 9, w, 18, 9);
   ctx.fillStyle = MINE;
@@ -1840,8 +2424,20 @@ function drawTrial(time) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, point.x, y + 0.5);
+  // The tryout island is not in state.islands, so its name is not drawn with
+  // the others; where no saved island of that name is on the map, put it here.
+  const name = trial.island && trial.island.label;
+  if (name && !(state.islands || []).some((island) => island.label === name)) {
+    ctx.font = '700 13px system-ui, sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.fillStyle = INK.label;
+    ctx.strokeText(name, point.x, point.y - 44);
+    ctx.fillText(name, point.x, point.y - 44);
+  }
   ctx.restore();
-  hits.push({ x: point.x, y: point.y, r: 26, trial: true });
+  hits.push({ x: point.x, y: point.y - 18, r: 26, trial: true });
 }
 
 /** Rings spreading from where something just happened. With less motion, a
@@ -1893,19 +2489,6 @@ function drawChangeMarks(time) {
     ctx.stroke();
     ctx.globalAlpha = 1;
   });
-  ctx.restore();
-}
-
-function selectionRing(ctx, x, y, radius, accent) {
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(255,255,255,.85)';
-  ctx.lineWidth = 4.5;
-  ctx.stroke();
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
   ctx.restore();
 }
 

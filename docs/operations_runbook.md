@@ -154,6 +154,13 @@ prepareは投稿・runtimeを変更しないが、サーバー専用embedding_ca
 9. 投稿・本文編集・画像・本人による認証・反応・コメントを確認し、Gemini使用量と遅延を測定する。
 10. 通常push用のGemini設定を固定し、CI再リリースを確認してから自動運用へ戻す。
 
+## 投稿のお題・参加者募集の受付の出し方（2026-10-20）
+
+1. **SQL を先に流すのが推奨**（ただし今回は後でも壊れない。流すまでは新機能が止まるだけ）：`supabase/migrations/20261020000000_post_prompts_and_recruit.sql` を Supabase の SQL エディタに貼って流す（足すだけ・何度流しても壊れない・古いコードも壊れない）。`posts` に `prompt`・`recruit_deadline`・`recruit_capacity` を足し、`reactions` に受付終了のトリガーを付け、`map_posts` を作り直す。
+2. **流すまでは機能が止まっている**：新しいコードが先に本番に出ても、`posts` にこの3列が無い間は `/api/config` の `features.post_extras` が `false` になり、お題の記録・申込期限・先着人数は無視される（投稿の作成・編集は成功する）。`/api/health` の `post_extras_ready` も `false` だが、`ready` は変わらない（本番は止まらない）。
+3. **流したあと**：最大60秒ほどで自動で `features.post_extras` が `true`、`post_extras_ready` が `true` になる（再起動は要らない）。確認は `GET /api/health` と `GET /api/config`。あわせて SQL エディタで `select recruit_closed from map_posts(-1000,-1000,1000,1000,1)` が列として返ることを確かめる。
+4. **戻すとき**：コードだけ古いものに戻してよい（列は残る。古いコードは読まない）。受付終了のトリガーは残るので、期限・人数の付いた募集には新しく参加できないままになる。古い画面を開いたままの人が満員・期限切れの参加を押すと、トーストに `recruit_full` / `recruit_closed` の文字がそのまま出ることがある（`web/js/recruit-rules.js` の言い換えは新しい画面だけ）。
+
 ## 島の AI 命名の出し方と戻し方（2026-10-12）
 
 島の名前を Gemini で付ける機能は、**環境変数 `ISLAND_NAMING_ENABLED` が `1` のときだけ**動く。既定はオフ（未設定なら従来の上位語の名前のまま）。CI の変数・秘密は変えず、次の順で人が操作する。
@@ -197,6 +204,129 @@ update public.islands_state set name_source = 'terms', name_basis = null, name_t
 ```
 
 - 言葉そのものを禁止する：環境変数 `ISLAND_NAME_BLOCKLIST` にカンマ区切りで足す（例 `競馬,パチンコ`）。組み込みの禁止語は `core/island_namer.py` の `BLOCKED`。新しい revision を出すと効く。**禁止語は今後の答えに効く**。すでに付いた AI の名前が禁止語を含む場合は、次の読み込みから従来の名前に戻る（コードが再検査する）。付いた名前を別の名前にしたいときは、上の `manual` の SQL で直せる。
+
+## Google・LINE でのログインの出し方（2026-10-13）
+
+コードは入っている。ボタンは Cloud Run の環境変数 `KOTOBA_OAUTH_GOOGLE` / `KOTOBA_OAUTH_LINE` が `1` のときだけ出る（未設定なら今までどおりメールのパスコードだけ）。Google・LINE・Supabase・Cloud Run の設定変更なので、**2人の合意が要る**。順番は「外の設定（Google・LINE・Supabase）→ 動作確認 → 環境変数」。環境変数を先に立てると、押しても失敗するボタンが出る。
+
+### Google
+
+1. Google Cloud Console の「Google Auth Platform」（OAuth 同意画面）：対象は「外部」。アプリ名とサポート用のメールを入れる。スコープは `openid`・メール・プロフィールだけにする（この範囲なら Google の審査は要らない）。公開ステータスを「本番環境」にする（「テスト」のままだと、登録したテストユーザーしか入れない）。
+2. 「クライアント」を種類「ウェブ アプリケーション」で作る。承認済みのリダイレクト URI に `https://<project-ref>.supabase.co/auth/v1/callback` を入れる。
+3. Supabase → Authentication → Sign In / Providers → Google を有効にし、クライアント ID とクライアント シークレットを貼る。
+4. Supabase → Authentication → URL Configuration の Redirect URLs に、本番の URL（末尾 `/`）があることを確かめる。ないと、ログイン後に Site URL へ戻される。
+
+### LINE
+
+LINE は Supabase に最初から入っている接続先ではないので、「Custom Providers」（2026-04-08 から。無料プランは3つまで、Pro 以上は上限なし。上限を超えると `over_custom_provider_quota`）で足す。
+
+**種類は最初から OAuth2 にする**（2026-10-18 に確認）。LINE のウェブログインの ID トークンは HS256（チャネルシークレットで署名）で、Supabase の OIDC 検証は対称鍵の署名を扱えない（公式の Third-Party Auth の説明。ES256 になるのはアプリ・LINE SDK・LIFF のときだけ）。OIDC で作ると必ず検証で失敗する。
+
+1. LINE Developers コンソールで、プロバイダーを作り、その下に「LINE ログイン」チャネルを作る（アプリタイプは「ウェブアプリ」）。チャネルは後から別のプロバイダーへ移せない。
+2. Supabase → Authentication → Sign In / Providers → 一番下の Custom Providers → New Provider。
+   - 識別子は **`custom:line`**（コードがこの名前で呼ぶ。`web/js/session.js` の `SUPABASE_PROVIDERS`）
+   - 種類は **OAuth2**。Client ID はチャネル ID、Client Secret はチャネルシークレット
+   - authorize `https://access.line.me/oauth2/v2.1/authorize`、token `https://api.line.me/oauth2/v2.1/token`、userinfo `https://api.line.me/oauth2/v2.1/userinfo`、スコープ `openid profile`
+   - **メールなしでも登録できる設定（email optional）を必ず有効にする**。LINE の userinfo は `sub`・`name`・`picture` だけでメールを返さない（メール取得権限を申請しても、メールは ID トークンにしか入らない）
+   - 画面に出る Callback URL を控える
+   - 注意：OAuth2 で Supabase が userinfo から利用者を作れることは、公式の文書では確かめきれていない。「開発中」のチャネルで、まず管理者のアカウントで一度ログインして確かめる
+3. LINE のチャネル →「LINE ログイン設定」→ コールバック URL に、手順2で控えた Callback URL を入れる。
+4. メールの取得権限（チャネル基本設定 → OpenID Connect →「申請」）は申請しなくてよい。上のとおり OAuth2 ではメールが Supabase に届かないうえ、islands はメールがなくてもアカウントを作れる（プロフィール編集のメール欄には「LINE でログインしています」と出る）。
+5. 「開発中」のチャネルは、チャネルの管理者とテスターしかログインできない。確認が済んでから「公開」にする（**公開は元に戻せない**）。
+
+### 出す
+
+1. **ボタンを出す前の確認**：ブラウザで `https://<project-ref>.supabase.co/auth/v1/authorize?provider=google&redirect_to=<本番のURL>/`（LINE は `provider=custom:line`）を開く。ログインのあと本番の画面へ戻り、名前とアイコンの設定（`#/setup`）が出れば通っている。
+2. Cloud Run の環境変数を足して新しい revision を出す。CI の deploy は `--update-env-vars` で決まった変数だけを書き換えるので、ここで足した変数は次の deploy でも残る。
+
+   ```powershell
+   gcloud run services update islands --project <ID> --region asia-northeast1 --update-env-vars KOTOBA_OAUTH_GOOGLE=1,KOTOBA_OAUTH_LINE=1
+   ```
+
+3. 入口の画面に「Googleで登録」「LINEで登録」、ログイン画面に「Google で続ける」「LINE で続ける」が出る。メールのボタンは「メールアドレスで登録」に変わる。
+4. ログインを途中でやめた・失敗したときは、アプリに戻って「ログインできませんでした。もう一度お試しください。」と出る（2026-10-18〜。以前は何も出ず、アドレスに `#error=...` が残った）。
+
+**止めたいとき**：`--remove-env-vars KOTOBA_OAUTH_LINE` などで外す。ボタンが消えるだけで、その方法で作ったアカウントは残る。ただしメールを渡していない LINE の人は、メールのパスコードでは入れなくなるので、止める前に人数を確かめる。
+
+## 地図の作り直し（2026-10-15：地図の見方 v3・お手本 10,182 件）
+
+**何が変わったか**
+
+- 投稿の位置を決めるエンコーダが読むベクトルを、保存した448次元そのものから「地図の見方」（`core.similarity.map_view`）に変えた。意味の部分からお手本の平均を引き（偏りの補正）、語（TF-IDF）の重みを 0.35 → 0.20 に下げたもの。似てる度（`vec_c`）も同じ見方で測る。保存するベクトル（`vec`）の作り方と埋め込みのキャッシュは変わらない
+- お手本（`scripts/seed_corpus.jsonl`）を 1,000 件 → 10,182 件にした。追加の 9,182 件は約90の分野ごとに書いた架空の短い投稿（`area` 付き）
+- 新しい見方の成果物は manifest の `schema_version` が 2。**古いコードは 2 を読めず起動時に止まる**（黙って間違った場所に置かない）。新しいコードは 1（今の本番の成果物）も 2 も読める
+- 効果（評価用の例文100件・20話題×5件、Gemini。近くの4件に同じ系統の話題がいるか）：「1件もいない」36% → 10%、「1番近い投稿が同じ系統」38% → 82%。リリース比較の地図上の P@k 0.20 → 0.46（`output/quality-gemini-20261015-v2.json`）
+- 品質ゲートの近所の数を「お手本の1.5%（最低15）」にした（1,000件のときの15件＝1.5%と同じ意味）。k=15 の値も `meta.gates.generalization` に残る。10,182 件の Gemini 版では k=15 で生徒役が上限比 0.37（UMAP の transform は 0.74）で、細かい近所の再現は生徒役の弱点として残っている（学習方法の改善候補）
+- 島の名前の候補は「島の文書の4%以上、ただし最大20件」に出る語（1万件で島1つが1,000件を超え、4%では名前が付かなかった）
+
+**ビルド環境（Windows の注意）**
+
+- パスが長いと torch・numba が入らない／動かない。短い場所に仮想環境を作る（例 `%TEMP%\mb`）。`NUMBA_CACHE_DIR` も短い場所に
+- `requirements-build.txt` はそのままでは入らない（`google-genai==1.64.0` が `httpx>=0.28.1` を要求し、`requirements.txt` の `httpx==0.27.2` とぶつかる）。地図づくりに google-genai は要らないので次で入れる（版は本番と同じ）。`PYTHONUTF8=1` も付ける（requirements の日本語コメントで止まるため）
+
+  ```powershell
+  $env:PYTHONUTF8 = '1'
+  python -m pip install -r requirements-onnx.txt torch==2.7.1 umap-learn==0.5.5
+  ```
+
+- Gemini の埋め込みは約2万文書（お手本の本文と内容語の2通り）。既定の速度（`GEMINI_ITEMS_PER_MINUTE=90`）だと約4時間かかるので、有料枠の範囲で上げる（2026-10-15 は 1500/分で制限に当たらなかった）。`.cache/embeddings.sqlite3`（キーは `embedding_spec` と本文）にあるものは呼ばない
+- 所要（8スレッドのPC、Gemini と E5 を並行）：1回 1〜1.5時間。半分以上はホールドアウトのための学習のやり直し
+
+**作り方**
+
+```powershell
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261015-v3'
+python scripts/build_seed_map.py --artifacts output/gemini-v3
+$env:EMBEDDING_PROVIDER = 'onnx'; $env:MAP_BUILD_VERSION = 'kotoba-map-e5-v3'
+python scripts/build_seed_map.py --artifacts output/e5-v3   # 手元と CI 用。artifacts/ の5ファイルを置き換える
+```
+
+**v6（2026-10-16）**：v5（用途 `clustering`）に、先生役 UMAP の新しい設定（`core.config.LAYOUT_CONFIG` の `repulsion_strength` 2・`spread` 0.5、`LAYOUT_VERSION` v3）を加えて作り直した版。埋め込みは v5 と同じなのでキャッシュがあれば送信はなく、所要は学習とゲートで約1時間:
+
+```powershell
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261016-v6'
+python scripts/build_seed_map.py --artifacts output/gemini-v6
+```
+
+**v5（2026-10-16）**：Gemini の用途を `clustering` にして地図を作り直した版（`core.config.GEMINI_TASK`）。用途は成果物の embedding spec に入るので、**このコードは v4 以前の Gemini の地図を読まず、v4 以前のコードは v5 を読まない**（どちらも起動時に止まる。黙って違う場所に置くことはない）。本番は、コードと地図を同じリリースで切り替える。お手本と例文を新しい用途で埋め込み直すので、キャッシュが無ければ Gemini の回数制限しだいで30分〜数時間かかる:
+
+```powershell
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261016-v5'
+$env:GEMINI_REQUESTS_PER_MINUTE = '100'; $env:GEMINI_ITEMS_PER_MINUTE = '1500'
+python scripts/build_seed_map.py --artifacts output/gemini-v5
+```
+
+手元と CI の E5（`kotoba-map-e5-v4`）は変わらない。
+
+**v4（2026-10-16）**：v3 の座標のまま、種類ちがいの例文（`scripts/seed_variants.jsonl`、5,397件）と新しい置き方（`core.config.SEED_PLACEMENT`）を足した版。学習はやり直さないので数分で済む（Gemini は例文の埋め込みが要る。キャッシュが無ければ約1時間）。元の版のフォルダを**コピーしてから**、コピーに対して実行する:
+
+```powershell
+Copy-Item -Recurse output/gemini-v3 output/gemini-v4
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261016-v4'
+python scripts/build_seed_map.py --add-variants --artifacts output/gemini-v4
+$env:EMBEDDING_PROVIDER = 'onnx'; $env:MAP_BUILD_VERSION = 'kotoba-map-e5-v4'
+python scripts/build_seed_map.py --add-variants   # artifacts/（手元と CI 用）
+```
+
+品質ゲート「placement」は、隠したお手本の例文も一緒に隠して測る（同じ位置に立つので、残すと答えを教えてしまう）。Gemini v4 で上限比 0.95（1.5%: 1.00）。新しくビルドし直す場合も `build_seed_map.py` が例文を読み込む。
+
+**v3（2026-10-16）で加わったこと**：新しい投稿はお手本で置く（`core.placement`、成果物に `seed_vectors.npy` が増えて5ファイル。`artifact_release.py` は manifest が挙げるファイルだけを ZIP に入れ・取り出す。知らない名前は拒否）。品質ゲートに「placement」（300件を隠し、残りのお手本で置いたときの近所の再現。Gemini v3 で上限比 0.94）。先生役 `min_dist` 0.0。島の半径は投稿数で縮む（`core.energy.reach_factor`、REQUIREMENTS 4.1.1）。評価用の短い投稿478件で、島22個（5件以上13個）、最大148件。
+
+**版の名前は毎回新しくする。** 本番の切り替えは DB の `map_runtime.active_version` と成果物の版の一致で判断するので、同じ名前を使い回すと新旧の位置が混ざっても気付けない。
+
+**本番への出し方（相手の方との合意が要る。CI 変数・GCS・本番 DB を触るため）**
+
+1. コードを先に main へ出す。新しいコードは今の本番の成果物（schema 1）のまま、今までどおり動く
+2. `compare_map_release.py`（基準は `artifacts/` の E5 v2）→ `artifact_release.py pack` → GCS へ新しいオブジェクト名で保存 → CI 変数（`MAP_ARTIFACT_VERSION` / `MAP_ARTIFACT_URI` / `MAP_ARTIFACT_SHA256`）を新しい版へ
+3. 「投稿再計算とメンテナンス切替」の手順どおり（prepare → maintenance on → apply → verify → traffic → maintenance off）。全投稿の `vec` / `vec_c` / `x` / `y` / `cluster_id` が新しい地図で計算し直される。語の辞書（`vectorizers.pkl`）が新しくなるので `vec` も変わるが、Gemini の埋め込みはキャッシュが効くので API はほぼ呼ばない
+4. 全投稿の位置が動く。アプリ内で事前に知らせる（既存の手順の2）
+
+**戻し方**：既存の「復旧とデータ保持」と同じ（旧 revision＝旧コードと旧成果物に traffic を戻し、`migrate_map.py rollback`）。新しいコードのまま CI 変数を旧 ZIP に戻すこともできる（schema 1 を読める）。
+
+**残っている課題**
+
+- プロフィールの似てる度の目盛り（`PROFILE_COSINE_ANCHORS`）は仮の値のまま。お手本の平均が変わるので、実際のプロフィールが集まったら測り直す
+- **島の強弱**：投稿が増えると、話題の違う島どうしが「影響範囲（普通の熱量で半径35）」の重なりで鎖のようにつながり、1つの大陸になる。評価用の短い投稿478件（24話題）を新しい地図に置くと 475 件が1つの島になった（古い地図でも 476 件）。並べ方（UMAP の設定11通り・分野ラベル付き）では隙間ができず、島がつながる距離と地図の広さの比率を見直す必要がある（距離0.6倍で島43・系統のまとまり59%、0.5倍で島69・71%）。島の規則は元の islands の設計なので、2人で決める
 
 ## 復旧とデータ保持
 

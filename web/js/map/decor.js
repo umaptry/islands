@@ -12,6 +12,8 @@
 // drift the fleet or leave a bird somewhere it should not be.
 
 import { drawSpriteTurned, fogImage } from './sprites.js';
+import { drawBoat } from './vehicles.js';
+import { beachThreshold, conesNear, conesOf, groundSum, postsNear } from './land.js';
 
 export const SYSTEM_REDUCED_MOTION = Boolean(
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -26,12 +28,11 @@ export function setReducedMotion(on) {
 }
 
 export const INK = {
-  seaMark: 'rgba(255, 255, 255, .17)',
-  surf: 'rgba(255, 255, 255, .58)',
   bird: 'rgba(255, 255, 255, .62)',
   boat: 'rgba(255, 255, 255, .92)',
   wake: 'rgba(255, 255, 255, .3)',
-  halo: 'rgba(23, 46, 74, .55)',
+  halo: 'rgba(29, 95, 144, .6)',   // palette.js halo
+  glint: 'rgba(255, 255, 255, .85)',
   label: '#ffffff',
 };
 
@@ -53,13 +54,14 @@ export function hashId(id) {
 }
 
 const BOAT_COUNT = 6;
-// Screen pixels at every zoom. A boat that grew with the map would compete with
-// the islands; the point is that it stays tiny.
-const BOAT_LENGTH = 9;
-const SEA_MARK_COUNT = 44;
+// The hull's length in screen px at the largest zoom; below that it shrinks in
+// proportion to scale / maxScale (as the route boats do), and under BOAT_MIN px
+// it is not drawn. The drawing is vehicles.js.
+const BOAT_LENGTH = 11;
+const BOAT_MIN = 3;
 const BIRD_SKEINS = 2;
 // Half a gull's wingspan, seen from above.
-const BIRD_SIZE = 5;
+const BIRD_SIZE = 2.5;   // halved 2026-10-13, with the flock's spacing and line
 // Boats and gulls wander the sea on slow closed curves (drift, below) so they
 // turn gently instead of flipping round at the end of a line: everything here
 // is seen from straight above, where a boat that reverses on the spot would
@@ -69,77 +71,98 @@ const BIRD_SIZE = 5;
 const BOAT_DRIFT = { period: 900, reach: 0.4 };
 const BIRD_DRIFT = { period: 370, reach: 0.4 };
 
+const GLINT_CELL = 300;   // screen px: about one sparkle candidate per cell of this size
+const GLINT_CHANCE = 0.75;
+const GLINT_SIZE = 3;   // screen px, half the star's width
+
+/** A four-pointed star that swells and fades once per period, never at rest. */
+function drawGlint(ctx, x, y, size) {
+  const pinch = size * 0.18;
+  ctx.beginPath();
+  ctx.moveTo(x, y - size);
+  ctx.quadraticCurveTo(x + pinch, y - pinch, x + size, y);
+  ctx.quadraticCurveTo(x + pinch, y + pinch, x, y + size);
+  ctx.quadraticCurveTo(x - pinch, y + pinch, x - size, y);
+  ctx.quadraticCurveTo(x - pinch, y - pinch, x, y - size);
+  ctx.fill();
+}
+
 export function drawSeaMarks(ctx, view, time) {
   const { sea, toScreen, width, height } = view;
   ctx.save();
-  ctx.strokeStyle = INK.seaMark;
-  ctx.lineWidth = 1;
-  ctx.lineCap = 'round';
-  for (let i = 0; i < SEA_MARK_COUNT; i += 1) {
-    const seed = 104729 * (i + 1);
-    const spot = toScreen(sea.x + noise(seed, 1) * sea.w, sea.y + noise(seed, 2) * sea.h);
-    if (spot.x < -20 || spot.x > width + 20 || spot.y < -20 || spot.y > height + 20) continue;
-    const sway = REDUCED_MOTION ? 0 : Math.sin(time * 0.6 + noise(seed, 3) * Math.PI * 2) * 1.3;
-    const unit = 3.2;
-    ctx.beginPath();
-    for (let row = 0; row < 2; row += 1) {
-      const y = spot.y + row * 2.6;
-      const x = spot.x + sway + row * 1.4;
-      ctx.moveTo(x - unit, y);
-      ctx.quadraticCurveTo(x - unit * 0.5, y - 1.5, x, y);
-      ctx.quadraticCurveTo(x + unit * 0.5, y + 1.5, x + unit, y);
+  // (The white crests that used to be here are gone: the incoming surf along the
+  // coasts, surf.js, replaces them.)
+  if (!REDUCED_MOTION) {
+    // Sparkles on the water, each lit for the first third of its own 3.2 s cycle.
+    // One candidate per cell of a grid in WORLD units, hashed from the cell index,
+    // so a sparkle stays put while you pan; the cell size follows the zoom (in
+    // octave steps) so there are always a handful on screen, however far in.
+    // (The ground is drawn over them, so none shows on land.)
+    ctx.fillStyle = INK.glint;
+    const first = toScreen(0, 0);
+    const pixel = toScreen(1, 0).x - first.x;   // screen px per world unit
+    if (pixel > 0) {
+      const cell = 2 ** Math.round(Math.log2(GLINT_CELL / pixel));
+      const fromX = Math.floor((-first.x / pixel) / cell);
+      const toX = Math.ceil(((width - first.x) / pixel) / cell);
+      const fromY = Math.floor((-first.y / pixel) / cell);
+      const toY = Math.ceil(((height - first.y) / pixel) / cell);
+      for (let gy = fromY; gy <= toY; gy += 1) {
+        for (let gx = fromX; gx <= toX; gx += 1) {
+          const seed = 611953 * (((gx * 73856093) ^ (gy * 19349663)) >>> 0 || 1);
+          if (noise(seed, 6) > GLINT_CHANCE) continue;
+          const wx = (gx + noise(seed, 1)) * cell;
+          const wy = (gy + noise(seed, 2)) * cell;
+          if (wx < sea.x || wx > sea.x + sea.w || wy < sea.y || wy > sea.y + sea.h) continue;
+          const phase = ((time + noise(seed, 4) * 3.2) % 3.2) / 3.2;
+          if (phase > 0.3) continue;
+          const spot = toScreen(wx, wy);
+          if (spot.x < -10 || spot.x > width + 10 || spot.y < -10 || spot.y > height + 10) continue;
+          drawGlint(ctx, spot.x, spot.y, GLINT_SIZE * Math.sin((phase / 0.3) * Math.PI));
+        }
+      }
     }
-    ctx.stroke();
   }
   ctx.restore();
 }
 
+// An ornamental boat wanders over the whole sea and so would cross islands: it
+// is left out while it is over land, fading over this many screen px at the shore
+// (the ground is asked at five spots round the boat, so one is a handful of
+// cheap checks a frame).
+const SHORE_FADE = 6;
+
+/** How much of a boat at world (x, y) shows: 1 on the water, 0 on land. */
+function seaShare(view, x, y) {
+  const { posts, cells, scale } = view;
+  if (!posts) return 1;
+  const reach = SHORE_FADE / Math.max(scale || 1, 1e-6);
+  // Only the posts near the boat count: look them up once for the five spots.
+  const lo = [x - reach, y - reach];
+  const hi = [x + reach, y + reach];
+  const near = postsNear(posts, lo, hi);
+  const cones = conesNear(conesOf(cells), lo, hi);
+  const beach = beachThreshold();
+  let wet = 0;
+  [[0, 0], [reach, 0], [-reach, 0], [0, reach], [0, -reach]].forEach(([dx, dy]) => {
+    if (groundSum(near, cones, x + dx, y + dy) < beach) wet += 1;
+  });
+  return wet / 5;
+}
+
 export function drawBoats(ctx, view, time) {
   if (REDUCED_MOTION) return;
-  const { sea, toScreen, width, height } = view;
+  const { sea, toScreen, width, height, scale, maxScale } = view;
+  const length = scale > 0 && maxScale > 0 ? BOAT_LENGTH * Math.min(1, scale / maxScale) : BOAT_LENGTH;
+  if (length < BOAT_MIN) return;
   for (let i = 0; i < BOAT_COUNT; i += 1) {
     const seed = 7919 * (i + 1);
     const spot = drift(sea, seed, time + noise(seed, 5) * 2000, BOAT_DRIFT);
     const point = toScreen(spot.x, spot.y);
     if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
-    drawBoat(ctx, point.x, point.y, spot.angle);
+    const share = seaShare(view, spot.x, spot.y);
+    if (share > 0) drawBoat(ctx, point.x, point.y, length, spot.angle, { alpha: 0.9 * share });
   }
-}
-
-/** A small boat from above, bow first along `angle`, with its wake fanning out behind. */
-function drawBoat(ctx, x, y, angle) {
-  const unit = BOAT_LENGTH;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-
-  // The wake: two lines opening out from the stern, fading as they go.
-  const wake = ctx.createLinearGradient(-unit * 2.4, 0, -unit * 0.4, 0);
-  wake.addColorStop(0, 'rgba(255, 255, 255, 0)');
-  wake.addColorStop(1, INK.wake);
-  ctx.strokeStyle = wake;
-  ctx.lineWidth = 1;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-unit * 0.4, -unit * 0.12);
-  ctx.lineTo(-unit * 2.4, -unit * 0.5);
-  ctx.moveTo(-unit * 0.4, unit * 0.12);
-  ctx.lineTo(-unit * 2.4, unit * 0.5);
-  ctx.stroke();
-
-  // The hull: pointed at the bow, square at the stern.
-  ctx.fillStyle = INK.boat;
-  ctx.beginPath();
-  ctx.moveTo(unit * 0.55, 0);
-  ctx.quadraticCurveTo(unit * 0.2, -unit * 0.24, -unit * 0.45, -unit * 0.2);
-  ctx.lineTo(-unit * 0.45, unit * 0.2);
-  ctx.quadraticCurveTo(unit * 0.2, unit * 0.24, unit * 0.55, 0);
-  ctx.closePath();
-  ctx.fill();
-  // A cabin on the deck, so it reads as a boat and not as a grain of rice.
-  ctx.fillStyle = 'rgba(23, 46, 74, .35)';
-  ctx.fillRect(-unit * 0.28, -unit * 0.09, unit * 0.34, unit * 0.18);
-  ctx.restore();
 }
 
 export function drawBirds(ctx, view, time) {
@@ -148,7 +171,7 @@ export function drawBirds(ctx, view, time) {
   ctx.save();
   ctx.strokeStyle = INK.bird;
   ctx.fillStyle = INK.bird;
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = 0.7;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   for (let flight = 0; flight < BIRD_SKEINS; flight += 1) {
@@ -161,8 +184,8 @@ export function drawBirds(ctx, view, time) {
     const unitX = Math.cos(spot.angle);
     const unitY = Math.sin(spot.angle);
     for (let bird = 0; bird < 3; bird += 1) {
-      const back = bird === 0 ? 0 : 9;
-      const side = bird === 1 ? -8 : (bird === 2 ? 8 : 0);
+      const back = bird === 0 ? 0 : 4.5;
+      const side = bird === 1 ? -4 : (bird === 2 ? 4 : 0);
       drawBird(ctx,
         lead.x - unitX * back - unitY * side,
         lead.y - unitY * back + unitX * side,

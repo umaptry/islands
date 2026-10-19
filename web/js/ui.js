@@ -79,6 +79,10 @@ export function toast(message) {
 // islands' post panel: half height, swipe up for full height, with the message
 // list appearing only once it is expanded. Ported behaviour and all - the half
 // state is what lets you read a card without losing sight of the map.
+//
+// Never modal (2026-10-16): no grey veil over the map and the map stays live,
+// so another face can be tapped straight away to look round post after post,
+// as with a place on Google Maps. Tapping the open sea still closes it.
 
 const sheetState = { open: false, expanded: false, onClose: null };
 // Wide and tall enough for the side panel; a phone held sideways is not.
@@ -89,12 +93,8 @@ let sheetFocus = null;
 export function setupSheetAccessibility() {
   const sheet = $('sheet');
   const sync = () => {
-    const modal = sheetState.open && !desktopSheet();
-    sheet.setAttribute('aria-modal', String(modal));
     sheet.setAttribute('aria-hidden', String(!sheetState.open));
     sheet.inert = !sheetState.open;
-    document.querySelectorAll('.screen, #bottomNav').forEach((node) => { node.inert = modal; });
-    $('sheetBackdrop').classList.toggle('on', modal);
     document.dispatchEvent(new CustomEvent('sheet:layout'));
     if (window.visualViewport) {
       document.documentElement.style.setProperty('--viewport-height', `${window.visualViewport.height}px`);
@@ -108,13 +108,6 @@ export function setupSheetAccessibility() {
   document.addEventListener('keydown', (event) => {
     if (!sheetState.open || document.querySelector('.modal-backdrop')) return;
     if (event.key === 'Escape') { event.preventDefault(); closeSheet(); }
-    if (event.key === 'Tab' && !desktopSheet()) {
-      const nodes = [...sheet.querySelectorAll('button, input, textarea, a[href], [tabindex="0"]')]
-        .filter((node) => !node.disabled && node.getClientRects().length);
-      const first = nodes[0], last = nodes[nodes.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    }
   });
   sync();
 }
@@ -128,7 +121,7 @@ export function openSheet({ expanded = false, onClose = null } = {}) {
   sheetState.onClose = onClose;
   sheet.classList.add('on');
   sheet.classList.toggle('full', expanded);
-  $('sheetBackdrop').classList.add('on');
+  $('sheetScroll').scrollTop = 0;
   document.body.classList.add('sheet-open');
   document.dispatchEvent(new CustomEvent('sheet:state'));
   if (!desktopSheet()) $('sheetClose').focus();
@@ -139,6 +132,9 @@ export function expandSheet(expanded) {
   if (!sheetState.open || sheetState.expanded === expanded) return;
   sheetState.expanded = expanded;
   $('sheet').classList.toggle('full', expanded);
+  // Back at half height the card shows its top again: the half sheet does not
+  // scroll (style.css), so whatever was scrolled to would be out of reach.
+  if (!expanded) $('sheetScroll').scrollTop = 0;
   document.dispatchEvent(new CustomEvent('sheet:expand', { detail: { expanded } }));
 }
 
@@ -150,7 +146,6 @@ export function closeSheet() {
   sheetState.open = false;
   sheetState.expanded = false;
   $('sheet').classList.remove('on', 'full');
-  $('sheetBackdrop').classList.remove('on');
   document.body.classList.remove('sheet-open');
   const done = sheetState.onClose;
   sheetState.onClose = null;

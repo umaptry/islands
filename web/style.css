@@ -1,6 +1,7 @@
 /* islands — one sheet.
  *
- * The palette is islands' do-blue (#2FA6FF) over a white card surface: blue is
+ * The palette is the map's sea (#46AEE6, palette 03 クリア・スカイ, 2026-10-18;
+ * it was islands' do-blue #2FA6FF) over a white card surface: blue is
  * the sea, white is anything a person wrote, and the ten island hues are the
  * only saturated colour on the page. That leaves the map free to be the loudest
  * thing on screen, which is the point of the whole app.
@@ -10,9 +11,11 @@
  */
 
 :root {
-  --sea: #2FA6FF;
-  --sea-deep: #1F8FE3;
-  --sea-ink: #0B4A78;
+  /* The same blues as the map (web/js/map/palette.js): the sea, a deeper sea,
+   * and the dark blue the map rims its island names with. */
+  --sea: #46AEE6;
+  --sea-deep: #2E9AD6;
+  --sea-ink: #1D5F90;
 
   --surface: #ffffff;
   --surface-2: #f4f7fb;
@@ -257,6 +260,8 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, .32);
 }
 .oauth-button { margin-bottom: 10px; }
+/* LINE's own green (LINE Login button guidelines); the others keep the app's buttons. */
+.btn.oauth-line, .btn-outline.oauth-line { background: #06c755; border-color: #06c755; color: #fff; }
 
 .dev-code {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -428,6 +433,9 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
 }
 .filter-button.on { background: #fff; color: var(--sea); }
+/* The icon span is a flex item but its svg is inline, so it sat on a text baseline (a few px high). */
+.filter-button > span:first-child { display: flex; align-items: center; justify-content: center; }
+.filter-button svg { display: block; }
 .filter-count {
   background: #fff; color: var(--sea); font-size: 11px; font-weight: 800;
   border-radius: 999px; padding: 0 6px; min-width: 18px; text-align: center;
@@ -561,12 +569,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 
 /* ---------------------------------------------------------------- sheet */
 
-.sheet-backdrop {
-  position: fixed; inset: 0; background: rgba(10, 30, 52, .34);
-  opacity: 0; pointer-events: none; transition: opacity .22s var(--ease); z-index: 40;
-}
-.sheet-backdrop.on { opacity: 1; pointer-events: auto; }
-
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
   visibility: hidden; pointer-events: none;
@@ -605,6 +607,21 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 }
 
 .sheet-thread { padding-bottom: 8px; }
+
+/* Several posts on one spot at full zoom (2026-10-18). */
+.stack-title { margin: 2px 2px 8px; font-size: 15px; font-weight: 800; }
+.stack-list { list-style: none; margin: 0; padding: 0; }
+.stack-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 12px 4px; border-bottom: 1px solid var(--line); font-size: 13.5px; color: var(--ink);
+}
+.stack-heat { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.stack-who { flex: none; width: 5.5em; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.stack-text { flex: 1; min-width: 0; color: var(--ink-2); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.stack-go { flex: none; color: var(--ink-3); font-size: 18px; }
+.sheet-back {
+  display: block; margin: 0 0 8px; padding: 6px 2px; font-size: 13px; font-weight: 700; color: var(--sea);
+}
 .thread-open {
   width: 100%; text-align: center; padding: 13px;
   border-radius: var(--radius-sm); background: var(--surface-2);
@@ -838,7 +855,6 @@ body:has(#islandBadge:not([hidden])) .toast {
   }
   .sheet.on { transform: none; }
   .sheet.full { height: auto; }
-  .sheet-backdrop { display: none; }
   .sheet-grip { display: none; }
   .sheet-scroll { padding-top: 16px; }
   .sheet-thread { border-top: 1px solid var(--line); max-height: 40dvh; overflow-y: auto; }
@@ -894,6 +910,13 @@ body:has(#islandBadge:not([hidden])) .toast {
 .map-status { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); background: rgb(255 255 255 / .94); color: #374151; border-radius: 8px; padding: 8px 12px; font-size: 12px; z-index: 4; }
 .sheet { bottom: var(--keyboard-inset, 0px); }
 .sheet:not(.full) .sheet-scroll { overscroll-behavior: contain; }
+/* At half height the card does not scroll: a swipe up on it grows the sheet
+   (setupSheetGesture in screens/map.js) and only the full sheet scrolls, as
+   with a place on Google Maps (2026-10-16). Sideways scrollers inside still
+   scroll. The side panel of wider screens scrolls as before. */
+@media not all and (min-width: 768px) and (min-height: 500px) {
+  .sheet:not(.full) .sheet-scroll { overflow-y: hidden; touch-action: pan-x; }
+}
 .sheet-open .bottom-nav { visibility: hidden; }
 .chat-input-row { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 .chat-input { min-width: 0; }
@@ -962,7 +985,56 @@ body:has(#islandBadge:not([hidden])) .toast {
 .weekly-label { font-size: 11px; font-weight: 700; color: var(--on-sea-2); flex: none; }
 .weekly-text { font-size: 13.5px; font-weight: 700; flex: 1 1 160px; min-width: 0; }
 .weekly-prompt .btn-small { min-height: 30px; padding: 0 12px; font-size: 12px; }
-.weekly-prompt.used .btn-small { display: none; }
+.weekly-prompt.used { background: rgba(255, 255, 255, .24); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .85); }
+
+/* The three standing prompts: quieter than the week's, and clearly chips. */
+.extra-prompts { margin: -2px 0 10px; }
+.extra-prompts .weekly-label { display: block; margin-bottom: 6px; }
+.extra-prompt-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.extra-chip {
+  min-height: 34px; padding: 0 13px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .5); background: transparent;
+  color: #fff; font-size: 13px; font-weight: 700;
+  transition: background .12s var(--ease), color .12s var(--ease);
+}
+.extra-chip[aria-pressed=true] { background: #fff; color: var(--sea-ink); border-color: #fff; }
+
+/* 参加者募集中: the deadline and the first-come limit open under the tags. */
+#compose .scroller > .compose-recruit { order: 4; margin-top: 0; }
+.recruit-clip {
+  display: grid; grid-template-rows: 0fr; opacity: 0;
+  transition: grid-template-rows .24s var(--ease), opacity .2s var(--ease);
+}
+.compose-recruit[data-open=true] .recruit-clip { grid-template-rows: 1fr; opacity: 1; }
+.recruit-box {
+  min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 8px;
+  background: rgba(255, 255, 255, .14); border-radius: 10px; padding: 0 12px; margin-top: 6px;
+  transition: padding .24s var(--ease);
+}
+.compose-recruit[data-open=true] .recruit-box { padding: 10px 12px; }
+.recruit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #fff; }
+.recruit-label { font-size: 13px; font-weight: 700; }
+.recruit-opt { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--on-sea-3); }
+.recruit-input {
+  height: 40px; min-width: 0; padding: 0 10px; border-radius: 8px; border: 0;
+  background: #fff; color: var(--ink); font: inherit; font-size: 16px; /* 16px: no iOS zoom on focus */
+}
+input[type=date].recruit-input { width: 168px; }
+input[type=number].recruit-input { width: 96px; text-align: right; }
+.recruit-with-unit { display: inline-flex; align-items: center; gap: 6px; }
+.recruit-unit { font-size: 13px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .recruit-clip, .recruit-box { transition: none; }
+}
+
+/* 参加 under a recruiting post: the terms, and why it cannot be pressed. */
+.post-action.reaction.join.has-terms { flex-direction: row; align-items: center; }
+.join-text { display: inline-flex; flex-direction: column; align-items: flex-start; text-align: left; line-height: 1.25; }
+.join-terms { font-size: 12px; color: var(--ink-3); font-weight: 400; white-space: nowrap; }
+/* A divider keeps the joined count from reading as the end of the deadline line. */
+.post-action.reaction.join.has-terms .post-action-count { margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line, currentColor); align-self: stretch; display: inline-flex; align-items: center; }
+.post-action.reaction.join.ended:disabled { opacity: 1; background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
+.post-action.reaction.join.ended .post-action-label { font-weight: 700; }
 
 /* On/off switches: "talk to me" (Q45) and the sound settings (item 21). */
 .switch-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
@@ -1116,6 +1188,9 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .post-actions-group { display: flex; align-items: center; gap: 14px; }
 .post-actions-group.right { margin-left: auto; gap: 10px; }
 .post-actions-group .post-action { padding-left: 4px; padding-right: 4px; }
+/* 参加 can carry two small lines, so the row may fall to a second line. */
+.post-actions { flex-wrap: wrap; row-gap: 2px; }
+.post-actions-group.right { flex-wrap: wrap; justify-content: flex-end; }
 .post-footer { margin-top: 0; }
 .post-participants-button {
   display: block; width: 100%; margin-top: 6px; padding: 9px 12px; border-radius: 999px;
@@ -1210,3 +1285,117 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 @media (max-width: 767px) and (max-height: 700px) {
   .sheet:not(.full) .post-footer { position: static; box-shadow: none; margin: 0; padding: 0; }
 }
+
+/* ---------------------------------------------------------------- map screen: 05 リアル・レリーフ x 03 クリア・スカイ (2026-10-18)
+   Same values as PALETTE in js/map/palette.js. */
+:root {
+  --ui: #1B8ED5;          /* controls: selected chip, bottom nav, switches */
+  --mine: #FF5A5F;        /* yours on the map */
+  --map-top-h: 60px;      /* the strip over the map, kept up to date by map-extras.js */
+  --float-shadow: 0 1px 2px rgba(16, 42, 71, .10), 0 6px 18px rgba(16, 42, 71, .16);
+}
+.nav-item.on { color: var(--ui); }
+
+.search, .filter-button {
+  background: #fff; border: 1px solid rgba(16, 42, 71, .06);
+  box-shadow: var(--float-shadow);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.search-icon { color: var(--ink-3); opacity: 1; }
+.search-input { color: var(--ink); }
+.search-input::placeholder { color: var(--ink-3); }
+.search-clear { color: var(--ink-3); display: inline-flex; }
+.filter-button { color: var(--ink-2); justify-content: center; }
+.filter-button.on { background: var(--ui); color: #fff; }
+.filter-count { background: var(--ui); color: #fff; }
+.filter-button.on .filter-count { background: #fff; color: var(--ui); }
+.filter-tag.on { background: #e5f2fb; color: var(--ui); border-color: #b5d9f0; }
+.round-button { color: var(--ui); }
+.map-status .btn-outline { color: var(--ui); border-color: var(--ui); }
+.trial-banner .btn-small { background: var(--ui); }
+.trial-banner, .digest-pill, .island-badge { box-shadow: var(--float-shadow); }
+.participant-stop { background: var(--mine); }
+
+/* near islands: a row of chips under the search bar */
+.near-islands {
+  pointer-events: auto; display: flex; align-items: center; gap: 7px;
+  width: 100%; max-width: 520px; overflow-x: auto; padding: 2px 2px 6px; margin-bottom: -6px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.near-islands::-webkit-scrollbar { display: none; }
+.near-label, .near-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 12px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 700; white-space: nowrap; box-shadow: var(--float-shadow);
+}
+.near-label { background: var(--ui); color: #fff; padding-left: 9px; }
+.near-chip { background: #fff; color: var(--ink); }
+.near-chip:active { transform: scale(.96); }
+
+/* island card: floats above the bottom nav */
+.island-card {
+  position: absolute; z-index: 6; left: 12px; right: 12px; margin: 0 auto; max-width: 420px;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px);
+  background: #fff; color: var(--ink); border-radius: 18px;
+  box-shadow: 0 2px 4px rgba(16, 42, 71, .10), 0 14px 36px rgba(16, 42, 71, .22);
+  padding: 16px 16px 14px;
+}
+.island-card-close {
+  position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center; color: var(--ink-3);
+}
+.island-card-close:hover { background: var(--surface-2); }
+.island-card-name { margin: 0 36px 2px 0; font-size: 20px; font-weight: 800; line-height: 1.3; }
+.island-card-count { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+.island-card-topics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.island-card-label { font-size: 11.5px; font-weight: 800; color: var(--ui); margin-right: 2px; }
+.island-topic { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: #e5f2fb; color: #14618f; }
+.island-card-posts { display: flex; flex-direction: column; margin-bottom: 12px; border-top: 1px solid var(--line); }
+.island-post {
+  display: flex; gap: 8px; align-items: baseline; text-align: left; width: 100%;
+  padding: 9px 2px; border-bottom: 1px solid var(--line); font-size: 13px; min-width: 0;
+}
+.island-post b { flex: none; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.island-post span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.island-card-note { margin: -4px 0 12px; font-size: 12px; color: var(--ink-3); }
+.island-card-enter { width: 100%; min-height: 44px; background: var(--ui); color: #fff; font-weight: 800; }
+.island-card-open .island-badge { visibility: hidden; }
+
+.island-card-open .map-controls { visibility: hidden; }
+/* On a phone the controls row (switch + globe) takes the bottom right, so the badge rides above it. */
+@media (max-width: 767px) {
+  .island-badge { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 76px); max-width: calc(100% - 32px); }
+  .island-badge #islandText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* mini map, top right under the strip */
+.mini-map {
+  position: absolute; z-index: 3; right: 14px; top: calc(var(--map-top-h) + 8px);
+  width: 96px; height: 96px; border-radius: 14px; overflow: hidden;
+  border: 2px solid #fff; box-shadow: var(--float-shadow); touch-action: none; cursor: pointer;
+  background: #46AEE6;
+}
+.mini-map canvas { display: block; width: 100%; height: 100%; }
+
+/* The status strip sits under whatever the top strip holds (it used to be fixed at 112px and met the digest pill). */
+.map-status { top: calc(var(--map-top-h) + 8px); }
+/* While the mini map is up, the status strip ("N件が該当") sits to its left. */
+@media (max-width: 767px) {
+  .mini-on .map-status { left: 16px; transform: none; max-width: calc(100% - 140px); width: auto; }
+}
+
+/* "this week" switch to the left of the overview button, centred on it */
+.map-controls { flex-direction: row; align-items: center; gap: 8px; }
+.busy-toggle {
+  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 13px 0 8px;
+  border-radius: 999px; background: #fff; color: var(--ink-2);
+  font-size: 12.5px; font-weight: 700; box-shadow: var(--float-shadow); white-space: nowrap;
+}
+.busy-switch { position: relative; width: 30px; height: 18px; border-radius: 999px; background: #c9d4e0; transition: background .15s; flex: none; }
+.busy-switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 999px;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .15s var(--ease);
+}
+.busy-toggle.on { color: var(--ink); }
+.busy-toggle.on .busy-switch { background: var(--ui); }
+.busy-toggle.on .busy-switch::after { transform: translateX(12px); }

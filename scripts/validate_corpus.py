@@ -30,7 +30,13 @@ DEFAULT_PATH = Path(__file__).resolve().parent / "seed_corpus.jsonl"
 
 RECOMMENDED_MIN = 300
 RECOMMENDED_TARGET = 600
-RECOMMENDED_MAX = 1000
+# 2026-10-15: the corpus grew from 1,000 to about 10,000 lines (1,000 originals
+# plus short posts written to cover ~90 areas of life). With 1,000 the student
+# encoder only memorised the teacher's layout and placed unseen posts with
+# none of their four nearest map neighbours in the same family of topics 19% of
+# the time; with 10,000 it learned the layout (10%). Past this the build gets
+# long for little: 5,000 -> 10,000 gained only 2 points.
+RECOMMENDED_MAX = 12000
 MAX_TEXT_LENGTH = 120
 MIN_CONTENT_TERMS = 2
 MIN_PER_DOMAIN = 10

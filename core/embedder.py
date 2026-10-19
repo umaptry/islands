@@ -267,7 +267,11 @@ def load_embedder(provider=None, **kwargs):
     if provider == "gemini":
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is required for EMBEDDING_PROVIDER=gemini")
-        return GeminiEmbedder(api_key=api_key)
+        # From core.config, which the artifact manifest's embedding spec also
+        # reads: the map and the API calls can never disagree on the task.
+        from core.config import GEMINI_DIMENSIONS, GEMINI_MODEL_NAME, GEMINI_TASK
+        return GeminiEmbedder(api_key=api_key, model=GEMINI_MODEL_NAME, dimensions=GEMINI_DIMENSIONS,
+                              task=GEMINI_TASK)
     if provider == "onnx":
         return OnnxEmbedder(**kwargs)
     raise ValueError("Unknown EMBEDDING_PROVIDER")

@@ -2,12 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
+// land.js, with the config and the ground stubbed, as a module lines.js can import.
+const landSource = (await readFile(new URL('../../web/js/map/land.js', import.meta.url), 'utf8'))
+  .replace("import { groundOf } from './coast.js';", () =>
+    'const groundOf = (post, x, y) => { const d = Math.hypot(x - post.x, y - post.y); return d < post.radius ? post.energy * (1 - d / post.radius) : 0; };')
+  .replace("import { config, energyOf, radiusOf } from '../config.js';", () =>
+    `const config = () => ({ energy: { biome_thresholds: { desert: 30 }, radius_factor: 1, radius_base: 10, radius_scale: 1, radius_trim: 1 } });
+     const energyOf = (post) => post.energy; const radiusOf = (post) => post.radius;`);
+const landUrl = `data:text/javascript;base64,${Buffer.from(landSource).toString('base64')}`;
+
 let source = await readFile(new URL('../../web/js/map/lines.js', import.meta.url), 'utf8');
 source = source
   .replace("import { REDUCED_MOTION, hashId } from './decor.js';", () =>
     'const REDUCED_MOTION = false; const hashId = (id) => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);')
-  .replace("import { drawSpriteTurned } from './sprites.js';", () =>
-    'const drawSpriteTurned = (...args) => { (globalThis.planesDrawn ||= []).push(args); return true; };');
+  .replace("import { drawBoat, drawCar, drawPlane } from './vehicles.js';", () =>
+    `const drawPlane = (...args) => { (globalThis.planesDrawn ||= []).push(args); return true; };
+     const drawBoat = (...args) => { (globalThis.boatsDrawn ||= []).push(args); return true; };
+     const drawCar = (...args) => { (globalThis.carsDrawn ||= []).push(args); return true; };`)
+  .replace("from './land.js';", () => `from '${landUrl}';`)
+  .replace("import { config, energyOf } from '../config.js';", () =>
+    "const config = () => ({ energy: { radius_factor: 1 } }); const energyOf = (post) => post.energy;");
 const lines = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const islands = [
@@ -156,4 +170,223 @@ test('zoomed in: one plane per route however many arches; zoomed out: no lines, 
   globalThis.planesDrawn = [];
   lines.drawPlanes(far.ctx, farView, none, 30);
   assert.equal(globalThis.planesDrawn.length, 0);
+});
+
+// Two islands at (100,100) and (800,100); a third, "mid", between them at (450,100)
+// or off to one side at (450,600). Posts carry energy and a radius of their own.
+const post = (id, x, y, energy = 100, radius = 120) => ({ id, x, y, energy, radius });
+const seaIslands = [
+  { island_id: 'west', cx: 100, cy: 100, post_ids: ['w'] },
+  { island_id: 'east', cx: 800, cy: 100, post_ids: ['e'] },
+  { island_id: 'mid', cx: 450, cy: 100, post_ids: ['m'] },
+];
+const seaRow = (extra = {}) => row('u1', 'u2', 'w', 'e', { a_at: [100, 100], b_at: [800, 100], tier: 1, ...extra });
+function seaView(posts, rows = [seaRow()], extra = {}) {
+  return {
+    rows, islands: seaIslands, posts, toScreen: (x, y) => ({ x: x / 2, y: y / 2 }),
+    width: 600, height: 600, level: 'near', far: false, landOf: null, span: 1000, phone: false, ...extra,
+  };
+}
+const kindsOf = (plan) => plan.lines.map((line) => line.kind);
+
+test('a line with open sea between its ends is a sea route; land in the way makes it an arch', () => {
+  const open = [post('w', 100, 100), post('e', 800, 100), post('m', 450, 600)];
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, seaView(open))), ['sea']);
+  const blocked = [post('w', 100, 100), post('e', 800, 100), post('m', 450, 110)];
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, seaView(blocked))), ['arch']);
+});
+
+test("the stretch on the ends' own land does not block, a gap of land in between does", () => {
+  const own = [post('w', 100, 100), post('w2', 300, 100), post('e', 800, 100), post('e2', 600, 100)];
+  assert.equal(lines.crossesLand(own, [100, 100], [800, 100]), false, 'leaving and reaching its own shore');
+  // The same ends with a piece of land of their own island in the middle: a bay.
+  const bay = own.concat(post('w3', 450, 100));
+  assert.equal(lines.crossesLand(bay, [100, 100], [800, 100]), true);
+  // No open water at all: one stretch of land from end to end.
+  const solid = [100, 200, 300, 400].map((x) => post(`s${x}`, x, 100));
+  assert.equal(lines.crossesLand(solid, [100, 100], [400, 100]), true);
+});
+
+test('without view.posts every crossing is an arch with a plane, as before', () => {
+  const view = seaView(undefined);
+  delete view.posts;
+  const plan = lines.drawLinks(fakeCanvas().ctx, view);
+  assert.deepEqual(kindsOf(plan), ['arch']);
+  globalThis.planesDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, view, plan, 30);
+  assert.equal(globalThis.planesDrawn.length, 1);
+});
+
+test('a sea route is dashed and has boats, not planes', () => {
+  const view = seaView([post('w', 100, 100), post('e', 800, 100)]);
+  const dashes = [];
+  const canvas = fakeCanvas();
+  const ctx = new Proxy(canvas.ctx, {
+    get: (target, key) => (key === 'setLineDash' ? (d) => dashes.push(d) : target[key]),
+  });
+  const plan = lines.drawLinks(ctx, view);
+  assert.equal(dashes.length, 1);
+  globalThis.planesDrawn = [];
+  const boats = fakeCanvas();
+  lines.drawPlanes(boats.ctx, view, plan, 30);
+  assert.equal(globalThis.planesDrawn.length, 0);
+});
+
+test('a route gets one to three boats by tier, and the screen has a cap', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, undefined].map(lines.boatCount), [1, 1, 2, 3, 3, 1]);
+  const count = (view) => {
+    globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
+    lines.drawPlanes(fakeCanvas().ctx, view, lines.drawLinks(fakeCanvas().ctx, view), 30);
+    // A boat and a car handing over at the beach are one vehicle drawn twice.
+    const spots = new Set([...globalThis.boatsDrawn, ...globalThis.carsDrawn].map(([, x, y]) => `${x}|${y}`));
+    return spots.size;
+  };
+  const posts = [post('w', 100, 100), post('e', 800, 100)];
+  [1, 2, 3].forEach((tier) => assert.equal(count(seaView(posts, [seaRow({ tier })])), tier));
+  // Many routes: one island pair each, so many pairs of islands.
+  const many = [];
+  const isles = [];
+  const manyPosts = [];
+  for (let i = 0; i < 12; i += 1) {
+    const y = 20 + i * 40;
+    isles.push({ island_id: `l${i}`, cx: 0, cy: y, post_ids: [`l${i}`] }, { island_id: `r${i}`, cx: 800, cy: y, post_ids: [`r${i}`] });
+    manyPosts.push(post(`l${i}`, 0, y, 100, 10), post(`r${i}`, 800, y, 100, 10));
+    many.push(row(`a${i}`, `b${i}`, `l${i}`, `r${i}`, { a_at: [0, y], b_at: [800, y], tier: 3 }));
+  }
+  const crowd = { ...seaView(manyPosts, many), islands: isles };
+  assert.equal(count(crowd), 18, 'wide screen cap');
+  assert.equal(count({ ...crowd, phone: true }), 8, 'phone cap');
+});
+
+test('where a boat is depends on the clock alone, slower than a plane, and boats are spread apart', () => {
+  const spec = { duration: 10, offset: 0, index: 0, count: 2 };
+  assert.deepEqual(lines.boatAt(7, spec), lines.boatAt(7, spec));
+  assert.ok(lines.boatAt(5, spec).t < lines.planeAt(5, spec).t, 'a plane has gone further by then');
+  assert.notEqual(lines.boatAt(7, spec).t, lines.boatAt(7, { ...spec, index: 1 }).t);
+});
+
+test('with no clock the boats stand still where they are drawn', () => {
+  const view = seaView([post('w', 100, 100), post('e', 800, 100)], [seaRow({ tier: 2 })]);
+  const plan = lines.drawLinks(fakeCanvas().ctx, view);
+  const spots = () => globalThis.boatsDrawn.map(([, x, y]) => [x, y]);
+  globalThis.boatsDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, view, plan, null);
+  const first = spots();
+  globalThis.boatsDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, view, plan, null);
+  assert.equal(first.length, 2);
+  assert.deepEqual(spots(), first);
+});
+
+test('coarse cells block like posts, and a thin island on a long line is not skipped', () => {
+  const ends = [post('w', 100, 100), post('e', 900, 100)];
+  const cell = { cell_x: 22, cell_y: 5, sum_energy: 120 };   // centred at (450, 110)
+  assert.equal(lines.crossesLand(ends, [100, 100], [900, 100], []), false);
+  assert.equal(lines.crossesLand(ends, [100, 100], [900, 100], [cell]), true);
+  // A small island whose land (above the beach) is only a few units wide.
+  const thin = ends.concat(post('t', 503, 106, 40, 30));
+  assert.equal(lines.crossesLand(thin, [100, 100], [900, 100]), true);
+});
+
+test('a like that grows an island on the route is a new answer, with the same posts array', () => {
+  const posts = [post('w', 100, 100), post('e', 800, 100), post('m', 450, 140, 10, 60)];
+  const view = seaView(posts);
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), ['sea']);
+  posts[2].energy = 120;
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), ['arch']);
+});
+
+test('over land a sea route is driven by a car, over the water sailed by a boat, from the clock alone', () => {
+  // Land reaches 84 units from each end here, so the water runs 184 to 716 on x.
+  const view = seaView([post('w', 100, 100), post('e', 800, 100)], [seaRow({ tier: 3 })]);
+  const plan = lines.drawLinks(fakeCanvas().ctx, view);
+  const run = (time) => {
+    globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
+    lines.drawPlanes(fakeCanvas().ctx, view, plan, time);
+    return { boats: globalThis.boatsDrawn.slice(), cars: globalThis.carsDrawn.slice() };
+  };
+  assert.deepEqual(run(41), run(41), 'the same moment shows the same vehicles');
+  let cars = 0;
+  let boats = 0;
+  for (let time = 0; time < 400; time += 1.3) {
+    const seen = run(time);
+    seen.cars.forEach(([, x]) => {
+      cars += 1;
+      // The screen is the world halved; a car may reach 14 px (7 here) past a beach.
+      assert.ok(x * 2 < 184 + 30 || x * 2 > 716 - 30, `a car at world x ${x * 2} is on the water`);
+    });
+    seen.boats.forEach(([, x]) => {
+      boats += 1;
+      assert.ok(x * 2 > 84 + 100 - 30 && x * 2 < 800 - 84 + 30, `a boat at world x ${x * 2} is on land`);
+    });
+  }
+  assert.ok(cars > 0 && boats > 0, `both kinds appear over a round trip (${cars} cars, ${boats} boats)`);
+  // Standing still (reduced motion, no clock): spread along the route, so the
+  // middle one is a boat and the ones near the ends are on the water too at tier 3.
+  const still = run(null);
+  assert.equal(still.cars.length, 0);
+  assert.equal(still.boats.length, 3);
+});
+
+test('a route with only tiny beaches at its ends has boats on almost all of it', () => {
+  const open = seaView([post('w', 100, 100, 100, 10), post('e', 800, 100, 100, 10)], [seaRow({ tier: 2 })]);
+  const plan = lines.drawLinks(fakeCanvas().ctx, open);
+  assert.equal(plan.lines[0].runs.filter((r) => r.land).length, 2, 'two tiny beaches at the ends');
+  globalThis.boatsDrawn = [];
+  globalThis.carsDrawn = [];
+  lines.drawPlanes(fakeCanvas().ctx, open, plan, null);
+  assert.equal(globalThis.carsDrawn.length, 0);
+  assert.equal(globalThis.boatsDrawn.length, 2);
+});
+
+test('the stretches of a line are the same walked from either end', () => {
+  const posts = [post('w', 100, 100), post('e', 800, 100)];
+  const view = seaView(posts, [seaRow({ a: 'u9', b: 'u1' })]);   // a > b: drawn from the other end
+  const [line] = lines.drawLinks(fakeCanvas().ctx, view).lines;
+  assert.deepEqual(line.runs.map((r) => r.land), [true, false, true]);
+  assert.equal(line.runs[0].from, 0);
+  assert.equal(line.runs[2].to, 1);
+});
+
+test('a piece of an arc keeps its ends and its curve', () => {
+  const shape = lines.arc({ x: 0, y: 0 }, { x: 100, y: 0 }, 1, 0.3);
+  const part = lines.slice(shape, 0.25, 0.75);
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  [0, 0.3, 1].forEach((u) => {
+    const whole = lines.pointOn(shape, 0.25 + u * 0.5);
+    const piece = lines.pointOn(part, u);
+    near(piece.x, whole.x);
+    near(piece.y, whole.y);
+  });
+});
+
+test('vehicles are sized by scale / maxScale, and not drawn when under 3 px', () => {
+  assert.equal(lines.sizeShare({}), 1, 'a view without scales draws them full size');
+  assert.equal(lines.sizeShare({ scale: 12, maxScale: 24 }), 0.5);
+  assert.equal(lines.sizeShare({ scale: 30, maxScale: 24 }), 1);
+  const posts = [post('w', 100, 100), post('e', 800, 100)];
+  const sizes = (extra) => {
+    const view = seaView(posts, [seaRow({ tier: 1 })], extra);
+    globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
+    lines.drawPlanes(fakeCanvas().ctx, view, lines.drawLinks(fakeCanvas().ctx, view), 30);
+    return [...globalThis.boatsDrawn, ...globalThis.carsDrawn].map((args) => args[3]);
+  };
+  const full = sizes({ scale: 24, maxScale: 24 });
+  assert.ok(full.length > 0 && full.every((s) => s === 20 || s === 18), 'closest zoom: a boat is 20 px, a car 18 px');
+  assert.ok(sizes({ scale: 12, maxScale: 24 }).every((s) => s <= 10));
+  assert.equal(sizes({ scale: 2, maxScale: 24 }).length, 0, 'too small to draw');
+});
+
+test('an arch is a dotted line, not a solid one', () => {
+  const view = seaView([post('w', 100, 100), post('e', 800, 100), post('m', 450, 110)]);
+  const dashes = [];
+  const ctx = new Proxy(fakeCanvas().ctx, {
+    get: (target, key) => (key === 'setLineDash' ? (d) => dashes.push(d) : target[key]),
+  });
+  assert.deepEqual(kindsOf(lines.drawLinks(ctx, view)), ['arch']);
+  assert.equal(dashes.length, 1);
+  assert.ok(dashes[0][0] < 1 && dashes[0][1] > 2, 'round dots with gaps');
 });

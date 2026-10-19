@@ -25,6 +25,9 @@ from core.config import (
     ENERGY_RADIUS_BASE,
     ENERGY_RADIUS_SCALE,
     ENERGY_RADIUS_TRIM,
+    ISLAND_REACH_FLOOR,
+    ISLAND_REACH_FULL_POSTS,
+    ISLAND_REACH_POWER,
     PLOT_TIERS,
     REGION_MIN_GROUP,
     REGION_MIN_POSTS,
@@ -72,13 +75,62 @@ def total_energy(post):
     return computed_energy(post)
 
 
-def influence_radius(energy):
-    """How far one post's ground reaches. islands: (30 + e * 0.45) * (2/3)."""
-    return (ENERGY_RADIUS_BASE + float(energy) * ENERGY_RADIUS_SCALE) * ENERGY_RADIUS_TRIM
+def reach_factor(post_count):
+    """What every radius is multiplied by on a map holding `post_count` posts:
+    1 up to ISLAND_REACH_FULL_POSTS, then (full / count) ** ISLAND_REACH_POWER,
+    never below the floor. The browser is served the same number
+    (/api/config energy.radius_factor)."""
+    count = max(int(post_count or 0), 0)
+    if count <= ISLAND_REACH_FULL_POSTS:
+        return 1.0
+    return max(ISLAND_REACH_FLOOR, (ISLAND_REACH_FULL_POSTS / count) ** ISLAND_REACH_POWER)
 
 
-def post_radius(post):
-    return influence_radius(total_energy(post))
+def influence_radius(energy, factor=1.0):
+    """How far one post's ground reaches. islands: (30 + e * 0.45) * (2/3),
+    times the map's reach factor."""
+    return (ENERGY_RADIUS_BASE + float(energy) * ENERGY_RADIUS_SCALE) * ENERGY_RADIUS_TRIM * factor
+
+
+def post_radius(post, factor=1.0):
+    return influence_radius(total_energy(post), factor)
+
+
+# A post's cone reaches a little less far in some directions than in others, so
+# a lone post makes an island with bays and headlands instead of a disc. Only
+# ever less (by COAST_DEPTH at most): which posts share a landmass is still
+# decided by the full radii. Fixed by the post's id, so the island keeps its
+# shape. The browser reads these two from /api/config; web/js/map/coast.js
+# repeats only the hash and the sum, and tests pin both to one set of numbers
+# (2026-10-13).
+COAST_DEPTH = 0.3
+COAST_WAVES = ((2, 1.0), (3, 0.8), (4, 0.5), (5, 0.35), (7, 0.2))
+
+
+def hash32(text):
+    """FNV-1a over the UTF-8 bytes, as coast.js computes it."""
+    h = 0x811C9DC5
+    for byte in str(text).encode("utf-8"):
+        h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def coast_reach(post, dx, dy):
+    """The share of the full radius the post's cone reaches towards (dx, dy):
+    between 1 - COAST_DEPTH and 1. Takes and returns numpy arrays."""
+    import numpy as np
+
+    key = str(post.get("id") or f"{post['x']},{post['y']}")
+    angle = np.arctan2(dy, dx)
+    wave = np.zeros_like(angle, dtype=float)
+    norm = 0.0
+    for k, weight in COAST_WAVES:
+        h = hash32(f"{key}:{k}")
+        amp = weight * (0.5 + 0.5 * ((h & 0xFFFF) / 65536))
+        phase = ((h >> 16) / 65536) * 2 * np.pi
+        wave += amp * np.cos(k * angle - phase)
+        norm += amp
+    return 1 - COAST_DEPTH * (1 + wave / norm) / 2
 
 
 def biome_at(summed_energy):
@@ -138,7 +190,7 @@ class _DisjointSet:
             self._parent[root_a] = root_b
 
 
-def detect_landmasses(posts):
+def detect_landmasses(posts, factor=None):
     """Group posts whose ground overlaps. islands' detectIslands, minus the naming.
 
     Returns [{"posts": [...], "cx": float, "cy": float, "size": int,
@@ -157,7 +209,10 @@ def detect_landmasses(posts):
     if count == 0:
         return []
 
-    radii = [post_radius(post) for post in posts]
+    # Given by the caller when `posts` is not the whole map (the browser passes
+    # what is on screen); otherwise these posts are the map and set it.
+    factor = reach_factor(count) if factor is None else factor
+    radii = [post_radius(post, factor) for post in posts]
     sets = _DisjointSet(count)
     for i in range(count):
         xi, yi = float(posts[i]["x"]), float(posts[i]["y"])
@@ -208,7 +263,7 @@ def terrain_word(size):
     return "大陸" if size >= CONTINENT_MIN_POSTS else "島"
 
 
-def name_landmasses(posts, idf, name_group):
+def name_landmasses(posts, idf, name_group, factor=None):
     """Landmasses with names taken from the posts standing on them.
 
     `name_group` is core.clustering.name_group, passed in rather than imported
@@ -219,7 +274,7 @@ def name_landmasses(posts, idf, name_group):
     one with more people behind it has the better claim - the same rule the map
     used before landmasses existed.
     """
-    landmasses = detect_landmasses(posts)
+    landmasses = detect_landmasses(posts, factor)
     taken = []
     named = []
     masses = []
@@ -306,11 +361,14 @@ def constants():
         "biome_colors": dict(BIOME_COLORS),
         "plot_tiers": [[threshold, glyph] for threshold, glyph in PLOT_TIERS],
         "continent_min_posts": CONTINENT_MIN_POSTS,
+        "coast_depth": COAST_DEPTH,
+        "coast_waves": [[k, weight] for k, weight in COAST_WAVES],
     }
 
 
 __all__ = [
-    "BIOME_ORDER", "biome_at", "computed_energy", "constants", "detect_landmasses",
+    "BIOME_ORDER", "biome_at", "coast_reach", "computed_energy", "constants", "detect_landmasses",
+    "hash32",
     "influence_radius", "interaction_count", "name_landmasses", "plot_glyph",
-    "post_radius", "terrain_word", "total_energy",
+    "post_radius", "reach_factor", "terrain_word", "total_energy",
 ]

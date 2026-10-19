@@ -31,6 +31,14 @@ MAX_RANKED_TERMS = 20
 # somebody waits for their join to come back.
 LIVE_LABEL_TERMS = 3
 PAIR_SEMANTIC_FLOOR = 0.28
+# A label term must appear in this share of the island's documents, but never
+# needs more than LABEL_SUPPORT_CAP of them. The share was set for ~1,000 seeds
+# (islands of 100-170, so 4-7 documents); at ~10,000 short seeds an island holds
+# 900-1,900 lines spread over many small topics, and 4% (35-77) left islands like
+# the photography one (写真 in 62 of 1,734) with no nameable pair at all, so no
+# island count passed. Twenty documents is still no one-off (2026-10-15).
+LABEL_SUPPORT_RATIO = 0.04
+LABEL_SUPPORT_CAP = 20
 TRIPLE_SEMANTIC_FLOOR = 0.32
 TRIPLE_MARGIN = 0.015
 
@@ -148,7 +156,7 @@ def _positive_npmi(left, right, document_sets, global_df):
 def rank_cluster_keywords(labels, cluster_id, token_lists, model, embedding_cache):
     member_indices = np.where(labels == cluster_id)[0]
     cluster_size = len(member_indices)
-    minimum_support = max(2, math.ceil(cluster_size * 0.04))
+    minimum_support = max(2, min(math.ceil(cluster_size * LABEL_SUPPORT_RATIO), LABEL_SUPPORT_CAP))
     per_doc_candidates = [set(make_label_candidates(tokens)) for tokens in token_lists]
     global_df = Counter(term for terms in per_doc_candidates for term in terms)
     cluster_df = Counter(term for i in member_indices for term in per_doc_candidates[i])

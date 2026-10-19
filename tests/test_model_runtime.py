@@ -12,9 +12,10 @@ from core.terrain import energy_grid
 
 
 def test_artifacts_reject_wrong_provider_and_changed_file(tmp_path):
-    for name in ('manifest.json', 'seed_map.json', 'encoder.npz', 'vectorizers.pkl'):
+    listed = json.loads(open('artifacts/manifest.json', encoding='utf-8').read())['files']
+    for name in ('manifest.json', *listed):
         shutil.copyfile('artifacts/' + name, tmp_path / name)
-    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-v1'
+    assert validate_manifest(tmp_path, 'onnx')['artifact_version'] == 'kotoba-map-e5-v4'
     with pytest.raises(RuntimeError):
         validate_manifest(tmp_path, 'gemini')
     with (tmp_path / 'encoder.npz').open('ab') as handle:
@@ -105,3 +106,16 @@ def test_post_retry_is_idempotent(fresh_client):
     assert first.status_code == second.status_code == 200
     assert first.json()['id'] == second.json()['id']
     assert fresh_client.get('/api/health').json()['posts'] == 1
+
+
+def test_the_gemini_embedder_asks_for_what_the_manifest_says(monkeypatch):
+    """The spec written into a map (task, dimensions, model) is what the API is
+    asked for. Until 2026-10-16 load_embedder used its own defaults, so changing
+    the task in core.config would have stamped maps with a task never sent."""
+    from core.artifact_manifest import embedding_spec
+
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    embedder = load_embedder(provider='gemini')
+    spec = embedding_spec('gemini')
+    assert embedder._prompt('焚き火') == f"task: {spec['task']} | query: 焚き火"
+    assert (embedder._model, embedder._dimensions) == (spec['model'], spec['dimensions'])

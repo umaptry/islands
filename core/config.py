@@ -10,10 +10,16 @@ import os
 
 GEMINI_MODEL_NAME = "gemini-embedding-2"
 GEMINI_DIMENSIONS = 384
-GEMINI_TASK = "sentence similarity"
+# The task prefix Gemini embeds for ("task: <this> | query: <text>"). Clustering
+# since map v5 (2026-10-16): on 838 topic-labelled posts, a post's nearest
+# neighbour shared its topic 83% of the time, against 62% for "sentence
+# similarity" (and 60% for OpenAI text-embedding-3-large); announcements 60% ->
+# 88%, "want to try" 51% -> 79%. More dimensions did not help (384 = 3072).
+# Part of the embedding spec: a map built with one task refuses the other.
+GEMINI_TASK = "clustering"
 
 MODEL_VERSION = "kotoba-map-v2"
-LAYOUT_VERSION = "parametric-isotropic-v1"
+LAYOUT_VERSION = "seed-placed-isotropic-v3"
 
 # One free-text self-introduction per person is the ONLY input signal.
 FEATURE_CONFIG = {
@@ -35,11 +41,49 @@ CHAR_WEIGHT = FEATURE_CONFIG["char_weight"]
 DENSE_RAW_WEIGHT = FEATURE_CONFIG["dense_raw_weight"]
 DENSE_CONCEPT_WEIGHT = FEATURE_CONFIG["dense_concept_weight"]
 
-# Reference layout parameters for the one-off teacher UMAP run.
+# How a map built from 2026-10-15 on reads a stored vector, for its encoder and
+# for 似てる度 alike: the dense block centred on the seed mean, recombined with
+# the word block at 0.80 / 0.20 (core.similarity.map_view). Measured with Gemini
+# on the 100 labelled probes with the built map, a post's nearest map neighbour
+# shared its family of topics 38% -> 82% of the time (with the 10k seed corpus),
+# and posts with none among their four nearest went 36% -> 10%. At 0.35 the word block let common words
+# (勉強, 毎日) outvote the meaning; 0-25% measured alike, above 30% fell away.
+#
+# Kept OUT of FEATURE_CONFIG on purpose: that dict describes the STORED vector
+# and every artifact's manifest must equal it, so older artifacts stay loadable.
+# A build writes these weights into its own seed_map.json (cosine_centroid), and
+# from then on the artifact, not these constants, decides how it is read.
+VIEW_DENSE_WEIGHT = 0.80
+VIEW_SPARSE_WEIGHT = 0.20
+
+# How a map built from 2026-10-15 on places a new text: at the main group among
+# its k nearest seeds in meaning (core.placement.place_by_seeds). temperature
+# weights the k by similarity, bandwidth (world units) is how close two seeds'
+# spots must be to count as one group. Written into the artifact, which decides.
+# Softer since v4 (2026-10-16; was k 15, temperature 0.02, bandwidth 25): more
+# seeds and a flatter weighting keep a post with its topic rather than with
+# posts worded like it. On the Gemini map: held-out seeds 0.94 -> 0.96 of the
+# ceiling (1.5%: 0.94 -> 1.00), the 478 evaluation posts' nearest neighbour on
+# their own topic 44% -> 50%, build probes lost 14% -> 11%.
+SEED_PLACEMENT = {"method": "seed_mode", "k": 60, "temperature": 0.05, "bandwidth": 40.0}
+SEED_VARIANTS_FILE = "seed_variants.jsonl"   # in scripts/, see core.placement
+
+# Reference layout parameters for the one-off teacher UMAP run. min_dist went
+# 0.05 -> 0.0 on 2026-10-15: with posts placed by their seeds, the tighter teacher
+# left more sea between topics - on 478 labelled posts at reach x0.7, 18-29
+# islands with 106-150 posts on the biggest (0.05: 22-30 and 130-213), the
+# placement no less accurate (3 random seeds each).
+# repulsion_strength 2 and spread 0.5 since v6 (2026-10-16): searched over ~60
+# settings on the clustering vectors (2 random seeds each, the best 7 on 3 more
+# and with posts placed as serving places them). Placed the serving way, the
+# 838 labelled posts' islands were one family 61% -> 73% of the time and the
+# biggest island 29% -> 19% of them (3 seeds); laid out with the seeds, 71% ->
+# 81% (5 seeds, worst 77%). Seeds' 15 nearest kept on the map: 0.36 -> 0.35.
 LAYOUT_CONFIG = {
     "n_neighbors": 15,
-    "min_dist": 0.05,
-    "spread": 1.0,
+    "min_dist": 0.0,
+    "spread": 0.5,
+    "repulsion_strength": 2.0,
     "n_epochs": 1000,
     "negative_sample_rate": 10,
     "metric": "cosine",
@@ -145,6 +189,16 @@ ENERGY_PER_INTERACTION = 5
 ENERGY_RADIUS_BASE = 30.0
 ENERGY_RADIUS_SCALE = 0.45
 ENERGY_RADIUS_TRIM = 2.0 / 3.0
+# Islands are the posts whose ground overlaps. Past ISLAND_REACH_FULL_POSTS the
+# reach shrinks as (full / posts) ** ISLAND_REACH_POWER - as if the map grew with
+# its people - so islands keep apart instead of chaining into one continent.
+# Fitted on the labelled eval posts placed by seeds (2026-10-16): about 20
+# islands with the biggest holding a quarter to a third of the posts needed
+# x1.0 at ~120 posts, x0.9 at ~240 and x0.7 at ~480 (x1.0 there: one island of
+# all 478). Never below the floor, or a very busy map would be dust.
+ISLAND_REACH_FULL_POSTS = 180
+ISLAND_REACH_POWER = 0.36
+ISLAND_REACH_FLOOR = 0.4
 
 # Where the ground changes. Summed energy at a point in the field, not one
 # post's energy: two posts side by side make forest out of what either alone
@@ -160,13 +214,13 @@ BIOME_THRESHOLDS = {
 
 # Drawn on the client; defined here so the server and the browser cannot drift.
 BIOME_COLORS = {
-    "sea": "#1F8FE8",
-    "shallow": "#63CDF9",
-    "desert": "#E6CF9B",
-    "savanna": "#C8B676",
-    "plains": "#81C784",
-    "forest": "#41A873",
-    "mountain": "#34806C",
+    "sea": "#46AEE6",
+    "shallow": "#9DD9F5",
+    "desert": "#EAD39A",
+    "savanna": "#C4DC86",
+    "plains": "#94C973",
+    "forest": "#5AAE72",
+    "mountain": "#3F9468",
 }
 
 # Settlement glyph by interaction count. islands' table, unchanged.
@@ -384,16 +438,38 @@ PROMPT_UTC_OFFSET_HOURS = 9
 
 # Q40: the first post is made by choosing one of these. It is placed to show
 # where it would stand and is never saved, so the map does not fill up with
-# the same sentence. Spread over different topics on purpose, so the tryout
-# lands on different islands. 仮: written by Claude Code on 2026-10-07.
+# the same sentence. Two for each kind of post (昔がんばってたこと / 最近はまってること /
+# 今度やってみたいこと / イベントの告知), spread over different topics on purpose, so
+# the tryout lands on different islands. 仮: rewritten by Claude Code on 2026-10-20.
 EXAMPLE_POSTS = (
-    "週末に近所を走っています。一緒に走れる人がいたらうれしいです",
-    "仕事でデータ分析を始めました。勉強のコツを知りたいです",
-    "最近パン作りにはまっています。おすすめの粉を教えてください",
-    "子育てと仕事の両立で悩み中。同じような人と話したいです",
-    "地域のお祭りを手伝ってくれる仲間を探しています",
-    "読んだ本の感想を話せる人がほしいです",
+    "学生のころ吹奏楽部でトランペットを吹いていました。また吹きたいな",
+    "昔は毎朝プールで泳いでいました。いまは運動不足なので泳ぎ仲間がほしい",
+    "最近、家庭菜園でミニトマトを育てています。甘くならなくて悩み中です",
+    "最近ボードゲームにはまっています。おすすめがあれば教えてください",
+    "今度、ひとりで北海道を旅してみたいです。おすすめの場所はありますか",
+    "いつか古い着物を服に仕立て直してみたいです。まずはミシンから始めます",
+    "今度の日曜に公園で朝ランをします。ゆっくりペースで5人ほど募集中です",
+    "来月、近所で読書会を開きます。好きな本を持ち寄って話しませんか",
 )
+
+# Extra writing prompts next to the weekly one. Each is shown until the person
+# has posted once with it (the browser decides from the post's `prompt`); the
+# weekly prompt is not one of these and keeps coming back every week.
+# 2026-10-20.
+EXTRA_PROMPTS = (
+    {"key": "past", "text": "昔がんばってたこと"},
+    {"key": "now", "text": "最近はまってること"},
+    {"key": "future", "text": "今度やってみたいこと"},
+)
+# What a post's `prompt` may be: the weekly one or an extra one.
+POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
+
+# 「参加者募集中」 posts may carry a sign-up deadline (a Japan-time date, open until
+# the end of that day) and a first-come capacity.
+RECRUIT_TAG = TAGS[2]
+RECRUIT_CAPACITY_MIN = 1
+RECRUIT_CAPACITY_MAX = 999
+RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today
 # How far (map units) the nearest saved post may be for the tryout to count as
 # standing on that post's island. 仮: about one landmass radius at 50 energy.
 PREVIEW_ISLAND_RADIUS = 40.0

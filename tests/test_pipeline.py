@@ -223,12 +223,15 @@ def test_the_scale_and_the_space_are_stamped_together(loaded):
     than obviously broken, so serving only centres when the anchors say they
     were measured that way.
     """
-    from core.similarity import CENTERED_SPACE, resolve_scale
+    from core.similarity import CENTERED_SPACE, MAP_VIEW_SPACE, resolve_scale
 
     anchors = loaded["cosine_anchors"]
     centroid = loaded["cosine_centroid"]
     assert centroid is not None, "run scripts/build_similarity_calibration.py"
-    assert anchors["space"] == CENTERED_SPACE
+    # The ruler names the space it was measured in, and the centroid the space
+    # it describes (an older centroid names none and means centered-v2).
+    assert anchors["space"] in (CENTERED_SPACE, MAP_VIEW_SPACE)
+    assert anchors["space"] == (centroid.get("space") or CENTERED_SPACE)
     assert len(centroid["dense_mean"]) == centroid["dense_dim"]
 
     # The three honest states.

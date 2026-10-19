@@ -35,15 +35,25 @@ export function setupWelcome() {
     const box = clear($('welcomeOAuth'));
     const providers = config().oauth || [];
     providers.forEach((provider) => box.append(el('button', {
-      className: 'btn btn-block', text: provider === 'google' ? 'Googleで登録' : 'Appleのアカウントで登録',
+      className: `btn btn-block ${OAUTH[provider]?.className || ''}`,
+      text: OAUTH[provider]?.register || `${provider}で登録`,
       on: { click: () => session.startOAuth(provider) },
     })));
-    // The 「または」 line only means something when there is a choice above it.
+    // The 「または」 line only means something when there is a choice above it,
+    // and then the button under it says what it signs you up with.
     $('welcomeDivider').hidden = providers.length === 0;
+    $('welcomeRegister').textContent = providers.length ? 'メールアドレスで登録' : 'アカウント作成';
   } });
 }
 
 // ---------------------------------------------------------------- sign in
+
+// The sign-in services the server may switch on (/api/config `oauth`).
+const OAUTH = {
+  google: { name: 'Google', register: 'Googleで登録', className: 'oauth-google' },
+  line: { name: 'LINE', register: 'LINEで登録', className: 'oauth-line' },
+  apple: { name: 'Apple', register: 'Appleのアカウントで登録', className: 'oauth-apple' },
+};
 
 let pendingEmail = '';
 let registerIntent = false;
@@ -215,12 +225,11 @@ function paintOAuth() {
     return;
   }
   row.hidden = false;
-  const names = { google: 'Google', apple: 'Apple' };
   $$('.oauth-button', row).forEach((node) => node.remove());
   providers.forEach((provider) => {
     row.append(el('button', {
-      className: 'btn btn-outline btn-block oauth-button',
-      text: `${names[provider] || provider} で続ける`,
+      className: `btn btn-outline btn-block oauth-button ${OAUTH[provider]?.className || ''}`,
+      text: `${OAUTH[provider]?.name || provider} で続ける`,
       on: { click: () => session.startOAuth(provider) },
     }));
   });
