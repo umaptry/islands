@@ -438,16 +438,38 @@ PROMPT_UTC_OFFSET_HOURS = 9
 
 # Q40: the first post is made by choosing one of these. It is placed to show
 # where it would stand and is never saved, so the map does not fill up with
-# the same sentence. Spread over different topics on purpose, so the tryout
-# lands on different islands. 仮: written by Claude Code on 2026-10-07.
+# the same sentence. Two for each kind of post (昔がんばってたこと / 最近はまってること /
+# 今度やってみたいこと / イベントの告知), spread over different topics on purpose, so
+# the tryout lands on different islands. 仮: rewritten by Claude Code on 2026-10-20.
 EXAMPLE_POSTS = (
-    "週末に近所を走っています。一緒に走れる人がいたらうれしいです",
-    "仕事でデータ分析を始めました。勉強のコツを知りたいです",
-    "最近パン作りにはまっています。おすすめの粉を教えてください",
-    "子育てと仕事の両立で悩み中。同じような人と話したいです",
-    "地域のお祭りを手伝ってくれる仲間を探しています",
-    "読んだ本の感想を話せる人がほしいです",
+    "学生のころ吹奏楽部でトランペットを吹いていました。また吹きたいな",
+    "昔は毎朝プールで泳いでいました。いまは運動不足なので泳ぎ仲間がほしい",
+    "最近、家庭菜園でミニトマトを育てています。甘くならなくて悩み中です",
+    "最近ボードゲームにはまっています。おすすめがあれば教えてください",
+    "今度、ひとりで北海道を旅してみたいです。おすすめの場所はありますか",
+    "いつか古い着物を服に仕立て直してみたいです。まずはミシンから始めます",
+    "今度の日曜に公園で朝ランをします。ゆっくりペースで5人ほど募集中です",
+    "来月、近所で読書会を開きます。好きな本を持ち寄って話しませんか",
 )
+
+# Extra writing prompts next to the weekly one. Each is shown until the person
+# has posted once with it (the browser decides from the post's `prompt`); the
+# weekly prompt is not one of these and keeps coming back every week.
+# 2026-10-20.
+EXTRA_PROMPTS = (
+    {"key": "past", "text": "昔がんばってたこと"},
+    {"key": "now", "text": "最近はまってること"},
+    {"key": "future", "text": "今度やってみたいこと"},
+)
+# What a post's `prompt` may be: the weekly one or an extra one.
+POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
+
+# 「参加者募集中」 posts may carry a sign-up deadline (a Japan-time date, open until
+# the end of that day) and a first-come capacity.
+RECRUIT_TAG = TAGS[2]
+RECRUIT_CAPACITY_MIN = 1
+RECRUIT_CAPACITY_MAX = 999
+RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today
 # How far (map units) the nearest saved post may be for the tryout to count as
 # standing on that post's island. 仮: about one landmass radius at 50 energy.
 PREVIEW_ISLAND_RADIUS = 40.0

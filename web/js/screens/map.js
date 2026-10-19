@@ -71,7 +71,13 @@ function paintTrial() {
 export async function showTrial() {
   if (!await navigate('#/map')) return;
   paintTrial();
-  if (state.trialPost) focusOn(state.trialPost, { lift: 0.45 });
+  // Come in close, as for a new post, so the land under the tryout and its
+  // island name can be seen (a pan at the whole-map zoom left a speck).
+  const trial = state.trialPost;
+  if (trial) {
+    const fit = state.camera.fit || state.camera.scale;
+    zoomTo(trial.x, trial.y, fit * 3, { lift: 0.4 });
+  }
 }
 
 export async function openOnMap(postId) {
@@ -596,10 +602,12 @@ export async function react(postId, kind) {
   // back rather than leaving the button lying about what happened.
   if (on) state.reactions.delete(reactionKey(postId, kind));
   else state.reactions.add(reactionKey(postId, kind));
-  if (!on) {
+  const celebrate = () => {
     buzz('react');
     if (Number.isFinite(Number(post.x))) ripple(Number(post.x), Number(post.y), { color: islandColor(post.cluster_id) });
-  }
+  };
+  // 参加 can be refused (closed / full), so it celebrates only once accepted.
+  if (!on && kind !== 'join') celebrate();
   // A MINIMAL patch, not a spread of the whole row. Spreading would carry the
   // server's `energy` along with it, and upsertPost can only tell that the
   // energy is now stale by seeing that the patch moved a count without
@@ -610,7 +618,10 @@ export async function react(postId, kind) {
   }
   try {
     if (on) await data.removeReaction(postId, kind);
-    else await data.addReaction(postId, kind);
+    else {
+      await data.addReaction(postId, kind);
+      if (kind === 'join') celebrate();
+    }
     refreshConnections({ fresh: true });
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));

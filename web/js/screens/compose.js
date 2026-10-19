@@ -30,6 +30,7 @@ import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
 import { buzz, moment } from '../feedback.js';
 import { heatObject } from '../components/heatobject.js';
 import { ripple } from '../map/index.js';
+import { availablePrompts, deadlineRange, extrasPayload, parseCapacity } from '../recruit-rules.js';
 import { openOnMap, showTrial } from './map.js';
 
 let editing = null;       // the post being edited, or null for a new one
@@ -44,6 +45,11 @@ let requestBody = null;
 let firstPost = false;
 let touched = false;     // the heat slider has been moved (a new post cannot go without)
 let heat = null;         // the HeatObject above the slider
+let selectedPrompt = null;   // "weekly", an extra prompt's key, or null
+let promptPosts = [];        // my posts, to hide the extra prompts already used
+
+// The prompts and the recruit fields exist only once the database has the columns.
+const extrasOn = () => Boolean(config().features?.post_extras);
 
 // ---------------------------------------------------------------- image
 
@@ -106,6 +112,7 @@ function paintTags(selected = []) {
     node.addEventListener('click', () => {
       const on = node.classList.toggle('on');
       node.setAttribute('aria-checked', String(on));
+      paintRecruit();
       buzz('tap');
     });
     box.append(node);
@@ -115,9 +122,58 @@ function paintTags(selected = []) {
 function paintPrompt(show) {
   const prompt = config().weekly_prompt;
   $('composePrompt').hidden = !show || !prompt?.text;
-  $('composePrompt').classList.remove('used');
   $('composePromptText').textContent = prompt?.text || '';
-  $('composeBody').placeholder = `取り組みや活動内容（最大${config().limits.body_max}文字）`;
+  selectedPrompt = null;
+  paintExtraPrompts(show);
+  syncPrompt();
+}
+
+/** The three standing prompts, minus the ones this person has already posted with. */
+function paintExtraPrompts(show) {
+  const items = show ? availablePrompts(config().extra_prompts, promptPosts, extrasOn()) : [];
+  if (selectedPrompt && selectedPrompt !== 'weekly' && !items.some((item) => item.key === selectedPrompt)) selectedPrompt = null;
+  $('composeExtraPrompts').hidden = !items.length;
+  const list = clear($('composeExtraPromptList'));
+  items.forEach((item) => {
+    const chip = el('button', { className: 'extra-chip', text: item.text, attrs: { type: 'button' } });
+    chip.dataset.key = item.key;
+    chip.addEventListener('click', () => {
+      selectedPrompt = selectedPrompt === item.key ? null : item.key;
+      syncPrompt();
+      if (selectedPrompt) $('composeBody').focus();
+    });
+    list.append(chip);
+  });
+  syncPrompt();
+}
+
+/** Show which prompt is chosen, and let it speak in the body's placeholder. */
+function syncPrompt() {
+  const weekly = selectedPrompt === 'weekly';
+  $('composePrompt').classList.toggle('used', weekly);
+  $('composePromptUse').textContent = weekly ? 'お題を外す' : 'このお題で書く';
+  $('composePromptUse').setAttribute('aria-pressed', String(weekly));
+  $$('#composeExtraPromptList .extra-chip').forEach((chip) => {
+    chip.setAttribute('aria-pressed', String(chip.dataset.key === selectedPrompt));
+  });
+  const picked = weekly ? config().weekly_prompt?.text
+    : config().extra_prompts?.find((item) => item.key === selectedPrompt)?.text;
+  $('composeBody').placeholder = picked
+    ? `お題：${picked}` : `取り組みや活動内容（最大${config().limits.body_max}文字）`;
+}
+
+/** 申込期限 and 先着人数 open under the tags while 参加者募集中 is ticked, and
+ * their values go when it is unticked. */
+function paintRecruit() {
+  const available = extrasOn();
+  $('composeRecruit').hidden = !available;
+  const open = available && selectedTags().includes(RECRUIT_TAG);
+  $('composeRecruit').dataset.open = String(open);
+  $('composeRecruitBox').inert = !open;
+  if (!open) {
+    $('composeDeadline').value = '';
+    $('composeCapacity').value = '';
+  }
 }
 
 function paintExamples(show) {
@@ -146,11 +202,10 @@ export function setupCompose() {
   $('composeMotivation').addEventListener('input', moved);
   $('composeMotivation').addEventListener('change', moved);
   $('composePromptUse').addEventListener('click', () => {
-    const text = config().weekly_prompt?.text;
-    if (!text) return;
-    body.placeholder = `お題：${text}`;
-    $('composePrompt').classList.add('used');
-    body.focus();
+    if (!config().weekly_prompt?.text) return;
+    selectedPrompt = selectedPrompt === 'weekly' ? null : 'weekly';
+    syncPrompt();
+    if (selectedPrompt) body.focus();
   });
 
   $('composeBack').addEventListener('click', () => {
@@ -181,7 +236,8 @@ export function setupCompose() {
   screen('compose', {
     leave() {
       if (draftKey) drafts.set(draftKey, { body: body.value, tags: selectedTags(), motivation: $('composeMotivation').value,
-        touched, imagePath, imageBlob, requestKey, requestBody });
+        touched, imagePath, imageBlob, requestKey, requestBody,
+        prompt: selectedPrompt, deadline: $('composeDeadline').value, capacity: $('composeCapacity').value });
     },
     enter: async (params, query) => {
       const first = query && query.get('first') === '1';
@@ -227,7 +283,9 @@ export function setupCompose() {
       // A post that exists already has an answer; only a new one has to be given one.
       touched = Boolean(editing);
       paintTags(editing ? (editing.tags || []) : []);
+      promptPosts = state.myPosts;
       paintPrompt(!editing && !firstPost);
+      refreshPromptPosts(editing, firstPost);
       paintExamples(firstPost && !editing);
       imagePath = editing ? (editing.image_path || null) : null;
       paintImage(imagePath ? data.imageUrl(imagePath) : null);
@@ -235,15 +293,44 @@ export function setupCompose() {
         $('composeMotivation').value = draft.motivation;
         touched = Boolean(draft.touched);
         paintTags(draft.tags);
+        selectedPrompt = draft.prompt || null;
+        paintExtraPrompts(!editing && !firstPost);
         imagePath = draft.imagePath;
         imageBlob = draft.imageBlob;
         paintImage(imageBlob ? URL.createObjectURL(imageBlob) : imagePath ? data.imageUrl(imagePath) : null);
+      }
+      paintRecruit();
+      if (extrasOn()) {
+        const { min, max } = deadlineRange(new Date(), editing?.recruit_deadline);
+        $('composeDeadline').min = min;
+        $('composeDeadline').max = max;
+        $('composeDeadline').value = '';
+        $('composeCapacity').value = '';
+        if (draft) {
+          $('composeDeadline').value = draft.deadline || '';
+          $('composeCapacity').value = draft.capacity || '';
+        } else if (editing && selectedTags().includes(RECRUIT_TAG)) {
+          $('composeDeadline').value = editing.recruit_deadline || '';
+          $('composeCapacity').value = editing.recruit_capacity || '';
+        }
       }
       $('composeError').textContent = '';
       paintCounter();
       paintMotivation();
     },
   });
+}
+
+/** My posts may not be loaded yet (they come with the map); read them so a used
+ * prompt is hidden even on a fresh visit. */
+function refreshPromptPosts(post, first) {
+  if (post || first || !extrasOn() || !state.account) return;
+  const accountId = state.account.id;
+  data.postsByAuthor(accountId).then((rows) => {
+    if (state.account?.id !== accountId || !Array.isArray(rows)) return;
+    promptPosts = rows;
+    if ($('compose').classList.contains('active')) paintExtraPrompts(true);
+  }).catch(() => {});
 }
 
 /** show('compose') brings the bottom nav back; the first post is still in the way of it. */
@@ -262,6 +349,14 @@ function recruitNote(tags) {
 
 async function submit() {
   if (submitting) return;
+  // A filled but invalid capacity must not quietly become "no limit".
+  if (extrasOn() && selectedTags().includes(RECRUIT_TAG)
+    && $('composeCapacity').value.trim() !== '' && parseCapacity($('composeCapacity').value) === null) {
+    const message = '先着人数は1〜999の整数で入力してください';
+    $('composeError').textContent = message;
+    toast(message);
+    return;
+  }
   submitting = true;
   $('composeSubmit').disabled = true;
   $('composeError').textContent = '';
@@ -271,6 +366,14 @@ async function submit() {
     tags: selectedTags(),
     motivation: Number($('composeMotivation').value),
   };
+  Object.assign(payload, extrasPayload({
+    enabled: extrasOn(),
+    editing: Boolean(editing),
+    recruiting: payload.tags.includes(RECRUIT_TAG),
+    prompt: selectedPrompt,
+    deadline: $('composeDeadline').value,
+    capacity: $('composeCapacity').value,
+  }));
 
   try {
     if (imageBlob) {
@@ -308,6 +411,8 @@ async function submit() {
     if (recruitNote(payload.tags)) toast(recruitNote(payload.tags).trim());
   } catch (error) {
     $('composeError').textContent = error.message;
+    // The server words its 422s for a person (a past deadline, a bad number).
+    if (error.status === 422) toast(error.message);
     show('compose');
     keepNavHidden();
   } finally {

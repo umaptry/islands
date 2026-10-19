@@ -56,6 +56,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from typing import Any
 from pydantic import BaseModel, Field
 
 from core import affinity as people
@@ -70,9 +71,12 @@ from core import quiet
 from core import webpush
 from core.clustering import assign_cluster, name_group
 from core.prompts import weekly_prompt
+from core import post_extras
 from core.config import (
     AWAY_DIGEST_COUNT,
     EXAMPLE_POSTS,
+    EXTRA_PROMPTS,
+    RECRUIT_TAG,
     PREVIEW_ISLAND_RADIUS,
     PREVIEW_NEIGHBORS,
     CONNECTION_CACHE_SECONDS,
@@ -391,6 +395,12 @@ class PostCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     motivation: int = MOTIVATION_DEFAULT
     image_path: str | None = None
+    # 2026-10-20. prompt: "weekly" | "past" | "now" | "future" | null. The recruit_*
+    # fields count only for a post tagged 参加者募集中. Checked by core.post_extras
+    # (Any, so a wrong type gets the same Japanese message as a wrong value).
+    prompt: str | None = None
+    recruit_deadline: Any = None
+    recruit_capacity: Any = None
 
 
 class PostPreview(BaseModel):
@@ -407,6 +417,10 @@ class PostPatch(BaseModel):
     tags: list[str] | None = None
     motivation: int | None = None
     image_path: str | None = None
+    # 2026-10-20. Absent leaves the value alone; null erases it.
+    prompt: str | None = None
+    recruit_deadline: Any = None
+    recruit_capacity: Any = None
     # Explicit rather than a DELETE-only path: islands' card menu offers edit
     # and delete from the same place, and both are the author changing their
     # own row.
@@ -507,6 +521,29 @@ def clean_tags(tags):
     """
     chosen = {tag for tag in (tags or []) if tag in TAGS}
     return [tag for tag in TAGS if tag in chosen]
+
+
+def post_extras_on():
+    """Whether the database can keep the prompt / sign-up fields (2026-10-20).
+
+    False until supabase/migrations/20261020000000_post_prompts_and_recruit.sql has
+    been run on the production database; the memory store always can. While it is
+    False the fields are ignored (never sent to the database) and the screen is told
+    through features.post_extras."""
+    return bool(getattr(state["store"], "supports_post_extras", True))
+
+
+def extras_for_new_post(payload, tags):
+    """The prompt / sign-up columns of a new post. Raises HTTPException 422."""
+    try:
+        extras = {"prompt": post_extras.clean_prompt(payload.prompt),
+                  "recruit_deadline": None, "recruit_capacity": None}
+        if RECRUIT_TAG in tags:
+            extras["recruit_deadline"] = post_extras.clean_deadline(payload.recruit_deadline)
+            extras["recruit_capacity"] = post_extras.clean_capacity(payload.recruit_capacity)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    return extras
 
 
 def clean_motivation(value):
@@ -1491,7 +1528,13 @@ def config():
         # give it its own switch instead of finding it by its wording.
         "open_tag": TAGS[0],
         "weekly_prompt": weekly_prompt(),
+        # 2026-10-20: prompts that go away for a person once they posted with them
+        # (the browser decides from the `prompt` of that person's posts).
+        "extra_prompts": [dict(item) for item in EXTRA_PROMPTS],
         "example_posts": list(EXAMPLE_POSTS),
+        # post_extras: the database can keep the prompt / sign-up deadline / capacity.
+        # False on a production database the 2026-10-20 SQL has not reached yet.
+        "features": {"post_extras": post_extras_on()},
         "island_colors": list(ISLAND_COLORS),
         "limits": {
             "body_min": MIN_TEXT_LENGTH,
@@ -1560,6 +1603,12 @@ def health():
             island_names_ok = False
         if not island_names_ok:
             not_ready.append("islands_state.name_source column missing (run migration 20261012000000)")
+    # The 2026-10-20 post columns are NOT part of ready: without them the code
+    # simply keeps the prompt / sign-up features off, so production stays up.
+    try:
+        post_extras_ok = bool(state["store"].post_extras_ready()) if store_ok else False
+    except StoreError:
+        post_extras_ok = False
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
@@ -1574,6 +1623,7 @@ def health():
         "maintenance": runtime["maintenance"],
         "active_map_version": runtime["active_version"],
         "island_names_ready": island_names_ok,
+        "post_extras_ready": post_extras_ok,
         "ready": store_ok and compatible and not runtime["maintenance"] and island_names_ok,
         "not_ready_reasons": not_ready,
     }
@@ -1929,9 +1979,13 @@ def create_post(payload: PostCreate, request: Request):
             uuid.UUID(request_key)
         except ValueError:
             raise HTTPException(422, "再試行キーが不正です。")
-        canonical = json.dumps({"body": body, "tags": clean_tags(payload.tags),
-            "motivation": clean_motivation(payload.motivation), "image_path": payload.image_path or None},
-            sort_keys=True, ensure_ascii=False)
+        canon = {"body": body, "tags": clean_tags(payload.tags),
+                 "motivation": clean_motivation(payload.motivation), "image_path": payload.image_path or None}
+        # Only when given, so a retry key made before 2026-10-20 still finds its post.
+        for name in ("prompt", "recruit_deadline", "recruit_capacity"):
+            if getattr(payload, name) is not None:
+                canon[name] = getattr(payload, name)
+        canonical = json.dumps(canon, sort_keys=True, ensure_ascii=False, default=str)
         stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id + ':' + request_key + ':' + canonical))
         try:
             existing = state["store"].get_post(stable_id)
@@ -1950,13 +2004,17 @@ def create_post(payload: PostCreate, request: Request):
     if not account or not account.get("display_name"):
         raise HTTPException(status_code=409, detail="先にプロフィールを作成してください。")
 
+    tags = clean_tags(payload.tags)
+    extras = extras_for_new_post(payload, tags) if post_extras_on() else {}
+
     x, y, cluster_id, terms, vector, centred = project(body)
     record = {
         "author_id": user_id,
         "body": body,
-        "tags": clean_tags(payload.tags),
+        "tags": tags,
         "motivation": clean_motivation(payload.motivation),
         "image_path": payload.image_path or None,
+        **extras,
         "x": x,
         "y": y,
         "cluster_id": cluster_id,
@@ -2087,8 +2145,12 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
 
     fields = {}
     terms = None
-    if payload.body is not None:
-        body = clean_body(payload.body)
+    sent = payload.model_fields_set
+    extras_sent = sent & {"prompt", "recruit_deadline", "recruit_capacity"}
+    extras_on = post_extras_on()
+    recruit_sent = bool(extras_on and sent & {"recruit_deadline", "recruit_capacity"})
+    existing = None
+    if payload.body is not None or recruit_sent:
         try:
             existing = store.get_post(post_id)
         except StoreError:
@@ -2097,6 +2159,8 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
             raise HTTPException(status_code=404, detail="見つかりませんでした。")
         if existing["author_id"] != user_id:
             raise HTTPException(status_code=403, detail="自分の投稿だけ編集できます。")
+    if payload.body is not None:
+        body = clean_body(payload.body)
         if body != existing["body"]:
             if not check_rate_limit(user_id):
                 raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
@@ -2111,6 +2175,24 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
 
     if payload.tags is not None:
         fields["tags"] = clean_tags(payload.tags)
+        if extras_on and RECRUIT_TAG not in fields["tags"]:
+            fields.update({"recruit_deadline": None, "recruit_capacity": None})
+    if extras_on:
+        try:
+            if "prompt" in sent:
+                fields["prompt"] = post_extras.clean_prompt(payload.prompt)
+            if recruit_sent:
+                tags_now = fields.get("tags", existing.get("tags") or [])
+                if RECRUIT_TAG not in tags_now:
+                    fields.update({"recruit_deadline": None, "recruit_capacity": None})
+                else:
+                    if "recruit_deadline" in sent:
+                        fields["recruit_deadline"] = post_extras.clean_deadline(
+                            payload.recruit_deadline, keep=existing.get("recruit_deadline"))
+                    if "recruit_capacity" in sent:
+                        fields["recruit_capacity"] = post_extras.clean_capacity(payload.recruit_capacity)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
     if payload.motivation is not None:
         fields["motivation"] = clean_motivation(payload.motivation)
     if payload.clear_image:
@@ -2118,6 +2200,15 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
     elif payload.image_path is not None:
         fields["image_path"] = payload.image_path
 
+    if not fields and extras_sent and not extras_on:
+        # The database cannot keep these yet: ignore them and still succeed.
+        try:
+            row = store.get_post(post_id)
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+        if not row or row["author_id"] != user_id:
+            raise HTTPException(status_code=403, detail="編集できませんでした。")
+        return {**row, "island": island_of(row["id"])}
     if not fields:
         raise HTTPException(status_code=422, detail="変更点がありません。")
 
@@ -2373,7 +2464,13 @@ def local_delete_comment(comment_id: str, request: Request):
 def local_add_reaction(payload: ReactionChange, request: Request):
     require_local()
     user_id = current_user(request)
-    created = state["store"].add_reaction(payload.post_id, user_id, payload.kind)
+    try:
+        created = state["store"].add_reaction(payload.post_id, user_id, payload.kind)
+    except StoreError as error:
+        # Same words the database trigger raises for the direct insert (2026-10-20).
+        if str(error) in (post_extras.ERROR_CLOSED, post_extras.ERROR_FULL):
+            raise HTTPException(status_code=409, detail=str(error))
+        raise
     invalidate_connections()
     return {"ok": True, "created": created}
 

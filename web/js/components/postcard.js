@@ -16,10 +16,11 @@
 
 import { config } from '../config.js';
 import { data } from '../net.js';
-import { hasReacted, state, subscribe } from '../state.js';
+import { hasReacted, state, subscribe, upsertPost } from '../state.js';
 import { avatar, confirmAction, el, motivationColor, timeAgo } from '../ui.js';
 import { icon } from '../icons.js';
 import { isRecruiting } from '../map/reads.js';
+import { RECRUIT_STATE_LABEL, recruitLines, recruitState } from '../recruit-rules.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -38,9 +39,32 @@ subscribe(() => {
       const on = hasReacted(post.id, node.dataset.reaction);
       node.classList.toggle('on', on);
       node.setAttribute('aria-pressed', String(on));
+      if (node.dataset.reaction === 'join') paintJoin(node, post);
     });
   });
 });
+
+/** 参加: the terms under the word, and 受付終了 / 満員 (not pressable unless you
+ * have joined already: taking your own join back is always allowed). */
+function paintJoin(button, post) {
+  const joined = hasReacted(post.id, 'join');
+  // Before the migration the columns do not exist: show nothing of the new rules.
+  const on = Boolean(config().features?.post_extras);
+  const closed = on ? recruitState(post) : null;
+  const ended = Boolean(closed) && !joined;
+  const word = ended ? RECRUIT_STATE_LABEL[closed] : '参加';
+  const label = button.querySelector('.post-action-label');
+  if (label) label.textContent = word;
+  const terms = button.querySelector('.join-terms');
+  if (terms) {
+    terms.replaceChildren(...(on ? recruitLines(post) : []).map((line) => el('span', { text: line, style: { display: 'block' } })));
+    terms.hidden = !terms.childNodes.length;
+    button.classList.toggle('has-terms', !terms.hidden);
+  }
+  button.classList.toggle('ended', ended);
+  button.setAttribute('aria-label', ended ? `${word}（参加できません）` : word);
+  if (!button.dataset.busy) button.disabled = ended;
+}
 
 // いいね shows only its heart and count; 手伝えるかも and 参加 carry their words.
 // 参加 exists only on a post that is looking for participants.
@@ -268,7 +292,11 @@ function footer(post, options) {
       attrs: { type: 'button', 'data-reaction': reaction.kind, 'aria-label': reaction.label },
     },
       el('span', { className: 'post-action-icon' }, icon(reaction.icon, reaction.kind === 'like' ? 20 : 18)),
-      reaction.kind === 'like' ? null : el('span', { className: 'post-action-label', text: reaction.label }),
+      reaction.kind === 'join'
+        ? el('span', { className: 'join-text' },
+          el('span', { className: 'post-action-label', text: reaction.label }),
+          el('span', { className: 'join-terms', attrs: { hidden: true } }))
+        : reaction.kind === 'like' ? null : el('span', { className: 'post-action-label', text: reaction.label }),
       el('span', { className: 'post-action-count num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
     );
 
@@ -278,6 +306,7 @@ function footer(post, options) {
       const count = button.querySelector('.post-action-count');
       const current = state.postsById.get(post.id) || post;
       count.textContent = String(current[reaction.countKey] || 0);
+      if (reaction.kind === 'join') paintJoin(button, current);
     };
     paint();
 
@@ -296,10 +325,18 @@ function footer(post, options) {
         void button.offsetWidth;
         button.classList.add('pop');
       }
+      const wasOn = hasReacted(post.id, reaction.kind);
       button.disabled = true;
+      button.dataset.busy = '1';
       try {
         await options.onReact(reaction.kind);
+        // A refused join (closed / full) leaves it off; the row we hold is out of
+        // date, so read the post again and let the button say why.
+        if (reaction.kind === 'join' && !wasOn && !hasReacted(post.id, 'join')) {
+          upsertPost(await data.getPost(post.id).catch(() => null));
+        }
       } finally {
+        delete button.dataset.busy;
         button.disabled = false;
         paint();
       }

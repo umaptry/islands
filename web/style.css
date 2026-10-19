@@ -985,7 +985,56 @@ body:has(#islandBadge:not([hidden])) .toast {
 .weekly-label { font-size: 11px; font-weight: 700; color: var(--on-sea-2); flex: none; }
 .weekly-text { font-size: 13.5px; font-weight: 700; flex: 1 1 160px; min-width: 0; }
 .weekly-prompt .btn-small { min-height: 30px; padding: 0 12px; font-size: 12px; }
-.weekly-prompt.used .btn-small { display: none; }
+.weekly-prompt.used { background: rgba(255, 255, 255, .24); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .85); }
+
+/* The three standing prompts: quieter than the week's, and clearly chips. */
+.extra-prompts { margin: -2px 0 10px; }
+.extra-prompts .weekly-label { display: block; margin-bottom: 6px; }
+.extra-prompt-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.extra-chip {
+  min-height: 34px; padding: 0 13px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .5); background: transparent;
+  color: #fff; font-size: 13px; font-weight: 700;
+  transition: background .12s var(--ease), color .12s var(--ease);
+}
+.extra-chip[aria-pressed=true] { background: #fff; color: var(--sea-ink); border-color: #fff; }
+
+/* 参加者募集中: the deadline and the first-come limit open under the tags. */
+#compose .scroller > .compose-recruit { order: 4; margin-top: 0; }
+.recruit-clip {
+  display: grid; grid-template-rows: 0fr; opacity: 0;
+  transition: grid-template-rows .24s var(--ease), opacity .2s var(--ease);
+}
+.compose-recruit[data-open=true] .recruit-clip { grid-template-rows: 1fr; opacity: 1; }
+.recruit-box {
+  min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 8px;
+  background: rgba(255, 255, 255, .14); border-radius: 10px; padding: 0 12px; margin-top: 6px;
+  transition: padding .24s var(--ease);
+}
+.compose-recruit[data-open=true] .recruit-box { padding: 10px 12px; }
+.recruit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #fff; }
+.recruit-label { font-size: 13px; font-weight: 700; }
+.recruit-opt { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--on-sea-3); }
+.recruit-input {
+  height: 40px; min-width: 0; padding: 0 10px; border-radius: 8px; border: 0;
+  background: #fff; color: var(--ink); font: inherit; font-size: 16px; /* 16px: no iOS zoom on focus */
+}
+input[type=date].recruit-input { width: 168px; }
+input[type=number].recruit-input { width: 96px; text-align: right; }
+.recruit-with-unit { display: inline-flex; align-items: center; gap: 6px; }
+.recruit-unit { font-size: 13px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .recruit-clip, .recruit-box { transition: none; }
+}
+
+/* 参加 under a recruiting post: the terms, and why it cannot be pressed. */
+.post-action.reaction.join.has-terms { flex-direction: row; align-items: center; }
+.join-text { display: inline-flex; flex-direction: column; align-items: flex-start; text-align: left; line-height: 1.25; }
+.join-terms { font-size: 12px; color: var(--ink-3); font-weight: 400; white-space: nowrap; }
+/* A divider keeps the joined count from reading as the end of the deadline line. */
+.post-action.reaction.join.has-terms .post-action-count { margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line, currentColor); align-self: stretch; display: inline-flex; align-items: center; }
+.post-action.reaction.join.ended:disabled { opacity: 1; background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
+.post-action.reaction.join.ended .post-action-label { font-weight: 700; }
 
 /* On/off switches: "talk to me" (Q45) and the sound settings (item 21). */
 .switch-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
@@ -1139,6 +1188,9 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .post-actions-group { display: flex; align-items: center; gap: 14px; }
 .post-actions-group.right { margin-left: auto; gap: 10px; }
 .post-actions-group .post-action { padding-left: 4px; padding-right: 4px; }
+/* 参加 can carry two small lines, so the row may fall to a second line. */
+.post-actions { flex-wrap: wrap; row-gap: 2px; }
+.post-actions-group.right { flex-wrap: wrap; justify-content: flex-end; }
 .post-footer { margin-top: 0; }
 .post-participants-button {
   display: block; width: 100%; margin-top: 6px; padding: 9px 12px; border-radius: 999px;

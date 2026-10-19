@@ -38,6 +38,9 @@ import numpy as np
 
 from core.config import ENERGY_CELL_SIZE
 from core.energy import computed_energy, total_energy
+from core.post_extras import (
+    CLOSED_DEADLINE, CLOSED_FULL, ERROR_CLOSED, ERROR_FULL, EXTRA_COLUMNS, closed_state, shape,
+)
 
 ACCOUNTS = "accounts"
 # posts reach accounts through the author key and, many-to-many, through
@@ -70,10 +73,14 @@ REACTION_KINDS = ("like", "help", "join")
 # Columns the map needs. Deliberately excludes vec / vec_c: the vectors never
 # leave the server, and the browser is not granted them either (see the column
 # grants in supabase/schema.sql).
-POST_COLUMNS = (
+POST_COLUMNS_BASE = (
     "id,author_id,body,tags,motivation,image_path,x,y,cluster_id,terms,"
     "like_count,help_count,join_count,comment_count,energy,created_at,updated_at"
 )
+# The 2026-10-20 columns (お題 / 申込期限 / 先着人数). A database that has not had
+# the migration yet answers 400 (42703) when they are named, so SupabaseStore
+# reads and writes without them until it sees them (see supports_post_extras).
+POST_COLUMNS = POST_COLUMNS_BASE + "," + ",".join(EXTRA_COLUMNS)
 ACCOUNT_COLUMNS = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
                    "updated_at,topics,goal,seeking,offering")
 # The hidden profile vectors. Written by the server only, never selected for a client.
@@ -94,6 +101,7 @@ ISLAND_STATE_BASE_COLUMNS = ("id,name,label,tier,score_total,score_recent,score_
 ISLAND_STATE_COLUMNS = ISLAND_STATE_BASE_COLUMNS + "," + ",".join(ISLAND_NAME_COLUMNS)
 # How long a "columns are there" / "columns are missing" check is trusted.
 NAME_COLUMNS_CHECK_SECONDS = 60
+POST_EXTRAS_CHECK_SECONDS = 60
 ISLAND_EVENT_COLUMNS = "id,island_id,kind,cause,place,before,after,created_at"
 PUSH_CONFIG_COLUMNS = "vapid_public,vapid_private,dispatch_url"
 PUSH_SUBSCRIPTION_COLUMNS = "id,account_id,endpoint,p256dh,auth,user_agent,created_at"
@@ -418,6 +426,15 @@ class MemoryStore:
             key = (post_id, actor_id, kind)
             if key in self._reactions:
                 return False
+            if kind == "join":
+                # Same rule as the database trigger on reactions: a closed 募集 takes no
+                # new join (withdrawing one is always possible).
+                closed = closed_state(post.get("recruit_deadline"), post.get("recruit_capacity"),
+                                      post.get("join_count"))
+                if closed == CLOSED_DEADLINE:
+                    raise StoreError(ERROR_CLOSED)
+                if closed == CLOSED_FULL:
+                    raise StoreError(ERROR_FULL)
             self._reactions[key] = _now()
             post[f"{kind}_count"] = post.get(f"{kind}_count", 0) + 1
             post["energy"] = computed_energy(post)
@@ -812,8 +829,12 @@ class MemoryStore:
                     if row.get("active", True) or not active_only]
 
     supports_island_names = True
+    supports_post_extras = True
 
     def island_names_ready(self):
+        return True
+
+    def post_extras_ready(self):
         return True
 
     def save_island_states(self, rows):
@@ -870,6 +891,7 @@ class MemoryStore:
         keys = POST_COLUMNS.split(",")
         out = {key: row.get(key) for key in keys}
         out["energy"] = computed_energy(row)
+        out = shape(out)
         if with_vec:
             out["vec"] = row.get("vec")
             out["vec_c"] = row.get("vec_c")
@@ -921,6 +943,8 @@ class SupabaseStore:
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT)
         self._has_name_columns = True      # until the database says otherwise
         self._names_checked_at = None
+        self._has_post_extras = False      # until the database shows the 2026-10-20 columns
+        self._extras_checked_at = None
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1018,52 +1042,116 @@ class SupabaseStore:
 
     # -- posts -------------------------------------------------------------
 
+    # -- the 2026-10-20 columns (prompt / recruit_deadline / recruit_capacity) ---
+
+    def _post_columns(self):
+        return POST_COLUMNS if self.supports_post_extras else POST_COLUMNS_BASE
+
+    @staticmethod
+    def _missing_post_extras(response):
+        """True when a 400 says posts has no prompt / recruit_* column (yet)."""
+        if response.status_code != 400:
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42703", "PGRST204") and any(name in text for name in EXTRA_COLUMNS)
+
+    def post_extras_ready(self):
+        """True when posts has the 2026-10-20 columns (cached for a minute).
+
+        Raises StoreError when the database cannot be asked."""
+        now = time.monotonic()
+        if self._extras_checked_at is not None and now - self._extras_checked_at < POST_EXTRAS_CHECK_SECONDS:
+            return self._has_post_extras
+        try:
+            response = self._send("GET", POSTS, label="投稿の列の確認", allow_statuses=(400,),
+                                  params={"select": ",".join(EXTRA_COLUMNS), "limit": "1"})
+        except StoreError:
+            self._extras_checked_at = now - POST_EXTRAS_CHECK_SECONDS + 10
+            raise
+        if response.status_code < 300:
+            ready = True
+        elif self._missing_post_extras(response):
+            ready = False
+        else:
+            # Remember the failure for ~10s (keeping the last answer) so an outage
+            # does not make every request retry this check three times.
+            self._extras_checked_at = now - POST_EXTRAS_CHECK_SECONDS + 10
+            raise StoreError("投稿の列の確認")
+        if ready != self._has_post_extras or self._extras_checked_at is None:
+            print("[store] posts " + ("has" if ready else "has no")
+                  + " prompt / recruit_* columns; post extras are " + ("on" if ready else "off until "
+                  "supabase/migrations/20261020000000_post_prompts_and_recruit.sql is run"), flush=True)
+        self._has_post_extras = ready
+        self._extras_checked_at = now
+        return ready
+
+    @property
+    def supports_post_extras(self):
+        """Whether to read and write the extras. A database that cannot be asked
+        right now keeps the last answer (off before the first one)."""
+        try:
+            return self.post_extras_ready()
+        except StoreError:
+            return self._has_post_extras
+
+    def _without_extras(self, data):
+        if self.supports_post_extras:
+            return data
+        return {key: value for key, value in data.items() if key not in EXTRA_COLUMNS}
+
     def insert_post(self, record):
         response = self._send(
             "POST", POSTS, label="保存",
             headers={"Prefer": "return=representation,resolution=ignore-duplicates"},
-            params={"select": POST_COLUMNS},
-            json=record,
+            params={"select": self._post_columns()},
+            json=self._without_extras(record),
         )
         rows = response.json()
         if rows:
-            return rows[0]
+            return shape(rows[0])
         existing = self.get_post(record["id"])
         if not existing:
             raise StoreError("投稿を保存できませんでした。")
         return existing
 
     def get_post(self, post_id, with_vec=False):
-        select = POST_COLUMNS + (",vec,vec_c" if with_vec else "")
+        select = self._post_columns() + (",vec,vec_c" if with_vec else "")
         rows = self._get(POSTS, {
             "select": select, "id": f"eq.{post_id}", "deleted_at": "is.null", "limit": "1",
         })
-        return rows[0] if rows else None
+        return shape(rows[0]) if rows else None
 
     def update_post(self, post_id, author_id, fields):
+        fields = self._without_extras(fields)
+        if not fields:
+            return None
         response = self._send(
             "PATCH", POSTS, label="更新",
             headers={"Prefer": "return=representation"},
             params={
                 "id": f"eq.{post_id}", "author_id": f"eq.{author_id}",
-                "deleted_at": "is.null", "select": POST_COLUMNS,
+                "deleted_at": "is.null", "select": self._post_columns(),
             },
             json=fields,
         )
         rows = response.json()
-        return rows[0] if rows else None
+        return shape(rows[0]) if rows else None
 
     def soft_delete_post(self, post_id, author_id):
         return bool(self.update_post(post_id, author_id, {"deleted_at": _now()}))
 
     def posts_by_author(self, author_id):
         rows = self._get(POSTS, {
-            "select": POST_COLUMNS + f",{POST_AUTHOR}(id,display_name,icon_id,avatar_path)",
+            "select": self._post_columns() + f",{POST_AUTHOR}(id,display_name,icon_id,avatar_path)",
             "author_id": f"eq.{author_id}",
             "deleted_at": "is.null",
             "order": "created_at.desc",
         })
-        return [_flatten(row) for row in rows]
+        return [shape(_flatten(row)) for row in rows]
 
     def count_posts(self):
         response = self._send(
@@ -1075,10 +1163,12 @@ class SupabaseStore:
         return int(response.headers.get("content-range", "*/0").split("/")[-1])
 
     def map_posts(self, min_x, min_y, max_x, max_y, limit):
-        return self._rpc("map_posts", {
+        rows = self._rpc("map_posts", {
             "min_x": min_x, "min_y": min_y, "max_x": max_x, "max_y": max_y,
             "limit_n": limit,
         }, label="地図の読み込み")
+        # Before the 2026-10-20 SQL the answer has no extras; shape() fills them in.
+        return [shape(row) for row in rows]
 
     def map_cells(self, min_x, min_y, max_x, max_y):
         return self._rpc("map_cells", {

@@ -1033,7 +1033,7 @@ function kinPlan(meId, sifting) {
 function renderMap(time) {
   // The same posts and coarse layer the ground is drawn from, so the sea's
   // moving things can keep off the land the way the routes do.
-  const ground = groundPosts();
+  const ground = withTrialGround(groundPosts());
   const view = {
     sea: seaBox(), toScreen, width, height, scale: state.camera.scale, maxScale: clampScale(Infinity),
     posts: ground, cells: state.saturated ? state.cells : NO_CELLS,
@@ -1452,6 +1452,33 @@ function groundPosts() {
     }
   }
   return groundList;
+}
+
+// The tryout (Q40) is kept, so the land it would raise is drawn under it: the
+// ground the sentence would make if it were a post. Never sent anywhere, and
+// the list is rebuilt only when the posts or the tryout change (terrain cache key).
+// Not added while the terrain grid is in use (800+ posts in view): the grid is a
+// ready-made picture, so there only the pin and its sea effect show the tryout.
+let trialGround = { base: null, key: '', list: [] };
+const TRIAL_MOTIVATION = 50;
+
+function withTrialGround(list) {
+  const trial = state.trialPost;
+  if (!trial || !Number.isFinite(trial.x) || !Number.isFinite(trial.y)) {
+    // The tryout was closed: the ground goes back to what is saved.
+    if (trialGround.base) {
+      trialGround = { base: null, key: '', list: [] };
+      groundRev += 1;
+    }
+    return list;
+  }
+  const key = `${trial.x},${trial.y},${trial.motivation ?? TRIAL_MOTIVATION}`;
+  if (trialGround.base !== list || trialGround.key !== key) {
+    const stand = { id: 'trial', x: trial.x, y: trial.y, motivation: trial.motivation ?? TRIAL_MOTIVATION };
+    trialGround = { base: list, key, list: [...list, stand] };
+    groundRev += 1;
+  }
+  return trialGround.list;
 }
 
 function groundRegion(list) {
@@ -2397,6 +2424,18 @@ function drawTrial(time) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, point.x, y + 0.5);
+  // The tryout island is not in state.islands, so its name is not drawn with
+  // the others; where no saved island of that name is on the map, put it here.
+  const name = trial.island && trial.island.label;
+  if (name && !(state.islands || []).some((island) => island.label === name)) {
+    ctx.font = '700 13px system-ui, sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.fillStyle = INK.label;
+    ctx.strokeText(name, point.x, point.y - 44);
+    ctx.fillText(name, point.x, point.y - 44);
+  }
   ctx.restore();
   hits.push({ x: point.x, y: point.y - 18, r: 26, trial: true });
 }

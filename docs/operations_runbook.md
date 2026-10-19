@@ -154,6 +154,13 @@ prepareは投稿・runtimeを変更しないが、サーバー専用embedding_ca
 9. 投稿・本文編集・画像・本人による認証・反応・コメントを確認し、Gemini使用量と遅延を測定する。
 10. 通常push用のGemini設定を固定し、CI再リリースを確認してから自動運用へ戻す。
 
+## 投稿のお題・参加者募集の受付の出し方（2026-10-20）
+
+1. **SQL を先に流すのが推奨**（ただし今回は後でも壊れない。流すまでは新機能が止まるだけ）：`supabase/migrations/20261020000000_post_prompts_and_recruit.sql` を Supabase の SQL エディタに貼って流す（足すだけ・何度流しても壊れない・古いコードも壊れない）。`posts` に `prompt`・`recruit_deadline`・`recruit_capacity` を足し、`reactions` に受付終了のトリガーを付け、`map_posts` を作り直す。
+2. **流すまでは機能が止まっている**：新しいコードが先に本番に出ても、`posts` にこの3列が無い間は `/api/config` の `features.post_extras` が `false` になり、お題の記録・申込期限・先着人数は無視される（投稿の作成・編集は成功する）。`/api/health` の `post_extras_ready` も `false` だが、`ready` は変わらない（本番は止まらない）。
+3. **流したあと**：最大60秒ほどで自動で `features.post_extras` が `true`、`post_extras_ready` が `true` になる（再起動は要らない）。確認は `GET /api/health` と `GET /api/config`。あわせて SQL エディタで `select recruit_closed from map_posts(-1000,-1000,1000,1000,1)` が列として返ることを確かめる。
+4. **戻すとき**：コードだけ古いものに戻してよい（列は残る。古いコードは読まない）。受付終了のトリガーは残るので、期限・人数の付いた募集には新しく参加できないままになる。古い画面を開いたままの人が満員・期限切れの参加を押すと、トーストに `recruit_full` / `recruit_closed` の文字がそのまま出ることがある（`web/js/recruit-rules.js` の言い換えは新しい画面だけ）。
+
 ## 島の AI 命名の出し方と戻し方（2026-10-12）
 
 島の名前を Gemini で付ける機能は、**環境変数 `ISLAND_NAMING_ENABLED` が `1` のときだけ**動く。既定はオフ（未設定なら従来の上位語の名前のまま）。CI の変数・秘密は変えず、次の順で人が操作する。
