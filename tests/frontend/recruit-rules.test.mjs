@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../../web/js/recruit-rules.js', import.meta.url), 'utf8');
 const {
   addDays, availablePrompts, deadlineRange, extrasPayload, formatDeadline, jstToday, joinRefusal,
-  parseCapacity, recruitLines, recruitState, usedPromptKeys,
+  parseCapacity, recruitState, formatDeadlineShort, joinTerms, joinWord, usedPromptKeys,
 } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('jstToday follows Japan time, not the phone zone', () => {
@@ -51,10 +51,35 @@ test('recruitState: full by the numbers, deadline wins, the server flag is a fal
   assert.equal(recruitState(null, now), null);
 });
 
-test('recruitLines only lists the values that exist', () => {
-  assert.deepEqual(recruitLines({ recruit_deadline: '2026-12-31', recruit_capacity: 15 }), ['申込期限：2026/12/31', '先着人数：15人']);
-  assert.deepEqual(recruitLines({ recruit_capacity: 8 }), ['先着人数：8人']);
-  assert.deepEqual(recruitLines({}), []);
+test('formatDeadlineShort drops the year only for this year (Japan time)', () => {
+  const now = new Date('2026-10-20T00:00:00+09:00');
+  assert.equal(formatDeadlineShort('2026-10-31', now), '10月31日まで');
+  assert.equal(formatDeadlineShort('2027-01-05', now), '2027年1月5日まで');
+  assert.equal(formatDeadlineShort('', now), null);
+});
+
+test('joinTerms only lists the values that exist', () => {
+  const now = new Date('2026-10-20T00:00:00+09:00');
+  assert.equal(joinTerms({ recruit_deadline: '2026-10-31', recruit_capacity: 10 }, now), '申込期限 10月31日まで・先着10人・');
+  assert.equal(joinTerms({ recruit_deadline: '2026-10-31' }, now), '申込期限 10月31日まで・');
+  assert.equal(joinTerms({ recruit_capacity: 8 }, now), '先着8人・');
+  assert.equal(joinTerms({}, now), '');
+});
+
+test('joinWord says the state and who may still press', () => {
+  const now = new Date('2026-10-20T00:00:00+09:00');
+  const open = { recruit_deadline: '2026-10-31', recruit_capacity: 10, join_count: 3 };
+  assert.deepEqual(joinWord(open, { now }), { word: '参加する', ended: false, closed: null });
+  assert.equal(joinWord(open, { joined: true, now }).word, '参加済み（タップで取り消し）');
+  const late = { recruit_deadline: '2026-10-10', join_count: 3 };
+  assert.equal(joinWord(late, { now }).word, '受付終了');
+  assert.equal(joinWord(late, { now }).ended, true);
+  assert.deepEqual(joinWord(late, { joined: true, now }), { word: '参加済み（タップで取り消し）', ended: false, closed: 'deadline' });
+  const full = { recruit_capacity: 3, join_count: 3 };
+  assert.equal(joinWord(full, { now }).word, '満員');
+  assert.equal(joinWord(full, { joined: true, now }).ended, false);
+  // Without the migration the new rules are not shown or enforced here.
+  assert.equal(joinWord(full, { extras: false, now }).word, '参加する');
 });
 
 test('joinRefusal reads the PostgREST message and the local detail', () => {

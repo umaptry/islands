@@ -37,3 +37,60 @@ test('the ornamental boats shrink with the zoom like the route boats, and vanish
   decor.drawBoats({}, viewAt(1.2, 1366, 900), time);
   boats.forEach((s) => assert.equal(s, 11));
 });
+
+// A recording canvas context for the gulls: the body is the one ellipse per bird.
+function birdCtx() {
+  const log = { ellipses: [], begins: 0, lineWidths: [] };
+  const ctx = new Proxy({}, {
+    get(_, name) {
+      if (name === 'ellipse') return (x, y, rx) => log.ellipses.push(rx);
+      if (name === 'beginPath') return () => { log.begins += 1; };
+      return () => {};
+    },
+    set(_, name, value) {
+      if (name === 'lineWidth') log.lineWidths.push(value);
+      return true;
+    },
+  });
+  return { ctx, log };
+}
+
+// A small sea around the camera so the flocks are always on screen.
+const nearSea = { x: 495, y: 495, w: 10, h: 10 };
+
+test('the gulls are as big as before at the largest zoom, and shrink in proportion', () => {
+  let { ctx, log } = birdCtx();
+  decor.drawBirds(ctx, viewAt(18, 1366, 900, { maxScale: 18, sea: nearSea }), 100);
+  assert.equal(log.ellipses.length, 6);
+  log.ellipses.forEach((rx) => assert.ok(Math.abs(rx - 2.5 * 0.42) < 1e-9));
+  ({ ctx, log } = birdCtx());
+  decor.drawBirds(ctx, viewAt(9, 1366, 900, { maxScale: 18, sea: nearSea }), 100);
+  assert.equal(log.ellipses.length, 6);
+  log.ellipses.forEach((rx) => assert.ok(Math.abs(rx - 2.5 * 0.42 / 2) < 1e-9));
+  log.lineWidths.forEach((w) => assert.ok(w >= 0.5));
+});
+
+test('gulls under 1.5 px of wingspan are not drawn', () => {
+  const { ctx, log } = birdCtx();
+  decor.drawBirds(ctx, viewAt(1.2, 1366, 900, { maxScale: 18, sea: nearSea }), 100);
+  assert.equal(log.begins, 0);
+  assert.equal(log.ellipses.length, 0);
+});
+
+test('gulls keep the old size when maxScale is not given', () => {
+  const { ctx, log } = birdCtx();
+  decor.drawBirds(ctx, viewAt(1.2, 1366, 900, { sea: nearSea }), 100);
+  assert.equal(log.ellipses.length, 6);
+  log.ellipses.forEach((rx) => assert.ok(Math.abs(rx - 2.5 * 0.42) < 1e-9));
+});
+
+test('no gulls with reduced motion', () => {
+  decor.setReducedMotion(true);
+  try {
+    const { ctx, log } = birdCtx();
+    decor.drawBirds(ctx, viewAt(18, 1366, 900, { maxScale: 18, sea: nearSea }), 100);
+    assert.equal(log.begins, 0);
+  } finally {
+    decor.setReducedMotion(false);
+  }
+});

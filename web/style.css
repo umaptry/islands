@@ -55,7 +55,7 @@
 /* The UA rule for [hidden] is `display: none`, and ANY author `display`
  * declaration beats it - that is cascade origin, not specificity. Half the
  * chrome in this app sets its own display (.bottom-nav, .filter-panel,
- * .island-badge, .nav-badge, .dev-code, .btn), so without this line every one
+ * .nav-badge, .dev-code, .btn), so without this line every one
  * of them stayed on screen while JavaScript believed it had hidden them: the
  * bottom nav sat over the intro, and the tag dropdown never closed. */
 [hidden] { display: none !important; }
@@ -422,6 +422,9 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   color: #fff; font-size: 14px;
 }
 .search-input::placeholder { color: rgba(255, 255, 255, .72); }
+/* The global :focus-visible ring is too heavy inside the pill; the pill itself shows focus. */
+.search-input:focus-visible { outline: none; }
+.search:focus-within { border-color: #fff; background: rgba(255, 255, 255, .32); }
 .search-input::-webkit-search-cancel-button { display: none; }
 .search-clear { color: rgba(255, 255, 255, .8); font-size: 13px; padding: 4px; }
 
@@ -453,15 +456,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 }
 .filter-tag.on { background: #e2f0ff; color: var(--sea-ink); border-color: #b9dcff; }
 
-.island-badge {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px);
-  display: flex; align-items: center; gap: 8px;
-  background: rgba(255, 255, 255, .93); color: var(--sea-ink);
-  border-radius: 999px; padding: 8px 15px; font-size: 13px;
-  box-shadow: var(--shadow); z-index: 4; max-width: calc(100% - 110px);
-  width: max-content; /* left: 50% alone would cap it at half the screen */
-}
 .island-swatch { width: 10px; height: 10px; border-radius: 999px; flex: none; }
 
 .map-controls {
@@ -545,7 +539,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .post-action-count { font-weight: 700; }
 .post-action.reaction.like.on { color: var(--accent); background: #fff0ec; }
 .post-action.reaction.help.on { color: var(--help); background: #eaf7f0; }
-.post-action.reaction.join.on { color: var(--join); background: #fdf2e6; }
 .post-action:disabled { opacity: .55; }
 
 .similarity {
@@ -820,10 +813,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   transition: opacity .22s var(--ease), transform .22s var(--ease);
 }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
-/* On the map the island badge sits where the toast would; stand above it. */
-body:has(#islandBadge:not([hidden])) .toast {
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 62px);
-}
 
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 80;
@@ -1027,15 +1016,6 @@ input[type=number].recruit-input { width: 96px; text-align: right; }
   .recruit-clip, .recruit-box { transition: none; }
 }
 
-/* 参加 under a recruiting post: the terms, and why it cannot be pressed. */
-.post-action.reaction.join.has-terms { flex-direction: row; align-items: center; }
-.join-text { display: inline-flex; flex-direction: column; align-items: flex-start; text-align: left; line-height: 1.25; }
-.join-terms { font-size: 12px; color: var(--ink-3); font-weight: 400; white-space: nowrap; }
-/* A divider keeps the joined count from reading as the end of the deadline line. */
-.post-action.reaction.join.has-terms .post-action-count { margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line, currentColor); align-self: stretch; display: inline-flex; align-items: center; }
-.post-action.reaction.join.ended:disabled { opacity: 1; background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
-.post-action.reaction.join.ended .post-action-label { font-weight: 700; }
-
 /* On/off switches: "talk to me" (Q45) and the sound settings (item 21). */
 .switch-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
 .switch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -1130,7 +1110,6 @@ input.switch:disabled { opacity: .45; cursor: not-allowed; }
 .arrival.on { opacity: 1; transform: translate(-50%, 0); }
 .arrival-icon { flex: none; font-size: 18px; line-height: 1; }
 .arrival-text { min-width: 0; line-height: 1.45; }
-body:has(#islandBadge:not([hidden])) .arrival { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 76px); }
 
 /* Post cards: "talk to me" (Q45), views for the author only (Q35), a pop on reacting. */
 .post-views { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-3); }
@@ -1193,15 +1172,24 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .post-actions-group { display: flex; align-items: center; gap: 14px; }
 .post-actions-group.right { margin-left: auto; gap: 10px; }
 .post-actions-group .post-action { padding-left: 4px; padding-right: 4px; }
-/* 参加 can carry two small lines, so the row may fall to a second line. */
-.post-actions { flex-wrap: wrap; row-gap: 2px; }
-.post-actions-group.right { flex-wrap: wrap; justify-content: flex-end; }
 .post-footer { margin-top: 0; }
 .post-participants-button {
   display: block; width: 100%; margin-top: 6px; padding: 9px 12px; border-radius: 999px;
   background: #eff6ff; color: var(--sea); font-size: 12px; font-weight: 700;
 }
 .post-participants-button:hover { background: #dbeafe; }
+/* 参加: the same wide pill as the participants button, right above it. */
+.post-join-button {
+  display: block; width: 100%; margin-top: 6px; padding: 9px 12px; border-radius: 999px;
+  background: #fdf2e6; color: var(--join); font-size: 12px; font-weight: 700; text-align: center;
+}
+.post-join-button:hover { background: #fbe6cf; }
+.post-join-button.on { background: #f9dcb8; }
+.pj-word { display: block; }
+.pj-info { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; color: var(--ink-2, var(--ink-3)); }
+.pj-info b { font-weight: 700; }
+.post-join-button.ended:disabled { opacity: 1; background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
+.post-join-button:disabled { opacity: .55; }
 @media (max-width: 767px) {
   .sheet:not(.full) .post-footer {
     position: sticky; bottom: 0; z-index: 1; background: var(--surface);
@@ -1318,7 +1306,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .round-button { color: var(--ui); }
 .map-status .btn-outline { color: var(--ui); border-color: var(--ui); }
 .trial-banner .btn-small { background: var(--ui); }
-.trial-banner, .digest-pill, .island-badge { box-shadow: var(--float-shadow); }
+.trial-banner, .digest-pill { box-shadow: var(--float-shadow); }
 .participant-stop { background: var(--mine); }
 
 /* near islands: a row of chips under the search bar */
@@ -1364,14 +1352,8 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .island-post span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 .island-card-note { margin: -4px 0 12px; font-size: 12px; color: var(--ink-3); }
 .island-card-enter { width: 100%; min-height: 44px; background: var(--ui); color: #fff; font-weight: 800; }
-.island-card-open .island-badge { visibility: hidden; }
 
 .island-card-open .map-controls { visibility: hidden; }
-/* On a phone the controls row (switch + globe) takes the bottom right, so the badge rides above it. */
-@media (max-width: 767px) {
-  .island-badge { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 76px); max-width: calc(100% - 32px); }
-  .island-badge #islandText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-}
 
 /* mini map, top right under the strip */
 .mini-map {

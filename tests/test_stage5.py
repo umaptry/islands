@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import app as application
 
 from conftest import BOOKKEEPING, CAMPING_A, CAMPING_B
-from core.config import EXAMPLE_POSTS, TAGS, WEEKLY_PROMPTS
+from core.config import EXAMPLE_POSTS, RECRUIT_TAG, TAGS, WEEKLY_PROMPTS
 from core.prompts import weekly_prompt
 
 ANON = "anon:0123456789abcdef0123456789abcdef"
@@ -41,6 +41,13 @@ def test_config_carries_the_prompt_the_examples_and_the_open_tag(client):
     assert data["example_posts"] == list(EXAMPLE_POSTS)
     assert data["open_tag"] == TAGS[0]
     assert all(len(text) <= data["limits"]["body_max"] for text in data["example_posts"])
+
+
+def test_tags_keep_their_order_and_recruit_tag_does_not_depend_on_it(client):
+    order = ["気軽に話しかけて", "助けてほしい", "仲間募集中", "参加者募集中"]
+    assert list(TAGS) == order
+    assert RECRUIT_TAG == "参加者募集中"
+    assert client.get("/api/config").json()["tags"] == order
 
 
 # --------------------------------------------------------------------------

@@ -62,6 +62,12 @@ const BOAT_MIN = 3;
 const BIRD_SKEINS = 2;
 // Half a gull's wingspan, seen from above.
 const BIRD_SIZE = 2.5;   // halved 2026-10-13, with the flock's spacing and line
+// Like the boats, the gulls are BIRD_SIZE at the largest zoom and shrink in
+// proportion to scale / maxScale (the flock's spacing with them); a gull whose
+// wingspan would be under BIRD_MIN px is not drawn. The line keeps a floor.
+const BIRD_MIN = 1.5;
+const BIRD_LINE = 0.7;
+const BIRD_LINE_MIN = 0.5;
 // Boats and gulls wander the sea on slow closed curves (drift, below) so they
 // turn gently instead of flipping round at the end of a line: everything here
 // is seen from straight above, where a boat that reverses on the spot would
@@ -167,11 +173,14 @@ export function drawBoats(ctx, view, time) {
 
 export function drawBirds(ctx, view, time) {
   if (REDUCED_MOTION) return;
-  const { sea, toScreen, width, height } = view;
+  const { sea, toScreen, width, height, scale, maxScale } = view;
+  const k = scale > 0 && maxScale > 0 ? Math.min(1, scale / maxScale) : 1;
+  const size = BIRD_SIZE * k;
+  if (size * 2 < BIRD_MIN) return;
   ctx.save();
   ctx.strokeStyle = INK.bird;
   ctx.fillStyle = INK.bird;
-  ctx.lineWidth = 0.7;
+  ctx.lineWidth = Math.max(BIRD_LINE_MIN, BIRD_LINE * k);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   for (let flight = 0; flight < BIRD_SKEINS; flight += 1) {
@@ -184,12 +193,13 @@ export function drawBirds(ctx, view, time) {
     const unitX = Math.cos(spot.angle);
     const unitY = Math.sin(spot.angle);
     for (let bird = 0; bird < 3; bird += 1) {
-      const back = bird === 0 ? 0 : 4.5;
-      const side = bird === 1 ? -4 : (bird === 2 ? 4 : 0);
+      const back = bird === 0 ? 0 : 4.5 * k;
+      const side = (bird === 1 ? -4 : (bird === 2 ? 4 : 0)) * k;
       drawBird(ctx,
         lead.x - unitX * back - unitY * side,
         lead.y - unitY * back + unitX * side,
         spot.angle,
+        size,
         time * 2.2 + bird * 1.3 + flight);
     }
   }
@@ -199,21 +209,21 @@ export function drawBirds(ctx, view, time) {
 /** A gull from above, heading along `angle`: wings swept back from a short
  * body. Now and then it beats its wings, which from above shows as the span
  * drawing in; the rest of the time it glides. */
-function drawBird(ctx, x, y, angle, beat) {
+function drawBird(ctx, x, y, angle, size, beat) {
   const flap = Math.max(0, Math.sin(beat)) ** 2 * Math.max(0, Math.sin(beat * 0.31));
-  const span = BIRD_SIZE * (1 - flap * 0.35);
-  const sweep = BIRD_SIZE * (0.45 + flap * 0.2);
+  const span = size * (1 - flap * 0.35);
+  const sweep = size * (0.45 + flap * 0.2);
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle);
   ctx.beginPath();
   ctx.moveTo(-sweep, -span);
-  ctx.quadraticCurveTo(BIRD_SIZE * 0.1, -span * 0.35, 0, 0);
-  ctx.quadraticCurveTo(BIRD_SIZE * 0.1, span * 0.35, -sweep, span);
+  ctx.quadraticCurveTo(size * 0.1, -span * 0.35, 0, 0);
+  ctx.quadraticCurveTo(size * 0.1, span * 0.35, -sweep, span);
   ctx.stroke();
   // The body, head forward.
   ctx.beginPath();
-  ctx.ellipse(-BIRD_SIZE * 0.1, 0, BIRD_SIZE * 0.42, BIRD_SIZE * 0.14, 0, 0, Math.PI * 2);
+  ctx.ellipse(-size * 0.1, 0, size * 0.42, size * 0.14, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }

@@ -20,7 +20,7 @@ import { chatInput, postChat } from '../components/chat.js';
 import { loadDigest, paintMarks, setupMeet } from './meet.js';
 import { refreshExtras, setupMapExtras } from './map-extras.js';
 import {
-  abortReveal, fitCamera, focusOn, initMap, landmassOf, onCameraSettled, participantView, playReveal,
+  abortReveal, fitCamera, focusOn, initMap, onCameraSettled, participantView, playReveal,
   resize, ripple, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
 } from '../map/index.js';
 import { noteLinks } from '../map/lines.js';
@@ -195,7 +195,7 @@ export async function refreshIslands() {
     const result = await api.get('/api/islands', { auth: false });
     state.islands = result.islands || [];
     setReachFactor(result.radius_factor);
-    paintBadge();
+    paintChrome();
   } catch {
     /* keep the previous names rather than blanking every label */
   }
@@ -301,28 +301,9 @@ export async function refreshMyPosts() {
 
 // ---------------------------------------------------------------- chrome
 
-function paintBadge() {
+function paintChrome() {
   paintMarks();
   if (booted) refreshExtras();
-  const badge = $('islandBadge');
-  const mine = state.activePostId ? state.postsById.get(state.activePostId) : null;
-  if (!mine) {
-    badge.hidden = true;
-    return;
-  }
-  const named = state.islands.find((island) => island.post_ids?.includes(mine.id));
-  const local = landmassOf(mine.id);
-  if (!named && !local) {
-    badge.hidden = true;
-    return;
-  }
-  badge.hidden = false;
-  $('islandSwatch').style.background = islandColor(mine.cluster_id);
-  clear($('islandText')).append(
-    document.createTextNode('あなたは '),
-    el('b', { text: named ? named.label : `${local.size}件の島` }),
-    document.createTextNode(' にいます'),
-  );
 }
 
 function paintFilterPanel() {
@@ -823,7 +804,7 @@ export function setupMapScreen() {
         refreshConnections();
         refreshNeighbors();
       }
-      paintBadge();
+      paintChrome();
       paintTrial();
       refreshMyViews();
       // Not awaited: the map is already up, and the pill can arrive a moment later.

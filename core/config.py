@@ -165,8 +165,8 @@ assert max(CLUSTER_CANDIDATES) <= len(ISLAND_COLORS), "島の数が色数を超�
 TAGS = (
     "気軽に話しかけて",
     "助けてほしい",
-    "参加者募集中",
     "仲間募集中",
+    "参加者募集中",
 )
 
 # エンジョイ (0) - ガチ (100).
@@ -466,7 +466,7 @@ POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
 
 # 「参加者募集中」 posts may carry a sign-up deadline (a Japan-time date, open until
 # the end of that day) and a first-come capacity.
-RECRUIT_TAG = TAGS[2]
+RECRUIT_TAG = "参加者募集中"
 RECRUIT_CAPACITY_MIN = 1
 RECRUIT_CAPACITY_MAX = 999
 RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today

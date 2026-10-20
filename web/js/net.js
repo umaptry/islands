@@ -141,11 +141,13 @@ const supabaseBackend = {
   async mapCells({ minX, minY, maxX, maxY }) {
     return rpc('map_cells', { min_x: minX, min_y: minY, max_x: maxX, max_y: maxY });
   },
+  // No deleted_at filter on posts: the column is not granted for select, so using it
+  // in a filter is a 42501. The posts_read policy already hides deleted rows.
   async getPost(id) {
     const rows = await restCall('posts', {
       params: {
         select: `${postColumns()},${POST_AUTHOR_EMBED}`,
-        id: `eq.${id}`, deleted_at: 'is.null', limit: '1',
+        id: `eq.${id}`, limit: '1',
       },
     });
     return rows.length ? flatten(rows[0]) : null;
@@ -154,7 +156,7 @@ const supabaseBackend = {
     const rows = await restCall('posts', {
       params: {
         select: `${postColumns()},${POST_AUTHOR_EMBED}`,
-        author_id: `eq.${authorId}`, deleted_at: 'is.null', order: 'created_at.desc',
+        author_id: `eq.${authorId}`, order: 'created_at.desc',
       },
     });
     return rows.map((row) => flatten(row));

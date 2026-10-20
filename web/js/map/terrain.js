@@ -362,6 +362,36 @@ export function detailPixels({ posts, cells = [], region, scale, pixelRatio = 1,
   return pixels;   // `coast` rides along: toCanvas ignores it, the page reads it
 }
 
+// The sharp texture comes in two steps after a stop: a preview at
+// PREVIEW_RATIO of the pixel ratio (a quarter of the pixels, no surf), which is
+// there almost at once, then the full one that replaces it.
+export const PREVIEW_RATIO = 0.5;
+
+/**
+ * What the sharp texture still needs, as a plain decision (the map keeps the
+ * state; this only reads it). `sharp` is the texture on show or null: its `rev`
+ * and `cells` are what it was made from (the ground's revision, which also
+ * moves with the tryout, and the saturated cells), `unit` its texture pixels
+ * per world unit as asked for. `need` is the unit this screen wants, `view` the
+ * world rectangle on screen. A rebuilt whole-map ground does not matter: the
+ * sharp texture is made from the posts, not from that one.
+ * Returns `stage`: 0 nothing to ask, 1 the preview, 2 the full texture.
+ */
+export function sharpPlan({ sharp, rev, cells, need, view, surf = false }) {
+  const valid = Boolean(sharp) && sharp.rev === rev && sharp.cells === cells;
+  const covers = valid && view.minX >= sharp.minX && view.minY >= sharp.minY
+    && view.maxX <= sharp.minX + sharp.width / sharp.scale && view.maxY <= sharp.minY + sharp.height / sharp.scale;
+  const fine = valid && sharp.unit >= need * 0.8;
+  // The surf has come into view but this texture was made without it: the full
+  // one again. `traced` is whether it was asked for, not whether any coast was
+  // found, or a stretch of open sea would ask forever.
+  const bare = surf && valid && !sharp.preview && !sharp.traced;
+  if (covers && fine && !bare) return { valid, covers, fine, stage: 0 };
+  // The preview only when it would be sharper than what is there.
+  const stage = covers && sharp.unit >= need * PREVIEW_RATIO * 0.99 ? 2 : 1;
+  return { valid, covers, fine, stage };
+}
+
 /** Pixels from detailPixels (or compute) on a canvas the map can draw. */
 export function toCanvas({ pixels, minX, minY, scale, width, height }) {
   const canvas = document.createElement('canvas');
