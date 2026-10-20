@@ -541,6 +541,57 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
 .post-action.reaction.help.on { color: var(--help); background: #eaf7f0; }
 .post-action:disabled { opacity: .55; }
 
+/* ---------------------------------------------------------------- image viewer */
+/* Above the sheet (50) and the nav (45), below the toast (70) and the confirm dialog (80). */
+
+body.image-viewer-open { overflow: hidden; }
+.image-viewer {
+  --viewer-dim: 1;
+  position: fixed; inset: 0; z-index: 60;
+  color: #fff; opacity: 0; transition: opacity .18s var(--ease);
+  overscroll-behavior: contain; touch-action: none;
+}
+.image-viewer::before {
+  content: ''; position: absolute; inset: 0; background: rgba(5, 8, 12, .97);
+  opacity: var(--viewer-dim);
+}
+.image-viewer.on { opacity: 1; }
+.image-viewer.dragging::before { transition: none; }
+.image-viewer-stage {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: calc(env(safe-area-inset-top) + 64px) env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + 72px) env(safe-area-inset-left);
+}
+.image-viewer-img {
+  display: block; max-width: 100%; max-height: 100%; object-fit: contain;
+  transition: transform .2s var(--ease); user-select: none; -webkit-user-drag: none;
+}
+.image-viewer.dragging .image-viewer-img { transition: none; }
+.image-viewer-error { margin: 0; font-size: 14px; color: rgb(255 255 255 / .8); }
+.image-viewer-close {
+  position: absolute; z-index: 1;
+  top: calc(env(safe-area-inset-top) + 10px); left: calc(env(safe-area-inset-left) + 10px);
+  width: 44px; height: 44px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; background: rgb(0 0 0 / .45);
+}
+.image-viewer-close:hover { background: rgb(255 255 255 / .22); }
+.image-viewer-bar {
+  position: absolute; z-index: 1; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px calc(env(safe-area-inset-right) + 14px) calc(env(safe-area-inset-bottom) + 10px) calc(env(safe-area-inset-left) + 14px);
+  background: linear-gradient(to top, rgb(0 0 0 / .8), transparent);
+}
+.image-viewer-action {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+  padding: 7px 14px; border-radius: 999px; font-size: 13px; color: #fff;
+}
+button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
+.image-viewer-action.like.on { color: #ff8f77; }
+.image-viewer-action.help.on { color: #5fd69b; }
+.image-viewer-action.pop .post-action-icon { animation: action-pop .36s var(--ease); }
+.image-viewer button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.image-viewer.no-motion, .image-viewer.no-motion * { transition: none !important; animation: none !important; }
+
 .similarity {
   margin-top: 13px; padding: 12px 13px;
   background: var(--surface-2); border-radius: var(--radius-sm);

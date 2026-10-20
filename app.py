@@ -2237,6 +2237,34 @@ def delete_post(post_id: str, request: Request):
     return {"ok": True}
 
 
+@app.delete("/api/comments/{comment_id}")
+def delete_comment(comment_id: str, request: Request):
+    """Soft delete one of your own messages.
+
+    Through here and not straight from the browser: a PATCH that sets
+    deleted_at makes the row one the comments_read policy hides, and PostgREST
+    asks for the row back, so the database refuses the whole update ("new row
+    violates row-level security policy"). The store writes with the service
+    key, checks the author itself and gives the post its comment back (2026-10-21).
+    """
+    user_id = current_user(request)
+    try:
+        uuid.UUID(comment_id)
+    except ValueError:
+        # Not an id at all: the database would answer 400, read as an outage.
+        raise HTTPException(status_code=403, detail="削除できませんでした。")
+    try:
+        removed = state["store"].delete_comment(comment_id, user_id)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="削除に失敗しました。もう一度お試しください。")
+    if not removed:
+        raise HTTPException(status_code=403, detail="削除できませんでした。")
+    # One message fewer: the post's energy (and so its island) changes too.
+    invalidate_connections()
+    invalidate_islands()
+    return {"ok": True}
+
+
 @app.get("/api/neighbors")
 def neighbors(post: str = "", limit: int = ORBIT_NEIGHBOR_COUNT):
     """Who is near this post, measured before the squash.

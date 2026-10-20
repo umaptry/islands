@@ -19,6 +19,7 @@ import { data } from '../net.js';
 import { hasReacted, state, subscribe, upsertPost } from '../state.js';
 import { avatar, confirmAction, el, motivationColor, timeAgo } from '../ui.js';
 import { icon } from '../icons.js';
+import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
 import { joinTerms, joinWord } from '../recruit-rules.js';
 
@@ -121,10 +122,21 @@ export function postCard(post, options = {}) {
   if (!options.compact && post.image_path) {
     const url = data.imageUrl(post.image_path);
     if (url) {
-      card.append(el('div', { className: 'post-image' },
-        el('a', { attrs: { href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': '添付画像を全体表示' } },
-          el('img', { attrs: { src: url, alt: '添付画像', loading: 'lazy' },
-            on: { error: (event) => { event.target.alt = '画像を読み込めませんでした'; } } }))));
+      // A plain tap opens the in-app viewer; a middle / modified click keeps the
+      // link's own behaviour (a new tab with the picture).
+      const link = el('a', {
+        attrs: { href: url, rel: 'noopener noreferrer', 'aria-label': '添付画像を全体表示' },
+        on: {
+          click: (event) => {
+            if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            openImageViewer({ url, post, options, opener: link });
+          },
+        },
+      },
+        el('img', { attrs: { src: url, alt: '添付画像', loading: 'lazy' },
+          on: { error: (event) => { event.target.alt = '画像を読み込めませんでした'; } } }));
+      card.append(el('div', { className: 'post-image' }, link));
     }
   }
 

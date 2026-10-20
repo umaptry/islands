@@ -205,6 +205,16 @@ update public.islands_state set name_source = 'terms', name_basis = null, name_t
 
 - 言葉そのものを禁止する：環境変数 `ISLAND_NAME_BLOCKLIST` にカンマ区切りで足す（例 `競馬,パチンコ`）。組み込みの禁止語は `core/island_namer.py` の `BLOCKED`。新しい revision を出すと効く。**禁止語は今後の答えに効く**。すでに付いた AI の名前が禁止語を含む場合は、次の読み込みから従来の名前に戻る（コードが再検査する）。付いた名前を別の名前にしたいときは、上の `manual` の SQL で直せる。
 
+## 公開 URL を変えるとき（2026-10-21）
+
+本番の URL（今は `https://islands-vfjsyo6oyq-an.a.run.app`）は、次の場所に直接書いてある。独自ドメインに移すなどで URL が変わったら、全部そろえる。
+
+- `web/index.html`・`web/privacy.html`・`web/how.html` のリンクのカード（`og:url`・`og:image`・`twitter:image`）と、`web/privacy.html` の本文の URL
+- `tests/test_link_preview.py` の `SITE`
+- Supabase → Authentication → URL Configuration（Site URL と Redirect URLs に新しい URL を足す。古い URL はしばらく残す）
+- Google Auth Platform（ブランディングのホームページ・プライバシーポリシーの URL・承認済みドメイン、クライアントの承認済みの JavaScript 生成元）。LINE を出していればチャネルの設定も
+- 公開後、X・Facebook はカードを一時保存しているので、各社のカードの確認ツールで取り直す
+
 ## Google・LINE でのログインの出し方（2026-10-13）
 
 コードは入っている。ボタンは Cloud Run の環境変数 `KOTOBA_OAUTH_GOOGLE` / `KOTOBA_OAUTH_LINE` が `1` のときだけ出る（未設定なら今までどおりメールのパスコードだけ）。Google・LINE・Supabase・Cloud Run の設定変更なので、**2人の合意が要る**。順番は「外の設定（Google・LINE・Supabase）→ 動作確認 → 環境変数」。環境変数を先に立てると、押しても失敗するボタンが出る。

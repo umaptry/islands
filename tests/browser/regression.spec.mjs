@@ -148,6 +148,55 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
 });
 
 
+test('a post image opens in the viewer with close and reactions, and closes by button, Escape and back', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#welcomeRegister').click();
+  await page.locator('#authEmail').fill(`viewer-${crypto.randomUUID()}@example.com`);
+  await page.locator('#registerName').fill('画像の確認');
+  await page.locator('#registerAffiliation').fill('islands');
+  await page.locator('#authSend').click();
+  await expect(page.locator('.dev-code-value')).toBeVisible();
+  await page.locator('#authCode').fill(await page.locator('.dev-code-value').innerText());
+  await page.locator('#authVerify').click();
+  await page.locator('#setupSave').click();
+  await expect(page.locator('#guidance')).toHaveClass(/active/);
+  const pages = await page.locator('#guidanceTrack > .slide').count();
+  for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
+  await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
+  await page.locator('#composeMotivation').fill('70');
+  // A 1x1 PNG is enough: the viewer does not care what the picture is.
+  await page.locator('#composeImageInput').setInputFiles({
+    name: 'dot.png', mimeType: 'image/png',
+    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+  });
+  await page.locator('#composeSubmit').click();
+  await expect(page.locator('#map')).toHaveClass(/active/);
+
+  await page.goto('/#/me');
+  const link = page.locator('.post-card .post-image a').first();
+  await link.click();
+  const viewer = page.locator('.image-viewer');
+  await expect(viewer).toBeVisible();
+  await expect(viewer.getByRole('button', { name: '閉じる' })).toBeFocused();
+  await expect(viewer.locator('[data-count="like_count"]')).toHaveText('0');
+  await viewer.getByRole('button', { name: 'いいね' }).click();
+  await expect(viewer.locator('[data-count="like_count"]')).toHaveText('1');
+  await expect(page.locator('.post-card [data-reaction="like"] [data-count]').first()).toHaveText('1');
+  expect(await page.evaluate(() => location.hash)).toBe('#/me');
+
+  await viewer.getByRole('button', { name: '閉じる' }).click();
+  await expect(viewer).toHaveCount(0);
+  await expect(link).toBeFocused();
+  await link.click();
+  await page.keyboard.press('Escape');
+  await expect(viewer).toHaveCount(0);
+  await link.click();
+  await page.goBack();
+  await expect(viewer).toHaveCount(0);
+  await expect(page.locator('#me')).toHaveClass(/active/);
+});
+
+
 test('a Google or LINE round trip: a failure is said and cleaned up, a success remembers how', async ({ page }) => {
   // Cancelled at the provider: Supabase comes back with the error in the fragment.
   await page.goto('/#error=access_denied&error_code=access_denied&error_description=User+cancelled');
