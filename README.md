@@ -25,7 +25,7 @@ embeddingは `EMBEDDING_PROVIDER` で明示指定し、`artifacts/manifest.json`
 タップすると二人が共有していることばが見える。人が集まった場所は島になり、
 その島の名前は、そこにいる人たちの言葉から作られる。
 
-要件定義は [`REQUIREMENTS.md`](REQUIREMENTS.md)。詳しい図解は起動後 `/how`。
+要件定義は [`REQUIREMENTS.md`](REQUIREMENTS.md)。詳しい図解は起動後 `/how`、プライバシーポリシーは `/privacy`。
 
 ---
 
