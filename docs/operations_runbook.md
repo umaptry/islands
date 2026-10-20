@@ -212,6 +212,9 @@ update public.islands_state set name_source = 'terms', name_basis = null, name_t
 ### Google
 
 1. Google Cloud Console の「Google Auth Platform」（OAuth 同意画面）：対象は「外部」。アプリ名とサポート用のメールを入れる。スコープは `openid`・メール・プロフィールだけにする（この範囲なら Google の審査は要らない）。公開ステータスを「本番環境」にする（「テスト」のままだと、登録したテストユーザーしか入れない）。
+   - 「本番環境」にするには、「ブランディング」にホームページ URL（本番の URL）とプライバシーポリシー URL（本番の URL ＋ `/privacy`）が要る（2026-10-20 に確認。無いと「アプリを公開」が押せない）。承認済みドメインには本番のドメイン（`islands-xxxx.a.run.app` の形。Public Suffix List に `*.run.app` があるので、このドメインがそのまま登録できる単位になる）を入れる。
+   - ロゴは載せない（載せると Google のブランド確認が要る）。ブランド確認をしないあいだ、同意画面にはアプリ名ではなくドメインが出ることがある。
+   - プライバシーポリシーは `web/privacy.html`。取得する情報・外部のサービス・運営者の表記・問い合わせ先が変わったら、このページも直す（Google は書いてある範囲での利用を求める）。
 2. 「クライアント」を種類「ウェブ アプリケーション」で作る。承認済みのリダイレクト URI に `https://<project-ref>.supabase.co/auth/v1/callback` を入れる。
 3. Supabase → Authentication → Sign In / Providers → Google を有効にし、クライアント ID とクライアント シークレットを貼る。
 4. Supabase → Authentication → URL Configuration の Redirect URLs に、本番の URL（末尾 `/`）があることを確かめる。ないと、ログイン後に Site URL へ戻される。
@@ -341,6 +344,17 @@ python scripts/migrate_map.py apply --input output/rollback-e5.json --execute
 
 公開後に投稿集合や本文が変わっていれば通常rollbackは停止する。旧E5 provider/artifactsを指定して `rollback --reproject` で現在の投稿を再計算する。古い全DBバックアップを戻して新規投稿や反応を消さない。
 DBを戻した後に保存したE5 revisionへtrafficを戻す。DB/成果物/モデル版が揃ってからmaintenanceを解除する。コンテナだけ戻さない。
+
+### 退会（アカウントの削除）を頼まれたとき（2026-10-20）
+
+画面に退会の機能はなく、プライバシーポリシー（`web/privacy.html` の 7-3・第10章）で「問い合わせで受け付け、本人確認のうえ削除する」と約束している。
+
+1. 本人確認：登録しているメールアドレスから来た依頼かを確かめる。LINE でログインしている人（メールを持たない）は、プロフィールに表示名の一時的な書き換えを頼むなど、本人にしかできない方法で確かめる。
+2. Supabase → Authentication → Users でその人を探し、利用者の ID（UID）を控える。
+3. Supabase → Storage → `post-images` で、フォルダ `<UID>`（投稿の画像とアイコンの写真）を削除する。
+4. Authentication → Users → その人 → Delete user。`accounts` は `auth.users` に `on delete cascade` でつながっていて、その人の投稿・反応・コメント・通知・通報・通知の設定・端末の通知の宛先も一緒に消える（`supabase/schema.sql`・各 migration の外部キー）。
+5. 残るもの（ポリシーに書いてあるとおり）：ほかの人の投稿の閲覧の記録（`post_views.viewer`）、島の記録（`islands_state` の投稿者の一覧は次の地図の更新で外れる）、手元のバックアップ。
+6. 済んだら本人に知らせる。
 
 ## 監視・整理・記録
 

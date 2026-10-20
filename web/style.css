@@ -1162,6 +1162,11 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
  * second line, and the icon-photo step. */
 .landing .divider { margin: 20px 0 0; }
 .lede-sub { margin-top: -10px; font-size: 12px; color: var(--on-sea-3); word-break: break-all; }
+/* The privacy policy (/privacy) under the ways in: Google wants it linked from the home page. */
+.legal-note { margin: 20px 0 0; font-size: 12px; line-height: 1.6; text-align: center; color: var(--on-sea-2); word-break: auto-phrase; }
+.legal-note a { color: var(--on-sea); text-decoration: underline; text-underline-offset: 2px; }
+/* On the welcome screen the note sits above every way in, so it is read before any of them is pressed. */
+.legal-note-top { margin-top: 16px; text-align: left; }
 .avatar-pick { display: flex; flex-direction: column; align-items: center; gap: 18px; margin: 12px 0 28px; }
 .avatar-slot-large .avatar { box-shadow: 0 0 0 4px rgba(255, 255, 255, .6); }
 .avatar-pick .avatar-actions { justify-content: center; }
