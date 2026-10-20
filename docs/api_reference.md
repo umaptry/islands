@@ -781,8 +781,8 @@ Host: localhost:7860
 | `similarity.floor` / `ceiling` | `number\|null` | コサイン値を「似てる度 0〜100%」に変換するための校正パラメータ |
 | `open_tag` | `string` | 「話しかけていいよ」の切り替えが付けるタグ（`tags[0]`＝「気軽に話しかけて」）。Q45 |
 | `weekly_prompt` | `{key, text, until}` | 今週のお題（Q37）。月曜0時（日本時間）に替わる。`key` は `"2026-W41"` の形、`until` は次に替わる日時（UTC） |
-| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文）。2026-10-20 から4種類（昔がんばってたこと／最近はまってること／今度やってみたいこと／イベントの告知）×2の8つ |
-| `extra_prompts` | `{key, text}[]` | 今週のお題のほかに出すお題（2026-10-20）。`past`＝昔がんばってたこと、`now`＝最近はまってること、`future`＝今度やってみたいこと。その人が一度そのお題で投稿したら、そのお題だけ出さない（画面が自分の投稿の `prompt` で判断する）。今週のお題（`weekly`）は対象外 |
+| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文）。2026-10-21 から3つ（昔がんばってたこと・最近はまってること・イベントの告知を1つずつ） |
+| `extra_prompts` | `{key, text, example}[]` | 今週のお題のほかに出すお題（2026-10-20）。`example` は選んだときに本文の欄に薄く出す例文（画面が「例：」を付ける。2026-10-21）。`past`＝昔がんばってたこと、`now`＝最近はまってること、`future`＝今度やってみたいこと。その人が一度そのお題で投稿したら、そのお題だけ出さない（画面が自分の投稿の `prompt` で判断する）。今週のお題（`weekly`）は対象外 |
 | `features.post_extras` | `boolean` | DB が投稿の `prompt`・`recruit_deadline`・`recruit_capacity` を持っているか。`false` の間（本番に移行 SQL `20261020000000` が未適用）は、画面はお題の記録・申込期限・先着人数の入力を出さず、サーバーも送られてきた値を無視して保存する。ローカルは常に `true`。約60秒キャッシュ |
 | `push.public_key` | `string\|null` | ブラウザが push を購読するときの VAPID 公開鍵。`null` なら push は使えない（設定の欄は「このブラウザは端末への通知に対応していません」と出し、ベルの通知だけになる） |
 | `push.presence_seconds` / `presence_hold` | `number` | 画面に出ている間、`presence_seconds`（30秒）ごとに「あと `presence_hold`（75秒）は画面にいる」と伝える（`mark_active`）。その間サーバーは push しない |

@@ -98,6 +98,16 @@ export function usedPromptKeys(posts) {
   return new Set((posts || []).map((post) => post?.prompt).filter(Boolean));
 }
 
+/** What the body says while it is empty: an example sentence for an extra
+ * prompt ("例：…"), the weekly prompt itself, or the plain hint. */
+export function promptPlaceholder({ selected, weekly, extraPrompts, max }) {
+  if (selected === 'weekly' && weekly?.text) return `お題：${weekly.text}`;
+  const extra = selected ? (extraPrompts || []).find((item) => item?.key === selected) : null;
+  if (extra?.example) return `例：${extra.example}`;
+  if (extra?.text) return `お題：${extra.text}`;
+  return `取り組みや活動内容（最大${max}文字）`;
+}
+
 /** The extra prompts still on offer: none when the feature is off, and a key
  * disappears once its owner has posted with it. */
 export function availablePrompts(extraPrompts, posts, enabled) {
