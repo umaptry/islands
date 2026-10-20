@@ -30,15 +30,23 @@ def day(offset):
 # the examples and the extra prompts
 # --------------------------------------------------------------------------
 
-def test_there_are_eight_examples_that_fit_a_post():
-    assert len(EXAMPLE_POSTS) == 8
-    assert len(set(EXAMPLE_POSTS)) == 8
+def test_there_are_three_examples_that_fit_a_post():
+    assert len(EXAMPLE_POSTS) == 3
+    assert len(set(EXAMPLE_POSTS)) == 3
     assert all(1 <= len(text) <= application.MAX_TEXT_LENGTH for text in EXAMPLE_POSTS)
+
+
+def test_every_extra_prompt_has_its_own_example_sentence():
+    examples = [item["example"] for item in EXTRA_PROMPTS]
+    assert all(1 <= len(text) <= application.MAX_TEXT_LENGTH for text in examples)
+    assert len(set(examples)) == len(EXTRA_PROMPTS)
+    # Not one of the tryout examples above it on the first post.
+    assert not set(examples) & set(EXAMPLE_POSTS)
 
 
 def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     data = client.get("/api/config").json()
-    assert data["extra_prompts"] == [
+    assert [{"key": item["key"], "text": item["text"]} for item in data["extra_prompts"]] == [
         {"key": "past", "text": "昔がんばってたこと"},
         {"key": "now", "text": "最近はまってること"},
         {"key": "future", "text": "今度やってみたいこと"},

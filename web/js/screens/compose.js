@@ -30,7 +30,7 @@ import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
 import { buzz, moment } from '../feedback.js';
 import { heatObject } from '../components/heatobject.js';
 import { ripple } from '../map/index.js';
-import { availablePrompts, deadlineRange, extrasPayload, parseCapacity } from '../recruit-rules.js';
+import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
 import { openOnMap, showTrial } from './map.js';
 
 let editing = null;       // the post being edited, or null for a new one
@@ -119,12 +119,14 @@ function paintTags(selected = []) {
   });
 }
 
-function paintPrompt(show) {
+/** The weekly prompt for a new post; the extra ones also on the first post,
+ * under its examples. */
+function paintPrompt(weeklyShown, extrasShown) {
   const prompt = config().weekly_prompt;
-  $('composePrompt').hidden = !show || !prompt?.text;
+  $('composePrompt').hidden = !weeklyShown || !prompt?.text;
   $('composePromptText').textContent = prompt?.text || '';
   selectedPrompt = null;
-  paintExtraPrompts(show);
+  paintExtraPrompts(extrasShown);
   syncPrompt();
 }
 
@@ -132,6 +134,9 @@ function paintPrompt(show) {
 function paintExtraPrompts(show) {
   const items = show ? availablePrompts(config().extra_prompts, promptPosts, extrasOn()) : [];
   if (selectedPrompt && selectedPrompt !== 'weekly' && !items.some((item) => item.key === selectedPrompt)) selectedPrompt = null;
+  // A weekly prompt kept in a draft is dropped where the weekly prompt is not
+  // shown (the first post), or it would be sent without being seen.
+  if (selectedPrompt === 'weekly' && $('composePrompt').hidden) selectedPrompt = null;
   $('composeExtraPrompts').hidden = !items.length;
   const list = clear($('composeExtraPromptList'));
   items.forEach((item) => {
@@ -147,7 +152,8 @@ function paintExtraPrompts(show) {
   syncPrompt();
 }
 
-/** Show which prompt is chosen, and let it speak in the body's placeholder. */
+/** Show which prompt is chosen, and let it speak in the body's placeholder:
+ * an example sentence for an extra prompt, the weekly prompt's own words. */
 function syncPrompt() {
   const weekly = selectedPrompt === 'weekly';
   $('composePrompt').classList.toggle('used', weekly);
@@ -156,10 +162,12 @@ function syncPrompt() {
   $$('#composeExtraPromptList .extra-chip').forEach((chip) => {
     chip.setAttribute('aria-pressed', String(chip.dataset.key === selectedPrompt));
   });
-  const picked = weekly ? config().weekly_prompt?.text
-    : config().extra_prompts?.find((item) => item.key === selectedPrompt)?.text;
-  $('composeBody').placeholder = picked
-    ? `お題：${picked}` : `取り組みや活動内容（最大${config().limits.body_max}文字）`;
+  $('composeBody').placeholder = promptPlaceholder({
+    selected: selectedPrompt,
+    weekly: config().weekly_prompt,
+    extraPrompts: config().extra_prompts,
+    max: config().limits.body_max,
+  });
 }
 
 /** 申込期限 and 先着人数 open under the tags while 参加者募集中 is ticked, and
@@ -284,8 +292,8 @@ export function setupCompose() {
       touched = Boolean(editing);
       paintTags(editing ? (editing.tags || []) : []);
       promptPosts = state.myPosts;
-      paintPrompt(!editing && !firstPost);
-      refreshPromptPosts(editing, firstPost);
+      paintPrompt(!editing && !firstPost, !editing);
+      refreshPromptPosts(editing);
       paintExamples(firstPost && !editing);
       imagePath = editing ? (editing.image_path || null) : null;
       paintImage(imagePath ? data.imageUrl(imagePath) : null);
@@ -294,7 +302,7 @@ export function setupCompose() {
         touched = Boolean(draft.touched);
         paintTags(draft.tags);
         selectedPrompt = draft.prompt || null;
-        paintExtraPrompts(!editing && !firstPost);
+        paintExtraPrompts(!editing);
         imagePath = draft.imagePath;
         imageBlob = draft.imageBlob;
         paintImage(imageBlob ? URL.createObjectURL(imageBlob) : imagePath ? data.imageUrl(imagePath) : null);
@@ -323,8 +331,8 @@ export function setupCompose() {
 
 /** My posts may not be loaded yet (they come with the map); read them so a used
  * prompt is hidden even on a fresh visit. */
-function refreshPromptPosts(post, first) {
-  if (post || first || !extrasOn() || !state.account) return;
+function refreshPromptPosts(post) {
+  if (post || !extrasOn() || !state.account) return;
   const accountId = state.account.id;
   data.postsByAuthor(accountId).then((rows) => {
     if (state.account?.id !== accountId || !Array.isArray(rows)) return;

@@ -438,28 +438,28 @@ PROMPT_UTC_OFFSET_HOURS = 9
 
 # Q40: the first post is made by choosing one of these. It is placed to show
 # where it would stand and is never saved, so the map does not fill up with
-# the same sentence. Two for each kind of post (昔がんばってたこと / 最近はまってること /
-# 今度やってみたいこと / イベントの告知), spread over different topics on purpose, so
-# the tryout lands on different islands. 仮: rewritten by Claude Code on 2026-10-20.
+# the same sentence. Three, on different topics on purpose so the tryout lands
+# on different islands: 昔がんばってたこと, 最近はまってること and an event (参加者募集中).
+# Under them, the first post offers the extra prompts below. 仮: by Claude Code,
+# 2026-10-20; cut from eight to three on 2026-10-21.
 EXAMPLE_POSTS = (
     "学生のころ吹奏楽部でトランペットを吹いていました。また吹きたいな",
-    "昔は毎朝プールで泳いでいました。いまは運動不足なので泳ぎ仲間がほしい",
-    "最近、家庭菜園でミニトマトを育てています。甘くならなくて悩み中です",
     "最近ボードゲームにはまっています。おすすめがあれば教えてください",
-    "今度、ひとりで北海道を旅してみたいです。おすすめの場所はありますか",
-    "いつか古い着物を服に仕立て直してみたいです。まずはミシンから始めます",
     "今度の日曜に公園で朝ランをします。ゆっくりペースで5人ほど募集中です",
-    "来月、近所で読書会を開きます。好きな本を持ち寄って話しませんか",
 )
 
 # Extra writing prompts next to the weekly one. Each is shown until the person
 # has posted once with it (the browser decides from the post's `prompt`); the
 # weekly prompt is not one of these and keeps coming back every week.
-# 2026-10-20.
+# `example` is what the body's placeholder says while the prompt is chosen
+# ("例：…"), on topics none of EXAMPLE_POSTS uses. 2026-10-20; examples 2026-10-21.
 EXTRA_PROMPTS = (
-    {"key": "past", "text": "昔がんばってたこと"},
-    {"key": "now", "text": "最近はまってること"},
-    {"key": "future", "text": "今度やってみたいこと"},
+    {"key": "past", "text": "昔がんばってたこと",
+     "example": "高校まで陸上部で長距離を走っていました。久しぶりに大会に出てみたいです"},
+    {"key": "now", "text": "最近はまってること",
+     "example": "最近、休日にパン作りをしています。ふっくら焼くコツを知りたいです"},
+    {"key": "future", "text": "今度やってみたいこと",
+     "example": "今度、陶芸教室で器づくりに挑戦してみたいです。一緒に体験しませんか"},
 )
 # What a post's `prompt` may be: the weekly one or an extra one.
 POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)

@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../../web/js/recruit-rules.js', import.meta.url), 'utf8');
 const {
   addDays, availablePrompts, deadlineRange, extrasPayload, formatDeadline, jstToday, joinRefusal,
-  parseCapacity, recruitState, formatDeadlineShort, joinTerms, joinWord, usedPromptKeys,
+  parseCapacity, promptPlaceholder, recruitState, formatDeadlineShort, joinTerms, joinWord, usedPromptKeys,
 } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('jstToday follows Japan time, not the phone zone', () => {
@@ -95,6 +95,22 @@ test('extra prompts: hidden once used, and none when the feature is off', () => 
   assert.deepEqual(availablePrompts(extra, posts, true).map((e) => e.key), ['past', 'future']);
   assert.deepEqual(availablePrompts(extra, [], true).length, 3);
   assert.deepEqual(availablePrompts(extra, posts, false), []);
+});
+
+test('promptPlaceholder: an extra prompt shows its example sentence, the weekly one its words', () => {
+  const extraPrompts = [
+    { key: 'past', text: '昔がんばってたこと', example: '高校まで陸上部でした' },
+    { key: 'now', text: '最近はまってること' },
+  ];
+  const weekly = { text: '週末の過ごし方' };
+  const say = (selected) => promptPlaceholder({ selected, weekly, extraPrompts, max: 60 });
+  assert.equal(say('past'), '例：高校まで陸上部でした');
+  // An extra prompt without an example still names itself.
+  assert.equal(say('now'), 'お題：最近はまってること');
+  assert.equal(say('weekly'), 'お題：週末の過ごし方');
+  assert.equal(say(null), '取り組みや活動内容（最大60文字）');
+  assert.equal(say('gone'), '取り組みや活動内容（最大60文字）');
+  assert.equal(promptPlaceholder({ selected: 'weekly', weekly: null, extraPrompts, max: 60 }), '取り組みや活動内容（最大60文字）');
 });
 
 test('extrasPayload: nothing when off, only filled values on create, nulls on edit', () => {
