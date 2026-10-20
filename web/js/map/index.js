@@ -24,7 +24,7 @@ import { kinLines } from './kin.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, drawMiniPin, pinColor, pinGeometry, pinScale, pinTier } from './pins.js';
 import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
-import { buildDetail, buildTerrain, gridTerrain, toCanvas } from './terrain.js';
+import { PREVIEW_RATIO, buildDetail, buildTerrain, gridTerrain, sharpPlan, toCanvas } from './terrain.js';
 import { drawSurf, surfShow } from './surf.js';
 import { offThread } from './offthread.js';
 import { groundOf } from './coast.js';
@@ -86,7 +86,7 @@ function insets() {
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0);
   const top = rects('.map-top').reduce((low, rect) => Math.max(low, rect.bottom - box.top + 8), 12);
-  const bottom = rects('.island-badge, .map-controls, .bottom-nav')
+  const bottom = rects('.map-controls, .bottom-nav')
     .reduce((high, rect) => Math.max(high, box.bottom - rect.top + 8), 12);
   return { top: Math.min(top, height * 0.4), bottom: Math.min(bottom, height * 0.4) };
 }
@@ -108,7 +108,7 @@ function chromeBoxes() {
 function measureChrome() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #islandBadge, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #busyToggle, #islandCard')]
+  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #busyToggle, #islandCard')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -800,8 +800,7 @@ function liftLandAtNight(terrain, closeUp, grid, alpha) {
     ctx.drawImage(grid.canvas, origin.x, origin.y, (grid.maxX - grid.minX) * scale, (grid.maxY - grid.minY) * scale);
   }
   if (terrain) {
-    paintGround(terrain, NIGHT_LAND * alpha, closeUp);
-    if (closeUp) paintGround(closeUp, NIGHT_LAND);
+    paintGroundStack(terrain, alpha, closeUp, NIGHT_LAND, false);
   }
   ctx.restore();
 }
@@ -1092,6 +1091,9 @@ function renderMap(time) {
     revision,
     elsewhere: (job, answer) => offThread('ground', job, answer),
   });
+  // The sharp texture is asked for before the whole-map ground: the worker takes
+  // one job at a time, in order, and the sharp one is what is waited for.
+  if (!stage && !grid) requestSharp(ground);
   let terrain = null;
   let before = null;   // the ground as it was without the new post, while it rises
   if (!grid) {
@@ -1114,15 +1116,16 @@ function renderMap(time) {
   }
   if (before) paintGround(before, 1);
   let closeUp = null;
+  sharpBaseScale = null;
   if (terrain) {
     lastGround = {
       canvas: terrain.canvas, minX: terrain.minX, minY: terrain.minY,
       maxX: terrain.minX + terrain.width / terrain.scale, maxY: terrain.minY + terrain.height / terrain.scale,
     };
     // Close up, a sharp texture of the area on screen goes over the whole-map one.
-    closeUp = stage || grid ? null : sharpGround(terrain, ground);
-    paintGround(terrain, before ? stage.land : 1, closeUp);
-    if (closeUp) paintGround(closeUp, 1);
+    sharpBaseScale = terrain.scale;
+    closeUp = stage || grid ? null : sharpGround(terrain);
+    paintGroundStack(terrain, before ? stage.land : 1, closeUp, 1, true);
     // Incoming surf along the coasts, over the shallows and under the night layer
     // and everything that stands on the land. Only from a view about one island wide.
     if (closeUp && closeUp.surf && !stage) drawSurf(ctx, closeUp.surf, view, motion, tod === 'night' ? 0.55 : 1);
@@ -1303,11 +1306,9 @@ function renderMap(time) {
     });
 
     if (detail) {
-      // Under the name: how many people, and what else they talk about.
-      // An AI- or hand-made name already says the topic: show people only.
-      const named = island.name_source === 'ai' || island.name_source === 'manual';
-      const topics = named ? [] : (island.topics || []).slice(0, 2);
-      const line = [`${island.people || place.members.size}人`, ...topics].join('・');
+      // Under the name: how many people. The words they use most are no longer
+      // shown here (2026-10-20); the name already says what the island is about.
+      const line = `${island.people || place.members.size}人`;
       ctx.font = SMALL_FONT;
       const lineWidth = ctx.measureText(line).width;
       if (claim(x, y + 17, lineWidth, 12)) {
@@ -1397,6 +1398,25 @@ function paintGround(terrain, alpha, hole = null) {
   ctx.restore();
 }
 
+/** The whole-map ground and the sharp texture over it, the terrain at
+ * `alpha * level`, the sharp one at `level`. While the sharp texture has just
+ * been replaced and `fade` is on, the old picture (the previous sharp texture,
+ * or the whole-map ground) gives way to the new one over SHARP_FADE_MS. At night
+ * (fade off) the lifted land is screened on: two layers would add up, so the new
+ * texture alone shows. */
+function paintGroundStack(terrain, alpha, closeUp, level, fade) {
+  const t = fade && closeUp ? sharpFadeAt(closeUp) : 1;
+  if (t >= 1) {
+    paintGround(terrain, alpha * level, closeUp);
+    if (closeUp) paintGround(closeUp, level);
+    return;
+  }
+  const from = sharpFade.from;
+  paintGround(terrain, alpha * level, from);
+  if (from) paintGround(from, level);
+  paintGround(closeUp, level * t);
+}
+
 // ---------------------------------------------------------------- sharp ground
 
 // The whole-map ground texture has at most 1400 pixels on a side, so zoomed in
@@ -1405,8 +1425,9 @@ function paintGround(terrain, alpha, hole = null) {
 // screen's resolution (pixel ratio capped at 2: memory) and drawn over it. While
 // the camera moves, the last sharp one is kept for as long as it is the same
 // ground; outside it the coarse one shows until the next stop.
-const SHARP_SETTLE_MS = 160;
-const GROUND_SETTLE_MS = 160;
+const SHARP_SETTLE_MS = 60;    // the sharp texture is asked for after this long still
+const GROUND_SETTLE_MS = 160;  // the whole-map ground's zoom and the buildings' real size
+const SHARP_FADE_MS = 100;     // the old picture gives way to a new sharp texture
 const NO_CELLS = [];         // one empty list, so the terrain cache can tell nothing changed
 let groundScale = null;      // the zoom the whole-map ground is built for
 
@@ -1498,8 +1519,10 @@ function groundRegion(list) {
 }
 const SHARP_RATIO_CAP = 2;
 const SHARP_MARGIN = 0.25;   // of the screen's size, on every side
-let sharp = null;            // { ...texture, base, unit }
+let sharp = null;            // { ...texture, surf, rev, cells, unit, preview }
 let sharpTimer = 0;
+let sharpBaseScale = null;   // the whole-map ground's scale, as of the last frame
+let sharpFade = { from: null, at: 0 };   // the picture a new sharp texture fades in over
 let cameraMark = '';
 let cameraStill = 0;
 
@@ -1516,44 +1539,84 @@ function sharpWindow() {
   };
 }
 
-function sharpGround(base, posts) {
-  const need = state.camera.scale * Math.min(dpr, SHARP_RATIO_CAP);
+/** How far the fade into the sharp texture `texture` has got: 1 when there is
+ * none (also with less motion), else 0 to 1. */
+function sharpFadeAt(texture) {
+  if (REDUCED_MOTION || texture !== sharp || !sharpFade.at) return 1;
+  const t = (performance.now() - sharpFade.at) / SHARP_FADE_MS;
+  if (t >= 1) {
+    sharpFade = { from: null, at: 0 };
+    return 1;
+  }
+  return Math.max(0, t);
+}
+
+/** A new sharp texture (or none) takes over; the one it replaces fades out. */
+function setSharp(next) {
+  sharpFade = next ? { from: sharp, at: performance.now() } : { from: null, at: 0 };
+  sharp = next;
+}
+
+/** Ask for the sharp texture when the screen needs one and the camera has been
+ * still for SHARP_SETTLE_MS. Two steps: a preview at half the pixel ratio (a
+ * quarter of the pixels, no surf) that is there quickly, then the full one. One
+ * job at a time. */
+function requestSharp(posts) {
+  if (sharpTimer || sharpBaseScale === null) return;
+  const scale = state.camera.scale;
+  const ratio = Math.min(dpr, SHARP_RATIO_CAP);
+  const need = scale * ratio;
+  const surf = surfShow(scale, width, height) > 0;
   // The whole-map texture is sharp enough from here (the overview) - unless the
   // surf is showing, which is traced on the sharp one.
-  if (need <= base.scale * 1.3 && surfShow(state.camera.scale, width, height) <= 0) {
-    sharp = null;
-    return null;
-  }
-  const now = performance.now();
-  const valid = sharp && sharp.base === base;
+  if (need <= sharpBaseScale * 1.3 && !surf) return;
+  if (performance.now() - cameraStill < SHARP_SETTLE_MS) return;
+  // An empty list is the same as none: state.cells is a new [] on every fetch.
+  const cells = state.saturated && state.cells.length ? state.cells : NO_CELLS;
+  const rev = groundRev;
   const a = toWorld(0, 0);
   const b = toWorld(width, height);
-  const covers = valid && a.x >= sharp.minX && a.y >= sharp.minY
-    && b.x <= sharp.minX + sharp.width / sharp.scale && b.y <= sharp.minY + sharp.height / sharp.scale;
-  const fine = valid && sharp.unit >= need * 0.8;
-  if ((!covers || !fine) && !sharpTimer && now - cameraStill >= SHARP_SETTLE_MS) {
-    const scale = state.camera.scale;
-    const pixelRatio = Math.min(dpr, SHARP_RATIO_CAP);
-    const job = {
-      posts, cells: state.saturated ? state.cells : [], region: sharpWindow(), scale, pixelRatio,
-      surf: surfShow(scale, width, height) > 0,
-    };
-    // In the worker when there is one (offthread.js): the map keeps moving
-    // while it is made. One job at a time; the answer clears sharpTimer.
-    const sent = offThread('detail', job, (built, ok) => {
+  const { stage } = sharpPlan({ sharp, rev, cells, need, surf, view: { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y } });
+  if (!stage) return;
+  const preview = stage === 1;
+  const pixelRatio = preview ? ratio * PREVIEW_RATIO : ratio;
+  const job = {
+    posts, cells, region: sharpWindow(), scale, pixelRatio, surf: !preview && surf,
+  };
+  const make = (texture, coast) => {
+    // The preview has no surf of its own: keep the one traced on the texture it
+    // replaces while it is the same ground.
+    const kept = preview && sharp && sharp.rev === rev && sharp.cells === cells ? sharp.surf : undefined;
+    setSharp(texture ? {
+      ...texture, surf: coast || kept, traced: job.surf, rev, cells, unit: scale * pixelRatio, preview,
+    } : null);
+  };
+  // In the worker when there is one (offthread.js): the map keeps moving
+  // while it is made. One job at a time; the answer clears sharpTimer.
+  const sent = offThread('detail', job, (built, ok) => {
+    sharpTimer = 0;
+    if (ok) make(built ? toCanvas(built) : null, built && built.coast);
+  });
+  if (sent) {
+    sharpTimer = -1;
+  } else {
+    // Out of the frame being painted: the next frame shows it.
+    sharpTimer = setTimeout(() => {
       sharpTimer = 0;
-      if (ok) sharp = built ? { ...toCanvas(built), surf: built.coast, base, unit: scale * pixelRatio } : null;
-    });
-    if (sent) {
-      sharpTimer = -1;
-    } else {
-      // Out of the frame being painted: the next frame shows it.
-      sharpTimer = setTimeout(() => {
-        sharpTimer = 0;
-        const built = buildDetail(job);
-        sharp = built ? { ...built, surf: built.coast, base, unit: scale * pixelRatio } : null;
-      }, 0);
-    }
+      const built = buildDetail(job);
+      make(built, built && built.coast);
+    }, 0);
+  }
+}
+
+function sharpGround(base) {
+  // The whole-map texture is sharp enough from here (the overview) - unless the
+  // surf is showing, which is traced on the sharp one.
+  if (state.camera.scale * Math.min(dpr, SHARP_RATIO_CAP) <= base.scale * 1.3
+      && surfShow(state.camera.scale, width, height) <= 0) {
+    sharp = null;
+    sharpFade = { from: null, at: 0 };
+    return null;
   }
   // The last sharp texture keeps showing until its replacement is ready, even if
   // the ground under it was rebuilt: the coarse one flashing up in between read
@@ -2510,12 +2573,6 @@ function postsRegion() {
     maxY = Math.max(maxY, post.y + reach);
   });
   return { minX, minY, maxX, maxY };
-}
-
-/** Which landmass a post is standing on, computed over what is in view. */
-export function landmassOf(postId) {
-  const masses = detectLandmasses(state.posts);
-  return membership(masses).get(postId) || null;
 }
 
 // Per frame the lines only ask which land a post is on, so the answer is kept

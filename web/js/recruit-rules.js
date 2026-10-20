@@ -55,13 +55,32 @@ export function recruitState(post, now = new Date()) {
   return post.recruit_closed === 'full' ? 'full' : null;
 }
 
-/** The small lines under 参加 (only the values that exist). */
-export function recruitLines(post) {
-  const lines = [];
-  const deadline = formatDeadline(post?.recruit_deadline);
-  if (deadline) lines.push(`申込期限：${deadline}`);
-  if (Number(post?.recruit_capacity) > 0) lines.push(`先着人数：${Number(post.recruit_capacity)}人`);
-  return lines;
+/** "2026-10-31" -> "10月31日まで" (with the year when it is not this year, Japan time). */
+export function formatDeadlineShort(ymd, now = new Date()) {
+  const match = YMD.exec(ymd || '');
+  if (!match) return null;
+  const day = `${Number(match[2])}月${Number(match[3])}日まで`;
+  return Number(match[1]) === Number(jstToday(now).slice(0, 4)) ? day : `${Number(match[1])}年${day}`;
+}
+
+/** The terms before "現在N人参加" on the 参加 button, e.g.
+ * "申込期限 10月31日まで・先着10人・" (only the values that exist; "" when none). */
+export function joinTerms(post, now = new Date()) {
+  const parts = [];
+  const deadline = formatDeadlineShort(post?.recruit_deadline, now);
+  if (deadline) parts.push(`申込期限 ${deadline}`);
+  if (Number(post?.recruit_capacity) > 0) parts.push(`先着${Number(post.recruit_capacity)}人`);
+  return parts.map((part) => `${part}・`).join('');
+}
+
+/** What the 参加 button says: the state word (first line) and whether it is
+ * pressable. 受付終了 / 満員 only stop somebody who has not joined: taking
+ * your own join back is always allowed. */
+export function joinWord(post, { joined = false, extras = true, now = new Date() } = {}) {
+  const closed = extras ? recruitState(post, now) : null;
+  if (joined) return { word: '参加済み（タップで取り消し）', ended: false, closed };
+  if (closed) return { word: RECRUIT_STATE_LABEL[closed], ended: true, closed };
+  return { word: '参加する', ended: false, closed };
 }
 
 export const RECRUIT_STATE_LABEL = { deadline: '受付終了', full: '満員' };

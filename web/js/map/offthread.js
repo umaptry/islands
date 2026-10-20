@@ -8,13 +8,32 @@
 
 import { config } from '../config.js';
 
-const PATIENCE_MS = 5000;   // no answer by then: give up on the worker for good
+// No answer by then: give up on the worker for good. Jobs go to the worker one
+// at a time (below), so this counts only the time a job is actually being made:
+// two jobs asked for together on a slow phone are not a dead worker.
+const PATIENCE_MS = 5000;
 
 let worker = null;
 let broken = false;
 let given = null;           // the config object the worker was last handed
 let next = 0;
 const waiting = new Map();  // job id -> answer(built, ok)
+let queue = [];             // jobs not yet posted: { id, kind, job }
+let busy = 0;               // id of the job the worker is on, 0 when idle
+
+/** Post the next job if the worker is idle. The sharp texture ('detail') goes
+ * before a whole-map one ('ground') that is still waiting: it is what the person
+ * is looking at, and the worker could only do them in the order posted. */
+function pump() {
+  if (busy || !queue.length || !worker) return;
+  const first = queue.findIndex((entry) => entry.kind === 'detail');
+  const { id, kind, job } = queue.splice(first < 0 ? 0 : first, 1)[0];
+  busy = id;
+  setTimeout(() => { if (busy === id) giveUp(); }, PATIENCE_MS);
+  const current = config();
+  worker.postMessage({ id, kind, config: current === given ? null : current, job });
+  given = current;
+}
 
 function giveUp() {
   broken = true;
@@ -22,6 +41,8 @@ function giveUp() {
   worker = null;
   const answers = [...waiting.values()];
   waiting.clear();
+  queue = [];
+  busy = 0;
   answers.forEach((answer) => answer(null, false));
 }
 
@@ -32,12 +53,14 @@ function start() {
     const answer = waiting.get(data.id);
     if (!answer) return;
     waiting.delete(data.id);
+    if (busy === data.id) busy = 0;
     if (data.error) {
       answer(null, false);
       giveUp();
       return;
     }
     answer(data.built, true);
+    pump();   // after the answer, which may ask for the next job
   };
   given = null;
 }
@@ -64,9 +87,7 @@ export function offThread(kind, job, answer) {
   }
   const id = ++next;
   waiting.set(id, answer);
-  setTimeout(() => { if (waiting.has(id)) giveUp(); }, PATIENCE_MS);
-  const current = config();
-  worker.postMessage({ id, kind, config: current === given ? null : current, job: { ...job, posts: plain(job.posts) } });
-  given = current;
+  queue.push({ id, kind, job: { ...job, posts: plain(job.posts) } });
+  pump();
   return true;
 }

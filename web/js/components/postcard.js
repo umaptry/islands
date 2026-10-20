@@ -20,7 +20,7 @@ import { hasReacted, state, subscribe, upsertPost } from '../state.js';
 import { avatar, confirmAction, el, motivationColor, timeAgo } from '../ui.js';
 import { icon } from '../icons.js';
 import { isRecruiting } from '../map/reads.js';
-import { RECRUIT_STATE_LABEL, recruitLines, recruitState } from '../recruit-rules.js';
+import { joinTerms, joinWord } from '../recruit-rules.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -44,35 +44,27 @@ subscribe(() => {
   });
 });
 
-/** 参加: the terms under the word, and 受付終了 / 満員 (not pressable unless you
- * have joined already: taking your own join back is always allowed). */
+/** 参加: the word (参加する / 参加済み / 受付終了 / 満員) and, under it, the terms
+ * and the joined count. Not pressable once ended unless you have joined already.
+ * The count itself is painted by the subscription through its data-count. */
 function paintJoin(button, post) {
   const joined = hasReacted(post.id, 'join');
   // Before the migration the columns do not exist: show nothing of the new rules.
-  const on = Boolean(config().features?.post_extras);
-  const closed = on ? recruitState(post) : null;
-  const ended = Boolean(closed) && !joined;
-  const word = ended ? RECRUIT_STATE_LABEL[closed] : '参加';
-  const label = button.querySelector('.post-action-label');
-  if (label) label.textContent = word;
-  const terms = button.querySelector('.join-terms');
-  if (terms) {
-    terms.replaceChildren(...(on ? recruitLines(post) : []).map((line) => el('span', { text: line, style: { display: 'block' } })));
-    terms.hidden = !terms.childNodes.length;
-    button.classList.toggle('has-terms', !terms.hidden);
-  }
+  const extras = Boolean(config().features?.post_extras);
+  const { word, ended } = joinWord(post, { joined, extras });
+  button.querySelector('.pj-word').textContent = word;
+  button.querySelector('.pj-terms').textContent = extras ? joinTerms(post) : '';
   button.classList.toggle('ended', ended);
-  button.setAttribute('aria-label', ended ? `${word}（参加できません）` : word);
   if (!button.dataset.busy) button.disabled = ended;
 }
 
-// いいね shows only its heart and count; 手伝えるかも and 参加 carry their words.
-// 参加 exists only on a post that is looking for participants.
+// いいね shows only its heart and count; 手伝えるかも carries its words.
+// 参加 is a wide button of its own under this row (see joinButton).
 const REACTIONS = [
   { kind: 'like', label: 'いいね', icon: 'heart', countKey: 'like_count', tone: 'like', side: 'left' },
   { kind: 'help', label: '手伝えるかも', icon: 'help', countKey: 'help_count', tone: 'help', side: 'right' },
-  { kind: 'join', label: '参加', icon: 'hand', countKey: 'join_count', tone: 'join', side: 'right' },
 ];
+const JOIN = { kind: 'join', label: '参加', countKey: 'join_count', tone: 'join' };
 
 /**
  * @param post           the post row
@@ -141,7 +133,9 @@ export function postCard(post, options = {}) {
   // joined sit together at the foot of the card (as in the mock), so that the
   // half-open sheet can keep both in view.
   if (!options.compact) {
-    const foot = el('div', { className: 'post-footer' }, footer(post, options));
+    const row = footer(post, options);
+    const foot = el('div', { className: 'post-footer' }, row);
+    if (row.joinButton) foot.append(row.joinButton);
     if (options.onSeeParticipants && isRecruiting(post)) {
       foot.append(el('button', {
         className: 'post-participants-button',
@@ -283,27 +277,38 @@ function footer(post, options) {
     el('span', { className: 'post-action-count num', attrs: { 'data-count': 'comment_count' }, text: post.comment_count || 0 }),
   ));
 
-  REACTIONS.forEach((reaction) => {
-    // Somebody else's 参加 button on a post that is not recruiting would be a
-    // promise nobody asked for. Your own earlier join stays visible and undoable.
-    if (reaction.kind === 'join' && !isRecruiting(post) && !hasReacted(post.id, 'join')) return;
-    const button = el('button', {
-      className: `post-action reaction ${reaction.tone}`,
-      attrs: { type: 'button', 'data-reaction': reaction.kind, 'aria-label': reaction.label },
-    },
-      el('span', { className: 'post-action-icon' }, icon(reaction.icon, reaction.kind === 'like' ? 20 : 18)),
-      reaction.kind === 'join'
-        ? el('span', { className: 'join-text' },
-          el('span', { className: 'post-action-label', text: reaction.label }),
-          el('span', { className: 'join-terms', attrs: { hidden: true } }))
-        : reaction.kind === 'like' ? null : el('span', { className: 'post-action-label', text: reaction.label }),
-      el('span', { className: 'post-action-count num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
-    );
+  // Somebody else's 参加 button on a post that is not recruiting would be a
+  // promise nobody asked for. Your own earlier join stays visible and undoable.
+  const showJoin = isRecruiting(post) || hasReacted(post.id, 'join');
+  const all = showJoin ? [...REACTIONS, JOIN] : REACTIONS;
+
+  all.forEach((reaction) => {
+    const isJoin = reaction.kind === 'join';
+    const button = isJoin
+      ? el('button', {
+        className: 'post-join-button reaction join',
+        // No aria-label: the words inside (state, terms, how many) are its name.
+        attrs: { type: 'button', 'data-reaction': 'join' },
+      },
+        el('span', { className: 'pj-word' }),
+        el('span', { className: 'pj-info' },
+          el('span', { className: 'pj-terms' }),
+          '現在',
+          el('b', { className: 'num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
+          '人参加'))
+      : el('button', {
+        className: `post-action reaction ${reaction.tone}`,
+        attrs: { type: 'button', 'data-reaction': reaction.kind, 'aria-label': reaction.label },
+      },
+        el('span', { className: 'post-action-icon' }, icon(reaction.icon, reaction.kind === 'like' ? 20 : 18)),
+        reaction.kind === 'like' ? null : el('span', { className: 'post-action-label', text: reaction.label }),
+        el('span', { className: 'post-action-count num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
+      );
 
     const paint = () => {
       button.classList.toggle('on', hasReacted(post.id, reaction.kind));
       button.setAttribute('aria-pressed', String(hasReacted(post.id, reaction.kind)));
-      const count = button.querySelector('.post-action-count');
+      const count = button.querySelector('[data-count]');
       const current = state.postsById.get(post.id) || post;
       count.textContent = String(current[reaction.countKey] || 0);
       if (reaction.kind === 'join') paintJoin(button, current);
@@ -341,7 +346,8 @@ function footer(post, options) {
         paint();
       }
     });
-    (reaction.side === 'left' ? left : right).append(button);
+    if (isJoin) row.joinButton = button;
+    else (reaction.side === 'left' ? left : right).append(button);
   });
 
   return row;
