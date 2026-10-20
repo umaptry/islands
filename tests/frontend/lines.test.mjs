@@ -362,7 +362,7 @@ test('a piece of an arc keeps its ends and its curve', () => {
   });
 });
 
-test('vehicles are sized by scale / maxScale, and not drawn when under 3 px', () => {
+test('vehicles are sized by scale / maxScale, with a floor, and always drawn', () => {
   assert.equal(lines.sizeShare({}), 1, 'a view without scales draws them full size');
   assert.equal(lines.sizeShare({ scale: 12, maxScale: 24 }), 0.5);
   assert.equal(lines.sizeShare({ scale: 30, maxScale: 24 }), 1);
@@ -376,8 +376,46 @@ test('vehicles are sized by scale / maxScale, and not drawn when under 3 px', ()
   };
   const full = sizes({ scale: 24, maxScale: 24 });
   assert.ok(full.length > 0 && full.every((s) => s === 20 || s === 18), 'closest zoom: a boat is 20 px, a car 18 px');
-  assert.ok(sizes({ scale: 12, maxScale: 24 }).every((s) => s <= 10));
-  assert.equal(sizes({ scale: 2, maxScale: 24 }).length, 0, 'too small to draw');
+  assert.ok(sizes({ scale: 12, maxScale: 24 }).every((s) => s === 10 || s === 9));
+  const far = sizes({ scale: 2, maxScale: 24 });
+  assert.ok(far.length > 0 && far.every((s) => s === 8 || s === 7), 'zoomed out: the floor, a boat 8 px, a car 7 px');
+});
+
+test('vehicleSize: base at the closest zoom, the floor when small, in proportion between, never over base', () => {
+  assert.equal(lines.vehicleSize(20, 8, 1), 20);
+  assert.equal(lines.vehicleSize(20, 8, 0.01), 8);
+  assert.equal(lines.vehicleSize(20, 8, 0), 8);
+  assert.equal(lines.vehicleSize(20, 8, 0.5), 10);
+  assert.equal(lines.vehicleSize(20, 8, 0.75), 15);
+  assert.equal(lines.vehicleSize(5, 8, 1), 5, 'a floor above the base does not make it bigger');
+  assert.equal(lines.vehicleSize(5, 8, 0.1), 5);
+});
+
+test('a road inside an island has cars by tier, none when faint, and shares the cap', () => {
+  const isle = [{ island_id: 'home', cx: 100, cy: 100, post_ids: ['p1', 'p2'] }];
+  const road = (i, extra = {}) => row(`a${i}`, `b${i}`, 'p1', 'p2', { a_at: [90, 100 + i], b_at: [150, 100 + i], tier: 1, ...extra });
+  const run = (rows, extra = {}) => {
+    const view = { ...seaView(undefined, rows, extra), islands: isle };
+    delete view.posts;
+    globalThis.boatsDrawn = [];
+    globalThis.carsDrawn = [];
+    const plan = lines.drawLinks(fakeCanvas().ctx, view);
+    lines.drawPlanes(fakeCanvas().ctx, view, plan, 30);
+    return { plan, cars: globalThis.carsDrawn.length, boats: globalThis.boatsDrawn.length };
+  };
+  lines.resetLinks();
+  const one = run([road(0, { tier: 3 })]);
+  assert.deepEqual(kindsOf(one.plan), ['road']);
+  assert.equal(one.cars, 3, 'tier 3: three cars');
+  assert.equal(one.boats, 0);
+  assert.equal(run([road(0, { tier: 2 })]).cars, 2);
+  assert.equal(run([road(0, { faint: true })]).cars, 0, 'a faint road has none');
+  const many = Array.from({ length: 12 }, (_, i) => road(i, { tier: 3, strength: i + 1 }));
+  assert.equal(run(many).cars, 18, 'wide screen cap');
+  assert.equal(run(many, { phone: true }).cars, 8, 'phone cap');
+  assert.ok(globalThis.carsDrawn.every((args) => args[3] === 18), 'a car on a road is sized like a sea route car (18 px at the closest zoom)');
+  assert.ok(run(one.plan.lines.map((l) => l.row), { scale: 2, maxScale: 24 }).cars > 0);
+  assert.ok(globalThis.carsDrawn.every((args) => args[3] === 7), 'zoomed out: the 7 px floor');
 });
 
 test('an arch is a dotted line, not a solid one', () => {
