@@ -80,14 +80,21 @@ const BOAT_LENGTH = 20;
 // fade where it meets the water.
 const CAR_LENGTH = 18;
 // Vehicles are sized like the buildings: in proportion to the map's scale, the
-// sizes above being those at the closest zoom. Smaller than this on screen (CSS
-// px) and they are not drawn at all (else only a shadow or a wake would show).
-const MIN_VEHICLE_PX = 3;
+// sizes above being those at the closest zoom, but never smaller than a floor
+// (CSS px), so that from the zoom where the lines appear they are always seen.
+const BOAT_MIN = 8;
+const CAR_MIN = 7;
+const PLANE_MIN = 10;
 /** The share of the closest-zoom size to use now. 1 when the view does not say. */
 export function sizeShare(view) {
   const { scale, maxScale } = view;
   if (!(scale > 0) || !(maxScale > 0)) return 1;
   return Math.min(1, scale / maxScale);
+}
+/** A vehicle's length in CSS px: `base` at the closest zoom (share 1), in
+ * proportion to the scale below that, but not under `floor` (nor over `base`). */
+export function vehicleSize(base, floor, share) {
+  return Math.min(base, Math.max(floor, base * share));
 }
 const SHORE_ROAD_WIDTHS = [0, 0.9, 1.1, 1.3];
 const SHORE_ROAD_UNDER = 'rgba(74, 52, 38, .32)';
@@ -488,32 +495,40 @@ export function boatAt(time, { duration, offset = 0, index = 0, count = 1 }) {
   return planeAt(time, { duration: slow, offset: offset + index * (slow * 2 / count) });
 }
 
-/** Cars and boats on the sea routes: one to three per route by its tier, the strongest
- * routes first until the screen's cap is used up. `time` null: standing still. */
+/** Cars and boats on the sea routes, and cars on the roads inside an island: one
+ * to three per route or road by its tier, the strongest first until the screen's
+ * cap is used up. `time` null: standing still. */
 function drawBoats(ctx, view, plan, time) {
   const { width, height, span, phone } = view;
   const share = sizeShare(view);
-  const boatLength = BOAT_LENGTH * share;
-  const carLength = CAR_LENGTH * share;
-  if (boatLength < MIN_VEHICLE_PX && carLength < MIN_VEHICLE_PX) return;
+  const boatLength = vehicleSize(BOAT_LENGTH, BOAT_MIN, share);
+  const carLength = vehicleSize(CAR_LENGTH, CAR_MIN, share);
   const still = REDUCED_MOTION || time === null || time === undefined;
-  let room = phone ? BOAT_CAP.phone : BOAT_CAP.wide;
+  const cap = phone ? BOAT_CAP.phone : BOAT_CAP.wide;
   const routes = new Map();
   plan.lines.forEach(({ row, kind, group: key, arc: shape, world, runs }) => {
-    if (kind !== 'sea' || row.faint || !onScreen(shape, width, height)) return;
+    if ((kind !== 'sea' && kind !== 'road') || row.faint || !onScreen(shape, width, height)) return;
     if (growthOf(linkKey(row)) < 1) return;
     const strength = Number(row.strength) || 0;
-    const held = routes.get(key);
+    // A road is its own line (a car runs on each); a sea route is one per pair of islands.
+    const id = kind === 'road' ? `road|${linkKey(row)}` : key;
+    const held = routes.get(id);
     if (!held) {
-      routes.set(key, { key, shape, world, strength, runs, tier: row.tier || 1 });
+      routes.set(id, { key: id, shape, world, strength, runs, tier: row.tier || 1, road: kind === 'road' });
       return;
     }
     held.tier = Math.max(held.tier, row.tier || 1);
     if (strength > held.strength) Object.assign(held, { shape, world, strength, runs });
   });
-  [...routes.values()].sort((a, b) => b.strength - a.strength).forEach(({ shape, key, world, tier, runs }) => {
-    const count = Math.min(boatCount(tier), room);
-    room -= count;
+  // Roads may not use up the whole cap: at least half stays for the sea routes
+  // (when there are that many), and what the sea routes leave over goes to the roads.
+  const all = [...routes.values()];
+  const demand = (isRoad) => all.filter((r) => r.road === isRoad).reduce((n, r) => n + boatCount(r.tier), 0);
+  let roadRoom = Math.max(Math.floor(cap / 2), cap - demand(false));
+  let seaRoom = cap - Math.min(demand(true), roadRoom);
+  all.sort((a, b) => b.strength - a.strength).forEach(({ shape, key, world, tier, runs, road }) => {
+    const count = Math.min(boatCount(tier), road ? roadRoom : seaRoom);
+    if (road) roadRoom -= count; else seaRoom -= count;
     const seed = hashId(key);
     const duration = crossingSeconds(world, span);
     for (let index = 0; index < count; index += 1) {
@@ -524,23 +539,22 @@ function drawBoats(ctx, view, plan, time) {
       if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
       const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
       const alpha = still ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
-      // A car on the land stretches, a boat on the water: from the clock and the
-      // ground alone, handing over across a short stretch at the beach.
-      const [car, boat] = runs ? mixAt(runs, t, HANDOVER_PX / Math.max(1, shape.length)) : [0, 1];
-      if (car > 0.01 && carLength >= MIN_VEHICLE_PX) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
-      if (boat > 0.01 && boatLength >= MIN_VEHICLE_PX) drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha: alpha * boat });
+      // A car on the land stretches (and all of a road), a boat on the water: from
+      // the clock and the ground alone, handing over across a short stretch at the beach.
+      const [car, boat] = road ? [1, 0] : runs ? mixAt(runs, t, HANDOVER_PX / Math.max(1, shape.length)) : [0, 1];
+      if (car > 0.01) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
+      if (boat > 0.01) drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha: alpha * boat });
     }
   });
 }
 
-/** Cars and boats on the sea routes, planes on the arches that are alive now (over the towns). */
+/** Cars and boats on the sea routes and roads, planes on the arches that are alive now (over the towns). */
 export function drawPlanes(ctx, view, plan, time) {
   const { width, height, far, span, phone } = view;
   if (far || !plan) return;
   drawBoats(ctx, view, plan, time);
   const cap = phone ? PLANE_CAP.phone : PLANE_CAP.wide;
-  const size = PLANE_SIZE * sizeShare(view);
-  if (size < MIN_VEHICLE_PX) return;
+  const size = vehicleSize(PLANE_SIZE, PLANE_MIN, sizeShare(view));
 
   // The arches between two islands are drawn one per pair of people, but the
   // plane is one per route: it flies the strongest arch of its route that is on

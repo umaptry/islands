@@ -12,8 +12,10 @@ import { data } from '../net.js';
 import { state } from '../state.js';
 import { avatar, clear, clip, confirmAction, el, timeAgo, toast } from '../ui.js';
 import { buzz } from '../feedback.js';
+import { sendsOnEnter } from '../chat-rules.js';
 
 const POLL_MS = 5000;
+const CHAT_INPUT_MAX_PX = 120;   // about five lines of the message box
 
 export function postChat(postId, { onCountChange, onReply } = {}) {
   const list = el('div', { className: 'chat-list' });
@@ -157,11 +159,16 @@ export function postChat(postId, { onCountChange, onReply } = {}) {
 /** The input under a thread. replyTo(comment) makes the next message an answer to one. */
 export function chatInput(postId, { onSent } = {}) {
   const limit = config().limits.comment_max;
-  const field = el('input', {
+  // A message may run over several lines (2026-10-21). On a touch screen the
+  // keyboard's return key starts a new line and the button sends; with a real
+  // keyboard Enter sends and Shift+Enter starts a new line.
+  const touch = typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches;
+  const field = el('textarea', {
     className: 'chat-input',
     attrs: {
-      type: 'text', placeholder: 'メッセージを入力...', maxlength: limit,
-      enterkeyhint: 'send', autocomplete: 'off',
+      rows: 1, placeholder: 'メッセージを入力...', maxlength: limit,
+      enterkeyhint: touch ? 'enter' : 'send', autocomplete: 'off',
+      'aria-label': 'メッセージ',
     },
   });
   const send = el('button', {
@@ -197,10 +204,18 @@ export function chatInput(postId, { onSent } = {}) {
     field.focus();
   }
 
-  const sync = () => { send.disabled = !field.value.trim(); };
+  // Grows with what is written, up to about five lines, then scrolls.
+  const fit = () => {
+    field.style.height = 'auto';
+    field.style.height = `${Math.min(field.scrollHeight, CHAT_INPUT_MAX_PX)}px`;
+  };
+  const sync = () => {
+    send.disabled = !field.value.trim();
+    fit();
+  };
   field.addEventListener('input', sync);
   field.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (sendsOnEnter(event, touch)) {
       event.preventDefault();
       submit();
     }
