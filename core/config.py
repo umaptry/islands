@@ -305,7 +305,7 @@ SIMILAR_NOTIFY_THRESHOLD = 0.75
 SIMILAR_NOTIFY_PER_DAY = 3
 
 # Connections: one line per pair of people, no direction.
-CONNECTION_POINTS = {"like": 1, "help": 1, "join": 1, "comment": 2, "reply": 3}
+CONNECTION_POINTS = {"join": 1, "comment": 2, "reply": 3}
 CONNECTION_HALF_LIFE_DAYS = 14.0
 # Strength tiers 1..3 by decayed points: below the first bound is tier 1.
 CONNECTION_TIER_BOUNDS = (3.0, 8.0)

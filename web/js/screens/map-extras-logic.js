@@ -53,3 +53,30 @@ export function miniToWorld(clientX, clientY, rect, geometry, size) {
     y: Math.max(world.minY, Math.min(world.maxY, y)),
   };
 }
+
+/** The island closest to a world point (null when none has a centre). */
+export function nearestIsland(islands, x, y) {
+  const list = islands.filter(hasCenter);
+  return list.length ? nearest(list, x, y)[0].island : null;
+}
+
+/** Where to look after the tryout: wide enough to hold the tryout and the few
+ * islands around it (not the whole map, not a speck of sea). Returns the
+ * world point to centre and the scale, kept between `fit` and `fit * 3`. */
+export function trialView({ trial, islands, width, height, fit, around = 3 }) {
+  const near = nearest(islands.filter(hasCenter), trial.x, trial.y).slice(0, around).map((entry) => entry.island);
+  const xs = [trial.x, ...near.map((island) => island.cx)];
+  const ys = [trial.y, ...near.map((island) => island.cy)];
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const room = 220 / fit;   // never closer than about 220 px at the whole-map zoom
+  const spanX = Math.max((maxX - minX) * 1.6, room);
+  const spanY = Math.max((maxY - minY) * 1.6, room);
+  const scale = Math.min(width * 0.9 / spanX, height * 0.5 / spanY);
+  return {
+    x: (minX + maxX) / 2, y: (minY + maxY) / 2,
+    scale: Math.max(fit, Math.min(fit * 3, scale)),
+  };
+}

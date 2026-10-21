@@ -98,7 +98,7 @@ def test_the_person_card_shows_who_they_are_and_what_you_share(people, app_modul
     put_profile(me.client, near, bio="週末は山にいます。", seeking="冬の寝袋選び", offering="焚き火のこつ", **NEAR)
     near.post(BOOKKEEPING)
     latest = near.post(CAMPING_B)
-    friend.react(latest["id"], "like")
+    friend.react(latest["id"], "join")
 
     card = me.client.get(f"/api/people/{near.id}/card", headers=me.headers)
     assert card.status_code == 200, card.text
@@ -130,7 +130,7 @@ def test_the_card_lists_at_most_five_connections(people, app_module):
     own = host.post(CAMPING_A)
     guests = [people(f"g{i}@example.com", f"きゃく{i}") for i in range(7)]
     for guest in guests:
-        guest.react(own["id"], "like")
+        guest.react(own["id"], "join")
     card = host.client.get(f"/api/people/{host.id}/card").json()
     assert len(card["connections"]) == 5
     assert card["connection_count"] == 7

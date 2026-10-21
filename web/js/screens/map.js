@@ -16,9 +16,11 @@ import {
   sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
+import { openReactors } from '../components/reactors.js';
 import { chatInput, postChat } from '../components/chat.js';
 import { loadDigest, paintMarks, setupMeet } from './meet.js';
-import { refreshExtras, setupMapExtras } from './map-extras.js';
+import { refreshExtras, hideTrialHint, setupMapExtras, showTrialHint } from './map-extras.js';
+import { trialView } from './map-extras-logic.js';
 import {
   abortReveal, fitCamera, focusOn, initMap, onCameraSettled, participantView, playReveal,
   resize, ripple, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
@@ -66,17 +68,19 @@ function filtersChanged() {
 /** Q40: the tried-out sentence, standing on the map for this browser only. */
 function paintTrial() {
   $('trialBanner').hidden = !state.trialPost;
+  if (!state.trialPost) hideTrialHint();
 }
 
 export async function showTrial() {
   if (!await navigate('#/map')) return;
   paintTrial();
-  // Come in close, as for a new post, so the land under the tryout and its
-  // island name can be seen (a pan at the whole-map zoom left a speck).
+  // Stand back far enough to see the tryout and the islands around it: close in
+  // on the tryout alone it was a pin in an empty sea, with nothing to do next.
   const trial = state.trialPost;
   if (trial) {
     const fit = state.camera.fit || state.camera.scale;
-    zoomTo(trial.x, trial.y, fit * 3, { lift: 0.4 });
+    const view = trialView({ trial, islands: state.islands, width: window.innerWidth, height: window.innerHeight, fit });
+    zoomTo(view.x, view.y, view.scale, { lift: 0.5, then: showTrialHint });
   }
 }
 
@@ -294,6 +298,8 @@ export async function refreshMyPosts() {
     if (state.activePostId && !state.myPosts.some((p) => p.id === state.activePostId)) {
       state.activePostId = state.myPosts.length ? state.myPosts[0].id : null;
     }
+    // "Near me" depends on my posts, which arrive after the map first draws.
+    if (booted) refreshExtras();
   } catch {
     /* leave whatever was there */
   }
@@ -473,21 +479,6 @@ async function renderSheet(post, generation, back = null) {
   }
   const mine = state.account && post.author_id === state.account.id;
 
-  // 似てる度 against my active post. Asking the
-  // server rather than measuring on the map: the map is a 2-D shadow, and this
-  // number is the 448-dim cosine the ranking already uses.
-  let similarity = null;
-  if (!mine && state.activePostId && state.activePostId !== post.id) {
-    try {
-      similarity = await api.get(
-        `/api/pair?a=${encodeURIComponent(state.activePostId)}&b=${encodeURIComponent(post.id)}`,
-        { auth: false },
-      );
-    } catch {
-      similarity = null;
-    }
-  }
-
   if (generation !== selectionGeneration || !sheetOpen()) return;
   const island = state.islands.find((entry) => entry.post_ids?.includes(post.id));
   if (island) {
@@ -498,7 +489,6 @@ async function renderSheet(post, generation, back = null) {
   }
 
   body.append(postCard(post, {
-    similarity,
     onReact: (kind) => react(post.id, kind),
     onOpenAuthor: (authorId) => {
       restorePost = post.id;
@@ -513,6 +503,14 @@ async function renderSheet(post, generation, back = null) {
     onDelete: () => removeOwnPost(post),
     onReport: mine ? null : () => report(post),
     onSeeParticipants: isRecruiting(post) ? () => showParticipants(post) : null,
+    onSeeReactors: mine ? (kind) => openReactors({
+      post, kind,
+      onOpenProfile: (id) => {
+        restorePost = post.id;
+        closeSheet();
+        navigate(id === state.account?.id ? '#/me' : `#/u/${id}`);
+      },
+    }) : null,
   }));
 
   // The thread only exists once the sheet is expanded - islands' rule, and a
@@ -603,7 +601,9 @@ export async function react(postId, kind) {
       await data.addReaction(postId, kind);
       if (kind === 'join') celebrate();
     }
-    refreshConnections({ fresh: true });
+    // Only 参加 (and messages) draw a route since 2026-10-22: いいね and
+    // 手伝えるかも have nothing new to fetch.
+    if (kind === 'join') refreshConnections({ fresh: true });
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));
     else state.reactions.delete(reactionKey(postId, kind));
@@ -767,6 +767,7 @@ export function setupMapScreen() {
   screen('map', {
     leave(next) {
       if (['me', 'user'].includes(next) && state.selected) restorePost = state.selected.id;
+      hideTrialHint();
       setAmbient(false);
       stopMap();   // no painting while another screen is in front
       abortReveal();

@@ -37,3 +37,17 @@ test('?tod= and ?tier= are read before the # and after the route alike', () => {
   assert.equal(addressParam('tier', { search: '?tier=2', hash: '#/map?tier=4' }), '2');
   assert.equal(addressParam('tier', { search: '', hash: '' }), null);
 });
+
+test('--grass in style.css is the map grass, and the profile photo wears it', async () => {
+  const css = await load('web/style.css');
+  const token = css.match(/--grass:\s*(#[0-9A-Fa-f]{6})/)[1];
+  assert.equal(token.toUpperCase(), PALETTE.grass.toUpperCase());
+  assert.match(css, /\.avatar\.profile-avatar\s*\{[^}]*border:\s*6px solid var\(--grass\)/);
+});
+
+test('--sand in style.css is the map beach, ringed outside the grass on the profile photo', async () => {
+  const css = await load('web/style.css');
+  const token = css.match(/--sand:\s*(#[0-9A-Fa-f]{6})/)[1];
+  assert.equal(token.toUpperCase(), PALETTE.sand.toUpperCase());
+  assert.match(css, /\.avatar\.profile-avatar\s*\{[^}]*box-shadow:\s*0 0 0 6px var\(--sand\)/);
+});

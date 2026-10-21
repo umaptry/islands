@@ -16,6 +16,9 @@
   --sea: #46AEE6;
   --sea-deep: #2E9AD6;
   --sea-ink: #1D5F90;
+  /* The island green of the map (grass in web/js/map/palette.js). */
+  --grass: #94C973;
+  --sand: #EAD39A;      /* the map beach (palette.js sand): the ring outside the profile photo */
 
   --surface: #ffffff;
   --surface-2: #f4f7fb;
@@ -99,6 +102,14 @@ a { color: inherit; }
 .screen.tinted { background: var(--sea); color: var(--on-sea); }
 
 body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); }
+/* On-screen keyboard up (js/keyboard.js): no bar to leave room for. */
+body.kb-open .bottom-nav { display: none; }
+body.kb-open.has-nav .screen.tinted { padding-bottom: 0; }
+body.kb-open .toast { bottom: 18px; }
+/* Floating map parts sit on the nav; with the nav hidden they drop to the edge. */
+body.kb-open .map-controls { bottom: calc(env(safe-area-inset-bottom) + 14px); }
+body.kb-open .arrival { bottom: calc(env(safe-area-inset-bottom) + 14px); }
+body.kb-open .island-card { bottom: calc(env(safe-area-inset-bottom) + 12px); }
 
 .scroller {
   flex: 1;
@@ -388,13 +399,6 @@ body.has-nav .screen.tinted { padding-bottom: calc(var(--nav-h) + env(safe-area-
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  background: rgba(255, 255, 255, .2); border: 1px solid rgba(255, 255, 255, .3);
-  color: var(--on-sea); font-size: 12px; font-weight: 700;
-  padding: 3px 10px; border-radius: 999px;
-}
-.post-card .chip { background: #eaf4ff; border-color: #d3e7fb; color: var(--sea-ink); }
 
 /* ---------------------------------------------------------------- map */
 
@@ -592,24 +596,6 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .image-viewer button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .image-viewer.no-motion, .image-viewer.no-motion * { transition: none !important; animation: none !important; }
 
-.similarity {
-  margin-top: 13px; padding: 12px 13px;
-  background: var(--surface-2); border-radius: var(--radius-sm);
-}
-.similarity-head { display: flex; align-items: baseline; gap: 7px; }
-.similarity-value { font-size: 26px; font-weight: 800; color: var(--sea-ink); line-height: 1; }
-.similarity-label { font-size: 12px; color: var(--ink-3); font-weight: 700; }
-.similarity-bar {
-  height: 6px; border-radius: 999px; background: var(--surface-3);
-  margin: 9px 0 11px; overflow: hidden;
-}
-.similarity-fill {
-  height: 100%; border-radius: 999px;
-  background: linear-gradient(90deg, var(--sea), var(--i3));
-  transition: width .5s var(--ease);
-}
-.similarity-note { font-size: 13px; margin: 0 0 8px; color: var(--ink-2); }
-.similarity-foot { font-size: 11px; color: var(--ink-3); margin: 9px 0 0; line-height: 1.6; }
 
 /* ---------------------------------------------------------------- sheet */
 
@@ -832,6 +818,8 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 }
 .avatar.has-image { background: var(--surface-3); }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
+/* An island: the photo, a ring of grass, then a ring of beach (2026-10-22). */
+.avatar.profile-avatar { border: 6px solid var(--grass); box-shadow: 0 0 0 6px var(--sand); }
 
 /* ---------------------------------------------------------------- nav */
 
@@ -948,9 +936,6 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .post-action.like .post-action-label { display: none; }
 .post-image { border-radius: 6px; }
 .post-image img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
-.similarity-details { margin-top: 12px; font-size: 12px; color: #6b7280; }
-.similarity-details summary { cursor: pointer; padding: 8px 0; }
-.similarity-details .similarity { margin-top: 8px; }
 .profile-tabs { border-top: 1px solid rgb(255 255 255 / .3); }
 .map-status { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); background: rgb(255 255 255 / .94); color: #374151; border-radius: 8px; padding: 8px 12px; font-size: 12px; z-index: 4; }
 .sheet { bottom: var(--keyboard-inset, 0px); }
@@ -1442,3 +1427,113 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .busy-toggle.on { color: var(--ink); }
 .busy-toggle.on .busy-switch { background: var(--ui); }
 .busy-toggle.on .busy-switch::after { transform: translateX(12px); }
+
+/* Holding いいね / 手伝えるかも on your own post lists who pressed it
+   (js/longpress.js, components/reactors.js). No text selection, image-save or
+   callout menu on a long touch, and a faint squeeze while it is held. */
+.post-action.holdable {
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .12s var(--ease), background-color .12s var(--ease);
+}
+.post-action.holdable.pressing { transform: scale(.94); background: var(--surface-3); }
+.reactors-modal { max-height: min(80vh, 560px); display: flex; flex-direction: column; }
+.reactors-list { overflow-y: auto; margin: 0 -8px 14px; min-height: 0; }
+.reactors-note { margin: 0; padding: 14px 8px; font-size: 13.5px; color: var(--ink-2); text-align: center; }
+.reactor-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px;
+  padding: 6px 8px; border-radius: 8px; text-align: left; color: var(--ink);
+}
+.reactor-row:hover { background: var(--surface-2); }
+.reactor-name { font-size: 14px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==== 2026-10-22 first-run: welcome, guidance, setup (lane W) ==== */
+.landing h1 { margin-bottom: 14px; }
+.landing .welcome-lead { margin: 0 0 4px; font-size: 16px; font-weight: 700; line-height: 1.6; word-break: auto-phrase; text-wrap: balance; }
+.welcome-art { display: block; height: clamp(84px, 19dvh, 168px); width: auto; aspect-ratio: 1; margin: 6px auto 4px; }
+.landing .btn-quiet#welcomeBrowse { margin-top: 14px; background: rgba(255, 255, 255, .26); border-color: rgba(255, 255, 255, .7); font-weight: 700; }
+@media (max-height: 700px) {
+  .landing .scroller { padding-top: 24px; padding-bottom: 24px; }
+  .landing h1 { margin-bottom: 8px; font-size: 30px; }
+  .landing h2 { font-size: 20px; margin-bottom: 4px; }
+  .landing .welcome-lead { font-size: 14px; }
+  .welcome-art { height: clamp(72px, 15dvh, 110px); margin: 2px auto; }
+  .landing .btn { margin-top: 10px; }
+  .landing .returning { margin-top: 14px; }
+  .landing .divider { margin-top: 12px; }
+}
+@media (max-height: 500px) { .welcome-art { display: none; } }
+.guidance-skip {
+  position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 8px; z-index: 2;
+  min-height: 44px; padding: 0 14px; background: none; border: 0; cursor: pointer;
+  color: var(--on-sea-2); font: inherit; font-size: 14px; font-weight: 700;
+}
+.guidance-skip:hover { color: #fff; }
+.slide h2 { text-wrap: balance; word-break: auto-phrase; }
+.slide-note { word-break: auto-phrase; text-wrap: pretty; }
+#guidanceNext { flex: 1.6; white-space: nowrap; }
+#guidanceBack { flex: 1; }
+/* ==== end lane W ==== */
+
+/* ==== 2026-10-22 first-run: compose, reveal (lane P) ==== */
+/* heat + tag captions, and the reason the button waits */
+#compose .field-help { margin: -2px 0 10px; font-size: 12px; line-height: 1.6; color: var(--on-sea-2); word-break: auto-phrase; text-wrap: pretty; }
+#compose .field-hint { margin: 10px 0 0; font-size: 13px; font-weight: 700; color: #fff; text-align: center; }
+#compose .field-hint[hidden] { display: none; }
+#compose .compose-tags .field-title { margin-bottom: 4px; }
+#compose .examples-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+#compose .examples-note { line-height: 1.5; }
+/* first post, step 1: examples only */
+#compose .examples-own { margin-top: 14px; }
+#compose:not(.first-post) .examples-own { display: none; }
+#compose.first-post.own-closed .examples-own ~ *,
+#compose.first-post.own-closed #composeExtraPrompts,
+#compose.first-post.own-closed .compose-body,
+#compose.first-post.own-closed .compose-heat,
+#compose.first-post.own-closed .compose-tags,
+#compose.first-post.own-closed .compose-recruit,
+#compose.first-post.own-closed #composeMoveNotice,
+#compose.first-post.own-closed #firstPostFooter,
+#compose.first-post.own-closed .scroller > .field { display: none; }
+#compose.first-post:not(.own-closed) .examples-own { display: none; }
+#compose.first-post:not(.own-closed) .examples { margin-bottom: 22px; }
+/* the tried-out sentence: nearby islands */
+.reveal-near { margin-top: 18px; }
+.reveal-near-lede { margin: 0 0 10px; font-size: 14px; font-weight: 700; line-height: 1.6; color: #fff; word-break: auto-phrase; text-wrap: pretty; }
+.reveal-near-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.reveal-near-item { display: flex; align-items: center; gap: 0; padding: 12px 14px; border-radius: 10px; background: rgba(255, 255, 255, .14); color: #fff; font-size: 15px; }
+.reveal-near-item .reveal-swatch { flex: none; }
+.reveal-near-name { flex: 1; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+.reveal-near-people { flex: none; margin-left: 10px; font-size: 13px; color: var(--on-sea-2); }
+/* ==== end lane P ==== */
+
+/* ==== 2026-10-22 first-run: map screen (lane M) ==== */
+.trial-hint {
+  position: absolute; z-index: 5; left: 0; top: 0; pointer-events: none;
+  padding: 6px 12px; border-radius: 999px; background: var(--ui, #1f6fd1); color: #fff;
+  font-size: 12.5px; font-weight: 800; white-space: nowrap; box-shadow: var(--float-shadow);
+}
+.trial-hint::after {
+  content: ''; position: absolute; left: 50%; bottom: -5px; width: 10px; height: 10px;
+  background: inherit; transform: translateX(-50%) rotate(45deg); border-radius: 2px;
+}
+.busy-note {
+  position: absolute; z-index: 4; right: 14px; margin: 0;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 66px);
+  max-width: min(300px, calc(100% - 28px)); padding: 7px 12px; border-radius: 12px;
+  background: rgb(255 255 255 / .94); color: var(--ink-2); font-size: 12px; line-height: 1.5;
+  box-shadow: var(--float-shadow); pointer-events: none;
+}
+.island-card-open .busy-note { visibility: hidden; }
+/* ==== end lane M ==== */
+
+/* ==== 2026-10-22 first-run: notifications, profile (lane N) ==== */
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 16px; }
+.empty-actions .btn[hidden] { display: none; }
+/* ==== end lane N ==== */
+
+/* ==== 2026-10-22 first-run: help (?) (lane H) ==== */
+#guidance.is-review .guidance-first-only { display: none; }
+.me-howto { display: block; margin: 4px auto 10px; padding: 6px 12px; font-size: 13px; font-weight: 600; color: #fff; text-decoration: underline; }
+/* ==== end lane H ==== */

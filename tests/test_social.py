@@ -272,6 +272,28 @@ def test_the_local_server_says_who_joined_a_post(people, fresh_client):
     assert fresh_client.get(f"/api/local/posts/{post['id']}/joiners").json()["joiners"] == []
 
 
+def test_the_local_server_lists_who_reacted_with_names(people, fresh_client):
+    """The stand-in for reading reactions with accounts embedded: 長押しで反応した人の一覧."""
+    akari = people("a@example.com", "あかり")
+    bob = people("b@example.com", "ボブ")
+    carol = people("c@example.com", "キャロル")
+    post = akari.post("みんなで山に登る仲間を探しています")
+    url = f"/api/local/posts/{post['id']}/reactors"
+    assert fresh_client.get(url, params={"kind": "like"}).json()["reactors"] == []      # nobody yet
+    assert bob.react(post["id"], "like").status_code == 200
+    assert carol.react(post["id"], "like").status_code == 200
+    assert carol.react(post["id"], "help").status_code == 200
+    likes = fresh_client.get(url, params={"kind": "like"}).json()["reactors"]
+    assert [row["id"] for row in likes] == [carol.id, bob.id]                          # newest first
+    assert likes[0]["display_name"] == "キャロル"
+    assert {"icon_id", "avatar_path", "created_at"} <= set(likes[0])
+    helps = fresh_client.get(url, params={"kind": "help"}).json()["reactors"]
+    assert [row["id"] for row in helps] == [carol.id]                                  # kinds stay apart
+    bob.unreact(post["id"], "like")
+    assert [r["id"] for r in fresh_client.get(url, params={"kind": "like"}).json()["reactors"]] == [carol.id]
+    assert fresh_client.get(url, params={"kind": "wave"}).status_code == 422
+
+
 # --------------------------------------------------------------------------
 # authorisation
 # --------------------------------------------------------------------------

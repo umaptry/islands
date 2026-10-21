@@ -9,6 +9,7 @@ import { api } from './net.js';
 import { session } from './session.js';
 import { state } from './state.js';
 import { onboardingStep } from './onboarding.js';
+import { setupKeyboardGuard } from './keyboard.js';
 import { navigate, route, screen, setGuard, show, startRouter } from './router.js';
 import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
 import { setupPush, syncPush } from './push.js';
@@ -73,6 +74,7 @@ async function boot() {
   setupAudio();
   setupWelcome();
   setupIcons();
+  setupKeyboardGuard();
   document.addEventListener('map:version-changed', () => {
     const node = document.getElementById('mapVersionNotice');
     if (node) node.hidden = false;

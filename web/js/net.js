@@ -200,6 +200,19 @@ const supabaseBackend = {
       params: { select: 'post_id,kind', actor_id: `eq.${session.userId()}` },
     });
   },
+  // Who pressed one reaction on a post (public rows), newest first.
+  async reactorsOf(postId, kind) {
+    const rows = await restCall('reactions', {
+      params: {
+        select: `created_at,${ACCOUNT_EMBED}`,
+        post_id: `eq.${postId}`, kind: `eq.${kind}`, order: 'created_at.desc', limit: '200',
+      },
+    });
+    return rows.map((row) => {
+      const id = row.accounts?.id;
+      return { ...flatten(row), id };
+    });
+  },
   async addReaction(postId, kind) {
     // resolution=ignore-duplicates: two taps racing each other must not turn
     // the second one into an error the tapper sees.
@@ -313,6 +326,10 @@ const localBackend = {
     return true;
   },
   myReactions: async () => (await api.get('/api/local/reactions/mine')).reactions,
+  reactorsOf: async (postId, kind) => {
+    const params = new URLSearchParams({ kind });
+    return (await api.get(`/api/local/posts/${encodeURIComponent(postId)}/reactors?${params}`, { auth: false })).reactors;
+  },
   addReaction: async (postId, kind) => {
     try {
       await api.post('/api/local/reactions', { post_id: postId, kind });

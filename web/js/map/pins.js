@@ -1,14 +1,14 @@
-// The post pin: a teardrop with the writer's initial, drawn on the map canvas.
+// The post pin: a round badge with the writer's initial, drawn on the map canvas.
 // Its look follows the heat in the four steps of heat.js (see PIN in palette.js):
-// still, bobbing, flames, blue flames. A recruiting pin sparkles itself.
+// still, bobbing, soft round flames, blue flames. A recruiting pin sparkles itself.
 //
 // Shapes and fills (each flame frame too) are painted once into small offscreen
 // canvases and stamped with drawImage; only the sway, the glows, the shine band,
 // the stars and the rings are drawn per frame, and those are cheap. With
 // `time` null nothing but the stamp is drawn (a still picture).
 //
-// Everything is in "pin units": the design was drawn with a head of radius 9 on a
-// tip at (0,0), so one unit = size / 18 px (times the heat tier's scale).
+// Everything is in "pin units": the badge has radius 9 and its centre is the
+// post's place (0,0), so one unit = size / 18 px (times the heat tier's scale).
 
 import { PALETTE, PIN, mixHex, pinColor } from './palette.js';
 import { getHeatTier } from '../heat.js';
@@ -19,17 +19,21 @@ const SPRITE_LIMIT = 800;
 const FLAME_STEPS = 8;          // frames cached per flame cycle (smooth between the 4 key shapes)
 const TAU = Math.PI * 2;
 
-// The drop (tip at 0,0, head centre 17 up, radius 9) and the 4 key shapes of a
-// flame head: [left tip x, y, centre tip x, y, right tip x, y].
-const DROP = 'M0,0 C-3,-7 -9,-11 -9,-17 A9,9 0 1 1 9,-17 C9,-11 3,-7 0,0 Z';
+// A flame is three soft, round-ended lobes behind the top of the badge:
+// [x, top y, half width] for the left, middle and right lobe. The 4 key shapes
+// are blended round a loop. Every lobe is an upright ellipse, so nothing is sharp.
 const FLAME_FRAMES = [
-  [-5.5, -29.0, 0.5, -36.0, 6.0, -30.5],
-  [-6.5, -31.0, -1.0, -34.0, 5.0, -28.5],
-  [-5.0, -28.0, 1.5, -37.5, 6.5, -31.5],
-  [-6.0, -30.5, 0.0, -35.0, 5.5, -29.5],
+  [[-5.6, -16.5, 3.6], [0.4, -23.0, 4.4], [5.8, -17.5, 3.6]],
+  [[-6.2, -18.0, 3.8], [-0.8, -21.5, 4.2], [5.2, -15.5, 3.4]],
+  [[-5.2, -15.5, 3.4], [1.2, -24.0, 4.6], [6.4, -18.5, 3.8]],
+  [[-5.9, -17.5, 3.7], [0.0, -22.0, 4.3], [5.5, -16.5, 3.5]],
 ];
-const HEAD_Y = -17;
+const HEAD_Y = 0;
 const HEAD_R = 9;
+const FLAME_TOP = -24.5;   // above the badge's centre, in pin units
+const LOBE_BOTTOM = -3;    // where a lobe starts, inside the badge
+const GROUND = 10;         // how far below the centre the pin's shadow lies
+const TAG_RISE = 14.5;     // from the pin's top to the top of the あなた tag, in size / 18 px
 
 // Per tier: size scale, flame cycle (s), sway cycle (s) and angle (deg), sparks.
 const TIERS = {
@@ -54,12 +58,21 @@ export function pinScale(size, heat, selected = false) {
   return (size / 18) * TIERS[pinTier(heat)].scale * (selected ? SELECTED_SCALE : 1);
 }
 
-/** Where the head is, measured from the tip (0): { headY, headR, top }. `top` is
- * the highest point of the pin itself (the flame's tip if it has one), negative. */
+/** The badge, measured from the post's place (its centre, 0): { headY, headR, top }.
+ * `top` is the highest point of the pin itself (the flame if it has one), negative. */
 export function pinGeometry(size, heat, selected = false) {
   const s = pinScale(size, heat, selected);
   const flame = TIERS[pinTier(heat)].flame;
-  return { headY: HEAD_Y * s, headR: HEAD_R * s, top: (flame ? -38 : HEAD_Y - HEAD_R - 0.7) * s };
+  return { headY: HEAD_Y * s, headR: HEAD_R * s, top: (flame ? FLAME_TOP : HEAD_Y - HEAD_R - 0.7) * s };
+}
+
+/** How far above its place a pin reaches (negative px): the flame, or the
+ * 「あなた」 tag over yours. What an island's name has to clear. `selected`: the
+ * open pin is bigger and hops LIFT up, so it reaches higher. */
+export function pinReach(size, heat, yours = false, selected = false) {
+  const geo = pinGeometry(size, heat, selected);
+  const top = selected ? geo.top - LIFT * pinScale(size, heat, true) : geo.top;
+  return yours ? top - TAG_RISE * (size / 18) : top;
 }
 
 /** Which of the cached flame pictures a time falls on (0 when still / not a flame). */
@@ -150,37 +163,30 @@ function paintGlow(ctx, color, x, y, rx, ry, alpha) {
 
 // ---------------------------------------------------------------- shapes
 
-/** The i-th (fractional) flame head: the 4 key shapes blended round a loop. */
+/** The i-th (fractional) flame: the 4 key shapes blended round a loop. */
 function flameParams(frame) {
   const pos = (frame / FLAME_STEPS) * FLAME_FRAMES.length;
   const i = Math.floor(pos) % FLAME_FRAMES.length;
   const j = (i + 1) % FLAME_FRAMES.length;
   const f = pos - Math.floor(pos);
-  return FLAME_FRAMES[i].map((v, k) => v + (FLAME_FRAMES[j][k] - v) * f);
+  return FLAME_FRAMES[i].map((lobe, k) => lobe.map((v, m) => v + (FLAME_FRAMES[j][k][m] - v) * f));
 }
 
-/** Trace the drop, or the drop with a flame head, into ctx's current path. */
+/** Add a flame's round lobes to the current path (after beginPath). */
+function addLobes(c, frame) {
+  for (const [x, top, w] of flameParams(frame)) {
+    const cy = (top + LOBE_BOTTOM) / 2;
+    c.moveTo(x + w, cy);
+    c.ellipse(x, cy, w, (LOBE_BOTTOM - top) / 2, 0, 0, TAU);
+  }
+}
+
+/** Trace the round badge, with its flame's lobes when `frame` is given. */
 function tracePin(c, frame) {
   c.beginPath();
-  if (frame == null) {
-    c.moveTo(0, 0);
-    c.bezierCurveTo(-3, -7, -9, -11, -9, -17);
-    c.arc(0, -17, 9, Math.PI, 0, false);
-    c.bezierCurveTo(9, -11, 3, -7, 0, 0);
-    c.closePath();
-    return;
-  }
-  const [lx, ly, cx, cy, rx, ry] = flameParams(frame);
-  c.moveTo(0, 0);
-  c.bezierCurveTo(-3, -7, -9, -11, -9, -17);
-  c.bezierCurveTo(-9, -22, lx - 2, ly + 5, lx, ly);
-  c.bezierCurveTo(lx + 1.5, ly + 3, -2.5, -25, -1.5, -26);
-  c.bezierCurveTo(-1.5, -29, cx - 1.5, cy + 3, cx, cy);
-  c.bezierCurveTo(cx + 1.5, cy + 4, 3, -28, 2.8, -25.5);
-  c.bezierCurveTo(3.8, -26.5, rx - 1, ry + 2, rx, ry);
-  c.bezierCurveTo(rx + 2.5, ry + 5, 9, -21, 9, -17);
-  c.bezierCurveTo(9, -11, 3, -7, 0, 0);
-  c.closePath();
+  c.moveTo(HEAD_R, 0);
+  c.arc(0, 0, HEAD_R, 0, TAU);
+  if (frame != null) addLobes(c, frame);
 }
 
 /** A 4-pointed star of radius 3 at the origin. */
@@ -205,8 +211,8 @@ function fillOf(tier) {
   };
 }
 
-/** The still picture of a pin (shadow, body, rim, letter) at scale s. The
- * open pin's picture has no shadow: it is lifted off the ground, and its
+/** The still picture of a pin (shadow, flame, badge, rim, letter) at scale s.
+ * The open pin's picture has no shadow: it is lifted off the ground, and its
  * shadow is drawn where the ground is (drawPostPin). */
 function paintPin(c, tier, frame, s, { gold, selected, initial }) {
   c.save();
@@ -214,17 +220,28 @@ function paintPin(c, tier, frame, s, { gold, selected, initial }) {
   if (!selected) {
     c.fillStyle = 'rgba(11,26,34,0.28)';
     c.beginPath();
-    c.ellipse(1.2, 0.6, 4.2, 1.7, 0, 0, TAU);
+    c.ellipse(1.2, GROUND - 0.4, 6.6, 2.2, 0, 0, TAU);
     c.fill();
   }
 
   const flame = TIERS[tier].flame;
-  const shapeFrame = flame ? frame : null;
-  const top = flame ? Math.min(...flameParams(frame).filter((_, k) => k % 2 === 1)) : -26;
   const { stops, edge } = fillOf(tier);
-  const body = c.createLinearGradient(0, top, 0, 0);
+  // The soft flame behind the badge: round lobes, hot colour at the tips.
+  if (flame) {
+    const top = Math.min(...flameParams(frame).map((lobe) => lobe[1]));
+    const fire = c.createLinearGradient(0, top, 0, LOBE_BOTTOM + 6);
+    fire.addColorStop(0, stops[0][1]);
+    fire.addColorStop(0.35, stops[1][1]);
+    fire.addColorStop(1, stops[2][1]);
+    c.beginPath();
+    addLobes(c, frame);
+    c.fillStyle = fire;
+    c.fill();
+  }
+  const body = c.createLinearGradient(0, -HEAD_R, 0, HEAD_R);
   for (const [at, color] of stops) body.addColorStop(at, color);
-  tracePin(c, shapeFrame);
+  c.beginPath();
+  c.arc(0, 0, HEAD_R, 0, TAU);
   c.fillStyle = body;
   c.fill();
   c.lineJoin = 'round';
@@ -236,7 +253,7 @@ function paintPin(c, tier, frame, s, { gold, selected, initial }) {
     c.lineWidth = selected ? 1.9 : 1.4;
     c.stroke();
   } else {
-    const rim = c.createLinearGradient(0, top, 0, 0);
+    const rim = c.createLinearGradient(0, -HEAD_R, 0, HEAD_R);
     rim.addColorStop(0, PIN.gold.light);
     rim.addColorStop(0.45, PIN.gold.main);
     rim.addColorStop(1, PIN.gold.dark);
@@ -257,9 +274,9 @@ function paintLetter(c, initial, edge) {
   c.lineJoin = 'round';
   c.lineWidth = 1.6;
   c.strokeStyle = edge;
-  c.strokeText(initial, 0, -13.6);
+  c.strokeText(initial, 0, 3.4);
   c.fillStyle = '#FFFFFF';
-  c.fillText(initial, 0, -13.6);
+  c.fillText(initial, 0, 3.4);
 }
 
 function firstChar(initial) {
@@ -272,9 +289,6 @@ function firstChar(initial) {
 const fract = (v) => ((v % 1) + 1) % 1;
 const wave = (t) => 0.5 - 0.5 * Math.cos(TAU * t);   // 0 -> 1 -> 0 over t = 0..1
 
-/** Draw a post's pin with its tip at (x, y). Returns { top, headY, headR }:
- * `top` is the pin's highest y (the flame tip or the "あなた" tag included), and
- * the head circle is for hit tests and chips. See the file header for opts. */
 /** How far the open pin stands off the ground, in pin units (x s), and how it
  * gets there: a little hop past the height and back, over LIFT_S seconds. */
 const LIFT = 6;
@@ -289,6 +303,9 @@ export function liftShare(age) {
   return 1 + (k + 1) * (t - 1) ** 3 + k * (t - 1) ** 2;
 }
 
+/** Draw a post's pin with its centre at (x, y). Returns { top, headY, headR }:
+ * `top` is the pin's highest y (the flame or the "あなた" tag included), and
+ * the badge circle (centre headY, radius headR) is for hit tests and chips. */
 export function drawPostPin(ctx, x, y, opts = {}) {
   const {
     heat = 0, size = 22, time = null, phase = 0, recruit = false, recruitQuiet = false,
@@ -311,7 +328,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   const prevAlpha = ctx.globalAlpha;
   ctx.globalAlpha = prevAlpha * alpha;
 
-  // Motion: a mid pin bobs up and down, a flame pin sways about its tip.
+  // Motion: a mid pin bobs up and down, a flame pin sways about its centre.
   let bob = 0;
   let angle = 0;
   if (live) {
@@ -327,7 +344,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   if (selected) {
     const up = liftShare(openedFor);
     const share = Math.max(0, Math.min(1.2, up));
-    paintGlow(ctx, '#0B1A22', x + 1.4 * s, y + 0.8 * s, (4.6 + 2.6 * share) * s, (1.9 + 0.9 * share) * s, 0.55 - 0.15 * share);
+    paintGlow(ctx, '#0B1A22', x + 1.4 * s, y + (GROUND + 0.4) * s, (7 + 3 * share) * s, (2.3 + 1.1 * share) * s, 0.55 - 0.15 * share);
     bob -= LIFT * s * up;
   }
 
@@ -339,7 +356,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
     ctx.strokeStyle = PALETTE.accent;
     ctx.lineWidth = 1.6 * s;
     ctx.beginPath();
-    ctx.ellipse(x, y, (4 + 8 * k) * s, (1.6 + 3.2 * k) * s, 0, 0, TAU);
+    ctx.ellipse(x, y + GROUND * s, (7 + 8 * k) * s, (2.2 + 2.4 * k) * s, 0, 0, TAU);
     ctx.stroke();
     ctx.restore();
   }
@@ -352,17 +369,17 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   }
   if (gold && (sparkle || !live)) {
     const a = live ? 0.2 + 0.4 * wave(time / 1.8 + phase / TAU) : 0.4;
-    paintGlow(ctx, '#FFD75E', x, y + bob + HEAD_Y * s, 18 * s, 19 * s, a * 1.4);
+    paintGlow(ctx, '#FFD75E', x, y + bob + HEAD_Y * s, 18 * s, 18 * s, a * 1.4);
   }
   if (spec.flame) {
     const a = live ? 0.25 + 0.3 * wave(time / spec.period + phase / TAU) : 0.4;
-    paintGlow(ctx, inner, x, y + bob - 22 * s, (spec.sway < 1.5 ? 17 : 15) * s, (spec.sway < 1.5 ? 24 : 21) * s, a * 1.4);
+    paintGlow(ctx, inner, x, y + bob - 7 * s, (spec.sway < 1.5 ? 17 : 15) * s, (spec.sway < 1.5 ? 21 : 19) * s, a * 1.4);
   }
 
-  // Sparks rising off a flame.
+  // Round sparks floating up off a flame.
   if (live && spec.flame) {
     const d = spec.sway < 1.5 ? 1.2 : 1.5;
-    const spots = [[-3, -30], [3, -31], [0, -33]];
+    const spots = [[-4, -20], [4, -21], [0, -23]];
     ctx.save();
     ctx.fillStyle = spec.colors.core;
     for (let j = 0; j < spec.sparks; j++) {
@@ -376,11 +393,11 @@ export function drawPostPin(ctx, x, y, opts = {}) {
     ctx.restore();
   }
 
-  // The pin itself, swaying about its tip.
+  // The pin itself, swaying about its centre.
   const key = pinSpriteKey({ dpr, tier, frame: fr, size: s, gold, selected, initial });
   const padX = 16 * s;
-  const padUp = 42 * s;
-  const entry = sprite(key, padX * 2, padUp + 5 * s, padX, padUp, dpr,
+  const padUp = 28 * s;
+  const entry = sprite(key, padX * 2, padUp + 15 * s, padX, padUp, dpr,
     (c) => paintPin(c, tier, fr, s, { gold, selected, initial }));
   ctx.save();
   ctx.translate(x, y + bob);
@@ -397,7 +414,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   if (showTag) {
     ctx.save();
     const ts = size / 18;
-    const ty = y + bob - (spec.flame ? 44 : 33) * s;
+    const ty = y + bob + geo.top - 8 * ts;
     ctx.fillStyle = PALETTE.accent;
     ctx.beginPath();
     ctx.roundRect ? ctx.roundRect(x - 13 * ts, ty - 6.5 * ts, 26 * ts, 11 * ts, 5.5 * ts)
@@ -416,7 +433,7 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   return { top, headY: y + geo.headY + bob, headR: geo.headR };
 }
 
-/** The shine band and the stars on a recruiting pin. ctx is already at the tip,
+/** The shine band and the stars on a recruiting pin. ctx is already at the badge's centre,
  * rotated, in px; this draws in pin units. */
 function paintSparkle(ctx, tier, frame, s, time, initial) {
   ctx.save();
@@ -435,18 +452,18 @@ function paintSparkle(ctx, tier, frame, s, time, initial) {
     ctx.fillStyle = g;
     ctx.globalAlpha *= 0.9;
     ctx.beginPath();
-    ctx.moveTo(-3 + dx, -38);
-    ctx.lineTo(2 + dx, -38);
-    ctx.lineTo(-2 + dx, 2);
-    ctx.lineTo(-7 + dx, 2);
+    ctx.moveTo(-3 + dx, -27);
+    ctx.lineTo(2 + dx, -27);
+    ctx.lineTo(-2 + dx, 11);
+    ctx.lineTo(-7 + dx, 11);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
     // The letter was in the cached picture, under the band: put it back on top.
     paintLetter(ctx, initial, fillOf(tier).edge);
   }
-  // Stars: two over the head, one on the rim, taking turns.
-  const stars = [[-4.5, -21.5, 1.0, '#FFFFFF'], [7.5, -25, 1.5, '#FFF3B0'], [4.5, -11.5, 0.8, '#FFFFFF']];
+  // Stars: two over the top of the badge, one low on the rim, taking turns.
+  const stars = [[-4.5, -6.5, 1.0, '#FFFFFF'], [7.2, -7.5, 1.5, '#FFF3B0'], [5.2, 6.5, 0.8, '#FFFFFF']];
   for (let j = 0; j < stars.length; j++) {
     const k = fract((time - (j * 0.7 - (j === 1 ? 0.05 : 0))) / 2.1);
     const grow = k < 0.18 ? k / 0.18 : k < 0.36 ? 1 - (k - 0.18) / 0.18 : 0;

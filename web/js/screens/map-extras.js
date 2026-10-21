@@ -11,7 +11,9 @@ import { $, clear, clip, closeSheet, el, sheetOpen } from '../ui.js';
 import { icon } from '../icons.js';
 import { PALETTE, TIMES } from '../map/palette.js';
 import * as mapApi from '../map/index.js';
-import { MINI_SHOW_ZOOM, miniToWorld, miniVisible, pickNear, recentPosts } from './map-extras-logic.js';
+import {
+  MINI_SHOW_ZOOM, miniToWorld, miniVisible, myIslands, nearestIsland, pickNear, recentPosts,
+} from './map-extras-logic.js';
 
 const NEAR_COUNT = 3;
 const MINI_SIZE = 96;
@@ -44,13 +46,16 @@ function choosePicks() {
 export function refreshNearIslands() {
   const box = $('nearIslands');
   const picked = choosePicks();
-  const signature = picked.map((island) => `${islandKey(island)}:${islandName(island)}`).join('|');
+  // Near my own island when I have one; otherwise just the islands around.
+  const mine = myIslands(state.islands.filter(hasCenter), state.myPosts.map((post) => post.id)).length > 0;
+  const label = mine ? 'あなたに近い島' : 'まわりの島';
+  const signature = `${label}|${picked.map((island) => `${islandKey(island)}:${islandName(island)}`).join('|')}`;
   if (signature === nearSignature) return;
   nearSignature = signature;
   box.hidden = picked.length === 0;
   clear(box);
   if (!picked.length) return;
-  box.append(el('span', { className: 'near-label' }, icon('pin', 14), el('span', { text: '近くの島' })));
+  box.append(el('span', { className: 'near-label' }, icon('pin', 14), el('span', { text: label })));
   picked.forEach((island) => {
     box.append(el('button', {
       className: 'near-chip', attrs: { type: 'button' }, text: islandName(island),
@@ -79,6 +84,7 @@ export function closeIslandCard() {
 
 function openIslandCard(island, key = islandKey(island)) {
   if (!island) return;
+  hideTrialHint();
   if (sheetOpen()) closeSheet();
   if (!cardIsland) cardOpener = document.activeElement;
   cardIsland = island;
@@ -113,10 +119,10 @@ function openIslandCard(island, key = islandKey(island)) {
   }
   // Far islands may not be loaded yet: say so instead of showing a thin list.
   if (recent.length < Math.min(2, ids.length)) {
-    card.append(el('p', { className: 'island-card-note', text: '島に入ると、ほかの投稿も見られます。' }));
+    card.append(el('p', { className: 'island-card-note', text: '島をのぞくと、ほかの投稿も見られます。' }));
   }
   const enter = el('button', {
-    className: 'btn island-card-enter', attrs: { type: 'button' }, text: '島に入る',
+    className: 'btn island-card-enter', attrs: { type: 'button' }, text: '島をのぞく',
     on: { click: () => {
       if (typeof mapApi.enterIsland === 'function') mapApi.enterIsland(key);
       closeIslandCard();
@@ -244,7 +250,68 @@ function paintBusy() {
   button.setAttribute('aria-checked', String(on));
   button.classList.toggle('on', on);
   const count = typeof mapApi.busyCount === 'function' ? mapApi.busyCount() : null;
-  $('busyText').textContent = on && finite(count) ? `今週 ${count}件` : '今週の動き';
+  $('busyText').textContent = on && finite(count) ? `今週の反応 ${count}件` : '今週の反応';
+  $('busyNote').hidden = !on;
+}
+
+// ---------------------------------------------------------------- first-visit hint
+
+// 「島をタップ」: once, after the tryout, pointing at the island nearest to it.
+// Seen once (or tapped past) and it does not come back. Storage may be refused
+// (private windows), so every use is guarded and the hint then shows each time.
+const HINT_KEY = 'islands.trialHint';
+const HINT_APART_PX = 60;
+let hint = { on: false, island: null };
+
+function hintSeen() {
+  try { return localStorage.getItem(HINT_KEY) === '1'; } catch { return false; }
+}
+
+function markHintSeen() {
+  try { localStorage.setItem(HINT_KEY, '1'); } catch { /* not kept */ }
+}
+
+export function hideTrialHint() {
+  hint = { on: false, island: null };
+  $('trialHint').hidden = true;
+}
+
+/** The island to point at: the nearest one that is not the tryout's own island
+ * (the banner says "the islands around"). Without any other, the nearest. */
+function hintIsland() {
+  const trial = state.trialPost;
+  const home = mapApi.screenPoint(trial.x, trial.y);
+  const others = state.islands.filter((island) => {
+    if (!hasCenter(island)) return false;
+    const at = mapApi.screenPoint(island.cx, island.cy);
+    return Math.hypot(at.x - home.x, at.y - home.y) > HINT_APART_PX;
+  });
+  return nearestIsland(others, trial.x, trial.y) || nearestIsland(state.islands, trial.x, trial.y);
+}
+
+function placeTrialHint() {
+  const node = $('trialHint');
+  if (!hint.on) return;
+  if (typeof mapApi.screenPoint !== 'function') { node.hidden = true; return; }
+  if (!hint.island && state.trialPost) hint.island = hintIsland();
+  const island = hint.island;
+  if (!island || !hasCenter(island)) { node.hidden = true; return; }
+  const spot = mapApi.screenPoint(island.cx, island.cy);
+  const box = $('map').getBoundingClientRect();
+  const banner = $('trialBanner');
+  const floor = Math.max(150, banner.hidden ? 0 : banner.getBoundingClientRect().bottom + 80);
+  const inside = spot.x > 40 && spot.x < box.width - 40 && spot.y > floor && spot.y < box.height - 120;
+  node.hidden = !inside;
+  if (inside) {
+    node.style.transform = `translate(${Math.round(spot.x - node.offsetWidth / 2)}px, ${Math.round(spot.y - node.offsetHeight - 40)}px)`;
+    if (!hint.marked) { hint.marked = true; markHintSeen(); }   // only a hint that was really shown counts as seen
+  }
+}
+
+export function showTrialHint() {
+  if (!state.trialPost || hintSeen()) return;
+  hint = { on: true, island: null };
+  placeTrialHint();
 }
 
 // ---------------------------------------------------------------- shared
@@ -258,6 +325,7 @@ function syncTopHeight() {
 }
 
 export function refreshExtras() {
+  placeTrialHint();
   refreshNearIslands();
   paintBusy();
   scheduleMini();
@@ -265,6 +333,7 @@ export function refreshExtras() {
 }
 
 function onCamera() {
+  placeTrialHint();
   scheduleMini();
   clearTimeout(nearTimer);
   nearTimer = setTimeout(refreshNearIslands, NEAR_SETTLE_MS);
@@ -290,7 +359,10 @@ export function setupMapExtras({ openPost }) {
   document.addEventListener('sheet:state', () => { if (sheetOpen() && cardIsland) closeIslandCard(); });
   const stage = $('stage');
   let down = null;
-  stage.addEventListener('pointerdown', (event) => { down = { x: event.clientX, y: event.clientY }; });
+  stage.addEventListener('pointerdown', (event) => {
+    down = { x: event.clientX, y: event.clientY };
+    hideTrialHint();
+  });
   stage.addEventListener('pointermove', (event) => {
     if (down && cardIsland && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 10) closeIslandCard();
   });

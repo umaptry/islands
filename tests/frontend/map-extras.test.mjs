@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 // The folder has no package.json "type", so load the module as a data: URL like the other tests.
 const source = await readFile(new URL('../../web/js/screens/map-extras-logic.js', import.meta.url), 'utf8');
 const {
-  miniToWorld, miniVisible, myIslands, pickNear, recentPosts,
+  miniToWorld, miniVisible, myIslands, nearestIsland, pickNear, recentPosts, trialView,
 } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const isle = (id, cx, cy, people = 3, post_ids = []) => ({ island_id: id, cx, cy, people, post_ids });
@@ -60,4 +60,27 @@ test('miniToWorld measures from the canvas rect and clamps to the world', () => 
   assert.ok(Math.abs(mid.x - 19) < 1e-9 && Math.abs(mid.y - 19) < 1e-9);
   const out = miniToWorld(-500, 9999, rect, geometry, 96);
   assert.deepEqual(out, { x: 0, y: 40 });
+});
+
+test('nearestIsland: the closest island, or null when none has a centre', () => {
+  const islands = [isle('a', 0, 0), isle('b', 10, 0), { island_id: 'x' }];
+  assert.equal(nearestIsland(islands, 8, 1).island_id, 'b');
+  assert.equal(nearestIsland([{ island_id: 'x' }], 0, 0), null);
+  assert.equal(nearestIsland([], 0, 0), null);
+});
+
+test('trialView: holds the tryout and the islands around it, between fit and fit x 3', () => {
+  const islands = [isle('a', 100, 0), isle('b', 0, 100), isle('c', -100, 0), isle('far', 5000, 5000)];
+  const view = trialView({ trial: { x: 0, y: 0 }, islands, width: 400, height: 800, fit: 1 });
+  assert.ok(view.scale >= 1 && view.scale <= 3);
+  // the three near islands and the tryout are all inside the view; the far one is not needed
+  const halfW = 400 / view.scale / 2;
+  const halfH = 800 / view.scale / 2;
+  [[100, 0], [0, 100], [-100, 0], [0, 0]].forEach(([x, y]) => {
+    assert.ok(Math.abs(x - view.x) <= halfW && Math.abs(y - view.y) <= halfH, `${x},${y} in view`);
+  });
+  // no islands at all: still a usable view around the tryout
+  const alone = trialView({ trial: { x: 7, y: 9 }, islands: [], width: 400, height: 800, fit: 1 });
+  assert.deepEqual([alone.x, alone.y], [7, 9]);
+  assert.ok(alone.scale >= 1 && alone.scale <= 3);
 });

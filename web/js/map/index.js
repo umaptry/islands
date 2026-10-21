@@ -22,7 +22,7 @@ import { detectLandmasses, membership } from './landmass.js';
 import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
 import { kinLines } from './kin.js';
 import { preloadSprites } from './sprites.js';
-import { drawPostPin, drawMiniPin, pinColor, pinGeometry, pinScale, pinTier } from './pins.js';
+import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
 import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
 import { PREVIEW_RATIO, buildDetail, buildTerrain, gridTerrain, sharpPlan, toCanvas } from './terrain.js';
 import { drawSurf, surfShow } from './surf.js';
@@ -53,17 +53,18 @@ let hits = [];
 //         flies you in.
 //   near  everybody's pin where they wrote, in its heat, with names where they
 //         fit. Now and then a pin says the start of what it wrote.
-//   deep  bigger pins, how much each was answered.
+//   deep  bigger pins.
+// Pins stay dots until the zoom reaches FACE_AT of the deepest (2026-10-22).
 //
 // Zoomed out you want to see where the activity is; zoomed in you want to see
 // who. Two views of the same fact, and the switch is what keeps a busy map
 // readable.
 const NEAR_AT = 1.7;
 const DEEP_AT = 4;
-// The small print - the 「N人・話題」 line under an island's name, the names
-// under other people's faces, the dotted lines - waits until about three times
-// the whole-map view (where a new post lands): between the overview and there,
-// the map showed so much text at once on a phone that nothing stood out.
+// The small print - the names under other people's faces, the dotted lines -
+// waits until about three times the whole-map view (where a new post lands):
+// between the overview and there, the map showed so much text at once on a
+// phone that nothing stood out.
 const DETAIL_AT = 2.9;
 // Zoom per pixel of wheel or trackpad-pinch movement (see the wheel handler).
 const WHEEL_ZOOM = 0.00375;
@@ -385,7 +386,19 @@ function zoomToIsland(island) {
   const usableW = Math.max(120, width - 32);
   const usableH = Math.max(120, height - frame.top - frame.bottom - 16);
   const room = Math.min(usableW / Math.max(1, maxX - minX), usableH / Math.max(1, maxY - minY));
-  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, clampScale(room), { lift: 0.5 });
+  // Short of where faces start (faceScale): opening an island is a look at it,
+  // and the posts are still dots; a small island then stays a little small.
+  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, Math.min(clampScale(room), faceScale() * 0.9), { lift: 0.5 });
+}
+
+// Posts are dots until the map is zoomed in this far, as a share of the largest
+// zoom (2026-10-22: the map had too much on it at once). Measured on a phone
+// and a desktop, 「島に入る」 reaches 0.1-0.25 of the largest zoom and a tapped
+// post (POST_ZOOM) 0.85, so 0.45 leaves the one a dot and the other a face.
+const FACE_AT = 0.45;
+
+function faceScale() {
+  return clampScale(Infinity) * FACE_AT;
 }
 
 /** How close a tapped post is brought: near the largest zoom (2026-10-20, the
@@ -953,6 +966,11 @@ export function mapSnapshot() {
   };
 }
 
+/** Where a world point is on the screen now (px, same origin as the map). */
+export function screenPoint(x, y) {
+  return toScreen(x, y);
+}
+
 /** Glide so that world point (x, y) is in the middle of the free part of the
  * screen, at the zoom the map has now. */
 export function panTo(x, y) {
@@ -1265,16 +1283,12 @@ function renderMap(time) {
     const textWidth = ctx.measureText(island.label).width;
     const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
     const mine = [...place.members].some((id) => minePosts.has(id));
-    // Zoomed in, a line of people and topics hangs under the name: the pair
-    // stands clear of the town and of the faces as one block.
-    const detail = z >= DETAIL_AT;
-    const under = detail ? 18 : 0;
-    let anchor = box.top - 10 - under;
+    let anchor = box.top - 10;
     if (!far) {
       // Zoomed in, the name rides above the island's highest face, so it is
       // over the people it names rather than over whoever happens to be next.
       const tops = visible.filter(({ post }) => place.members.has(post.id))
-        .map(({ post, point, mine: yours }) => point.y + pinTopOf(post, face, yours) - 8 - under);
+        .map(({ post, point, mine: yours }) => point.y + pinTopOf(post, face, yours, state.selected != null && post.id === state.selected.id) - 8);
       if (tops.length) anchor = Math.min(anchor, Math.min(...tops));
     }
     let x = null;
@@ -1304,30 +1318,18 @@ function renderMap(time) {
       alpha: place.fade,
       ...(lit ? { lit: islandColor(island.cluster_id), width: textWidth } : {}),
     });
-
-    if (detail) {
-      // Under the name: how many people. The words they use most are no longer
-      // shown here (2026-10-20); the name already says what the island is about.
-      const line = `${island.people || place.members.size}人`;
-      ctx.font = SMALL_FONT;
-      const lineWidth = ctx.measureText(line).width;
-      if (claim(x, y + 17, lineWidth, 12)) {
-        label(line, keepOnScreen(x, lineWidth), y + 17, SMALL_FONT, { soft: true, alpha: place.fade });
-      }
-    }
   });
   ctx.restore();
 
   const talk = [];   // faces about to say what they wrote, painted last
   if (far) {
-    if (!participants) drawCrowds(places, claim, meId, sifting);
     // Islands answer a tap by opening up; yours are on top of that.
     places.forEach((place) => {
       const { box, labelBox } = place;
       const around = labelBox ? {
         left: Math.min(box.left, labelBox.left), right: Math.max(box.right, labelBox.right),
-        top: Math.min(box.top, labelBox.top), bottom: box.bottom + 20,
-      } : { ...box, bottom: box.bottom + 20 };
+        top: Math.min(box.top, labelBox.top), bottom: box.bottom + 8,
+      } : { ...box, bottom: box.bottom + 8 };
       hits.push({ box: around, island: place.island });
     });
     drawPinsFar(visible, places, claim, meId, motion);
@@ -1794,52 +1796,6 @@ function drawTrees(trees, places, posts, thin, alpha = 1) {
   });
 }
 
-/** Who is on each island, zoomed out: a few faces and the head count. While
- * filtering, somebody none of whose posts here match steps back. */
-function drawCrowds(places, claim, meId, sifting) {
-  const size = 16;
-  const step = 11;
-  places.forEach((place) => {
-    const authors = new Map();
-    const matching = new Set();
-    place.members.forEach((id) => {
-      const post = state.postsById.get(id);
-      if (!post) return;
-      if (!steppedBack(post, sifting)) matching.add(post.author_id);
-      if (!authors.has(post.author_id)) authors.set(post.author_id, post);
-    });
-    const people = [...authors.values()]
-      .sort((a, b) => (b.author_id === meId) - (a.author_id === meId))
-      .slice(0, 4);
-    if (!people.length) return;
-    ctx.save();
-    ctx.font = '700 11px system-ui, sans-serif';
-    const count = `${place.island.people || authors.size}人`;
-    const countWidth = ctx.measureText(count).width;
-    const rowWidth = (people.length - 1) * step + size + 4 + countWidth;
-    const y = place.box.bottom + 11;
-    const left = place.x - rowWidth / 2;
-    if (!claim(place.x, y, rowWidth, size + 2)) { ctx.restore(); return; }
-    people.slice().reverse().forEach((post, index) => {
-      const at = left + size / 2 + (people.length - 1 - index) * step;
-      ctx.save();
-      if (!matching.has(post.author_id)) ctx.globalAlpha *= FILTERED_OUT;
-      drawMiniPin(ctx, at, y, { heat: post.motivation, initial: initialOf(post.display_name), size, mine: post.author_id === meId });
-      ctx.restore();
-    });
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 3.5;
-    ctx.strokeStyle = INK.halo;
-    const textX = left + (people.length - 1) * step + size + 4;
-    ctx.strokeText(count, textX, y + 0.5);
-    ctx.fillStyle = INK.label;
-    ctx.fillText(count, textX, y + 0.5);
-    ctx.restore();
-  });
-}
-
 // ---------------------------------------------------------------- who is shown
 
 // Diameter of a pin's head (pins.js); the pin itself stands a good deal taller.
@@ -1945,10 +1901,33 @@ function revealStage(now) {
 
 /** Rings that spread from your post and fade: "you are here". Only for a post
  * hidden under a town, where it is a dot; a pin carries its own ring. */
+const MINE_DOT_R = 6;
+
+/** A small 「あなた」 under your own dot, so the dot is found. It asks `claim` for
+ * its space like any name, so an island's name or another name that is already
+ * there wins and the label is left out. A pin carries its own tag instead. */
+function youLabel(claim, x, y) {
+  const top = y + MINE_DOT_R + 9;
+  ctx.save();
+  ctx.font = '700 11px system-ui, sans-serif';
+  const w = ctx.measureText('あなた').width;
+  if (claim(x, top, w, 12)) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = MINE;
+    ctx.strokeText('あなた', x, top);
+    ctx.fillStyle = '#fff';
+    ctx.fillText('あなた', x, top);
+  }
+  ctx.restore();
+}
+
 function radar(x, y, radius, motion) {
   ctx.save();
   const base = ctx.globalAlpha;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 1.8;
   ctx.strokeStyle = MINE;
   if (motion === null) {
     ctx.globalAlpha = base * 0.6;
@@ -2031,21 +2010,24 @@ function drawPinsFar(visible, places, claim, meId, motion) {
     }
     if (mine) {
       let hitY = point.y - 12;
-      if (!onTown(point)) {
+      if (!onTown(point) && state.camera.scale >= faceScale()) {
         const shown = pin(post, point, { mine: true, recruitQuiet: isRecruiting(post), time: motion, phase });
         claimPin(point, shown.headY);
         hitY = shown.headY;
       } else {
-        radar(point.x, point.y, 11, motion);
+        // Before faceScale yours is a dot, as in drawFaces, so it does not turn
+        // into a pin and back as the map is zoomed.
+        radar(point.x, point.y, MINE_DOT_R, motion);
         ctx.save();
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, MINE_DOT_R, 0, Math.PI * 2);
         ctx.fillStyle = MINE;
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = '#ffffff';
         ctx.stroke();
         ctx.restore();
+        youLabel(claim, point.x, point.y);
         hitY = point.y;
       }
       hits.push({ x: point.x, y: hitY, r: 22, post, approach: true });
@@ -2082,13 +2064,20 @@ function rollTalk(entries, stage) {
   })), ...nameBoxes];
   // The pins that hold a place are in the way too: a bubble over a neighbour's
   // head hides it.
-  const pins = entries.filter((entry) => entry.room && !entry.dim).map((entry) => ({
-    entry, left: entry.point.x - entry.size * 0.5, right: entry.point.x + entry.size * 0.5,
-    top: entry.point.y - entry.size * 1.6, bottom: entry.point.y,
-  }));
-  const clear = (self, reach) => {
+  const reachOf = (entry) => pinReach(entry.size, entry.post.motivation, entry.mine,
+    state.selected != null && entry.post.id === state.selected.id);
+  const pins = entries.filter((entry) => entry.room && !entry.dim).map((entry) => {
+    const headR = pinGeometry(entry.size, entry.post.motivation).headR;
+    return {
+      entry, left: entry.point.x - headR, right: entry.point.x + headR,
+      top: entry.point.y + reachOf(entry), bottom: entry.point.y + headR,
+    };
+  });
+  // The bubble's tail stands 16px over the pin's top (see shown.top - 16 in drawFaces).
+  const clear = (self) => {
     const point = self.point;
-    const box = { left: point.x - 50, right: point.x + 50, top: point.y - reach - 44, bottom: point.y - reach };
+    const base = point.y + reachOf(self) - 16;
+    const box = { left: point.x - 50, right: point.x + 50, top: base - 44, bottom: base };
     const hit = (c) => box.left < c.right && box.right > c.left && box.top < c.bottom && box.bottom > c.top;
     return !covered.some(hit) && !pins.some((c) => c.entry !== self && hit(c));
   };
@@ -2099,7 +2088,7 @@ function rollTalk(entries, stage) {
     && String(entry.post.body || '').trim()
     && entry.point.x > 36 && entry.point.x < width - 36
     && entry.point.y > frame.top + 36 && entry.point.y < height - frame.bottom - 12
-    && clear(entry, entry.size * 1.7));
+    && clear(entry));
   if (pool.length) bubbles.set(pool[Math.floor(Math.random() * pool.length)].post.id, now);
 }
 
@@ -2130,14 +2119,10 @@ function drawTalk(talk) {
 
 // ---------------------------------------------------------------- faces
 
-/** How far above its point a pin reaches (negative px): the flame's tip, or the
+/** How far above its point a pin reaches (negative px): the flame, or the
  * 「あなた」 tag over yours - what an island's name has to clear. */
-function pinTopOf(post, size, yours) {
-  const top = pinGeometry(size, post.motivation).top;
-  if (!yours) return top;
-  const flame = pinTier(post.motivation) === 'flame' || pinTier(post.motivation) === 'top';
-  const s = pinScale(size, post.motivation);
-  return Math.min(top, -(flame ? 44 : 33) * s - (6.5 * size) / 18);
+function pinTopOf(post, size, yours, selected = false) {
+  return pinReach(size, post.motivation, yours, selected);
 }
 
 /** Zoomed in: faces where people wrote, wrapped in their heat, names where they
@@ -2183,16 +2168,28 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
   })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy || a.tie - b.tie);
   const gap = deep ? FACE_GAP.deep : FACE_GAP.near;
   const stacking = deep && state.camera.scale >= clampScale(Infinity) * STACK_AT;
-  // A pin stands about 1.4 heads tall on its point: the room it claims is that
-  // column, centred half way up.
+  // Before faceScale every post is a dot; only the open post and a landing one
+  // are kept as pins, so the post on show matches its dot's card.
+  const faces = state.camera.scale >= faceScale();
+  // A pin is a round badge centred on its point (a flame adds a little above):
+  // the room it claims is a box round it.
   const roomW = full + gap;
-  const roomH = full * 1.4 + gap;
-  const roomY = (point) => point.y - full * 0.6;
+  // Up it reaches as far as the pin does (a flame, the あなた tag), but never
+  // less than 0.6 of the size; down it is 0.5 of the size.
+  const roomBox = (entry) => {
+    const up = Math.min(pinReach(full, entry.post.motivation, entry.mine, entry.post.id === selectedId), -full * 0.6);
+    const top = up - gap / 2;
+    const bottom = full * 0.5 + gap / 2;
+    return { y: entry.point.y + (top + bottom) / 2, h: bottom - top };
+  };
 
   ctx.save();
   ranked.forEach((entry) => {
     const { point, post } = entry;
-    const room = claim(point.x, roomY(point), roomW, roomH) || entry.rank <= 1;
+    entry.box = roomBox(entry);
+    const room = faces
+      ? claim(point.x, entry.box.y, roomW, entry.box.h) || entry.rank <= 1
+      : post.id === selectedId || post.id === landingId;
     entry.room = room;
     entry.size = full;
     entry.stack = null;
@@ -2200,7 +2197,8 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     if (!room || entry.dim || !(named || entry.mine)) return;
     ctx.font = SMALL_FONT;
     const name = clip(post.display_name, 6);
-    const nameY = point.y + 11;
+    // Under the badge (its radius grows with heat and when it is open).
+    const nameY = point.y + pinGeometry(full, post.motivation, post.id === selectedId).headR + 11;
     if (claim(point.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
       entry.name = name;
       entry.nameY = nameY;
@@ -2213,11 +2211,11 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     ranked.forEach((entry) => {
       if (entry.room || entry.dim) return;
       let under = null;
-      // Under a pin means inside the column the pin claimed (roomW x roomH), so
+      // Under a pin means inside the column the pin claimed (roomW x its box height), so
       // the test is that rectangle's own shape, not a circle.
       let nearest = 1;
       faces.forEach((face) => {
-        const distance = Math.hypot((face.point.x - entry.point.x) / roomW, (face.point.y - entry.point.y) / roomH);
+        const distance = Math.hypot((face.point.x - entry.point.x) / roomW, (face.box.y - entry.point.y) / face.box.h);
         if (distance < nearest) {
           nearest = distance;
           under = face;
@@ -2241,7 +2239,7 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     .map((entry) => entry.post.id));
 
   ranked.slice().reverse().forEach((entry) => {
-    const { post, point, mine, size, name, nameY, busy, dim, out } = entry;
+    const { post, point, mine, size, name, nameY, dim, out } = entry;
     if (entry.stacked) return;   // in the list of the pin it is under
     const phase = (hashId(post.id) % 628) / 100;
     const moving = motion !== null && (alive.has(post.id) || (mine && !dim));
@@ -2262,15 +2260,19 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     if (!entry.room) {
       // Waiting for room: a dot in its heat's colour. A tap on it comes closer
       // and opens it (pick: `dot`); it used to be no target at all.
+      // Yours is bigger, in your colour, and gives off rings, so it is found.
+      const yours = mine && !dim;
+      if (yours) radar(point.x, point.y, MINE_DOT_R, motion);
       ctx.beginPath();
-      ctx.arc(point.x, point.y, deep ? 3.5 : 3, 0, Math.PI * 2);
-      ctx.fillStyle = pinColor(post.motivation);
+      ctx.arc(point.x, point.y, yours ? MINE_DOT_R : deep ? 3.5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = yours ? MINE : pinColor(post.motivation);
       ctx.fill();
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = yours ? 2 : 1.2;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
       if (!plain) ctx.restore();
-      if (!dim) hits.push({ x: point.x, y: point.y, r: 12, post, dot: true });
+      if (yours) youLabel(claim, point.x, point.y);
+      if (!dim) hits.push({ x: point.x, y: point.y, r: yours ? 14 : 12, post, dot: true });
       return;
     }
     const unread = isUnreadRecruit(post, meId) && !dim;
@@ -2282,14 +2284,11 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     });
     const r = shown.headR;
     const headY = shown.headY;
-    if (isOpen(post)) openMark(point.x - r * 0.95, headY - r * 0.85, deep);
-    // How much it has been answered: always when deep, only when busy at near.
-    // A stack's "+N" takes the top right corner; the count then sits below.
+    // A stack's "+N" takes the top right corner. The green "talk to me" bubble
+    // and the red count of answers are gone (2026-10-22): nothing said what
+    // they meant, and the map had too much on it.
     const stack = entry.stack;
     if (stack) stackChip(point.x + r * 1.05, headY - r * 0.85, stack.length - 1);
-    if (busy > 0 && (deep || busy >= 5)) {
-      countChip(point.x + r * 0.95, stack ? headY + r * 0.75 : headY - r * 0.85, busy);
-    }
 
     if (name) {
       ctx.save();
@@ -2325,25 +2324,6 @@ function stackChip(x, y, more) {
   ctx.fill();
   ctx.lineWidth = 2;
   ctx.strokeStyle = '#ffffff';
-  ctx.stroke();
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, x, y + 0.5);
-  ctx.restore();
-}
-
-function countChip(x, y, count) {
-  const text = count > 99 ? '99+' : String(count);
-  ctx.save();
-  ctx.font = '700 9px system-ui, sans-serif';
-  const w = Math.max(14, ctx.measureText(text).width + 7);
-  ctx.beginPath();
-  ctx.roundRect(x - w / 2, y - 7, w, 14, 7);
-  ctx.fillStyle = MINE;
-  ctx.fill();
-  ctx.lineWidth = 1.4;
-  ctx.strokeStyle = '#fffaf0';
   ctx.stroke();
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
@@ -2409,36 +2389,6 @@ function regionNames(places, claim, label) {
   ctx.restore();
 }
 
-/** Whether the writer said "talk to me" on this post (Q45). */
-function isOpen(post) {
-  const tag = config().open_tag;
-  return Boolean(tag) && Array.isArray(post.tags) && post.tags.includes(tag);
-}
-
-const OPEN_GREEN = '#2f9e5b';
-
-/** A small green speech bubble on the face: "you may talk to me". */
-function openMark(x, y, deep) {
-  const r = deep ? 8 : 6.5;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.moveTo(x - r * 0.55, y + r * 0.6);
-  ctx.lineTo(x - r * 0.9, y + r * 1.25);
-  ctx.lineTo(x + r * 0.05, y + r * 0.85);
-  ctx.fillStyle = OPEN_GREEN;
-  ctx.fill();
-  ctx.lineWidth = 1.4;
-  ctx.strokeStyle = '#fffaf0';
-  ctx.stroke();
-  ctx.fillStyle = '#ffffff';
-  for (const dx of [-0.42, 0, 0.42]) {
-    ctx.beginPath();
-    ctx.arc(x + dx * r, y, r * 0.15, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
 
 /** Behind an island name that was just tapped: a white pill in its colour. */
 function litPill(entry) {
@@ -2461,9 +2411,14 @@ function drawTrial(time) {
   const point = toScreen(trial.x, trial.y);
   if (point.x < -60 || point.y < -60 || point.x > width + 60 || point.y > height + 60) return;
   const breathe = REDUCED_MOTION ? 0.5 : (Math.sin(time * 2.4) + 1) / 2;
+  const TRY_SIZE = 26;
+  const { headR } = pinGeometry(TRY_SIZE, trial.motivation);
+  // The ring lies at the pin's foot, where its shadow is, not across its middle.
+  const foot = point.y + headR * 1.1;
+  const ringRy = 4 + breathe * 1.5;
   ctx.save();
   ctx.beginPath();
-  ctx.ellipse(point.x, point.y, 14 + breathe * 4, 6 + breathe * 2, 0, 0, Math.PI * 2);
+  ctx.ellipse(point.x, foot, 14 + breathe * 4, ringRy, 0, 0, Math.PI * 2);
   ctx.setLineDash([5, 4]);
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = MINE;
@@ -2472,13 +2427,13 @@ function drawTrial(time) {
   ctx.globalAlpha = 0.75;
   drawPostPin(ctx, point.x, point.y, {
     heat: trial.motivation, initial: initialOf(trial.display_name || (state.account && state.account.display_name)),
-    size: 26, mine: true, tag: false, night: tod === 'night',
+    size: TRY_SIZE, mine: true, tag: false, night: tod === 'night',
   });
   ctx.globalAlpha = 1;
   ctx.font = '700 11px system-ui, sans-serif';
   const text = 'お試し';
   const w = ctx.measureText(text).width + 14;
-  const y = point.y + 20;
+  const y = foot + ringRy + 10;
   ctx.beginPath();
   ctx.roundRect(point.x - w / 2, y - 9, w, 18, 9);
   ctx.fillStyle = MINE;
@@ -2491,13 +2446,14 @@ function drawTrial(time) {
   // the others; where no saved island of that name is on the map, put it here.
   const name = trial.island && trial.island.label;
   if (name && !(state.islands || []).some((island) => island.label === name)) {
+    const nameY = point.y + pinReach(TRY_SIZE, trial.motivation) - 9;
     ctx.font = '700 13px system-ui, sans-serif';
     ctx.lineJoin = 'round';
     ctx.lineWidth = 4;
     ctx.strokeStyle = 'rgba(255,255,255,.9)';
     ctx.fillStyle = INK.label;
-    ctx.strokeText(name, point.x, point.y - 44);
-    ctx.fillText(name, point.x, point.y - 44);
+    ctx.strokeText(name, point.x, nameY);
+    ctx.fillText(name, point.x, nameY);
   }
   ctx.restore();
   hits.push({ x: point.x, y: point.y - 18, r: 26, trial: true });

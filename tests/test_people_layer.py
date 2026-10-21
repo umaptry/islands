@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import BOOKKEEPING, CAMPING_A, SOLDERING, Person
+from conftest import BOOKKEEPING, CAMPING_A, CAMPING_B, SOLDERING, Person
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -178,17 +178,27 @@ def test_the_similar_rules_still_hold_when_switched_on(people, app_module, monke
 
 
 # --------------------------------------------------------------------------
-# 2. any interaction draws a line anyone can see; undoing it removes it
+# 2. a join or a message draws a line anyone can see; undoing it removes it
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("kind", ["like", "help", "join"])
-def test_a_reaction_draws_a_line_and_taking_it_back_removes_it(people, app_module, kind):
+@pytest.mark.parametrize("kind", ["like", "help"])
+def test_a_like_or_a_help_draws_no_line(people, app_module, kind):
+    akari = people("a@example.com", "あかり")
+    bannai = people("b@example.com", "ばんない")
+    post = akari.post(CAMPING_A)
+    bannai.post(SOLDERING)
+    bannai.react(post["id"], kind)
+    assert lines_now(akari.client) == []
+
+
+def test_a_join_draws_a_line_and_taking_it_back_removes_it(people, app_module):
     akari = people("a@example.com", "あかり")
     bannai = people("b@example.com", "ばんない")
     post = akari.post(CAMPING_A)
     c = akari.client
     assert lines_now(c) == []
 
+    kind = "join"
     bannai.react(post["id"], kind)
     rows = lines_now(c)  # no Authorization header: a third party's view
     assert len(rows) == 1
@@ -205,7 +215,7 @@ def test_a_line_carries_where_both_ends_stand_and_who_they_are(people, app_modul
     bannai = people("b@example.com", "ばんない")
     post = akari.post(CAMPING_A)
     own = bannai.post(SOLDERING)
-    bannai.react(post["id"], "like")
+    bannai.react(post["id"], "like")  # a like alone draws nothing
     bannai.comment(post["id"], "いいですね")
 
     [row] = lines_now(akari.client)
@@ -216,7 +226,37 @@ def test_a_line_carries_where_both_ends_stand_and_who_they_are(people, app_modul
     assert row[f"{a}_at"] == [pytest.approx(post["x"]), pytest.approx(post["y"])]
     assert row[f"{b}_at"] == [pytest.approx(own["x"]), pytest.approx(own["y"])]
     assert (row[f"{a}_name"], row[f"{b}_name"]) == ("あかり", "ばんない")
-    assert row["week"] == 2
+    assert row["week"] == 1
+
+
+def test_a_line_joins_the_touched_post_to_the_nearest_post_of_the_other(people, app_module):
+    akari = people("a@example.com", "あかり")
+    bannai = people("b@example.com", "ばんない")
+    post = akari.post(CAMPING_A)
+    others = [bannai.post(text) for text in (SOLDERING, BOOKKEEPING, CAMPING_B)]
+
+    def gap(one, two):
+        return (one["x"] - two["x"]) ** 2 + (one["y"] - two["y"]) ** 2
+
+    near = min(others, key=lambda p: gap(p, post))
+    bannai.comment(post["id"], "いいですね")
+
+    [row] = lines_now(akari.client)
+    ends = {row["a"]: row["a_post"], row["b"]: row["b_post"]}
+    assert ends[akari.id] == post["id"]
+    assert ends[bannai.id] == near["id"], "the nearest post of the person who reached out"
+
+    # Now akari joins a far post of bannai's: the line follows the touched post,
+    # and akari's end is the one of akari's posts closest to it.
+    far = max(others, key=lambda p: gap(p, post))
+    second = akari.post(BOOKKEEPING)
+    akari.react(far["id"], "join")
+    app_module.invalidate_connections()
+    [row] = lines_now(akari.client)
+    ends = {row["a"]: row["a_post"], row["b"]: row["b_post"]}
+    assert ends[bannai.id] == far["id"]
+    closest = min([post, second], key=lambda p: gap(p, far))
+    assert ends[akari.id] == closest["id"]
 
 
 def test_a_similar_person_comes_with_the_post_the_dotted_line_goes_to(people, app_module):
@@ -297,19 +337,19 @@ def test_one_line_per_pair_however_many_posts_and_taps(people, app_module):
     chiaki = people("c@example.com", "ちあき")
     posts = [akari.post(f"{CAMPING_A} その{i}") for i in range(10)]
     for post in posts:
-        bannai.react(post["id"], "like")
-        bannai.react(post["id"], "help")
+        bannai.react(post["id"], "join")
+        bannai.react(post["id"], "like")  # draws nothing
     bannai.comment(posts[3]["id"], "これも良いですね")
     akari.comment(posts[3]["id"], "ありがとう")  # the author answering is not a new line
 
     c = akari.client
     rows = lines_now(c)
-    assert len(rows) == 1, "ten posts and twenty-one interactions are still one pair"
-    assert rows[0]["count"] == 21
+    assert len(rows) == 1, "ten posts and eleven interactions are still one pair"
+    assert rows[0]["count"] == 11
     ends = {rows[0]["a"]: rows[0]["a_post"], rows[0]["b"]: rows[0]["b_post"]}
-    assert ends[akari.id] == posts[3]["id"], "the line ends on the most-touched post"
+    assert ends[akari.id] == posts[3]["id"], "the line ends on the post last touched"
 
-    chiaki.react(posts[0]["id"], "like")
+    chiaki.react(posts[0]["id"], "join")
     assert len(lines_now(c)) == 2
     assert len(lines_now(c, person=chiaki.id)) == 1
 
@@ -495,7 +535,7 @@ def event(actor, owner, post, kind="like", days=0, reply_author=None):
 def test_connections_points_decay_tiers_and_faint_lines():
     from core import connections
 
-    events = [event("b", "a", "p1", "like", days=0), event("b", "a", "p1", "comment", days=1)]
+    events = [event("b", "a", "p1", "join", days=0), event("b", "a", "p1", "comment", days=1)]
     [line] = connections.build(events, now=NOW)
     assert (line["a"], line["b"]) == ("a", "b")
     assert line["points"] == 3 and line["count"] == 2
@@ -505,13 +545,14 @@ def test_connections_points_decay_tiers_and_faint_lines():
     two = [event("b", "a", "p1", "comment"), event("b", "a", "p1", "comment")]
     assert connections.build(two, now=NOW)[0]["tier"] == 2
 
-    [old] = connections.build([event("b", "a", "p1", days=40)], now=NOW)
+    [old] = connections.build([event("b", "a", "p1", "join", days=40)], now=NOW)
     assert old["faint"] and old["tier"] == 1 and not old["ongoing"]
-    assert connections.build([event("a", "a", "p1")], now=NOW) == []
+    assert connections.build([event("a", "a", "p1", "join")], now=NOW) == []
+    assert connections.build([event("b", "a", "p1", "like"), event("b", "a", "p2", "help")], now=NOW) == []
     many = [event("b", "a", f"p{i}", "comment") for i in range(5)]
     assert connections.build(many, now=NOW)[0]["tier"] == 3
 
-    week = [event("b", "a", "p1", days=d) for d in (0, 3, 6.9, 8, 20)]
+    week = [event("b", "a", "p1", "join", days=d) for d in (0, 3, 6.9, 8, 20)]
     assert connections.build(week, now=NOW)[0]["week"] == 3, "only the last seven days count"
 
 
@@ -528,9 +569,56 @@ def test_a_reply_to_your_own_comment_thread_counts_once():
 def test_the_fallback_post_ends_a_line_on_a_person_whose_posts_were_not_touched():
     from core import connections
 
-    [line] = connections.build([event("b", "a", "p1")], now=NOW, fallback_posts={"b": "pb"})
+    [line] = connections.build([event("b", "a", "p1", "join")], now=NOW, fallback_posts={"b": "pb"})
     assert (line["a_post"], line["b_post"]) == ("p1", "pb")
     assert connections.partners([line], "a") == {"b"}
+
+
+def test_the_other_end_is_the_nearest_post_and_the_last_touch_wins():
+    from core import connections
+
+    positions = {"p1": (0, 0), "p2": (10, 0), "n1": (1, 1), "n2": (9, 0), "far": (50, 50)}
+    by_author = {"a": ["p1", "p2"], "b": ["far", "n2", "n1"]}
+    kw = {"now": NOW, "positions": positions, "posts_by_author": by_author, "fallback_posts": {"b": "far"}}
+    [line] = connections.build([event("b", "a", "p1", "comment", days=3)], **kw)
+    assert (line["a_post"], line["b_post"]) == ("p1", "n1")
+    # The newest touch decides the post, even if the older one was touched more.
+    touches = [event("b", "a", "p1", "comment", days=3), event("b", "a", "p1", "join", days=2),
+               event("b", "a", "p2", "join", days=1)]
+    [line] = connections.build(touches, **kw)
+    assert (line["a_post"], line["b_post"]) == ("p2", "n2")
+    # Equal distances: the lower id.
+    tie = {"now": NOW, "positions": {"p1": (0, 0), "x": (3, 0), "y": (-3, 0)},
+           "posts_by_author": {"a": ["p1"], "b": ["y", "x"]}}
+    [line] = connections.build([event("b", "a", "p1", "join")], **tie)
+    assert line["b_post"] == "x"
+    # A person with no post that has a place falls back; nobody at all gives None.
+    [line] = connections.build([event("b", "a", "p1", "join")], now=NOW, positions=positions,
+                               posts_by_author={"a": ["p1"]}, fallback_posts={"b": "pb"})
+    assert line["b_post"] == "pb"
+    [line] = connections.build([event("b", "a", "p1", "join")], now=NOW, positions=positions,
+                               posts_by_author={"a": ["p1"]})
+    assert line["b_post"] is None
+    # A reply under somebody else's post joins the two people's closest posts.
+    lines = connections.build([event("b", "c", "pc", "reply", reply_author="a")],
+                              now=NOW, positions={**positions, "pc": (99, 99)},
+                              posts_by_author=by_author)
+    [line] = [row for row in lines if (row["a"], row["b"]) == ("a", "b")]
+    assert (line["a_post"], line["b_post"]) == ("p2", "n2")
+
+
+def test_a_touched_post_without_a_place_does_not_hide_the_line():
+    from core import connections
+
+    positions = {"p1": (0, 0), "n1": (1, 1)}
+    events = [event("b", "a", "p9", "join")]
+    # The touched post has no place: the closest placed pair is used instead.
+    [line] = connections.build(events, now=NOW, positions=positions,
+                               posts_by_author={"a": ["p1"], "b": ["n1"]}, fallback_posts={"a": "fa", "b": "fb"})
+    assert (line["a_post"], line["b_post"]) == ("p1", "n1")
+    # Nothing has a place: both ends fall back, so the line still has ends.
+    [line] = connections.build(events, now=NOW, positions={"zz": (0, 0)}, fallback_posts={"a": "fa", "b": "fb"})
+    assert (line["a_post"], line["b_post"]) == ("fa", "fb")
 
 
 def posts_by(author, count, days=0):
