@@ -2,7 +2,7 @@
   "id": "/",
   "name": "islands",
   "short_name": "islands",
-  "description": "書いた一言だけで地図の上に島ができる。近くにいる人ほど、似た話をしている。",
+  "description": "一言書くだけで、似た話の人が近くに集まって島ができる地図。気軽に話しかけたり、仲間を募集したりできます。",
   "lang": "ja",
   "start_url": "/#/map",
   "scope": "/",

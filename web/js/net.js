@@ -188,12 +188,11 @@ const supabaseBackend = {
     });
     return flatten(rows[0], 'author');
   },
+  // Through the server: setting deleted_at here hides the row from the
+  // comments_read policy, and the database then refuses the update it is asked
+  // to return. The server writes it with its own key, after checking the author.
   async deleteComment(commentId) {
-    await restCall('comments', {
-      method: 'PATCH',
-      params: { id: `eq.${commentId}`, author_id: `eq.${session.userId()}` },
-      body: { deleted_at: new Date().toISOString() },
-    });
+    await api.del(`/api/comments/${encodeURIComponent(commentId)}`);
     return true;
   },
   async myReactions() {
