@@ -1,7 +1,8 @@
 """Lines between people: one per pair, no direction, from interactions.
 
-Any interaction draws a line - a like, help or join, a comment on somebody's
-post, a reply to somebody's comment. Two people who interact many times, or
+Only an act of reaching out draws a line - a join, a comment on somebody's
+post, a reply to somebody's comment. A like or a "help" is too light: counting
+it would cover the map in lines. Two people who interact many times, or
 one person with ten posts, still get exactly one line: the unit is the pair of
 people, never the post.
 
@@ -15,7 +16,6 @@ function of the same name for the exact columns.
 """
 
 import math
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from core.config import (
@@ -63,14 +63,49 @@ def tier_of(strength):
     return tier
 
 
-def build(events, now=None, fallback_posts=None):
+def nearest_post(origin, candidates, positions):
+    """The candidate post standing closest to `origin` on the map (ties: lowest id)."""
+    best = None
+    for post_id in candidates:
+        spot = positions.get(post_id)
+        if spot is None:
+            continue
+        key = (math.hypot(spot[0] - origin[0], spot[1] - origin[1]), post_id)
+        if best is None or key < best[0]:
+            best = (key, post_id)
+    return best[1] if best else None
+
+
+def closest_pair(mine, theirs, positions):
+    """The (post of `mine`, post of `theirs`) pair standing closest to each other."""
+    best = None
+    for left in mine:
+        spot = positions.get(left)
+        if spot is None:
+            continue
+        right = nearest_post(spot, theirs, positions)
+        if right is None:
+            continue
+        other = positions[right]
+        key = (math.hypot(spot[0] - other[0], spot[1] - other[1]), left, right)
+        if best is None or key < best:
+            best = key
+    return (best[1], best[2]) if best else (None, None)
+
+
+def build(events, now=None, fallback_posts=None, positions=None, posts_by_author=None):
     """Connections, strongest first.
 
-    fallback_posts maps person -> their most energetic live post id, used as
-    the line end for somebody whose own posts the other never touched.
+    A line joins the post the last interaction landed on to the other person's
+    post standing closest to it on the map. positions maps post id -> (x, y)
+    and posts_by_author maps person -> their live post ids; without them (or
+    when the other person has no post with a place) the end falls back to
+    fallback_posts, person -> their most energetic live post id.
     """
     now = now or datetime.now(timezone.utc)
     fallback_posts = fallback_posts or {}
+    positions = positions or {}
+    posts_by_author = posts_by_author or {}
     half_life = CONNECTION_HALF_LIFE_DAYS
     pairs = {}
     for event in events:
@@ -82,7 +117,7 @@ def build(events, now=None, fallback_posts=None):
             if pair is None:
                 pair = pairs[key] = {
                     "points": 0, "strength": 0.0, "count": 0, "last": stamp,
-                    "days": set(), "week": 0, "posts": defaultdict(lambda: defaultdict(int)),
+                    "days": set(), "week": 0, "latest": None,
                 }
             pair["points"] += points
             pair["strength"] += points * math.pow(0.5, age_days / half_life)
@@ -91,17 +126,26 @@ def build(events, now=None, fallback_posts=None):
             pair["days"].add(stamp.date())
             if age_days <= CONNECTION_WEEK_DAYS:
                 pair["week"] += 1
-            if owner in key:
-                pair["posts"][owner][post_id] += 1
+            if pair["latest"] is None or (stamp, post_id) >= pair["latest"][:2]:
+                pair["latest"] = (stamp, post_id, owner)
 
     window_start = (now - timedelta(days=CONNECTION_ONGOING_WINDOW_DAYS)).date()
     out = []
     for (a, b), pair in pairs.items():
+        _, post_id, owner = pair["latest"]
+        ends = {}
+        spot = positions.get(post_id)
+        if owner in (a, b) and (spot is not None or not positions):
+            other = b if owner == a else a
+            ends[owner] = post_id
+            if spot is not None:
+                ends[other] = nearest_post(spot, posts_by_author.get(other, ()), positions)
+        else:
+            # The touched post has no place on the map: let both ends fall back.
+            ends[a], ends[b] = closest_pair(posts_by_author.get(a, ()), posts_by_author.get(b, ()), positions)
+
         def end(person):
-            counts = pair["posts"].get(person)
-            if counts:
-                return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
-            return fallback_posts.get(person)
+            return ends.get(person) or fallback_posts.get(person)
         recent_days = sum(1 for day in pair["days"] if day >= window_start)
         idle_days = (now - pair["last"]).total_seconds() / 86400.0
         out.append({

@@ -875,10 +875,20 @@ def connection_lines(force=False):
             return cached
     store = state["store"]
     events = store.interaction_events(since=CONNECTIONS_SINCE)
-    # A line ends on each person's most-touched post; somebody whose posts the
-    # other never touched is drawn from their most energetic one.
-    where, best = home_posts()
-    value = lines.build(events, fallback_posts={author: post["id"] for author, post in best.items()})
+    # A line ends on the post the last interaction landed on and on the other
+    # person's post standing closest to it; somebody with no post that has a
+    # place is drawn from their most energetic one.
+    posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+    where, best = home_posts(posts)
+    by_author = defaultdict(list)
+    for post in posts:
+        if post["id"] in where and post.get("author_id"):
+            by_author[post["author_id"]].append(post["id"])
+    value = lines.build(
+        events, fallback_posts={author: post["id"] for author, post in best.items()},
+        positions={post_id: (spot["x"], spot["y"]) for post_id, spot in where.items()},
+        posts_by_author=by_author,
+    )
     # The map draws a line from these alone: where both ends stand, and who the
     # two are for the tap on a boat. Posts the map has not loaded yet still
     # have a place, so a line does not wait for the viewport to reach it.
@@ -2524,6 +2534,17 @@ def local_joiners(post_id: str):
     """Who joined a post: the local stand-in for reading the reactions table."""
     require_local()
     return {"joiners": state["store"].joiners_of(post_id)}
+
+
+@app.get("/api/local/posts/{post_id}/reactors")
+def local_reactors(post_id: str, kind: str = "like"):
+    """Who pressed いいね / 手伝えるかも / 参加 on a post, with their names and icons."""
+    require_local()
+    try:
+        reactors = state["store"].reactors_of(post_id, kind)
+    except StoreError:
+        raise HTTPException(status_code=422, detail="kind は like / help / join のどれかです。")
+    return {"reactors": reactors}
 
 
 @app.get("/api/local/notifications")

@@ -9,16 +9,14 @@
 // Stage 5 added, for the author alone, how many people have seen the post (Q35). Nobody else
 // ever sees that number, and there is no "seen but not answered" anywhere:
 // a reply that does not come should not feel like one that was refused (Q46).
-//
-// What is added is the pair of lines かさなり can say and islands could not:
-// how alike two posts are, measured in the 448 dimensions before the map
-// flattened them, and which words the two people actually share.
 
 import { config } from '../config.js';
 import { data } from '../net.js';
 import { hasReacted, state, subscribe, upsertPost } from '../state.js';
 import { avatar, confirmAction, el, motivationColor, timeAgo } from '../ui.js';
 import { icon } from '../icons.js';
+import { buzz } from '../feedback.js';
+import { attachLongPress } from '../longpress.js';
 import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
 import { joinTerms, joinWord } from '../recruit-rules.js';
@@ -72,7 +70,7 @@ const JOIN = { kind: 'join', label: '参加', countKey: 'join_count', tone: 'joi
  * @param options.onReact  (kind) => Promise
  * @param options.onEdit / onDelete / onOpenAuthor / onReport / onComments
  * @param options.onSeeParticipants  () => void, shown on 「参加者募集中」 posts
- * @param options.similarity { similarity, shared, note } when viewing somebody else
+ * @param options.onSeeReactors  (kind) => void, run when you hold いいね / 手伝えるかも on your own post
  * @param options.compact  drop the image and the footer (used in list contexts)
  */
 export function postCard(post, options = {}) {
@@ -103,8 +101,6 @@ export function postCard(post, options = {}) {
     }, icon('more', 20)));
   }
   card.append(el('div', { className: 'post-head' }, author, tools));
-
-  // --- similarity, when this is somebody else's post --------------------
 
   // --- tags -------------------------------------------------------------
   if ((post.tags || []).length) {
@@ -163,12 +159,6 @@ export function postCard(post, options = {}) {
     paintViews(views, post.id);
     card.append(views);
   }
-  if (options.similarity && typeof options.similarity.similarity === 'number') {
-    const detail = el('details', { className: 'similarity-details' },
-      el('summary', { text: `似てる度 ${options.similarity.similarity}%・共通点を見る` }), similarityBlock(options.similarity));
-    card.append(detail);
-  }
-
   return card;
 }
 
@@ -244,36 +234,6 @@ function motivationBar(value) {
   );
 }
 
-function similarityBlock({ similarity, shared, note }) {
-  const block = el('div', { className: 'similarity' });
-  block.append(
-    el('div', { className: 'similarity-head' },
-      el('span', { className: 'similarity-value num', text: `${similarity}%` }),
-      el('span', { className: 'similarity-label', text: '似てる度' }),
-    ),
-    el('div', { className: 'similarity-bar' },
-      el('div', { className: 'similarity-fill', style: { width: '0%' } })),
-  );
-  requestAnimationFrame(() => {
-    const fill = block.querySelector('.similarity-fill');
-    if (fill) fill.style.width = `${Math.max(2, similarity)}%`;
-  });
-
-  if (shared && shared.length) {
-    block.append(el('div', { className: 'chips' },
-      shared.map((word) => el('span', { className: 'chip', text: word }))));
-  } else if (note) {
-    block.append(el('p', { className: 'similarity-note', text: note }));
-  }
-  // Otherwise a high number next to somebody drawn on the far side of the map
-  // reads as a bug rather than as the two different things they are.
-  block.append(el('p', {
-    className: 'similarity-foot',
-    text: '似てる度は文章の意味の近さです。地図上の距離とは異なる場合があります。',
-  }));
-  return block;
-}
-
 function footer(post, options) {
   const row = el('div', { className: 'post-actions' });
   const left = el('div', { className: 'post-actions-group' });
@@ -326,6 +286,16 @@ function footer(post, options) {
       if (reaction.kind === 'join') paintJoin(button, current);
     };
     paint();
+
+    // Holding the button on your own post lists who pressed it. Others' posts
+    // get nothing: the button stays an ordinary button.
+    if (!isJoin && options.onSeeReactors && state.account && post.author_id === state.account.id) {
+      button.classList.add('holdable');
+      attachLongPress(button, {
+        onPressing: (on) => button.classList.toggle('pressing', on),
+        onHold: () => { buzz('react'); options.onSeeReactors(reaction.kind); },
+      });
+    }
 
     button.addEventListener('click', async () => {
       if (!options.onReact) return;

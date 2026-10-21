@@ -472,6 +472,36 @@ class MemoryStore:
             return [actor for (pid, actor, kind) in self._reactions
                     if pid == post_id and kind == "join"]
 
+    def reactors_of(self, post_id, kind):
+        """The people who pressed one reaction on a post, newest first (local mode only).
+
+        The stand-in for reading reactions with their accounts embedded, which is
+        what the browser does against a database: 長押し on your own post's
+        いいね / 手伝えるかも.
+        """
+        if kind not in REACTION_KINDS:
+            raise StoreError("kind")
+        with self._lock:
+            # Two presses in the same instant: the dict keeps the order they came
+            # in, so the later one still comes first (not whichever id sorts higher).
+            rows = sorted(
+                ((created, order, actor)
+                 for order, ((pid, actor, k), created) in enumerate(self._reactions.items())
+                 if pid == post_id and k == kind),
+                reverse=True,
+            )
+            people = []
+            for created, _order, actor in rows:
+                account = self._accounts.get(actor) or {}
+                people.append({
+                    "id": actor,
+                    "display_name": account.get("display_name") or "",
+                    "icon_id": account.get("icon_id") or "0",
+                    "avatar_path": account.get("avatar_path"),
+                    "created_at": created,
+                })
+            return people
+
 
     def reactions_by_actor(self, actor_id):
         with self._lock:

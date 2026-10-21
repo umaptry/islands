@@ -428,8 +428,14 @@ export function setupProfileSetup() {
 // first post. Buttons are the only
 // way through: a scroll-snap track let a half swipe settle between two slides
 // with the dots showing one thing and the screen showing another.
+// 見直し: マイページの「islands の使い方を見る」から開いたとき。登録直後の
+// 流れ(onboarding の段階)には一切さわらず、終わったらマイページへ戻る。
+let reviewFromMe = false;
+export function markGuidanceReview() { reviewFromMe = true; }
+
 export function setupGuidance() {
   let index = 0;
+  let review = false;
   const track = () => $('guidanceTrack');
   const dots = () => [...$('guidanceDots').children];
 
@@ -440,18 +446,30 @@ export function setupGuidance() {
     slides.forEach((slide, i) => { slide.inert = i !== index; });
     dots().forEach((dot, i) => dot.classList.toggle('on', i === index));
     $('guidanceBack').hidden = index === 0;
-    $('guidanceNext').textContent = index === slides.length - 1 ? 'はじめる' : '次へ';
-    setOnboardingStep(String(index));
+    const last = index === slides.length - 1;
+    $('guidanceNext').textContent = last ? (review ? '閉じる' : 'ひとこと書いてみる') : '次へ';
+    if (!review) setOnboardingStep(String(index));
   }
 
+  // The last slide and 「スキップ」 end the same way: on to the first post.
+  const finish = () => {
+    if (review) {
+      // マイページから来たなら履歴を一つ戻る(戻る操作と同じ)。直接開いたなら置き換える。
+      if (reviewFromMe) { reviewFromMe = false; history.back(); }
+      else navigate('#/me', { replace: true });
+      return;
+    }
+    setOnboardingStep('post');
+    navigate('#/post?first=1');
+  };
+  $('guidanceSkip').addEventListener('click', finish);
   $('guidanceNext').addEventListener('click', () => {
     const total = track().children.length;
     if (index < total - 1) {
       index += 1;
       paint();
     } else {
-      setOnboardingStep('post');
-      navigate('#/post?first=1');
+      finish();
     }
   });
   $('guidanceBack').addEventListener('click', () => {
@@ -461,9 +479,20 @@ export function setupGuidance() {
     }
   });
 
-  screen('guidance', { enter: () => {
-    const saved = Number(onboardingStep());
-    index = Number.isInteger(saved) && saved >= 0 && saved < track().children.length ? saved : 0;
-    paint();
-  } });
+  screen('guidance', {
+    enter: (_params, query) => {
+      // 登録の途中(onboarding の段階が残っている)ときは、いつもの流れを優先する。
+      review = Boolean(query && query.get('review') === '1') && !onboardingStep();
+      $('guidance').classList.toggle('is-review', review);
+      $('guidanceSkip').textContent = review ? '閉じる' : 'スキップ';
+      if (review) {
+        index = 0;
+      } else {
+        const saved = Number(onboardingStep());
+        index = Number.isInteger(saved) && saved >= 0 && saved < track().children.length ? saved : 0;
+      }
+      paint();
+    },
+    leave: () => { reviewFromMe = false; },
+  });
 }

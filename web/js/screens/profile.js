@@ -13,8 +13,9 @@ import { state, removePost } from '../state.js';
 import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
 import { react, openOnMap as openMapPost, refreshMyViews } from './map.js';
 import { postCard } from '../components/postcard.js';
+import { openReactors } from '../components/reactors.js';
 import { icon } from '../icons.js';
-import { setupAvatarField } from './auth.js';
+import { markGuidanceReview, setupAvatarField } from './auth.js';
 import { buzz, canBuzz, feedbackSettings, resumeAudio, setFeedback, sound } from '../feedback.js';
 import { CATEGORIES, defaultSettings, iosOtherBrowser, mergeSettings, settingsRows } from '../notify-rules.js';
 import { disablePush, enablePush, forgetDevice, pushStatus } from '../push.js';
@@ -26,9 +27,11 @@ let editDraft = null;
 
 function header(account, { own } = {}) {
   const link = safeUrl(account.link_url);
+  const photo = avatar(account, 80);
+  photo.classList.add('profile-avatar');
   return el('div', { className: 'profile-head' },
     el('div', { className: 'profile-top' },
-      avatar(account, 80),
+      photo,
       own
         ? el('button', {
           className: 'profile-edit-button',
@@ -58,7 +61,7 @@ function tabs(counts, onSelect) {
   const entries = [
     ['posts', '投稿', counts.posts],
     ['messages', 'メッセージ', counts.messages],
-    ['together', '協働', counts.together],
+    ['together', 'つながり', counts.together],
   ];
   let active = 'posts';
   const paint = () => {
@@ -86,24 +89,42 @@ function tabs(counts, onSelect) {
 
 /** The three counts islands hard-coded. Derived here from what is actually there.
  *
- * 協働 is "people who have reacted with 手伝えるかも or 参加 to something
- * you wrote" - the two reactions that mean somebody offered to do a thing with
- * you, which is the only sense in which islands' "協働" tab ever meant anything.
+ * つながり is the number of people this person has a route (航路) with: since
+ * 2026-10-22 a route only grows from a message, a join or a reply, so it is
+ * "people they have actually talked or joined with". It comes from
+ * /api/connections?person=, one row per pair.
  */
-function countsFor(posts) {
+function countsFor(posts, links) {
   return {
     posts: posts.length,
     messages: posts.reduce((sum, post) => sum + (post.comment_count || 0), 0),
-    together: posts.reduce((sum, post) =>
-      sum + (post.help_count || 0) + (post.join_count || 0), 0),
+    together: links ? links.length : '–',
   };
+}
+
+/** The lines this person is on. A failed read is null (shown as "could not load"), not zero. */
+async function linksOf(accountId) {
+  try {
+    const result = await api.get(`/api/connections?person=${encodeURIComponent(accountId)}`, { auth: false });
+    return (result.connections || []).filter((row) => row.a === accountId || row.b === accountId);
+  } catch {
+    return null;
+  }
 }
 
 function postList(posts, { own, onOpen }) {
   const box = el('div', { className: 'profile-posts' });
   if (!posts.length) {
     box.append(el('div', { className: 'empty-panel' },
-      el('p', { text: '投稿はありません' })));
+      own
+        ? [
+          el('p', { text: 'まだ投稿がありません。最初のひとことを書いてみましょう。' }),
+          el('div', { className: 'empty-actions' }, el('button', {
+            className: 'btn btn-small', attrs: { type: 'button', id: 'meEmptyPost' },
+            text: '投稿する', on: { click: () => navigate('#/post') },
+          })),
+        ]
+        : el('p', { text: '投稿はありません' })));
     return box;
   }
   posts.forEach((post) => {
@@ -114,6 +135,10 @@ function postList(posts, { own, onOpen }) {
       onReact: (kind) => react(post.id, kind),
       onEdit: own ? () => navigate(`#/post/${post.id}/edit`) : null,
       onDelete: own ? () => remove(post) : null,
+      onSeeReactors: own ? (kind) => openReactors({
+        post, kind,
+        onOpenProfile: (id) => navigate(state.account?.id === id ? '#/me' : `#/u/${id}`),
+      }) : null,
     }));
   });
   return box;
@@ -144,23 +169,29 @@ async function renderMe() {
     return;
   }
   body.append(header(state.account, { own: true }));
+  body.append(el('button', {
+    className: 'btn-link me-howto', attrs: { type: 'button', id: 'meHowto' },
+    text: 'islands の使い方を見る',
+    on: { click: () => { markGuidanceReview(); navigate('#/guidance?review=1'); } },
+  }));
   refreshMyViews();
 
   let posts = state.myPosts;
-  try {
-    posts = await data.postsByAuthor(state.account.id);
+  const [fetched, links] = await Promise.all([
+    data.postsByAuthor(state.account.id).catch(() => null),
+    linksOf(state.account.id),
+  ]);
+  if (fetched) {
+    posts = fetched;
     state.myPosts = posts;
-  } catch {
-    /* fall back to whatever the map already loaded */
   }
-
-  const counts = countsFor(posts);
+  const counts = countsFor(posts, links);
   const panel = el('div', { className: 'profile-panel' });
-  body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, true)), panel);
-  paintTab(panel, 'posts', posts, true);
+  body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, true, links, state.account.id)), panel);
+  paintTab(panel, 'posts', posts, true, links, state.account.id);
 }
 
-function paintTab(panel, tab, posts, own) {
+function paintTab(panel, tab, posts, own, links, personId) {
   clear(panel);
   if (tab === 'posts') {
     panel.append(postList(posts, { own, onOpen: openOnMap }));
@@ -184,26 +215,28 @@ function paintTab(panel, tab, posts, own) {
       : el('div', { className: 'empty-panel' }, el('p', { text: 'メッセージはありません' })));
     return;
   }
-  const total = posts.reduce((sum, post) =>
-    sum + (post.help_count || 0) + (post.join_count || 0), 0);
-  panel.append(el('p', { className: 'empty-note', text: '協働は「手伝えるかも」「参加」の反応を集計しています。' }));
-  panel.append(total
+  panel.append(el('p', { className: 'empty-note', text: 'つながりは、メッセージや参加でやりとりした人の数です。' }));
+  if (!links) {
+    panel.append(el('div', { className: 'empty-panel' }, el('p', { text: 'つながりを読み込めませんでした' })));
+    return;
+  }
+  panel.append(links.length
     ? el('div', { className: 'profile-summary' },
-      el('p', { text: `${total} 件の「手伝えるかも」「参加」が届いています。` }),
-      ...posts.filter((post) => (post.help_count || 0) + (post.join_count || 0)).map((post) =>
-        el('button', {
+      el('p', { text: `${links.length} 人とつながっています。` }),
+      ...links.map((row) => {
+        const side = row.a === personId ? 'b' : 'a';
+        const other = { id: row[side], display_name: row[`${side}_name`], icon_id: row[`${side}_icon`] };
+        return el('button', {
           className: 'list-row', attrs: { type: 'button' },
-          on: { click: () => openOnMap(post) },
+          on: { click: () => navigate(state.account?.id === other.id ? '#/me' : `#/u/${other.id}`) },
         },
+          avatar(other, 36),
           el('div', { className: 'list-row-body' },
-            el('div', { className: 'list-row-title', text: post.body.slice(0, 24) }),
-            el('div', {
-              className: 'list-row-sub',
-              text: `手伝えるかも ${post.help_count || 0}・参加 ${post.join_count || 0}`,
-            }),
+            el('div', { className: 'list-row-title', text: other.display_name || '名前のない人' }),
           ),
-        )))
-    : el('div', { className: 'empty-panel' }, el('p', { text: '協働の記録はありません' })));
+        );
+      }))
+    : el('div', { className: 'empty-panel' }, el('p', { text: 'まだつながっている人はいません' })));
 }
 
 // ---------------------------------------------------------------- edit
@@ -470,10 +503,12 @@ async function renderUser(accountId) {
 
   let account = null;
   let posts = [];
+  let links = null;
   try {
-    [account, posts] = await Promise.all([
+    [account, posts, links] = await Promise.all([
       data.getAccount(accountId),
       data.postsByAuthor(accountId),
+      linksOf(accountId),
     ]);
   } catch (error) {
     clear(body).append(el('p', { className: 'sheet-error', text: error.message }));
@@ -485,10 +520,10 @@ async function renderUser(accountId) {
   }
 
   clear(body).append(header(account, { own: false }));
-  const counts = countsFor(posts);
+  const counts = countsFor(posts, links);
   const panel = el('div', { className: 'profile-panel' });
-  body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, false)), panel);
-  paintTab(panel, 'posts', posts, false);
+  body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, false, links, accountId)), panel);
+  paintTab(panel, 'posts', posts, false, links, accountId);
 }
 
 // ---------------------------------------------------------------- wiring

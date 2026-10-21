@@ -157,6 +157,33 @@ export function paintBadge() {
   header.textContent = `未読 ${state.unread}件`;
 }
 
+// 投稿が0件の人にだけ「投稿する」を見せる。投稿数がまだ分からないときは調べてから決める。
+let postsCheckedFor = null;
+let postsChecking = false;
+
+async function checkMyPosts() {
+  const account = state.account;
+  if (postsChecking) return;
+  postsChecking = true;
+  try {
+    const posts = await data.postsByAuthor(account.id);
+    if (state.account?.id !== account.id) return;
+    state.myPosts = posts;
+    postsCheckedFor = account.id;
+  } catch {
+    return;
+  } finally {
+    postsChecking = false;
+  }
+  const button = document.getElementById('notifEmptyPost');
+  if (button) button.hidden = state.myPosts.length > 0;
+}
+
+// 確認が済んで0件と分かったときだけ「投稿する」を出す（ちらつき防止）。
+function postsKnownEmpty() {
+  return Boolean(state.account) && postsCheckedFor === state.account.id && !state.myPosts?.length;
+}
+
 function paintList() {
   const entries = state.notifications;
   painted = signature(entries);
@@ -167,8 +194,19 @@ function paintList() {
     list.append(el('div', { className: 'empty-panel' },
       el('div', { className: 'empty-icon' }, icon('bellOff', 40)),
       el('p', { text: '通知はありません' }),
-      el('p', { className: 'empty-sub', text: 'メッセージ・反応・島の変化が届くと、ここに表示されます。' }),
+      el('p', { className: 'empty-sub', text: 'メッセージや反応、島の変化が届くと、ここに表示されます。気になる投稿に「いいね」やメッセージを送ってみましょう。' }),
+      el('div', { className: 'empty-actions' },
+        el('button', {
+          className: 'btn btn-small', attrs: { type: 'button', id: 'notifEmptyMap' },
+          text: 'マップを見る', on: { click: () => navigate('#/map') },
+        }),
+        el('button', {
+          className: 'btn btn-small', attrs: { type: 'button', id: 'notifEmptyPost' },
+          text: '投稿する', hidden: !postsKnownEmpty(), on: { click: () => navigate('#/post') },
+        }),
+      ),
     ));
+    if (state.account && postsCheckedFor !== state.account.id) checkMyPosts();
     return;
   }
 

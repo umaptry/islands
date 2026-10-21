@@ -21,15 +21,15 @@ test('pinColor is re-exported', () => {
   assert.equal(pins.pinColor(95), '#2F63F0');
 });
 
-test('pinGeometry puts the head above the tip and grows with heat and size', () => {
+test('pinGeometry centres the round badge on the place and grows with heat and size', () => {
   const g = pins.pinGeometry(18, 50);
   assert.equal(g.headR, 9);
-  assert.equal(g.headY, -17);
-  assert.ok(g.top < g.headY - g.headR + 1);
+  assert.equal(g.headY, 0);
+  assert.ok(g.top < g.headY - g.headR + 1 && g.top > g.headY - g.headR - 2);
   assert.ok(pins.pinGeometry(36, 50).headR === 18);
   assert.ok(pins.pinGeometry(22, 95).headR > pins.pinGeometry(22, 70).headR);
   assert.ok(pins.pinGeometry(22, 70).headR > pins.pinGeometry(22, 50).headR);
-  // A flame reaches above the head; a selected pin is bigger.
+  // A flame reaches above the badge; a selected pin is bigger.
   assert.ok(pins.pinGeometry(22, 80).top < pins.pinGeometry(22, 50).top);
   assert.ok(pins.pinGeometry(22, 50, true).headR > pins.pinGeometry(22, 50).headR);
 });
@@ -63,10 +63,58 @@ test('drawPostPin gives back a flat result for a bad size and does not throw', (
   assert.equal(pins.drawMiniPin(ctx, 10, 100, { size: -3 }), undefined);
 });
 
+test('pinReach adds the あなた tag over yours, and a flame reaches higher than a plain pin', () => {
+  assert.equal(pins.pinReach(22, 50), pins.pinGeometry(22, 50).top);
+  assert.ok(pins.pinReach(22, 50, true) < pins.pinReach(22, 50));
+  assert.ok(pins.pinReach(22, 80) < pins.pinReach(22, 50));
+});
+
+test('the pin is centred on its place: the badge circle sits at (x, y)', () => {
+  const target = { getTransform: () => ({ a: 1 }), globalAlpha: 1 };
+  const ctx = new Proxy(target, {
+    get: (t, name) => (name in t ? t[name] : () => ({ addColorStop() {} })),
+    set: (t, name, value) => { t[name] = value; return true; },
+  });
+  globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return ctx; } };
+  pins.clearPinCache();
+  const plain = pins.drawPostPin(ctx, 100, 200, { heat: 50, size: 22, initial: 'A' });
+  assert.equal(plain.headY, 200);
+  assert.equal(plain.headR, pins.pinGeometry(22, 50).headR);
+  assert.ok(plain.top < 200 - plain.headR);
+  const fire = pins.drawPostPin(ctx, 100, 200, { heat: 95, size: 22, initial: 'A', time: 0.3 });
+  assert.equal(fire.headY, 200);
+  assert.ok(fire.top < plain.top);
+});
+
 test('the open pin hops up past its height, then settles lifted', () => {
   assert.equal(pins.liftShare(0), 0);
   const peak = Math.max(...[0.1, 0.15, 0.2, 0.25, 0.3].map((t) => pins.liftShare(t)));
   assert.ok(peak > 1 && peak < 1.3, `a small overshoot, got ${peak}`);
   assert.equal(pins.liftShare(1), 1);
   assert.equal(pins.liftShare(null), 1);   // less motion: lifted, no hop
+});
+
+test('the top drawPostPin gives back is what pinReach says, tag and lift included', () => {
+  const target = { getTransform: () => ({ a: 1 }), globalAlpha: 1 };
+  const ctx = new Proxy(target, {
+    get: (t, name) => (name in t ? t[name] : () => ({ addColorStop() {} })),
+    set: (t, name, value) => { t[name] = value; return true; },
+  });
+  globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return ctx; } };
+  pins.clearPinCache();
+  for (const heat of [10, 50, 80, 95]) {
+    // Still (time null): no bob, no sway, so the pin stands exactly on its place.
+    const mine = pins.drawPostPin(ctx, 100, 200, { heat, size: 22, initial: 'A', mine: true });
+    assert.equal(mine.headY, 200);
+    assert.ok(Math.abs(mine.top - (200 + pins.pinReach(22, heat, true))) < 1e-9, `mine, heat ${heat}`);
+    const plain = pins.drawPostPin(ctx, 100, 200, { heat, size: 22, initial: 'A' });
+    assert.ok(Math.abs(plain.top - (200 + pins.pinReach(22, heat))) < 1e-9, `plain, heat ${heat}`);
+    // Opened (openedFor null = settled): bigger, and lifted off its place.
+    const open = pins.drawPostPin(ctx, 100, 200, { heat, size: 22, initial: 'A', mine: true, selected: true });
+    const lift = 6 * pins.pinScale(22, heat, true);
+    assert.ok(Math.abs(open.headY - (200 - lift)) < 1e-9, `lifted, heat ${heat}`);
+    assert.ok(open.headR > plain.headR);
+    assert.ok(Math.abs(open.top - (200 + pins.pinReach(22, heat, true, true))) < 1e-9, `open, heat ${heat}`);
+    assert.ok(pins.pinReach(22, heat, false, true) < pins.pinReach(22, heat));
+  }
 });

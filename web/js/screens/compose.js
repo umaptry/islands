@@ -79,6 +79,14 @@ function paintCounter() {
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
   $('composeSubmit').disabled = submitting || length < min || length > max || !touched;
+  // Say why the button waits, but only once the words are fine: a missing body
+  // is already told by the counter.
+  $('composeHint').hidden = Boolean(editing) || touched || length < min || length < 1 || length > max;
+}
+
+/** First post: show only the examples until "自分の言葉で書く" is tapped. */
+function setOwnOpen(open) {
+  $('compose').classList.toggle('own-closed', firstPost && !open);
 }
 
 function paintMotivation() {
@@ -209,6 +217,10 @@ export function setupCompose() {
   };
   $('composeMotivation').addEventListener('input', moved);
   $('composeMotivation').addEventListener('change', moved);
+  $('composeOwnBtn').addEventListener('click', () => {
+    setOwnOpen(true);
+    body.focus();
+  });
   $('composePromptUse').addEventListener('click', () => {
     if (!config().weekly_prompt?.text) return;
     selectedPrompt = selectedPrompt === 'weekly' ? null : 'weekly';
@@ -323,6 +335,7 @@ export function setupCompose() {
         }
       }
       $('composeError').textContent = '';
+      setOwnOpen(Boolean(draft && (draft.body?.trim() || draft.prompt)));
       paintCounter();
       paintMotivation();
     },
@@ -504,6 +517,7 @@ async function runPlacement(payload, { tryout = false } = {}) {
 
 /** Where the tried-out sentence would stand, before it is shown on the map.
  * (A real post goes straight to the map: see submit.) */
+let trialToken = 0;
 function showTrialReveal(result) {
   const island = result.island;
   // The name stays white on the sea; the island's own colour is the dot beside it.
@@ -514,11 +528,53 @@ function showTrialReveal(result) {
     nameBox.append(dot);
   }
   nameBox.append(el('span', { text: island ? island.label : 'まだ名前のない島' }));
-  clear($('revealBody')).append(el('p', {
+  const bodyBox = clear($('revealBody'));
+  bodyBox.append(el('p', {
     className: 'trial-note',
     text: `「${result.body}」\nこの文は保存していません。地図では、あなたにだけ見えます。`,
   }));
+  const mine = (trialToken += 1);
+  paintNearIslands(bodyBox, result, state.islands);
+  // The island list comes with the map; on a first visit it may not be here yet.
+  if (!state.islands?.length) {
+    api.get('/api/islands', { auth: false }).then((list) => {
+      if (mine === trialToken) paintNearIslands(bodyBox, result, list?.islands);
+    }).catch(() => {});
+  }
   show('reveal');
+}
+
+/** The islands near the tried-out sentence, named, with how many people they hold. */
+function paintNearIslands(bodyBox, result, islands) {
+  bodyBox.querySelector('.reveal-near')?.remove();
+  const near = nearIslands(result, 3, islands);
+  if (!near.length) return;
+  const list = el('ul', { className: 'reveal-near-list' });
+  near.forEach((entry) => {
+    const dot = el('span', { className: 'reveal-swatch' });
+    dot.style.background = islandColor(entry.cluster_id);
+    list.append(el('li', { className: 'reveal-near-item' },
+      dot,
+      el('span', { className: 'reveal-near-name', text: entry.label }),
+      el('span', { className: 'reveal-near-people', text: `${entry.people ?? 0}人` }),
+    ));
+  });
+  bodyBox.append(el('div', { className: 'reveal-near' },
+    el('p', { className: 'reveal-near-lede', text: 'あなたの文に近い話をしている人は、このあたりにいます' }),
+    list,
+  ));
+}
+
+/** The named islands nearest to where the tried-out sentence stands. */
+function nearIslands(result, count, islands) {
+  const { x, y } = result;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+  return (islands || [])
+    .filter((entry) => entry.label && Number.isFinite(entry.cx) && Number.isFinite(entry.cy))
+    .map((entry) => ({ entry, d: Math.hypot(entry.cx - x, entry.cy - y) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, count)
+    .map((item) => item.entry);
 }
 
 export function setupReveal() {
