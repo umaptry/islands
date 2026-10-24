@@ -11,6 +11,7 @@ const screens = new Map();
 const routes = [];
 let current = null;
 let guard = () => null;
+let navVisible = () => true;
 
 /** Register a screen. `enter` may be async; `leave` is always sync. */
 export function screen(id, handlers = {}) {
@@ -37,6 +38,12 @@ export function route(pattern, target) {
 /** Runs before every navigation. Return a hash to redirect, or null to allow. */
 export function setGuard(handler) {
   guard = handler;
+}
+
+/** Which bottom-nav buttons exist right now: `visible(route)` for the button that goes to `route`
+ * (the DM tab is there only when signed in and features.talk is on). Asked on every screen change. */
+export function setNavVisible(visible) {
+  navVisible = visible;
 }
 
 export function navigate(hash, { replace = false } = {}) {
@@ -112,9 +119,15 @@ export function show(id) {
   $$('.screen').forEach((node) => node.classList.toggle('active', node.id === id));
   // The nav is hidden on the screens you have to finish before you can use the
   // app - a guidance you are half way through, a sign-in, a first profile.
-  const chrome = ['map', 'notifications', 'me', 'user', 'compose', 'profileEdit', 'dmList'].includes(id);
+  const chrome = ['map', 'notifications', 'me', 'user', 'compose', 'profileEdit', 'dmList', 'communityEdit'].includes(id);
   $('bottomNav').hidden = !chrome;
   document.body.classList.toggle('has-nav', chrome);
+  refreshNav();
+}
+
+/** Show or hide each nav button as navVisible() says. */
+export function refreshNav() {
+  $$('.nav-item').forEach((item) => { item.hidden = !navVisible(item.dataset.route); });
 }
 
 export const activeScreen = () => current;

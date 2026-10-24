@@ -34,6 +34,9 @@ export const state = {
   removed: new Set(),     // ids deleted this session: the map's ground forgets them
   fetched: null,          // { minX, minY, maxX, maxY } fetched in full by the last refresh
   talk: { peers: new Set(), byTarget: new Map(), at: 0 },   // 「話してみたい」: who shares a 会 with me, and what I pressed
+  dmRooms: [],            // dm_room_list as last read: the DM tab's badge counts the rooms with something new
+  dmNotices: [],          // the DM-message rows of the notification feed (kept out of the 通知 list)
+  dmUnread: 0,            // how many rooms have something new
   communities: [],        // the communities I am in: { id, slug, name, role } (features.communities)
   communitiesLoaded: false,
   communityId: null,      // the one whose map I am looking at

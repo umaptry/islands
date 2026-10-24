@@ -23,7 +23,7 @@ import { refreshExtras, hideTrialHint, setupMapExtras, showTrialHint } from './m
 import { trialView } from './map-extras-logic.js';
 import {
   abortReveal, fitCamera, focusOn, initMap, onCameraSettled, participantView, playReveal,
-  resize, ripple, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
+  resize, ripple, setFreshPosts, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
 } from '../map/index.js';
 import { noteLinks } from '../map/lines.js';
 import { isRecruiting, markRead } from '../map/reads.js';
@@ -33,8 +33,9 @@ import { browserStorage, refreshTalk, talkOptionsFor } from '../talk.js';
 import { savePendingPost, validPostId } from '../return-post.js';
 import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
 import {
-  canSwitch, communityButtonText, islandsInScope, mapNotice, postsExtent,
+  canPostFromMap, canSwitch, headerTitle, islandsInScope, mapNotice, postsExtent,
 } from '../community-rules.js';
+import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -76,15 +77,24 @@ function applyScope(linked = null) {
 }
 
 function paintCommunity() {
-  const pill = $('mapCommunity');
-  const text = communityButtonText(scope, state.communities.length);
-  pill.hidden = !text;
+  // A rename (the edit screen) changes the name in my list; the scope follows it.
+  if (scope.mode === 'community') {
+    const mine = state.communities.find((entry) => entry.id === scope.id);
+    if (mine && mine.name !== scope.name) scope = { ...scope, name: mine.name };
+  }
+  // The left of the header: the community button, or just 「islands」 when there is no community to open.
+  const button = $('mapCommunity');
+  const head = headerTitle(scope, state.communities.length);
+  const caret = head.text.endsWith(' ▾');
+  clear(button).append(el('span', { className: 'header-community-name', text: caret ? head.text.slice(0, -2) : head.text }));
+  if (caret) button.append(el('span', { className: 'header-community-caret', text: '▾', attrs: { 'aria-hidden': 'true' } }));
   $('map').classList.toggle('no-community', scope.mode === 'none');
-  pill.textContent = text;
-  const switchable = canSwitch(scope, state.communities.length);
-  pill.classList.toggle('static', !switchable);
-  pill.setAttribute('aria-haspopup', switchable ? 'dialog' : 'false');
-  pill.setAttribute('aria-label', switchable ? `${scope.name}。コミュニティを切り替える` : (text || 'コミュニティ'));
+  button.disabled = !head.tappable;
+  button.classList.toggle('is-brand', head.brand);
+  button.setAttribute('aria-haspopup', head.tappable ? 'dialog' : 'false');
+  button.setAttribute('aria-label', head.tappable ? `${scope.name}。コミュニティの一覧を開く` : head.text);
+  // Writing: from the round button, for the community shown here (compose says 「{name} に投稿」).
+  $('mapPost').hidden = !canPostFromMap({ signedIn: Boolean(state.account), scope });
   const notice = mapNotice(scope, {
     signedIn: Boolean(state.account), known: state.communitiesLoaded, inviteOnly: config().invite_only === true,
   });
@@ -110,15 +120,16 @@ function applyIslands() {
   else state.islands = rawIslands;
 }
 
-/** The sheet that lists my communities. */
+/** The sheet that lists my communities (the current one marked). An admin's row also has 「編集」, which
+ * opens that community's edit screen. Opens with one community too: it shows that row and its 編集. */
 function openCommunitySheet() {
   if (!canSwitch(scope, state.communities.length)) return;
   const body = openSheet({ onClose: () => { state.selected = null; } });
   clear($('sheetFoot'));
   clear(body).append(
-    el('h3', { className: 'stack-title', text: 'コミュニティを切り替える' }),
+    el('h3', { className: 'stack-title', text: 'コミュニティ' }),
     el('ul', { className: 'stack-list community-list', attrs: { id: 'communityList' } },
-      state.communities.map((entry) => el('li', {},
+      state.communities.map((entry) => el('li', { className: 'community-item' },
         el('button', {
           className: `stack-row community-row${entry.id === scope.id ? ' on' : ''}`,
           attrs: { type: 'button', 'aria-current': String(entry.id === scope.id), 'data-community-id': entry.id },
@@ -126,9 +137,20 @@ function openCommunitySheet() {
         },
         el('span', { className: 'stack-who', text: entry.name }),
         el('span', { className: 'stack-text', text: entry.role === 'admin' ? '管理者' : '' }),
-        el('span', { className: 'stack-go', text: entry.id === scope.id ? '✓' : '›', attrs: { 'aria-hidden': 'true' } }))))),
+        el('span', { className: 'stack-go', text: entry.id === scope.id ? '✓' : '›', attrs: { 'aria-hidden': 'true' } })),
+        entry.role === 'admin' ? el('button', {
+          className: 'btn btn-small btn-quiet community-edit',
+          attrs: { type: 'button', 'aria-label': `${entry.name} を編集`, 'data-community-id': entry.id },
+          text: '編集',
+          on: { click: () => editCommunity(entry.id) },
+        }) : null))),
     el('p', { className: 'community-hint', text: '新しいコミュニティには、招待リンクを開くと入れます。' }),
   );
+}
+
+function editCommunity(id) {
+  closeSheet();
+  navigate(`#/community/${encodeURIComponent(id)}`);
 }
 
 async function switchCommunity(id) {
@@ -164,7 +186,9 @@ function paintMapStatus() {
   $('mapStatusText').textContent = mapError ? '地図を更新できませんでした。接続を確認してください。'
     : filtering ? `${state.posts.filter(matchesFilters).length}件が該当・検索対象は読み込み済みの範囲です${terrainNote}`
     : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
-    : worldCount === 0 && !state.myPosts.length ? 'まだ投稿がありません。最初の投稿で島をつくりましょう。'
+    : worldCount === 0 && !state.myPosts.length ? (canPostFromMap({ signedIn: Boolean(state.account), scope })
+      ? 'まだ投稿がありません。右下の「＋」から、最初の投稿で島をつくりましょう。'
+      : 'まだ投稿がありません。')
     : 'この範囲には投稿がありません。右下の全体表示ボタンで全体を見られます';
 }
 
@@ -464,6 +488,23 @@ export async function refreshMyPosts() {
   }
 }
 
+// ---------------------------------------------------------------- new islands
+
+// An island glows while it holds a post of the last seven days that I have not opened (my own never
+// count). The rules are in fresh-rules.js; the map module only draws the glow for the ids it is given.
+function paintFresh() {
+  const meId = state.account ? state.account.id : null;
+  const seen = meId ? loadSeen(browserStorage(), meId) : new Map();
+  setFreshPosts(freshPostIds(state.posts, { meId, seen }));
+}
+
+/** Opening a post's card puts its glow out. */
+function markPostSeen(post) {
+  if (!state.account || !post || post.author_id === state.account.id) return;
+  markSeen(browserStorage(), state.account.id, post.id);
+  paintFresh();
+}
+
 // ---------------------------------------------------------------- chrome
 
 function paintChrome() {
@@ -502,18 +543,43 @@ function paintFilterCount() {
   $('mapFilterBtn').classList.toggle('on', count > 0);
 }
 
+/** The search box opens inside the header (the community button and the search icon step aside) and
+ * closes again with its ✕, which also clears what was typed. */
+function setSearchOpen(open) {
+  $('mapHeader').classList.toggle('searching', open);
+  $('mapSearchBox').hidden = !open;
+  $('mapSearchOpen').setAttribute('aria-expanded', String(open));
+  if (open) $('mapSearch').focus();
+}
+
+function closeSearch() {
+  const search = $('mapSearch');
+  const typed = Boolean(search.value || state.filters.query);
+  search.value = '';
+  state.filters.query = '';
+  setSearchOpen(false);
+  if (typed) filtersChanged();
+  $('mapSearchOpen').focus({ preventScroll: true });
+}
+
 function setupChrome() {
   const search = $('mapSearch');
   search.addEventListener('input', () => {
     state.filters.query = search.value.trim();
-    $('mapSearchClear').hidden = !search.value;
     filtersChanged();
   });
-  $('mapSearchClear').addEventListener('click', () => {
-    search.value = '';
-    state.filters.query = '';
-    $('mapSearchClear').hidden = true;
-    filtersChanged();
+  search.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeSearch();
+  });
+  $('mapSearchOpen').addEventListener('click', () => {
+    playSe('hardClick');
+    $('mapFilterPanel').hidden = true;
+    setSearchOpen(true);
+  });
+  $('mapSearchClear').addEventListener('click', closeSearch);
+  $('mapPost').addEventListener('click', () => {
+    playSe('click');
+    navigate('#/post');
   });
 
   $('mapFilterBtn').addEventListener('click', (event) => {
@@ -558,7 +624,10 @@ function setupChrome() {
   // Another tab or a claim changed which communities I am in.
   subscribe((reason) => {
     if (reason === 'community') paintCommunity();
+    else if (reason === 'posts') paintFresh();
   });
+  // Signing out: nothing glows for a visitor.
+  window.addEventListener('islands:signout', paintFresh);
   $('trialClose').addEventListener('click', () => {
     state.trialPost = null;
     paintTrial();
@@ -641,6 +710,7 @@ export async function openPost(postId, { expand = false, back = null } = {}) {
   }
   state.selected = post;
   recordView(post);
+  markPostSeen(post);
   // Looking at a post puts its star out - except while looking at who joined,
   // when the sheet is only a way to read the writer's words.
   if (!participantView()) markRead(post.id);
@@ -1016,6 +1086,7 @@ export function setupMapScreen() {
         refreshNeighbors();
       }
       paintChrome();
+      paintFresh();
       paintTrial();
       refreshMyViews();
       // Not awaited: the map is already up, and the pill can arrive a moment later.

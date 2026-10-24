@@ -62,7 +62,7 @@ test('お互いに押すと両方に通知が届き、DM で1往復でき、ブ�
   await expect(button).toHaveText(label);
   expect(label).toBe('もっと話してみたい');
   // 押す前から、相手の名前つきの小さな文が出ている
-  await expect(guest.page.locator('.post-talk-note')).toHaveText('主催のあきさんへ。押したことは相手には見えず、お互いに押すと DM が開きます');
+  await expect(guest.page.locator('.post-talk-note')).toHaveText('押したことは相手には見えず、お互いに押すと DM が開きます');
   await button.click();
   await expect(guest.page.locator('.modal')).toContainText('お互いに押したときだけ DM が開通します');
   await guest.page.locator('.modal .btn:not(.btn-quiet)').click();
@@ -178,7 +178,7 @@ test('プロフィール画面にも同じボタンが出て、押すと投稿�
   await expect(profileButton(guest)).toBeVisible({ timeout: 15000 });
   await expect(profileButton(guest)).toHaveText(label);
   await expect(profileButton(guest)).toHaveAttribute('data-state', 'none');
-  await expect(profileNote(guest)).toHaveText('主催のあきさんへ。押したことは相手には見えず、お互いに押すと DM が開きます');
+  await expect(profileNote(guest)).toHaveText('押したことは相手には見えず、お互いに押すと DM が開きます');
 
   // 押す（初回の説明つき）→ プロフィールが「押しました」
   await profileButton(guest).click();

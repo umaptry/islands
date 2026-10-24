@@ -178,6 +178,8 @@ const supabaseBackend = {
     await rpc('revoke_invite', { invite });
     return true;
   },
+  /** An admin renames the community; answers the name as saved (trimmed). */
+  renameCommunity: (community, name) => rpc('rename_community', { community, new_name: name }),
   async mapCells({ minX, minY, maxX, maxY }) {
     return rpc('map_cells', { min_x: minX, min_y: minY, max_x: maxX, max_y: maxY });
   },
@@ -431,6 +433,8 @@ const localBackend = {
     await api.post(`/api/local/invites/${encodeURIComponent(invite)}/revoke`, {});
     return true;
   },
+  renameCommunity: (community, name) =>
+    api.post(`/api/local/communities/${encodeURIComponent(community)}/rename`, { name }),
   getPost: (id) => api.get(`/api/local/post/${id}`).catch((error) => {
     if (error.status === 404) return null;
     throw error;

@@ -19,6 +19,8 @@ const paths = {
   pencil: '<path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   send: '<path d="m22 2-7 20-4-9L2 9 20 2ZM22 2 11 13"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
 };
 
 export function icon(name, size = 22) {
@@ -33,12 +35,13 @@ export function icon(name, size = 22) {
 export function setupIcons() {
   const ids = { composeBack: 'back', editBack: 'back', userBack: 'back', composeImageBtn: 'image',
     composeImageClear: 'close', mapSearchClear: 'close', sheetClose: 'close',
-    dmListBack: 'back', dmRoomBack: 'back' };
+    communityEditBack: 'back', dmRoomBack: 'back', mapSearchOpen: 'search', mapPost: 'plus' };
   Object.entries(ids).forEach(([id, name]) => document.getElementById(id)?.replaceChildren(icon(name)));
   document.querySelector('.search-icon')?.replaceChildren(icon('search', 18));
+  document.getElementById('mapPost')?.replaceChildren(icon('plus', 30));
   document.querySelector('#mapFilterBtn > span')?.replaceChildren(icon('filter', 20));
   document.querySelectorAll('.nav-item').forEach((button, i) => {
     button.setAttribute('aria-label', button.querySelector('.nav-label').textContent);
-    button.querySelector('.nav-icon').replaceChildren(icon(['map', 'plus', 'bell', 'user'][i], 28));
+    button.querySelector('.nav-icon').replaceChildren(icon(['map', 'message', 'bell', 'user'][i], 28));
   });
 }

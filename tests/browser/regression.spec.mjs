@@ -11,7 +11,11 @@ test('landing, anonymous guard and navigation fit each viewport', async ({ page 
   const nav = await page.locator('#bottomNav').boundingBox();
   expect(nav.height).toBe(64);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.locator('[data-route="#/post"]').click();
+  // 投稿は下のバーにはなく、ログインしていない人には丸い投稿ボタンも出ない。DM のタブも出ない。
+  await expect(page.locator('[data-route="#/post"]')).toHaveCount(0);
+  await expect(page.locator('#mapPost')).toBeHidden();
+  await expect(page.locator('#navDm')).toBeHidden();
+  await page.evaluate(() => { location.hash = '#/post'; });
   await expect(page.locator('#auth')).toHaveClass(/active/);
 });
 
@@ -105,11 +109,13 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
     state.account = (await api.put('/api/account/me', { display_name: '比較用', icon_id: '1' })).account;
     return (await api.post('/api/posts', { body: '週末はソロキャンプに出かけて、焚き火を眺めながら静かに過ごすのが好きです。', motivation: 50 })).id;
   });
-  await page.locator('[data-route="#/post"]').click();
+  await page.reload();
+  await expect(page.locator('#map')).toHaveClass(/active/);
+  await page.locator('#mapPost').click();
   await expect(page.locator('#compose')).toHaveClass(/active/);
   await page.locator('#composeBody').fill('画面を移動してもこの下書きを保持します。');
   await page.locator('[data-route="#/map"]').click();
-  await page.locator('[data-route="#/post"]').click();
+  await page.locator('#mapPost').click();
   await expect(page.locator('#composeBody')).toHaveValue('画面を移動してもこの下書きを保持します。');
   await page.evaluate(async (id) => {
     const { openOnMap } = await import('/static/js/screens/map.js');
@@ -397,13 +403,9 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
   });
   await expect(page.locator('#nearIslands .near-label')).toHaveText('あなたに近い島');
 
-  // The weekly switch and its one-line note.
-  await expect(page.locator('#busyToggle')).toContainText('今週の反応');
-  await expect(page.locator('#busyNote')).toBeHidden();
-  await page.locator('#busyToggle').click();
-  await expect(page.locator('#busyNote')).toBeVisible();
-  await page.locator('#busyToggle').click();
-  await expect(page.locator('#busyNote')).toBeHidden();
+  // The weekly switch is gone (new islands glow by themselves instead).
+  await expect(page.locator('#busyToggle')).toHaveCount(0);
+  await expect(page.locator('#busyNote')).toHaveCount(0);
 
   // A name chip opens the island card, worded "島をのぞく".
   await page.locator('#nearIslands .near-chip').first().click();

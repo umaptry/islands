@@ -291,18 +291,20 @@ test('a person in no community, and no link, gets a notice and not a map', () =>
 
 test('the button at the map\'s top left', () => {
   assert.equal(rules.communityButtonText({ mode: 'community', name: 'BAR' }, 2), 'BAR ▾');
-  assert.equal(rules.communityButtonText({ mode: 'community', name: 'BAR' }, 1), 'BAR', 'nothing to switch to: no arrow');
+  assert.equal(rules.communityButtonText({ mode: 'community', name: 'BAR' }, 1), 'BAR ▾', 'one community: the sheet still opens (an admin edits there)');
+  assert.equal(rules.communityButtonText({ mode: 'community', name: 'BAR' }, 0), 'BAR', 'none listed (not read yet): no arrow');
   assert.equal(rules.communityButtonText({ mode: 'viewing', name: 'Z' }, 2), 'Z', 'read only: no arrow');
   assert.equal(rules.communityButtonText({ mode: 'legacy' }, 3), '');
   assert.equal(rules.communityButtonText({ mode: 'none' }, 0), '');
   assert.equal(rules.communityButtonText({ mode: 'community', name: 'あ'.repeat(40) }, 2), `${'あ'.repeat(12)}… ▾`);
   // Latin letters are half as wide, so a Latin name may be twice as long before it is cut.
   assert.equal(rules.communityButtonText({ mode: 'community', name: 'Saturday Morning Run' }, 2), 'Saturday Morning Run ▾');
-  assert.equal(rules.communityButtonText({ mode: 'community', name: 'a'.repeat(30) }, 1), `${'a'.repeat(24)}…`);
-  assert.equal(rules.communityButtonText({ mode: 'community', name: `${'あ'.repeat(11)}ab` }, 1), `${'あ'.repeat(11)}ab`);
-  assert.equal(rules.communityButtonText({ mode: 'community', name: `${'あ'.repeat(11)}abc` }, 1), `${'あ'.repeat(11)}ab…`);
+  assert.equal(rules.communityButtonText({ mode: 'community', name: 'a'.repeat(30) }, 1), `${'a'.repeat(24)}… ▾`);
+  assert.equal(rules.communityButtonText({ mode: 'community', name: `${'あ'.repeat(11)}ab` }, 1), `${'あ'.repeat(11)}ab ▾`);
+  assert.equal(rules.communityButtonText({ mode: 'community', name: `${'あ'.repeat(11)}abc` }, 1), `${'あ'.repeat(11)}ab… ▾`);
   assert.equal(rules.canSwitch({ mode: 'community' }, 2), true);
-  assert.equal(rules.canSwitch({ mode: 'community' }, 1), false);
+  assert.equal(rules.canSwitch({ mode: 'community' }, 1), true, 'one is enough: the sheet lists it and its 編集');
+  assert.equal(rules.canSwitch({ mode: 'community' }, 0), false);
   assert.equal(rules.canSwitch({ mode: 'viewing' }, 5), false);
   assert.equal(rules.canSwitch(null, 5), false);
 });
@@ -409,6 +411,37 @@ test('one line of the list: time left, the date, how many used it', () => {
   assert.equal(rules.inviteRowText({ expires_at: '2026-10-30T09:00:00Z' }, now).expiry, '10/30 18:00 に終了');
 });
 
+test('the one link: the newest invite that still works, or none', () => {
+  const now = Date.UTC(2026, 9, 30, 10, 0, 0);
+  const row = (id, extra = {}) => ({ id, code: CODE, expires_at: new Date(now + HOUR).toISOString(), created_at: '2026-10-30T08:00:00Z', ...extra });
+  const rows = [row('old'), row('new', { created_at: '2026-10-30T09:30:00Z' }), row('gone', { expires_at: new Date(now - 1000).toISOString() })];
+  assert.equal(rules.currentInvite(rows, now).id, 'new');
+  assert.equal(rules.currentInvite([rows[2]], now), null);
+  assert.equal(rules.currentInvite(null, now), null);
+});
+
+test('the post switch: the link carries ?post= only while it is on and a post is picked', () => {
+  assert.equal(rules.invitePostFor(true, POST), POST);
+  assert.equal(rules.invitePostFor(false, POST), null);
+  assert.equal(rules.invitePostFor(true, ''), null);
+  assert.equal(rules.invitePostFor(true, 'not a post!'), null);
+  const origin = 'https://islands.example';
+  assert.equal(rules.inviteUrlFor(origin, CODE, rules.invitePostFor(false, POST)), `${origin}/#/invite/${CODE}`);
+  assert.equal(rules.inviteUrlFor(origin, CODE, rules.invitePostFor(true, POST)), `${origin}/#/invite/${CODE}?post=${POST}`);
+});
+
+test('the line under the QR, the share text, the saved picture', () => {
+  const now = Date.UTC(2026, 9, 30, 10, 0, 0);
+  assert.equal(rules.inviteLineText({ expires_at: '2026-10-30T14:59:00Z', uses: 3 }, now), 'あと4時間59分（10/30 23:59 まで）・3人が使いました');
+  assert.equal(rules.inviteLineText({ expires_at: '2026-10-30T14:59:00Z', uses: 0 }, now), 'あと4時間59分（10/30 23:59 まで）・まだ使われていません');
+  assert.deepEqual(rules.inviteShareData('朝ラン会', 'https://x/#/invite/a'),
+    { title: '朝ラン会 への招待', text: 'islands の「朝ラン会」に招待します', url: 'https://x/#/invite/a' });
+  assert.equal(rules.inviteImageName('朝ラン会'), 'islands_招待_朝ラン会.png');
+  assert.equal(rules.inviteImageName('a/b:c*?"<>|d'), 'islands_招待_a b c d.png');
+  assert.equal(rules.inviteImageName('  '), 'islands_招待_コミュニティ.png');
+  assert.deepEqual(rules.inviteImageLines('朝ラン会', '2026-10-30T14:59:00Z'), { title: '朝ラン会 への招待', until: '10/30 23:59 まで' });
+});
+
 // ---------------------------------------------------------------- the wiring (a guard against drift)
 
 const read = (url) => readFile(new URL(url, import.meta.url), 'utf8');
@@ -502,4 +535,49 @@ test('only the posts of the invites own community can travel with it', () => {
   assert.deepEqual(rules.postsOfCommunity(rows, 'bar').map((post) => post.id), ['p1', 'p5']);
   assert.deepEqual(rules.postsOfCommunity(rows, ''), []);
   assert.deepEqual(rules.postsOfCommunity(undefined, 'bar'), []);
+});
+
+test('the left of the header: the community button, or just the name of the app', () => {
+  assert.deepEqual(rules.headerTitle({ mode: 'community', name: 'BAR' }, 1), { text: 'BAR ▾', brand: false, tappable: true });
+  assert.deepEqual(rules.headerTitle({ mode: 'viewing', name: 'Z' }, 1), { text: 'Z', brand: false, tappable: false });
+  assert.deepEqual(rules.headerTitle({ mode: 'none', reason: 'not-member' }, 0), { text: 'islands', brand: true, tappable: false });
+  assert.deepEqual(rules.headerTitle({ mode: 'legacy' }, 0), { text: 'islands', brand: true, tappable: false });
+  assert.deepEqual(rules.headerTitle(null, 0), { text: 'islands', brand: true, tappable: false });
+});
+
+test('the round post button shows only where I may write', () => {
+  const member = { mode: 'community', id: 'a', name: 'BAR' };
+  assert.equal(rules.canPostFromMap({ signedIn: true, scope: member }), true);
+  assert.equal(rules.canPostFromMap({ signedIn: true, scope: { mode: 'legacy' } }), true, 'communities off: as before');
+  assert.equal(rules.canPostFromMap({ signedIn: false, scope: member }), false, 'signed out');
+  assert.equal(rules.canPostFromMap({ signedIn: true, scope: { mode: 'none', reason: 'not-member' } }), false, 'no community');
+  assert.equal(rules.canPostFromMap({ signedIn: true, scope: { mode: 'viewing', id: 'z', name: 'Z' } }), false, 'read only');
+  assert.equal(rules.canPostFromMap({ signedIn: true, scope: null }), false);
+});
+
+test('the community name rule is the one rename_community has: trimmed, 1 to 40 characters', () => {
+  assert.deepEqual(rules.checkCommunityName('  週末の会 '), { ok: true, name: '週末の会', message: '' });
+  assert.equal(rules.checkCommunityName('\u3000\u3000夜の会\u3000').name, '夜の会', 'full-width spaces too');
+  assert.equal(rules.checkCommunityName('Saturday Morning Run').ok, true, 'a space in the middle stays');
+  assert.equal(rules.checkCommunityName('あ').ok, true);
+  assert.equal(rules.checkCommunityName('あ'.repeat(40)).ok, true);
+  assert.equal(rules.checkCommunityName('あ'.repeat(41)).ok, false);
+  assert.equal(rules.checkCommunityName(' '.repeat(3)).ok, false);
+  assert.equal(rules.checkCommunityName('').message, 'コミュニティの名前は1〜40文字で入力してください。');
+  assert.equal(rules.checkCommunityName(null).ok, false);
+  // characters outside the BMP count once, like Postgres char_length
+  assert.equal(rules.checkCommunityName('\u{1F3DD}'.repeat(40)).ok, true);
+  assert.equal(rules.checkCommunityName('\u{1F3DD}'.repeat(41)).ok, false);
+});
+
+test('rename answers in either shape, and the list follows', () => {
+  assert.equal(rules.readRenamed('新しい名前'), '新しい名前');
+  assert.equal(rules.readRenamed({ name: ' 新しい名前 ' }), '新しい名前');
+  assert.equal(rules.readRenamed(['新しい名前']), '新しい名前');
+  assert.equal(rules.readRenamed(null), '');
+  assert.equal(rules.readRenamed({}), '');
+  const list = [{ id: 'a', name: 'BAR', role: 'admin' }, { id: 'b', name: '読書', role: 'member' }];
+  assert.deepEqual(rules.withRenamed(list, 'a', '夜の BAR'), [{ id: 'a', name: '夜の BAR', role: 'admin' }, list[1]]);
+  assert.equal(list[0].name, 'BAR', 'the old list is not changed');
+  assert.deepEqual(rules.withRenamed(null, 'a', 'x'), []);
 });
