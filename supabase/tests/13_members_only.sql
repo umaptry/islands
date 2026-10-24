@@ -201,6 +201,7 @@ select is((select array_agg(p.proname::text order by p.proname) from pg_proc p
               and has_function_privilege('authenticated', p.oid, 'execute')
               and p.proname not in ('check_invite', 'claim_invite', 'create_invite', 'list_invites', 'revoke_invite',
                                     'my_communities', 'my_community_ids', 'is_community_admin', 'can_leave_community',
+                                    'rename_community',
                                     'is_member_of_post', 'is_member_of_post_any',
                                     'community_map_posts', 'map_posts', 'map_cells',
                                     'notification_feed', 'touch_last_seen', 'mark_active',
