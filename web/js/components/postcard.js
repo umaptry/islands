@@ -71,6 +71,7 @@ const JOIN = { kind: 'join', label: '参加', countKey: 'join_count', tone: 'joi
  * @param options.onEdit / onDelete / onOpenAuthor / onReport / onComments
  * @param options.onSeeParticipants  () => void, shown on 「参加者募集中」 posts
  * @param options.onSeeReactors  (kind) => void, run when you hold いいね / 手伝えるかも on your own post
+ * @param options.communityName  the post's community, said small under the time (profile pages)
  * @param options.compact  drop the image and the footer (used in list contexts)
  */
 export function postCard(post, options = {}) {
@@ -88,6 +89,8 @@ export function postCard(post, options = {}) {
     el('span', { className: 'post-author-text' },
       el('span', { className: 'post-author-name', text: post.display_name || '' }),
       el('span', { className: 'post-author-time', text: timeAgo(post.created_at) }),
+      // Which community this post is in, small (profile pages: a person may be in several).
+      options.communityName ? el('span', { className: 'post-community', text: options.communityName }) : null,
     ),
   );
 

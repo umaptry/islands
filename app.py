@@ -1949,8 +1949,10 @@ def config():
         "example_posts": list(EXAMPLE_POSTS),
         # post_extras: the database can keep the prompt / sign-up deadline / capacity.
         # False on a production database the 2026-10-20 SQL has not reached yet.
+        # members_only: whether community posts are readable by their members only (the screens then
+        # send the session on every read and show a notice instead of a map to anybody outside).
         "features": {"post_extras": post_extras_on(), "talk": talk_on(),
-                     "communities": communities_on()},
+                     "communities": communities_on(), "members_only": members_only_quiet()},
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。

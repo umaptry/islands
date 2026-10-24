@@ -25,7 +25,7 @@ import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
 import { browserStorage, refreshTalk } from '../talk.js';
 import { mapLinkFor, takePendingPost } from '../return-post.js';
-import { entryView, readPendingInvite } from '../community-rules.js';
+import { browseView, entryView, readPendingInvite } from '../community-rules.js';
 import { settleSession } from './invite.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
 
@@ -42,6 +42,11 @@ export function setupWelcome() {
     const entry = entryView({ cfg: config(), hasInvite: Boolean(readPendingInvite(browserStorage())) });
     $('welcomeInviteNote').hidden = !entry.note;
     $('welcomeInviteNote').textContent = entry.note;
+    // Members only: there is nothing to look at without an account, so no way to browse; a line says how to join.
+    const browse = browseView(config());
+    $('welcomeBrowse').hidden = !browse.canBrowse;
+    $('welcomeMembersNote').hidden = !browse.note;
+    $('welcomeMembersNote').textContent = browse.note;
     $('welcomeRegister').hidden = !entry.canRegister;
     const providers = entry.canRegister ? (config().oauth || []) : [];
     providers.forEach((provider) => box.append(el('button', {

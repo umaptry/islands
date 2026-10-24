@@ -52,7 +52,7 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
         {"key": "future", "text": "今度やってみたいこと"},
     ]
     assert data["extra_prompts"] == [dict(item) for item in EXTRA_PROMPTS]
-    assert data["features"] == {"post_extras": True, "talk": True, "communities": True}
+    assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False}
 
 
 def test_health_reports_the_columns_and_ready_does_not_depend_on_them(client):

@@ -20,7 +20,7 @@
 // ever moves, and nobody looking at a card in a bottom sheet needs 4032 pixels.
 
 import { RECRUIT_TAG } from '../map/reads.js';
-import { config, islandColor } from '../config.js';
+import { config, islandColor, membersOnly } from '../config.js';
 import { POST_IMAGE, prepareImage } from '../image.js';
 import { api, data } from '../net.js';
 import { navigate, screen, show } from '../router.js';
@@ -488,7 +488,7 @@ async function tryExample(text) {
   $('composeError').textContent = '';
   buzz('tap');
   try {
-    const result = await runPlacement({ body: text }, { tryout: true });
+    const result = await runPlacement({ body: text, ...tryoutCommunity() }, { tryout: true });
     state.trialPost = {
       x: result.x, y: result.y, body: text,
       icon_id: state.account?.icon_id, avatar_path: state.account?.avatar_path,
@@ -504,6 +504,13 @@ async function tryExample(text) {
     submitting = false;
     paintCounter();
   }
+}
+
+/** The community a tried-out sentence would stand in (members only: the server wants to know which). */
+function tryoutCommunity() {
+  if (!membersOnly()) return {};   // while the switch is off the server does not ask, and the body stays as it was
+  const scope = currentScope();
+  return scope.mode === 'community' ? { community_id: scope.id } : {};
 }
 
 /** The placing animation, and the request it is covering. */
@@ -569,7 +576,9 @@ function showTrialReveal(result) {
   paintNearIslands(bodyBox, result, state.islands);
   // The island list comes with the map; on a first visit it may not be here yet.
   if (!state.islands?.length) {
-    api.get('/api/islands', { auth: false }).then((list) => {
+    const scope = membersOnly() ? currentScope() : { mode: 'legacy' };
+    const path = scope.mode === 'community' ? `/api/islands?${new URLSearchParams({ community: scope.id })}` : '/api/islands';
+    api.get(path).then((list) => {
       if (mine === trialToken) paintNearIslands(bodyBox, result, list?.islands);
     }).catch(() => {});
   }

@@ -1813,3 +1813,16 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 /* The DM list is a tab now. */
 .dm-row.unread .list-row-title { font-weight: 800; }
 /* ==== end 2026-10-26 ==== */
+
+/* Members only: which community a post or a notification is about (small), the note on other people's pages,
+   and the notice for what cannot be read. */
+.post-community, .notif-community {
+  display: block; margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--ink-3);
+  overflow-wrap: anywhere; max-width: 100%;
+}
+.notif-community { color: var(--on-sea-3); }
+.notif-community[hidden] { display: none; }
+.profile-shared-note { margin: 0 0 12px; font-size: 12px; line-height: 1.6; color: var(--on-sea-2); text-wrap: pretty; }
+.members-only-title { margin: 0 0 8px; font-size: 15px; font-weight: 800; line-height: 1.6; text-wrap: pretty; }
+#welcomeMembersNote { margin-top: 12px; }
+#welcomeMembersNote[hidden] { display: none; }

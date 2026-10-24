@@ -340,7 +340,7 @@ test('trial result lists the nearest named islands and offers the own-words post
     contentType: 'application/json',
     body: JSON.stringify({ x: 10, y: 10, island: { cluster_id: 1, label: '近い島A' } }),
   }));
-  await page.route('**/api/islands', (route) => route.fulfill({
+  await page.route('**/api/islands*', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ islands: [
       { cluster_id: 1, label: '近い島A', people: 4, cx: 11, cy: 10 },
@@ -370,7 +370,7 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
     contentType: 'application/json',
     body: JSON.stringify({ x: 10, y: 10, island: { cluster_id: 1, label: '近い島A' } }),
   }));
-  await page.route('**/api/islands', (route) => route.fulfill({
+  await page.route('**/api/islands*', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ islands: [
       { cluster_id: 1, label: '近い島A', people: 4, cx: 11, cy: 10 },
@@ -428,7 +428,7 @@ test('trial hint still works when localStorage refuses', async ({ page }) => {
     contentType: 'application/json',
     body: JSON.stringify({ x: 10, y: 10, island: { cluster_id: 1, label: '近い島A' } }),
   }));
-  await page.route('**/api/islands', (route) => route.fulfill({
+  await page.route('**/api/islands*', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ islands: [
       { cluster_id: 1, label: '近い島A', people: 4, cx: 11, cy: 10 },

@@ -140,6 +140,16 @@ export function attachActors(entries, accounts) {
   });
 }
 
+/**
+ * The community a row is about: the row's own `community_id`, else the community of its post
+ * (`postCommunities`: post id -> community id). A 「話してみたい」 row is anonymous by design and a DM row belongs to
+ * two people, so those never name one. '' when unknown.
+ */
+export function communityIdOf(entry, postCommunities = {}) {
+  if (!entry || isTalkType(entry.type)) return '';
+  return entry.community_id || (entry.post_id && postCommunities[entry.post_id]) || '';
+}
+
 /** Who to name: the newest person, "ほか N人" for the rest. An island names itself. */
 export function headline(entry, talkLabel = '') {
   if (isTalkType(entry.type)) return talkHeadline(entry, talkLabel);

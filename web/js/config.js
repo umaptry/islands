@@ -39,10 +39,28 @@ export function config() {
 
 export const isLocal = () => config().mode === 'local';
 
+/** features.members_only: community posts are for their members only (the server's switch). */
+export const membersOnly = () => Boolean(cache && cache.features && cache.features.communities === true
+  && cache.features.members_only === true);
+
+/** A settings payload whose members_only switch (or communities feature) differs from the one in use. */
+export function switchChanged(before, after) {
+  const read = (settings) => Boolean(settings && settings.features
+    && settings.features.communities === true && settings.features.members_only === true);
+  return Boolean(before) && Boolean(after) && read(before) !== read(after);
+}
+
 export async function checkMapVersion() {
   const response = await fetch('/api/config', { cache: 'no-store' });
   if (!response.ok) return false;
   const latest = await response.json();
+  if (switchChanged(cache, latest)) {
+    // The members-only switch was flipped while this page was open: reads must ask the way the server now
+    // expects (with ?community=). Take the new settings and offer a reload, like a new map version.
+    cache = { ...cache, features: latest.features };
+    document.dispatchEvent(new CustomEvent('map:version-changed'));
+    return true;
+  }
   if (cache?.map_version && latest.map_version !== cache.map_version) {
     document.dispatchEvent(new CustomEvent('map:version-changed'));
     return true;

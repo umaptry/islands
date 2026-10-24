@@ -634,6 +634,17 @@ def test_health_and_config_do_not_hand_out_the_size_of_the_service(world):
     assert get(None, "/api/config").json()["energy"]["radius_factor"] == 1.0
 
 
+def test_config_tells_the_screens_whether_the_switch_is_on(world):
+    """The screens read features.members_only to decide what a signed-out visitor sees (a notice, not a map).
+    It follows the switch, is readable without signing in, and says nothing else about the service."""
+    on(world, False)
+    assert get(None, "/api/config").json()["features"]["members_only"] is False
+    on(world)
+    features = get(None, "/api/config").json()["features"]
+    assert features["members_only"] is True
+    assert features["communities"] is True
+
+
 # --------------------------------------------------------------------------
 # the stand-ins for PostgREST (/api/local/*): the SQL policies, in Python
 # --------------------------------------------------------------------------
