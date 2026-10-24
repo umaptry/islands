@@ -60,12 +60,15 @@ test('お互いに押すと両方に通知が届き、DM で1往復でき、ブ�
   const button = guest.page.locator('.post-talk-button');
   await expect(button).toBeVisible();
   await expect(button).toHaveText(label);
+  expect(label).toBe('もっと話してみたい');
+  // 押す前から、相手の名前つきの小さな文が出ている
+  await expect(guest.page.locator('.post-talk-note')).toHaveText('主催のあきさんへ。押したことは相手には見えず、お互いに押すと DM が開きます');
   await button.click();
   await expect(guest.page.locator('.modal')).toContainText('お互いに押したときだけ DM が開通します');
   await guest.page.locator('.modal .btn:not(.btn-quiet)').click();
   await expect(button).toHaveAttribute('data-state', 'pressed');
   await expect(button).toContainText('（押しました）');
-  await expect(guest.page.locator('.post-talk-note')).toContainText('押したことは相手には見えません');
+  await expect(guest.page.locator('.post-talk-note')).toHaveText('主催のあきさんも押すと DM が開きます。もう一度押すと取り消せます');
 
   // 主催者は自分の投稿にはボタンが出ない。参加者の投稿では「押されていない」ように見える。
   await openPostCard(host, eventId);
@@ -79,6 +82,7 @@ test('お互いに押すと両方に通知が届き、DM で1往復でき、ブ�
   await host.page.locator('.modal .btn:not(.btn-quiet)').click();
   await expect(hostButton).toHaveAttribute('data-state', 'matched', { timeout: 8000 });
   await expect(hostButton).toHaveText('DM を開く');
+  await expect(host.page.locator('.post-talk-note')).toHaveText('参加のべんさんと、お互いに押しました');
 
   // 両方に、名前つきの両思いの通知
   await guest.page.goto('/#/notifications');
@@ -136,6 +140,7 @@ test('片思いの通知には名前も人数も出ず、押した人は取り�
   await host.page.goto('/#/notifications');
   const notice = host.page.locator('.notif').first();
   await expect(notice).toContainText(`誰かが、あなたと${label}と言っています`);
+  await expect(notice).toContainText('誰かが、あなたともっと話してみたいと言っています');
   const text = await notice.innerText();
   expect(text).not.toContain('参加のべん');
   expect(text).not.toContain('ほか');
@@ -149,6 +154,100 @@ test('片思いの通知には名前も人数も出ず、押した人は取り�
   await guest.page.locator('.modal .btn:not(.btn-quiet)').click();
   await expect(guest.page.locator('.post-talk-button')).toHaveAttribute('data-state', 'none');
 
+  await host.context.close();
+  await guest.context.close();
+});
+
+const myId = (who) => who.page.evaluate(async () => (await import('/static/js/state.js')).state.account.id);
+
+test('プロフィール画面にも同じボタンが出て、押すと投稿カードの状態も揃う', async ({ browser }, testInfo) => {
+  const { host, guest, eventId, guestPostId } = await setUp(browser, testInfo);
+  const label = await talkLabel(guest);
+  const hostId = await myId(host);
+  const guestId = await myId(guest);
+  const profileButton = (who) => who.page.locator('#userBody .post-talk-button');
+  const profileNote = (who) => who.page.locator('#userBody .post-talk-note');
+
+  // 自分のプロフィールには出ない
+  await guest.page.goto('/#/me');
+  await guest.page.waitForTimeout(800);
+  await expect(guest.page.locator('.post-talk-button:visible')).toHaveCount(0);
+
+  // 会の仲間のプロフィール: まだ押していない（押す前から小さな文が出る）
+  await guest.page.goto(`/#/u/${hostId}`);
+  await expect(profileButton(guest)).toBeVisible({ timeout: 15000 });
+  await expect(profileButton(guest)).toHaveText(label);
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'none');
+  await expect(profileNote(guest)).toHaveText('主催のあきさんへ。押したことは相手には見えず、お互いに押すと DM が開きます');
+
+  // 押す（初回の説明つき）→ プロフィールが「押しました」
+  await profileButton(guest).click();
+  await expect(guest.page.locator('.modal')).toContainText('お互いに押したときだけ DM が開通します');
+  await guest.page.locator('.modal .btn:not(.btn-quiet)').click();
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'pressed');
+  await expect(profileButton(guest)).toContainText('（押しました）');
+  await expect(profileNote(guest)).toHaveText('主催のあきさんも押すと DM が開きます。もう一度押すと取り消せます');
+
+  // 同じ人の投稿カードも「押しました」で揃っている
+  await openPostCard(guest, eventId);
+  await expect(guest.page.locator('#sheet .post-talk-button')).toHaveAttribute('data-state', 'pressed');
+
+  // 取り消しの確認はカードと同じ。プロフィールで取り消すと元に戻る
+  await guest.page.goto(`/#/u/${hostId}`);
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'pressed', { timeout: 15000 });
+  await profileButton(guest).click();
+  await expect(guest.page.locator('.modal')).toContainText('取り消');
+  await guest.page.locator('.modal .btn-quiet').click();
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'pressed');
+  await profileButton(guest).click();
+  await guest.page.locator('.modal .btn:not(.btn-quiet)').click();
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'none');
+  await openPostCard(guest, eventId);
+  await expect(guest.page.locator('#sheet .post-talk-button')).toHaveAttribute('data-state', 'none');
+
+  // 押し直す → 相手がプロフィールで押すと両思い。DM を開く
+  await guest.page.goto(`/#/u/${hostId}`);
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'none', { timeout: 15000 });
+  await profileButton(guest).click();
+  await expect(profileButton(guest)).toHaveAttribute('data-state', 'pressed');
+  await host.page.goto(`/#/u/${guestId}`);
+  await expect(profileButton(host)).toHaveAttribute('data-state', 'none', { timeout: 15000 });
+  await profileButton(host).click();
+  await host.page.locator('.modal .btn:not(.btn-quiet)').click();
+  await expect(profileButton(host)).toHaveAttribute('data-state', 'matched', { timeout: 8000 });
+  await expect(profileButton(host)).toHaveText('DM を開く');
+  await expect(profileNote(host)).toHaveText('参加のべんさんと、お互いに押しました');
+  // 同じ人の投稿カードも DM を開くに揃う
+  await openPostCard(host, guestPostId);
+  await expect(host.page.locator('#sheet .post-talk-button')).toHaveAttribute('data-state', 'matched');
+  await host.page.goto(`/#/u/${guestId}`);
+  await expect(profileButton(host)).toHaveAttribute('data-state', 'matched', { timeout: 15000 });
+  await profileButton(host).click();
+  await expect(host.page.locator('#dmRoom')).toHaveClass(/active/);
+
+  expect(await guest.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await host.context.close();
+  await guest.context.close();
+});
+
+test('会の仲間でない人と、ログインしていない人のプロフィールにはボタンが出ない', async ({ browser }, testInfo) => {
+  const { host, guest } = await setUp(browser, testInfo);
+  const stranger = await newPerson(browser, testInfo, '通りすがり');
+  const hostId = await myId(host);
+  await stranger.page.goto(`/#/u/${hostId}`);
+  await expect(stranger.page.locator('#userBody .profile-name')).toContainText('主催のあき', { timeout: 15000 });
+  await stranger.page.waitForTimeout(800);
+  await expect(stranger.page.locator('#userBody .post-talk:not([hidden])')).toHaveCount(0);
+
+  const { baseURL, viewport } = testInfo.project.use;
+  const context = await browser.newContext({ baseURL, viewport });
+  const page = await context.newPage();
+  await page.goto(`/#/u/${hostId}`);
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#userBody .post-talk:not([hidden])')).toHaveCount(0);
+
+  await context.close();
+  await stranger.context.close();
   await host.context.close();
   await guest.context.close();
 });

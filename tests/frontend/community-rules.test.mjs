@@ -169,9 +169,9 @@ test('a community just joined is added once and keeps what is known', () => {
 // ---------------------------------------------------------------- the invite page
 
 test('the invite page says whose invitation it is, or why it cannot be used', () => {
-  const ok = rules.inviteView({ valid: true, name: 'BAR 10/30', reason: null });
+  const ok = rules.inviteView({ valid: true, name: '朝ラン部', reason: null });
   assert.equal(ok.state, 'valid');
-  assert.equal(ok.title, 'BAR 10/30 への招待です');
+  assert.equal(ok.title, '朝ラン部 への招待です');
   for (const [reason, word] of [['expired', '期限が切れて'], ['revoked', '止められて'], ['unknown', '見つかりません']]) {
     const bad = rules.inviteView({ valid: false, name: '', reason });
     assert.equal(bad.state, 'invalid');
@@ -296,6 +296,11 @@ test('the button at the map\'s top left', () => {
   assert.equal(rules.communityButtonText({ mode: 'legacy' }, 3), '');
   assert.equal(rules.communityButtonText({ mode: 'none' }, 0), '');
   assert.equal(rules.communityButtonText({ mode: 'community', name: 'あ'.repeat(40) }, 2), `${'あ'.repeat(12)}… ▾`);
+  // Latin letters are half as wide, so a Latin name may be twice as long before it is cut.
+  assert.equal(rules.communityButtonText({ mode: 'community', name: 'Saturday Morning Run' }, 2), 'Saturday Morning Run ▾');
+  assert.equal(rules.communityButtonText({ mode: 'community', name: 'a'.repeat(30) }, 1), `${'a'.repeat(24)}…`);
+  assert.equal(rules.communityButtonText({ mode: 'community', name: `${'あ'.repeat(11)}ab` }, 1), `${'あ'.repeat(11)}ab`);
+  assert.equal(rules.communityButtonText({ mode: 'community', name: `${'あ'.repeat(11)}abc` }, 1), `${'あ'.repeat(11)}ab…`);
   assert.equal(rules.canSwitch({ mode: 'community' }, 2), true);
   assert.equal(rules.canSwitch({ mode: 'community' }, 1), false);
   assert.equal(rules.canSwitch({ mode: 'viewing' }, 5), false);

@@ -166,7 +166,11 @@ export function bodyText(entry, talkLabel = '') {
 function talkHeadline(entry, label) {
   if (!label) return 'お知らせが届いています';
   const first = (entry.actors && entry.actors[0]) || {};
-  const name = entry.type === 'talk_wish' ? '' : (first.display_name || '相手');
+  // The templates add 「さん」, so a name that already ends in it is trimmed first.
+  // (A missing name is 「相手」 here and 「だれか」 on the lock screen; talk-rules.js says
+  // 「この人」 under the button: each is the natural word for its place.)
+  const shown = String(first.display_name || '').trim().replace(/さん$/, '');
+  const name = entry.type === 'talk_wish' ? '' : (shown || '相手');
   return fill(KIND_TEXT[entry.type], { label, name });
 }
 

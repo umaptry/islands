@@ -90,9 +90,16 @@ export function clearTalk() {
  * button follows state.talk without the card being built again.
  */
 export function talkOptionsFor(post) {
-  if (!talkAvailable() || !state.account || !post || post.author_id === state.account.id) return null;
-  const target = post.author_id;
+  if (!post) return null;
+  return talkOptionsForPerson(post.author_id, post.display_name);
+}
+
+/** The same options for a person (the profile screen uses this: one button, one
+ * state, whichever screen it is on). */
+export function talkOptionsForPerson(target, name = '') {
+  if (!talkAvailable() || !state.account || !target || target === state.account.id) return null;
   return {
+    name,
     state: () => talkStateFor(target, state.talk, { signedIn: Boolean(state.account) }),
     onPress: () => press(target),
     onWithdraw: () => withdraw(target),

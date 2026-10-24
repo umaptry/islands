@@ -1386,7 +1386,7 @@ def push_message(entry):
     elif entry["type"] in ("talk_match", "dm"):
         first = (entry["actors"][0] if entry["actors"] else None) or {}
         title = first.get("display_name") or "だれか"
-        body = PUSH_TEXT[entry["type"]].format(name=title)
+        body = PUSH_TEXT[entry["type"]].format(name=title[:-2] if title.endswith("さん") and len(title) > 2 else title)
     else:
         first = (entry["actors"][0] if entry["actors"] else None) or {}
         title = first.get("display_name") or "だれか"

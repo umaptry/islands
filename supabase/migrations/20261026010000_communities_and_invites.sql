@@ -41,7 +41,7 @@
 --        begin;
 --        select public.create_community('BAR', 'bar', '<ユーザーのアカウント id>');
 --        insert into public.community_members (community_id, account_id, role)
---          select id, '<相方のアカウント id>', 'admin' from public.communities where slug = 'bar'
+--          select id, '<もう1人の管理者のアカウント id>', 'admin' from public.communities where slug = 'bar'
 --        on conflict (community_id, account_id) do update set role = 'admin';
 --        -- 今ある人を全員 BAR に入れる（入れないと「招待リンクから参加してください」と出る）
 --        insert into public.community_members (community_id, account_id)

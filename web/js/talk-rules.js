@@ -65,13 +65,24 @@ export function talkStateFor(authorId, index, { signedIn = true, mine = false } 
 
 // ---------------------------------------------------------------- the button
 
-export const PRESSED_NOTE = '押したことは相手には見えません。お互いに押すと DM が開きます';
+/** How the other person is named in the small lines: 「{name}さん」, or 「この人」
+ * when no name came. The small line is there before the first press, so the button
+ * is clearly aimed at a person. */
+export const personCall = (name) => {
+  const text = String(name || '').trim();
+  if (!text) return 'この人';
+  return text.endsWith('さん') ? text : `${text}さん`; // never 「たなかさんさん」
+};
 
-/** The words on the button (and the small line under it) for one state. */
-export function talkButtonText(state, label) {
-  if (state === 'pressed') return { word: `${label}（押しました）`, note: PRESSED_NOTE };
-  if (state === 'matched') return { word: 'DM を開く', note: '' };
-  return { word: label, note: '' };
+/** The words on the button and the small line under it, for one state.
+ * `name` is the other person's display name. */
+export function talkButtonText(state, label, name = '') {
+  const who = personCall(name);
+  if (state === 'pressed') {
+    return { word: `${label}（押しました）`, note: `${who}も押すと DM が開きます。もう一度押すと取り消せます` };
+  }
+  if (state === 'matched') return { word: 'DM を開く', note: `${who}と、お互いに押しました` };
+  return { word: label, note: `${who}へ。押したことは相手には見えず、お互いに押すと DM が開きます` };
 }
 
 /** The one-time explanation, asked before the very first press. */

@@ -279,7 +279,7 @@ test('presence is sent when it changes and repeated before it runs out', () => {
 
 // ---------------------------------------------------------------- 「話してみたい」 and DM (2026-10-24)
 
-const LABEL = 'もっと話したい';
+const LABEL = 'もっと話してみたい';
 const AKI = '22222222-2222-4222-8222-222222222222';
 const talkRow = (type, extra = {}) => ({ id: `${type}-1`, type, unread: true, actor_id: AKI, post_id: null, created_at: '2026-10-30T20:00:00Z', ...extra });
 
@@ -303,6 +303,7 @@ test('talk_wish says only 誰かが…, whoever the row names', () => {
   assert.deepEqual(entry.actors, [], 'no face is attached');
   assert.equal(entry.actor_id, null);
   assert.equal(rules.headline(entry, LABEL), `誰かが、あなたと${LABEL}と言っています`);
+  assert.equal(rules.headline(entry, LABEL), '誰かが、あなたともっと話してみたいと言っています');
   assert.equal(rules.bodyText(entry, LABEL), '地図で参加者の投稿を見てみよう');
   // Even a row that already carries actors, with a name and "ほか N人", reveals nothing and counts nothing.
   const loud = { ...talkRow('talk_wish'), actors: [{ display_name: 'あき' }], others: 3 };
@@ -314,9 +315,15 @@ test('talk_wish says only 誰かが…, whoever the row names', () => {
 test('talk_match names the other person and points at the DM', () => {
   const entry = { ...talkRow('talk_match'), actors: [{ id: AKI, display_name: 'あき' }] };
   assert.equal(rules.headline(entry, LABEL), `あきさんと、お互いに『${LABEL}』でした。DMが開きました`);
+  assert.equal(rules.headline(entry, LABEL), 'あきさんと、お互いに『もっと話してみたい』でした。DMが開きました');
   assert.equal(rules.bodyText(entry, LABEL), 'DMを開く');
   const nameless = { ...talkRow('talk_match'), actors: [] };
   assert.ok(rules.headline(nameless, LABEL).startsWith('相手さんと'));
+});
+
+test('a name that already ends in さん is not given a second さん', () => {
+  const entry = { ...talkRow('talk_match'), actors: [{ id: AKI, display_name: 'たなかさん' }] };
+  assert.equal(rules.headline(entry, LABEL), `たなかさんと、お互いに『${LABEL}』でした。DMが開きました`);
 });
 
 test('a DM row names the sender and never carries a message', () => {
@@ -340,6 +347,10 @@ test('the other kinds read exactly as before when no label is passed', () => {
   assert.equal(rules.headline(like), 'ゆう ほか2人');
   assert.equal(rules.bodyText(like), rules.GROUP_TEXT);
   assert.equal(rules.bodyText({ type: 'comment', actors: [{}] }), rules.KIND_TEXT.comment);
+});
+
+test('the button name on the server is the agreed one, and the lock screen reads the same as the list', () => {
+  assert.equal(config.match(/TALK_LABEL\s*=\s*"([^"]+)"/)[1], LABEL);
 });
 
 test('the templates match the server\'s PUSH_TEXT once the button\'s name is put in', () => {

@@ -64,6 +64,7 @@ def room_id(person, other):
 def test_config_names_the_button_and_turns_the_feature_on(fresh_client):
     config = fresh_client.get("/api/config").json()
     assert config["talk"] == {"label": TALK_LABEL}
+    assert TALK_LABEL == "もっと話してみたい"
     assert config["features"]["talk"] is True
     assert not any(word in TALK_LABEL for word in ROMANCE)
 
@@ -73,6 +74,12 @@ def test_every_talk_sentence_is_free_of_romance_words():
     sentences += [TALK_ERROR_LOGIN, TALK_ERROR_SELF, TALK_ERROR_NOT_PEER, DM_ERROR_SEND]
     for sentence in sentences:
         assert not any(word in sentence for word in ROMANCE), sentence
+
+
+def test_push_text_does_not_double_san():
+    entry = {"type": "talk_match", "actors": [{"display_name": "たなかさん"}], "others": 0, "payload": {}, "category": "reaction", "id": "x", "created_at": "2026-10-24T00:00:00Z"}
+    message = application.push_message(entry)
+    assert message["body"] == f"たなかさんと、お互いに『{TALK_LABEL}』でした。DMが開きました"
 
 
 def test_new_types_sit_under_the_existing_switches():
@@ -223,6 +230,7 @@ def test_the_push_for_a_one_sided_press_names_nobody(cast):
     message = application.push_message(entry)
     assert message["title"] == "だれか"
     assert message["body"] == f"誰かが、あなたと{TALK_LABEL}と言っています"
+    assert message["body"] == "誰かが、あなたともっと話してみたいと言っています"
     assert "ゲスト" not in repr(message)
     # even a row that (wrongly) carried an actor would not be read for the text
     entry["actors"] = [{"id": guest.id, "display_name": "ゲスト"}]
@@ -293,6 +301,7 @@ def test_the_match_push_names_the_other_person(cast):
     message = application.push_message(entry)
     assert message["title"] == "ホスト"
     assert message["body"] == f"ホストさんと、お互いに『{TALK_LABEL}』でした。DMが開きました"
+    assert message["body"] == "ホストさんと、お互いに『もっと話してみたい』でした。DMが開きました"
 
 
 def test_talk_rows_are_never_folded_together(cast):

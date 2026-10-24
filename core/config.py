@@ -474,13 +474,13 @@ POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
 # the end of that day) and a first-come capacity.
 RECRUIT_TAG = "参加者募集中"
 
-# 「もっと話したい」（仮名）: the button's name lives here and nowhere else. The screen
+# 「もっと話してみたい」（仮名）: the button's name lives here and nowhere else. The screen
 # reads it from /api/config (talk.label), and the push texts are built from it.
 # NO romance words (the legal check depends on it).
 # The notice reads 「誰かが、あなたと{label}と言っています」, so the name must end like a verb
 # in the 〜たい / 〜したい form (話してみたい, 挨拶したい ...). A noun or 「気になる」 breaks the sentence.
 # After renaming: run the node tests (PUSH_TEXT vs screen texts) and retake the screenshots.
-TALK_LABEL = "もっと話したい"
+TALK_LABEL = "もっと話してみたい"
 # Wishes older than this are swept by press_talk (and hidden by my_talk_state).
 TALK_WISH_DAYS = 14
 DM_BODY_MAX = 1000

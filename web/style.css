@@ -1234,7 +1234,7 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 @media (max-width: 767px) {
   .sheet:not(.full) .post-footer {
     position: sticky; bottom: 0; z-index: 1; background: var(--surface);
-    margin: 0 -4px; padding: 0 4px 2px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
+    margin: 0 -4px; padding: 0 4px 14px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
   }
 }
 
@@ -1556,9 +1556,15 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .post-talk-button[data-state="matched"] { background: var(--talk); color: #fff; border-color: var(--talk); }
 .post-talk-button:disabled { opacity: .55; }
 .post-talk-button.pop { animation: action-pop .36s var(--ease); }
+.profile-talk { margin: 2px 16px 12px; }
+.profile-talk .post-talk { margin-top: 0; }
+/* Somebody you share no 会 with: the button stays hidden, so leave no gap either. */
+.profile-talk:has(> .post-talk[hidden]) { display: none; }
+/* The profile sits on the sea colour, not on a white card: the small line is white there. */
+.profile-talk .post-talk-note { color: var(--on-sea-2); }
 .post-talk-note {
   margin: 5px 10px 0; font-size: 11px; line-height: 1.55; text-align: center; color: var(--ink-3);
-  text-wrap: balance;
+  text-wrap: balance; word-break: auto-phrase; /* break between phrases, not inside 「開きます」 */
 }
 
 /* DM list */

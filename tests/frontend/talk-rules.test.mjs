@@ -11,7 +11,8 @@ const AKI = '22222222-2222-4222-8222-222222222222';
 const BEN = '33333333-3333-4333-8333-333333333333';
 const CHI = '44444444-4444-4444-8444-444444444444';
 const ROOM = '55555555-5555-4555-8555-555555555555';
-const LABEL = 'もっと話したい';
+const LABEL = 'もっと話してみたい';
+const NAME = 'あき';
 
 const cfg = (talk, label = LABEL) => ({ features: { talk }, talk: { label } });
 
@@ -32,7 +33,7 @@ test('nothing shows unless features.talk is exactly true and a label arrived', (
 
 test('the label is never written in the rules: every sentence takes it as input', () => {
   const code = source.replace(/\/\/.*$/gm, '');
-  assert.ok(!code.includes(LABEL), 'the name もっと話したい must come from /api/config');
+  assert.ok(!code.includes(LABEL), 'the name もっと話してみたい must come from /api/config');
   assert.ok(rules.talkButtonText('none', 'ほげ').word === 'ほげ');
   assert.ok(rules.talkButtonText('pressed', 'ほげ').word.startsWith('ほげ'));
   assert.ok(rules.introPrompt('ほげ').title.includes('ほげ'));
@@ -87,12 +88,34 @@ test('nothing in the index says whether somebody pressed ME', () => {
   assert.deepEqual(Object.keys(index.byTarget.get(AKI)).sort(), ['room_id', 'state']);
 });
 
-test('the words on the button, per state', () => {
-  assert.deepEqual(rules.talkButtonText('none', LABEL), { word: LABEL, note: '' });
-  const pressed = rules.talkButtonText('pressed', LABEL);
-  assert.equal(pressed.word, `${LABEL}（押しました）`);
-  assert.equal(pressed.note, '押したことは相手には見えません。お互いに押すと DM が開きます');
-  assert.deepEqual(rules.talkButtonText('matched', LABEL), { word: 'DM を開く', note: '' });
+test('the words on the button, per state: the small line is there before the first press', () => {
+  assert.deepEqual(rules.talkButtonText('none', LABEL, NAME), {
+    word: 'もっと話してみたい',
+    note: 'あきさんへ。押したことは相手には見えず、お互いに押すと DM が開きます',
+  });
+  assert.deepEqual(rules.talkButtonText('pressed', LABEL, NAME), {
+    word: 'もっと話してみたい（押しました）',
+    note: 'あきさんも押すと DM が開きます。もう一度押すと取り消せます',
+  });
+  assert.deepEqual(rules.talkButtonText('matched', LABEL, NAME), {
+    word: 'DM を開く',
+    note: 'あきさんと、お互いに押しました',
+  });
+});
+
+test('without a name the line still reads as aimed at a person', () => {
+  assert.equal(rules.personCall(''), 'この人');
+  assert.equal(rules.personCall('  '), 'この人');
+  assert.equal(rules.personCall(null), 'この人');
+  assert.equal(rules.personCall(' ベン '), 'ベンさん');
+  assert.equal(rules.personCall('たなかさん'), 'たなかさん');
+  assert.ok(rules.talkButtonText('none', LABEL).note.startsWith('この人へ。'));
+  assert.ok(rules.talkButtonText('matched', LABEL).note.startsWith('この人と、'));
+});
+
+test('the sentences after a press', () => {
+  assert.equal(rules.afterPress({ matched: false, room_id: null }, LABEL).message, '『もっと話してみたい』を押しました');
+  assert.equal(rules.afterPress({ matched: true, room_id: ROOM }, LABEL).message, 'お互いに『もっと話してみたい』でした。DMが開きました');
 });
 
 test('the one-time explanation and the take-back question', () => {
@@ -107,8 +130,7 @@ test('the one-time explanation and the take-back question', () => {
 test('no romantic wording on screen', () => {
   const banned = /恋|好き|片思い|両思い|愛|デート|カップル|告白|彼氏|彼女|モテ/;
   const lines = [
-    rules.PRESSED_NOTE,
-    ...Object.values(rules.talkButtonText('pressed', LABEL)),
+    ...['none', 'pressed', 'matched'].flatMap((s) => Object.values(rules.talkButtonText(s, LABEL, NAME))),
     ...Object.values(rules.introPrompt(LABEL)),
     ...Object.values(rules.withdrawPrompt(LABEL)),
     rules.afterPress({ matched: true, room_id: ROOM }, LABEL).message,

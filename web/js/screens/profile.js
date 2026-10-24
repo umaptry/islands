@@ -20,7 +20,8 @@ import { buzz, canBuzz, feedbackSettings, resumeAudio, setFeedback, sound } from
 import { CATEGORIES, defaultSettings, iosOtherBrowser, mergeSettings, settingsRows } from '../notify-rules.js';
 import { disablePush, enablePush, forgetDevice, pushStatus } from '../push.js';
 import { loadNotifySettings, useNotifySettings } from './notifications.js';
-import { talkAvailable } from '../talk.js';
+import { refreshTalk, talkAvailable, talkOptionsForPerson } from '../talk.js';
+import { talkButton } from '../components/talk-button.js';
 import { chooseCurrent, communitiesActive, refreshCommunities } from '../communities.js';
 import {
   DEFAULT_EXPIRY, EXPIRY_CHOICES, NOT_MEMBER_NOTE, QR_NOTE, activeInvites, createInviteBody,
@@ -744,6 +745,13 @@ async function renderUser(accountId) {
   }
 
   clear(body).append(header(account, { own: false }));
+  // The same button as under a post card; it stays hidden (null state) for yourself,
+  // signed out, the feature off, or somebody you share no 会 with.
+  const talk = talkOptionsForPerson(accountId, account.display_name);
+  if (talk) {
+    body.append(el('div', { className: 'profile-talk' }, talkButton(talk)));
+    refreshTalk({ maxAge: 20000 });
+  }
   const counts = countsFor(posts, links);
   const panel = el('div', { className: 'profile-panel' });
   body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, false, links, accountId)), panel);

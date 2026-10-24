@@ -335,10 +335,18 @@ export function mapNotice(scope, { signedIn, known = true, inviteOnly = true }) 
   };
 }
 
-const NAME_MAX = 12;
+// Measured in half-width units: a Japanese character is 2, a Latin letter 1. So 12 Japanese
+// characters, or 24 Latin ones (「Saturday Morning Run」 fits whole).
+const NAME_MAX = 24;
+const charWidth = (char) => (/^[\x20-\x7e｡-ﾟ]$/.test(char) ? 1 : 2);
 const clipName = (name) => {
-  const text = String(name || '').trim();
-  return text.length > NAME_MAX ? `${text.slice(0, NAME_MAX)}…` : text;
+  const chars = Array.from(String(name || '').trim());
+  let used = 0;
+  for (let i = 0; i < chars.length; i += 1) {
+    used += charWidth(chars[i]);
+    if (used > NAME_MAX) return `${chars.slice(0, i).join('')}…`;
+  }
+  return chars.join('');
 };
 
 /** The round button at the map's top left: 「{name} ▾」; the arrow only where there is something to switch to. */
