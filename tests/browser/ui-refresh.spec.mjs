@@ -143,8 +143,10 @@ test('コミュニティの一覧: 1つでも開き、管理者の行にだけ�
   expect(await admin.page.evaluate(() => location.hash)).toBe(`#/community/${admin.made.community_id}`);
   await expect(admin.page.locator('#communityEditName')).toHaveText(name);
   await expect(admin.page.locator('#communityName')).toHaveValue(name);
-  // 招待リンクの管理は、ここにある
-  await expect(admin.page.locator('.invite-open')).toBeVisible();
+  // 招待の管理は、ここにある
+  await expect(admin.page.locator('.community-invites .section-label')).toHaveText('メンバーを招待する');
+  await expect(admin.page.locator('.invite-open')).toHaveText('メンバーを招待する');
+  await expect(admin.page.getByText('招待リンクを作る')).toHaveCount(0);
 
   // 長さの決まり（前後の空白を取って 1〜40 字）
   await admin.page.locator('#communityName').fill('   ');

@@ -24,7 +24,6 @@ export const inviteOnlyOn = (cfg) => communitiesOn(cfg) && cfg.invite_only === t
 export const INVITE_ONLY_NOTE = 'islands は招待制です。コミュニティの招待リンクから登録してください。';
 export const NOT_MEMBER_NOTE = 'まだコミュニティに入っていません。招待リンクから参加してください。';
 export const NEW_ACCOUNT_NOTE = 'このアカウントはまだ登録されていません。コミュニティの招待リンクから登録してください。';
-export const QR_NOTE = 'QR にしたいときは、URL を Chrome の「QR コードを作成」などで QR にできます。';
 export const ASK_ADMIN = 'コミュニティの管理者に、新しいリンクをもらってください。';
 
 const REASON_TEXT = {
@@ -516,6 +515,35 @@ export function inviteRowText(row, now = Date.now()) {
     uses: uses ? `${uses}人が使いました` : 'まだ使われていません',
   };
 }
+
+/** The one link of a community: the newest invite that still works (or none). */
+export const currentInvite = (rows, now = Date.now()) => activeInvites(rows, now)[0] || null;
+
+/** The line under the QR: "あと4時間（10/25 23:59 まで）・3人が使いました". */
+export function inviteLineText(row, now = Date.now()) {
+  const text = inviteRowText(row, now);
+  return `${text.expiry}・${text.uses}`;
+}
+
+/** What the share sheet gets. */
+export const inviteShareData = (name, url) => ({
+  title: `${name} への招待`,
+  text: `islands の「${name}」に招待します`,
+  url,
+});
+
+/** The saved picture: its file name, and the two lines printed under the QR. */
+export function inviteImageName(name) {
+  const safe = String(name || '').replace(/[\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return `islands_招待_${safe || 'コミュニティ'}.png`;
+}
+export const inviteImageLines = (name, expiresAt) => ({
+  title: `${name} への招待`,
+  until: `${jstStamp(expiresAt)} まで`,
+});
+
+/** The post that travels with the link: only while the switch is on and a post is picked. */
+export const invitePostFor = (on, postId) => (on && validPost(postId) ? postId : null);
 
 // ---------------------------------------------------------------- islands in a community map
 

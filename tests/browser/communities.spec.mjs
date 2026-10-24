@@ -51,11 +51,12 @@ async function makeInviteLink(admin, communityId, { postId, key } = {}) {
   await card.waitFor({ timeout: 15000 });
   await card.locator('.invite-open').click();
   if (key) await card.locator(`.invite-chip[data-key="${key}"]`).click();
+  await card.locator('.invite-make').click();
+  await card.locator('.invite-qr').waitFor();
   if (postId) {
     await card.locator('.invite-with-post').check();
     await card.locator('.invite-post-select').selectOption(postId);
   }
-  await card.locator('.invite-make').click();
   const url = await card.locator('.invite-url').inputValue();
   expect(url).toContain('#/invite/');
   return { url: url.slice(url.indexOf('#')), card };
@@ -212,10 +213,10 @@ test('期限切れ・止めたリンク・見つからないリンクは、登�
 
   // 管理者が止めたリンク
   const live = await makeInviteLink(admin, community.community_id, { key: '3h' });
-  await expect(live.card.locator('.invite-row')).toHaveCount(1);
-  await live.card.locator('.invite-revoke').first().click();
+  await expect(live.card.locator('.invite-qr')).toBeVisible();
+  await live.card.locator('.invite-revoke').click();
   await admin.page.locator('.modal-actions .btn-danger').click();
-  await expect(live.card.locator('.invite-row')).toHaveCount(0);
+  await expect(live.card.locator('.invite-open')).toBeVisible();
   await visitor.page.goto(`/?r=${unique()}${live.url}`);
   await expect(visitor.page.locator('#inviteLede')).toContainText('止められ');
   await expect(visitor.page.locator('#inviteRegister')).toBeHidden();
@@ -253,14 +254,10 @@ test('招待に付ける投稿は、そのコミュニティの投稿だけ。�
   const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です');
   await makePost(admin, book.community_id, '読書会の本を決めます');
 
-  await admin.page.goto(`/?me=${unique()}#/community/${bar.community_id}`);
-  const card = admin.page.locator(`#communityEditBody .community-invites[data-community-id="${bar.community_id}"]`);
-  await card.waitFor({ timeout: 15000 });
-  await card.locator('.invite-open').click();
-  await card.locator('.invite-with-post').check();
+  // 選べる投稿は、そのコミュニティの投稿だけ（読書会の投稿は出ない）
+  const { url, card } = await makeInviteLink(admin, bar.community_id, { postId: barPost });
   await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);
-
-  const { url } = await makeInviteLink(admin, bar.community_id);
+  expect(url).toContain(`?post=${barPost}`);
   const visitor = await openContext(browser, testInfo);
   await visitor.page.goto(`/${url}`);
   await expect(visitor.page.locator('#inviteTitle')).toContainText('への招待です');

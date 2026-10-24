@@ -411,6 +411,37 @@ test('one line of the list: time left, the date, how many used it', () => {
   assert.equal(rules.inviteRowText({ expires_at: '2026-10-30T09:00:00Z' }, now).expiry, '10/30 18:00 に終了');
 });
 
+test('the one link: the newest invite that still works, or none', () => {
+  const now = Date.UTC(2026, 9, 30, 10, 0, 0);
+  const row = (id, extra = {}) => ({ id, code: CODE, expires_at: new Date(now + HOUR).toISOString(), created_at: '2026-10-30T08:00:00Z', ...extra });
+  const rows = [row('old'), row('new', { created_at: '2026-10-30T09:30:00Z' }), row('gone', { expires_at: new Date(now - 1000).toISOString() })];
+  assert.equal(rules.currentInvite(rows, now).id, 'new');
+  assert.equal(rules.currentInvite([rows[2]], now), null);
+  assert.equal(rules.currentInvite(null, now), null);
+});
+
+test('the post switch: the link carries ?post= only while it is on and a post is picked', () => {
+  assert.equal(rules.invitePostFor(true, POST), POST);
+  assert.equal(rules.invitePostFor(false, POST), null);
+  assert.equal(rules.invitePostFor(true, ''), null);
+  assert.equal(rules.invitePostFor(true, 'not a post!'), null);
+  const origin = 'https://islands.example';
+  assert.equal(rules.inviteUrlFor(origin, CODE, rules.invitePostFor(false, POST)), `${origin}/#/invite/${CODE}`);
+  assert.equal(rules.inviteUrlFor(origin, CODE, rules.invitePostFor(true, POST)), `${origin}/#/invite/${CODE}?post=${POST}`);
+});
+
+test('the line under the QR, the share text, the saved picture', () => {
+  const now = Date.UTC(2026, 9, 30, 10, 0, 0);
+  assert.equal(rules.inviteLineText({ expires_at: '2026-10-30T14:59:00Z', uses: 3 }, now), 'あと4時間59分（10/30 23:59 まで）・3人が使いました');
+  assert.equal(rules.inviteLineText({ expires_at: '2026-10-30T14:59:00Z', uses: 0 }, now), 'あと4時間59分（10/30 23:59 まで）・まだ使われていません');
+  assert.deepEqual(rules.inviteShareData('朝ラン会', 'https://x/#/invite/a'),
+    { title: '朝ラン会 への招待', text: 'islands の「朝ラン会」に招待します', url: 'https://x/#/invite/a' });
+  assert.equal(rules.inviteImageName('朝ラン会'), 'islands_招待_朝ラン会.png');
+  assert.equal(rules.inviteImageName('a/b:c*?"<>|d'), 'islands_招待_a b c d.png');
+  assert.equal(rules.inviteImageName('  '), 'islands_招待_コミュニティ.png');
+  assert.deepEqual(rules.inviteImageLines('朝ラン会', '2026-10-30T14:59:00Z'), { title: '朝ラン会 への招待', until: '10/30 23:59 まで' });
+});
+
 // ---------------------------------------------------------------- the wiring (a guard against drift)
 
 const read = (url) => readFile(new URL(url, import.meta.url), 'utf8');
