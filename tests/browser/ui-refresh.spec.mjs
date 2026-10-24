@@ -245,21 +245,23 @@ test('新しい島の光: 7日以内の自分以外の投稿が、開くまで�
   const theirs = await makePost(friend, '週末はコーヒー豆を焙煎して過ごしています', cid);
 
   const glow = (page, ids) => page.evaluate(async (ids) => {
-    // 島の名前は 1 分ほど遅れて届くので、ここでは決めた島を置いて確かめる。
-    const { state, notify } = await import('/static/js/state.js');
+    // 島の名前は 1 分ほど遅れて届くので、ここでは決めた島を置いて確かめる。置いたその場で数える
+    // （await を挟むと、地図のふだんの更新が島を置き換えてしまい、たまに数え違える）。
+    const { state } = await import('/static/js/state.js');
+    const map = await import('/static/js/map/index.js');
     state.islands = [{ island_id: 'i-mine', label: 'a', cx: 0, cy: 0, post_ids: [ids.mine] },
       { island_id: 'i-theirs', label: 'b', cx: 10, cy: 10, post_ids: [ids.theirs] }];
-    notify('posts');
-    return [...(await import('/static/js/map/index.js')).freshIslandSet()];
+    return [...map.freshIslandSet()];
   }, ids);
 
   await toMap(admin);
   await expect.poll(() => admin.page.evaluate(async () => (await import('/static/js/state.js')).state.posts.length)).toBe(2);
-  expect(await glow(admin.page, { mine, theirs })).toEqual(['i-theirs']);
+  // 光る投稿の一覧は、投稿が届いたあとに作られる。できるまで数え直す。
+  await expect.poll(() => glow(admin.page, { mine, theirs })).toEqual(['i-theirs']);
   // 開く（地図からカードを開くのと同じ入口）
   await admin.page.evaluate(async (id) => (await import('/static/js/screens/map.js')).openPost(id), theirs);
   await expect(admin.page.locator('#sheet.on .post-card')).toBeVisible();
-  expect(await glow(admin.page, { mine, theirs })).toEqual([]);
+  await expect.poll(() => glow(admin.page, { mine, theirs })).toEqual([]);
   // 読み直しても（ブラウザに残っているので）戻らない
   await toMap(admin);
   await expect.poll(() => admin.page.evaluate(async () => (await import('/static/js/state.js')).state.posts.length)).toBe(2);
@@ -285,15 +287,16 @@ test('新しい島の光: ブラウザに保存できなくても、その回の
   await toMap(admin);
   await expect.poll(() => admin.page.evaluate(async () => (await import('/static/js/state.js')).state.posts.length)).toBe(1);
   const glow = () => admin.page.evaluate(async (id) => {
-    const { state, notify } = await import('/static/js/state.js');
+    // 置いたその場で数える（上のテストと同じ理由）。
+    const { state } = await import('/static/js/state.js');
+    const map = await import('/static/js/map/index.js');
     state.islands = [{ island_id: 'i-theirs', label: 'b', cx: 10, cy: 10, post_ids: [id] }];
-    notify('posts');
-    return [...(await import('/static/js/map/index.js')).freshIslandSet()];
+    return [...map.freshIslandSet()];
   }, theirs);
-  expect(await glow()).toEqual(['i-theirs']);
+  await expect.poll(glow).toEqual(['i-theirs']);
   await admin.page.evaluate(async (id) => (await import('/static/js/screens/map.js')).openPost(id), theirs);
   await expect(admin.page.locator('#sheet.on .post-card')).toBeVisible();
-  expect(await glow()).toEqual([]);
+  await expect.poll(glow).toEqual([]);
 });
 
 test('下のバーは マップ／DM／通知／マイページ。今週の反応のスイッチはもうない', async ({ browser }, testInfo) => {
