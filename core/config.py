@@ -519,6 +519,15 @@ LOCAL_DEMO_COMMUNITY_SLUG = "demo"
 LOCAL_DEMO_INVITE_CODE = "demo-invite-code-local-0001"
 # How long the server trusts what it read from app_settings (invite_only).
 INVITE_ONLY_CACHE_SECONDS = 60
+# Members-only posts (app_settings.members_only): a post of a community is read by that community's
+# members only. The server reads the switch at most this often, and a change reaches every
+# instance within it.
+MEMBERS_ONLY_CACHE_SECONDS = 15
+# ONE sentence for "no such post", "a post of another community" and "you are not a member":
+# the three must never be told apart (no existence leak).
+MEMBERS_ONLY_NOT_FOUND = "見つかりませんでした。"
+MEMBERS_ONLY_UNAVAILABLE = "現在、確認できません。しばらくしてからお試しください。"
+MEMBERS_ONLY_COMMUNITY_REQUIRED = "コミュニティを指定してください。"
 RECRUIT_CAPACITY_MIN = 1
 RECRUIT_CAPACITY_MAX = 999
 RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today
