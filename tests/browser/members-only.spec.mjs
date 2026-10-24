@@ -526,9 +526,13 @@ test.describe('スイッチ「入」のとき', () => {
     await call(b, 'post', '/api/local/reactions', { post_id: pa, kind: 'join' });
     await call(a, 'post', '/api/local/reactions', { post_id: pb, kind: 'like' });
 
+    // 「もっと話してみたい」 is on the profile only, never on a post card.
     await a.page.goto(`/?t=${unique()}#/map?post=${pb}`);
     await a.page.locator('#sheet.on .post-card').waitFor();
-    const mine = a.page.locator('.post-talk-button');
+    await expect(a.page.locator('#sheet .post-talk-button')).toHaveCount(0);
+    await a.page.goto(`/?t3=${unique()}#/u/${b.id}`);
+    await expect(a.page.locator('#userBody .profile-name')).toBeVisible({ timeout: 15000 });
+    const mine = a.page.locator('#userBody .post-talk-button');
     await expect(mine.first()).toBeVisible();
     const before = await mine.first().getAttribute('data-state');
     await mine.first().click();

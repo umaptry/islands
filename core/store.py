@@ -1216,7 +1216,7 @@ class MemoryStore:
             rows = [(m["joined_at"], cid, self._communities[cid], m["role"])
                     for (cid, account), m in self._members.items()
                     if account == me and cid in self._communities]
-            rows.sort(key=lambda item: (_stamp(item[0]), item[1]))
+            rows.sort(key=lambda item: _stamp(item[0]))  # stable: equal clock ticks keep the order they joined in
             return [{"community_id": cid, "slug": c["slug"], "name": c["name"], "role": role}
                     for _, cid, c, role in rows]
 
@@ -1299,7 +1299,7 @@ class MemoryStore:
         with self._lock:
             if not community_id or not self._is_admin(community_id, me):
                 raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY_LIST, status=403)
-            rows = [i for i in self._invites.values() if i["community_id"] == community_id]
+            rows = [i for i in reversed(list(self._invites.values())) if i["community_id"] == community_id]  # newest first even when the clock ticks coarsely
             rows.sort(key=lambda i: _stamp(i["created_at"]), reverse=True)
             return [{key: i[key] for key in ("id", "code", "expires_at", "revoked_at", "uses", "created_at")}
                     for i in rows[:100]]
