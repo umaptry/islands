@@ -44,10 +44,10 @@ const makePost = (who, communityId, body, tags = []) => who.page.evaluate(async 
 
 const setInviteOnly = (who, value) => call(who, 'post', '/api/local/settings/invite-only', { value });
 
-// 管理者のマイページで招待リンクを作り、リンク（# から後ろ）を返す。
+// 管理者のコミュニティ編集画面（#/community/:id）で招待リンクを作り、リンク（# から後ろ）を返す。
 async function makeInviteLink(admin, communityId, { postId, key } = {}) {
-  await admin.page.goto(`/?me=${unique()}#/me`);
-  const card = admin.page.locator(`#meCommunities .me-community[data-community-id="${communityId}"]`);
+  await admin.page.goto(`/?me=${unique()}#/community/${communityId}`);
+  const card = admin.page.locator(`#communityEditBody .community-invites[data-community-id="${communityId}"]`);
   await card.waitFor({ timeout: 15000 });
   await card.locator('.invite-open').click();
   if (key) await card.locator(`.invite-chip[data-key="${key}"]`).click();
@@ -253,8 +253,8 @@ test('招待に付ける投稿は、そのコミュニティの投稿だけ。�
   const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です');
   await makePost(admin, book.community_id, '読書会の本を決めます');
 
-  await admin.page.goto(`/?me=${unique()}#/me`);
-  const card = admin.page.locator(`#meCommunities .me-community[data-community-id="${bar.community_id}"]`);
+  await admin.page.goto(`/?me=${unique()}#/community/${bar.community_id}`);
+  const card = admin.page.locator(`#communityEditBody .community-invites[data-community-id="${bar.community_id}"]`);
   await card.waitFor({ timeout: 15000 });
   await card.locator('.invite-open').click();
   await card.locator('.invite-with-post').check();

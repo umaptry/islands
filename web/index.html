@@ -324,20 +324,29 @@
   <canvas id="stage"></canvas>
 
   <div class="map-top">
-    <button class="community-pill" id="mapCommunity" type="button" hidden></button>
-    <div class="search-row">
-      <div class="search">
-        <span class="search-icon" aria-hidden="true"></span>
-        <input class="search-input" id="mapSearch" type="search" placeholder="検索..." autocomplete="off">
-        <button class="search-clear" id="mapSearchClear" aria-label="検索を消す" hidden>✕</button>
-      </div>
-      <div class="filter" id="mapFilter">
-        <button class="filter-button" id="mapFilterBtn" aria-label="タグで絞り込む">
-          <span aria-hidden="true"></span><span class="filter-count num" id="mapFilterCount" hidden>0</span>
+    <!-- One solid bar: the community on the left (it opens the community sheet), search and the tag
+         filter on the right. Tapping the search icon opens the search box inside the bar. -->
+    <header class="map-header" id="mapHeader">
+      <div class="map-header-inner">
+        <button class="header-community is-brand" id="mapCommunity" type="button" disabled>
+          <span class="header-community-name">islands</span>
         </button>
-        <div class="filter-panel" id="mapFilterPanel" hidden></div>
+        <div class="search" id="mapSearchBox" hidden>
+          <span class="search-icon" aria-hidden="true"></span>
+          <input class="search-input" id="mapSearch" type="search" placeholder="検索..." autocomplete="off" aria-label="投稿を検索">
+          <button class="search-clear" id="mapSearchClear" type="button" aria-label="検索を閉じる">✕</button>
+        </div>
+        <div class="header-tools" id="mapHeaderTools">
+          <button class="header-icon" id="mapSearchOpen" type="button" aria-label="検索" aria-expanded="false"></button>
+          <div class="filter" id="mapFilter">
+            <button class="filter-button" id="mapFilterBtn" type="button" aria-label="タグで絞り込む">
+              <span aria-hidden="true"></span><span class="filter-count num" id="mapFilterCount" hidden>0</span>
+            </button>
+            <div class="filter-panel" id="mapFilterPanel" hidden></div>
+          </div>
+        </div>
       </div>
-    </div>
+    </header>
     <div class="near-islands" id="nearIslands" aria-label="近くの島" hidden></div>
     <button class="digest-pill" id="mapDigest" type="button" hidden></button>
     <button class="participant-stop" id="participantStop" type="button" hidden>
@@ -354,14 +363,12 @@
   <div class="island-card" id="islandCard" role="dialog" aria-label="島の紹介" hidden></div>
 
   <div class="trial-hint" id="trialHint" hidden>島をタップ</div>
-  <p class="busy-note" id="busyNote" role="status" hidden>今週、新しい投稿や反応・メッセージがあった所を光らせています</p>
   <div class="map-controls">
-    <button class="busy-toggle" id="busyToggle" type="button" role="switch" aria-checked="false" hidden>
-      <i class="busy-switch" aria-hidden="true"></i><span class="busy-text" id="busyText">今週の反応</span>
-    </button>
     <button class="round-button" id="mapOverview" type="button" aria-label="地図全体を見る">
       <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.9 5.6 3.9 9S14.600 18.400 12 21c-2.600-2.600-3.900-5.600-3.900-9S9.400 5.600 12 3Z"/></svg>
     </button>
+    <!-- Like X's: a round button at the bottom right. Writes for the community shown on the map. -->
+    <button class="fab" id="mapPost" type="button" aria-label="投稿する" hidden></button>
   </div>
   <div class="map-notice" id="mapNotice" hidden>
     <div class="map-notice-card">
@@ -501,7 +508,6 @@
 <!-- ============ 12. DM: the rooms that have opened ============ -->
 <section id="dmList" class="screen tinted">
   <div class="topbar-inline">
-    <button class="icon-button" id="dmListBack" aria-label="戻る">←</button>
     <h2 class="screen-title">DM</h2>
   </div>
   <div class="scroller" id="dmListBody"></div>
@@ -518,10 +524,22 @@
   <div class="dm-foot" id="dmFoot"></div>
 </section>
 
+<!-- ============ 14. community: rename, invite links (an admin's screen; #/community/:id) ============ -->
+<section id="communityEdit" class="screen tinted">
+  <div class="topbar-inline">
+    <button class="icon-button" id="communityEditBack" aria-label="戻る">←</button>
+    <h2 class="screen-title">コミュニティの編集</h2>
+  </div>
+  <div class="scroller" id="communityEditBody"></div>
+</section>
+
 <!-- ============ shared ============ -->
 <nav class="bottom-nav" id="bottomNav" hidden>
   <button class="nav-item on" data-route="#/map"><span class="nav-icon">🗺</span><span class="nav-label">マップ</span></button>
-  <button class="nav-item" data-route="#/post"><span class="nav-icon">＋</span><span class="nav-label">投稿</span></button>
+  <button class="nav-item" data-route="#/dm" id="navDm" hidden>
+    <span class="nav-icon">💬</span><span class="nav-label">DM</span>
+    <span class="nav-badge num" id="dmBadge" hidden>0</span>
+  </button>
   <button class="nav-item" data-route="#/notifications">
     <span class="nav-icon">🔔</span><span class="nav-label">通知</span>
     <span class="nav-badge num" id="navBadge" hidden>0</span>

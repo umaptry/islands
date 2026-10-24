@@ -1,4 +1,5 @@
-// The DM: a list of the rooms that have opened (#/dm) and one room (#/dm/:id).
+// The DM: a list of the rooms that have opened (#/dm, the DM tab: every community's) and one room
+// (#/dm/:id).
 //
 // A room opens only when two people have pressed 「話してみたい」 for each other
 // (talk.js); from then on it is a plain two-person conversation. The input is the
@@ -14,9 +15,8 @@ import { activeScreen, navigate, screen } from '../router.js';
 import { state } from '../state.js';
 import { $, avatar, clear, clip, confirmAction, el, timeAgo, toast } from '../ui.js';
 import { chatInput } from '../components/chat.js';
-import { talkLabel, refreshTalk } from '../talk.js';
+import { refreshTalk, seeDmRoom, talkLabel, unreadRoomIds, useDmRooms } from '../talk.js';
 import { markDmNotificationsRead } from './notifications.js';
-import { unreadDmCount } from '../notify-rules.js';
 import {
   DM_MAX, DM_POLL_MS, dmEventLine, dmIntro, dmPreview, lastStamp, mergeMessages, sortRooms,
 } from '../talk-rules.js';
@@ -42,20 +42,22 @@ async function paintList() {
   }
   if (request !== listRequest) return;
   clear(body);
+  useDmRooms(rooms);   // the tab's badge follows what was just read
   if (!rooms.length) {
-    body.append(el('div', { className: 'empty-panel' },
+    body.append(el('div', { className: 'empty-panel', attrs: { id: 'dmEmpty' } },
       el('p', { text: 'まだ DM はありません' }),
       el('p', {
         className: 'empty-sub',
-        text: `同じ会に参加した人と、お互いに「${talkLabel()}」を押すと、ここに DM が開きます。`,
+        text: `お互いに『${talkLabel()}』を押すと、ここに DM が開きます`,
       })));
     return;
   }
+  const unreadIds = unreadRoomIds(rooms);
   rooms.forEach((room) => {
-    const unread = unreadDmCount(state.notifications, room.other_id) > 0;
+    const unread = unreadIds.has(room.room_id);
     const event = dmEventLine(room, (text) => clip(text, 22));
     body.append(el('button', {
-      className: 'list-row dm-row', attrs: { type: 'button' },
+      className: `list-row dm-row${unread ? ' unread' : ''}`, attrs: { type: 'button', 'data-room-id': room.room_id },
       on: { click: () => navigate(`#/dm/${encodeURIComponent(room.room_id)}`) },
     },
       avatar(faceOf(room), 44),
@@ -138,6 +140,7 @@ function paintFoot() {
     onSent: (message) => {
       if (!room || room.room_id !== own || !message) return;
       messages = mergeMessages(messages, [message]);
+      if (message.created_at) seeDmRoom(own, message.created_at);   // what I sent is not "new" to me
       paintMessages({ stick: true });
     },
   });
@@ -161,6 +164,8 @@ async function poll({ first = false } = {}) {
   if (mine !== request || !room || room.room_id !== id) return;
   const before = messages.length;
   messages = mergeMessages(messages, rows);
+  // Open on screen means seen: the tab's badge does not count what is in front of me.
+  if (lastStamp(messages)) seeDmRoom(id, lastStamp(messages));
   if (!first && messages.length === before) return;
   paintMessages({ stick: first });
   if (rows.some((row) => row.sender_id !== state.account?.id)) markDmNotificationsRead(room.other_id);
@@ -238,7 +243,6 @@ async function toggleBlock() {
 // ---------------------------------------------------------------- wiring
 
 export function setupDm() {
-  $('dmListBack').addEventListener('click', () => navigate('#/me'));
   $('dmRoomBack').addEventListener('click', () => navigate('#/dm'));
   $('dmRoomBlock').addEventListener('click', toggleBlock);
   $('dmRoomWho').addEventListener('click', () => {

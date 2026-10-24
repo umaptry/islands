@@ -33,12 +33,13 @@ export function icon(name, size = 22) {
 export function setupIcons() {
   const ids = { composeBack: 'back', editBack: 'back', userBack: 'back', composeImageBtn: 'image',
     composeImageClear: 'close', mapSearchClear: 'close', sheetClose: 'close',
-    dmListBack: 'back', dmRoomBack: 'back' };
+    communityEditBack: 'back', dmRoomBack: 'back', mapSearchOpen: 'search', mapPost: 'plus' };
   Object.entries(ids).forEach(([id, name]) => document.getElementById(id)?.replaceChildren(icon(name)));
   document.querySelector('.search-icon')?.replaceChildren(icon('search', 18));
+  document.getElementById('mapPost')?.replaceChildren(icon('plus', 30));
   document.querySelector('#mapFilterBtn > span')?.replaceChildren(icon('filter', 20));
   document.querySelectorAll('.nav-item').forEach((button, i) => {
     button.setAttribute('aria-label', button.querySelector('.nav-label').textContent);
-    button.querySelector('.nav-icon').replaceChildren(icon(['map', 'plus', 'bell', 'user'][i], 28));
+    button.querySelector('.nav-icon').replaceChildren(icon(['map', 'message', 'bell', 'user'][i], 28));
   });
 }

@@ -38,6 +38,9 @@ import numpy as np
 
 from core.config import ENERGY_CELL_SIZE
 from core.config import (
+    COMMUNITY_ERROR_NAME,
+    COMMUNITY_ERROR_RENAME_ADMIN_ONLY,
+    COMMUNITY_NAME_MAX,
     DM_BODY_MAX,
     DM_ERROR_SEND,
     DM_ROOM_EXCERPT,
@@ -1128,6 +1131,21 @@ class MemoryStore:
             if not invite or not self._is_admin(invite["community_id"], me):
                 raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY_REVOKE, status=403)
             invite["revoked_at"] = invite["revoked_at"] or _now()
+
+    def rename_community(self, me, community_id, new_name):
+        """What public.rename_community does: an admin of that community renames it. The name is
+        trimmed (full-width spaces too) and must then be 1..COMMUNITY_NAME_MAX characters.
+        Returns the new name."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            if not community_id or not self._is_admin(community_id, me):
+                raise CommunityRefused(COMMUNITY_ERROR_RENAME_ADMIN_ONLY, status=403)
+            name = (new_name or "").strip(" \t\r\n\u3000")
+            if not 1 <= len(name) <= COMMUNITY_NAME_MAX:
+                raise CommunityRefused(COMMUNITY_ERROR_NAME, status=400)
+            self._communities[community_id]["name"] = name
+            return name
 
     def expire_invite(self, invite_id):
         """Local-mode dev helper (an expired link for a test or a screenshot)."""

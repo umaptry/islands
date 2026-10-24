@@ -10,7 +10,7 @@ import { session } from './session.js';
 import { state } from './state.js';
 import { onboardingStep } from './onboarding.js';
 import { setupKeyboardGuard } from './keyboard.js';
-import { navigate, route, screen, setGuard, show, startRouter } from './router.js';
+import { navigate, refreshNav, route, screen, setGuard, setNavVisible, show, startRouter } from './router.js';
 import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
 import { setupPush, syncPush } from './push.js';
 import { $, toast } from './ui.js';
@@ -23,7 +23,8 @@ import { setupMapScreen, refreshMyPosts } from './screens/map.js';
 import { refreshNotifications, setupNotifications, paintBadge } from './screens/notifications.js';
 import { setupProfile } from './screens/profile.js';
 import { setupDm } from './screens/dm.js';
-import { browserStorage, clearTalk, refreshTalk, talkAvailable } from './talk.js';
+import { setupCommunityEdit } from './screens/community-edit.js';
+import { browserStorage, clearDm, clearTalk, dmTabVisible, refreshDmRooms, refreshTalk, talkAvailable } from './talk.js';
 import { mapLinkFor, postIdFromHash, savePendingPost, takePendingPost } from './return-post.js';
 import { setupInvite, settleSession } from './screens/invite.js';
 import { communitiesActive, dropCommunities, refreshCommunities } from './communities.js';
@@ -44,13 +45,17 @@ route('#/me/edit', 'profileEdit');
 route('#/u/:id', 'user');
 route('#/dm', 'dmList');
 route('#/dm/:id', 'dmRoom');
+route('#/community/:id', 'communityEdit');
 
 // Signed out, you can look at the map and read a post; you cannot write, react
 // or have an inbox. Sending somebody to the sign-in screen is a redirect and
 // not an error page, so the address they typed is the one they come back to.
 const NEEDS_ACCOUNT = new Set([
-  '#/post', '#/post/:id/edit', '#/notifications', '#/me', '#/me/edit', '#/dm', '#/dm/:id',
+  '#/post', '#/post/:id/edit', '#/notifications', '#/me', '#/me/edit', '#/dm', '#/dm/:id', '#/community/:id',
 ]);
+
+// The bottom bar is マップ／DM／通知／マイページ. The DM tab exists only when signed in and 「話してみたい」 is on.
+setNavVisible((target) => (target === '#/dm' ? dmTabVisible() : true));
 
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
@@ -104,6 +109,7 @@ async function boot() {
   setupNotifications();
   setupProfile();
   setupDm();
+  setupCommunityEdit();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   screen('booting', {});
@@ -194,8 +200,10 @@ async function boot() {
     refreshMyPosts();
     refreshNotifications();
     refreshTalk();
+    refreshDmRooms();
   }
   paintBadge();
+  refreshNav();
   syncRealtime();
   syncPush();
 
@@ -215,6 +223,8 @@ async function boot() {
       state.notifySettings = null;
       paintBadge();
       clearTalk();
+      clearDm();
+      refreshNav();
       dropCommunities();
     }
     // Also rings on every token refresh; both only act when the person changed.

@@ -396,3 +396,19 @@ test('matchSignature changes only when a new 「お互いに」 row appears', ()
   assert.notEqual(rules.matchSignature(one), rules.matchSignature(more));
   assert.equal(rules.matchSignature([]), '');
 });
+
+test('DM messages are not in the 通知 list or its badge; the 「お互いに」 row and 「誰かが…」 stay', () => {
+  const entries = [
+    talkRow('dm', { id: 'd1' }), talkRow('dm', { id: 'd2' }),
+    talkRow('talk_match', { id: 'm1' }), talkRow('talk_wish', { id: 'w1', actor_id: null }),
+    talkRow('like', { id: 'l1' }),
+  ];
+  const settings = rules.defaultSettings();
+  assert.deepEqual(rules.listable(entries).map((entry) => entry.id), ['m1', 'w1', 'l1']);
+  assert.deepEqual(rules.dmMessageRows(entries).map((entry) => entry.id), ['d1', 'd2']);
+  assert.equal(rules.unreadCount(entries, settings), 3, 'only the three that stay are counted');
+  assert.equal(rules.unreadCount([talkRow('dm', { id: 'd1' })], settings), 0);
+  assert.deepEqual(rules.listable(null), []);
+  // ...but a new DM message is still an arrival (the in-app band), as before.
+  assert.equal(rules.arrivals([talkRow('dm', { id: 'd9' })], new Set(), settings).length, 1);
+});

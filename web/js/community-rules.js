@@ -349,15 +349,65 @@ const clipName = (name) => {
   return chars.join('');
 };
 
-/** The round button at the map's top left: 「{name} ▾」; the arrow only where there is something to switch to. */
+/** The community button at the left of the map's header: 「{name} ▾」. The arrow is there whenever the
+ * button opens the sheet - with one community too, since the sheet is also where an admin edits it. */
 export function communityButtonText(scope, count) {
   if (!scope || (scope.mode !== 'community' && scope.mode !== 'viewing')) return '';
   const name = clipName(scope.name) || 'コミュニティ';
-  return count >= 2 && scope.mode === 'community' ? `${name} ▾` : name;
+  return count >= 1 && scope.mode === 'community' ? `${name} ▾` : name;
 }
 
-/** Whether the button opens the switching sheet. */
-export const canSwitch = (scope, count) => Boolean(scope && scope.mode === 'community' && count >= 2);
+/** Whether the button opens the community sheet: signed in with at least one community. */
+export const canSwitch = (scope, count) => Boolean(scope && scope.mode === 'community' && count >= 1);
+
+export const HEADER_BRAND = 'islands';
+
+/** What the left of the header says: the community button, or just the name of the app (signed out,
+ * in no community, a read-only look, communities off). `tappable` is whether it opens the sheet. */
+export function headerTitle(scope, count) {
+  const text = communityButtonText(scope, count);
+  return { text: text || HEADER_BRAND, brand: !text, tappable: canSwitch(scope, count) };
+}
+
+/** Whether the round 「投稿する」 button shows on the map: signed in, and looking at a map I may write on
+ * (not in the read-only look at a community I am not in, not with no community at all). */
+export const canPostFromMap = ({ signedIn, scope }) =>
+  Boolean(signedIn && scope && scope.mode !== 'none' && scope.mode !== 'viewing');
+
+// ---------------------------------------------------------------- renaming
+
+export const COMMUNITY_NAME_MAX = 40;
+export const COMMUNITY_NAME_NOTE = 'コミュニティの名前は1〜40文字で入力してください。';
+
+/** The same rule as rename_community / create_community: trimmed, then 1 to 40 characters. */
+export function checkCommunityName(raw) {
+  const name = String(raw == null ? '' : raw).trim();
+  const length = Array.from(name).length;
+  if (length < 1 || length > COMMUNITY_NAME_MAX) return { ok: false, name, message: COMMUNITY_NAME_NOTE };
+  return { ok: true, name, message: '' };
+}
+
+const JAPANESE = /[぀-ヿ一-鿿]/;
+
+/** A refusal from rename_community said for a person: the database's own Japanese sentence as it is,
+ * anything technical (a PostgREST code, an English policy message) as a plain one. */
+export function communityRefusal(message) {
+  const text = String(message || '').trim();
+  if (text && JAPANESE.test(text)) return text;
+  if (/row-level security|permission denied|42501/i.test(text)) return 'このコミュニティの名前は、管理者だけが変えられます。';
+  return 'うまくいきませんでした。少し待ってからもう一度お試しください。';
+}
+
+/** rename_community's answer (a string; the local route answers { name }) -> the name, or ''. */
+export function readRenamed(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const name = value && typeof value === 'object' ? value.name : value;
+  return typeof name === 'string' ? name.trim() : '';
+}
+
+/** My communities with one renamed (the list on screen follows without a reload). */
+export const withRenamed = (list, id, name) =>
+  (list || []).map((entry) => (entry.id === id ? { ...entry, name } : entry));
 
 /**
  * The small line over the composer. `known` is whether my communities were read: if the read

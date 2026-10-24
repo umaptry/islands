@@ -407,12 +407,10 @@ body.kb-open .island-card { bottom: calc(env(safe-area-inset-bottom) + 12px); }
 
 .map-top {
   position: absolute; top: 0; left: 0; right: 0;
-  padding: calc(10px + env(safe-area-inset-top)) 14px 0;
+  padding: 0 14px;
   display: flex; flex-direction: column; gap: 9px; align-items: center;
   pointer-events: none; z-index: 5;
 }
-.search-row { display: flex; gap: 8px; width: 100%; max-width: 520px; pointer-events: auto; }
-
 .search {
   flex: 1; display: flex; align-items: center; gap: 6px;
   height: 42px; padding: 0 12px; border-radius: 999px;
@@ -894,7 +892,6 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 }
 @media (min-width: 768px) {
   .bottom-nav { border-top: 1px solid var(--line); }
-  .map-top { padding-top: 16px; }
   .slide-art { width: 220px; }
 }
 
@@ -925,7 +922,6 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .nav-item.on svg { stroke-width: 2.5; }
 .nav-item { min-height: 48px; gap: 0; }
 .search-icon, .post-action-icon, .notif-icon { display: inline-flex; align-items: center; justify-content: center; }
-.search-row { max-width: 512px; }
 .search, .filter-button { height: 40px; }
 .post-card { padding: 16px; border-radius: 12px; box-shadow: 0 4px 6px rgb(0 0 0 / .1); }
 .post-body { font-size: 14px; line-height: 1.625; }
@@ -1412,21 +1408,8 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   .mini-on .map-status { left: 16px; transform: none; max-width: calc(100% - 140px); width: auto; }
 }
 
-/* "this week" switch to the left of the overview button, centred on it */
-.map-controls { flex-direction: row; align-items: center; gap: 8px; }
-.busy-toggle {
-  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 13px 0 8px;
-  border-radius: 999px; background: #fff; color: var(--ink-2);
-  font-size: 12.5px; font-weight: 700; box-shadow: var(--float-shadow); white-space: nowrap;
-}
-.busy-switch { position: relative; width: 30px; height: 18px; border-radius: 999px; background: #c9d4e0; transition: background .15s; flex: none; }
-.busy-switch::after {
-  content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 999px;
-  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .15s var(--ease);
-}
-.busy-toggle.on { color: var(--ink); }
-.busy-toggle.on .busy-switch { background: var(--ui); }
-.busy-toggle.on .busy-switch::after { transform: translateX(12px); }
+/* The overview button above the post button, at the bottom right. */
+.map-controls { flex-direction: column; align-items: center; gap: 12px; }
 
 /* Holding いいね / 手伝えるかも on your own post lists who pressed it
    (js/longpress.js, components/reactors.js). No text selection, image-save or
@@ -1518,14 +1501,6 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   content: ''; position: absolute; left: 50%; bottom: -5px; width: 10px; height: 10px;
   background: inherit; transform: translateX(-50%) rotate(45deg); border-radius: 2px;
 }
-.busy-note {
-  position: absolute; z-index: 4; right: 14px; margin: 0;
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 66px);
-  max-width: min(300px, calc(100% - 28px)); padding: 7px 12px; border-radius: 12px;
-  background: rgb(255 255 255 / .94); color: var(--ink-2); font-size: 12px; line-height: 1.5;
-  box-shadow: var(--float-shadow); pointer-events: none;
-}
-.island-card-open .busy-note { visibility: hidden; }
 /* ==== end lane M ==== */
 
 /* ==== 2026-10-22 first-run: notifications, profile (lane N) ==== */
@@ -1574,14 +1549,6 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .dm-row-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .dm-row-time { font-size: 11px; color: var(--on-sea-3); white-space: nowrap; }
 .dm-row-side .notif-dot { margin-top: 0; }
-.me-dm { margin: 4px 0 14px; }
-.me-dm-icon {
-  flex: none; width: 36px; height: 36px; border-radius: 999px;
-  background: rgba(0, 0, 0, .18); display: flex; align-items: center; justify-content: center;
-}
-.me-dm .stack-go { color: var(--on-sea-3); }
-.me-dm .unread-badge { flex: none; }
-
 /* DM room: the thread scrolls, the input stays at the foot, no bottom nav. */
 .dm-top { gap: 8px; }
 .dm-who {
@@ -1627,18 +1594,6 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 
 /* ==== コミュニティ・招待 (2026-10-24) ==== */
 
-/* The round button at the map's top left: 「{名前} ▾」 */
-.community-pill {
-  align-self: flex-start; pointer-events: auto;
-  max-width: 100%; height: 34px; padding: 0 14px; border-radius: 999px;
-  margin-left: max(0px, calc((100% - 520px) / 2));
-  background: #fff; color: var(--ui); border: 1px solid rgba(16, 42, 71, .06);
-  box-shadow: var(--float-shadow);
-  font-size: 13px; font-weight: 800; line-height: 1;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.community-pill:not(.static):active { transform: scale(.97); }
-.community-pill.static { cursor: default; color: var(--ink-2); }
 .community-row.on .stack-who { color: var(--ui); }
 .community-row .stack-who { flex: 1; width: auto; }
 .community-row .stack-text { flex: none; font-size: 12px; color: var(--ink-3); }
@@ -1657,7 +1612,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .map-notice-title { margin: 0 0 8px; font-size: 16px; font-weight: 800; line-height: 1.6; text-wrap: pretty; }
 .map-notice-sub { margin: 0 0 4px; font-size: 13px; color: var(--ink-2); line-height: 1.7; text-wrap: pretty; }
 .map-notice-card .btn { margin-top: 12px; background: var(--ui); color: #fff; box-shadow: none; }
-#map.no-community .search-row, #map.no-community .near-islands, #map.no-community .map-controls,
+#map.no-community .header-tools, #map.no-community .near-islands, #map.no-community .map-controls,
 #map.no-community .digest-pill, #map.no-community .mini-map { display: none; }
 
 /* The sentence that takes the place of "create an account". */
@@ -1688,27 +1643,19 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 #compose.compose-blocked .scroller > :not(.compose-community) { display: none; }
 .compose-community.blocked { border-radius: var(--radius-sm); background: rgba(255, 255, 255, .95); color: var(--bad); font-weight: 600; padding: 10px 14px; }
 
-/* マイページ: コミュニティ */
-.me-communities { margin: 4px 0 16px; }
-.me-community-empty {
-  margin: 0; padding: 12px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.7;
-  background: rgba(255, 255, 255, .13); border: 1px solid rgba(255, 255, 255, .22); color: var(--on-sea-2);
-}
-.me-community {
-  padding: 12px 14px; margin-bottom: 10px; border-radius: var(--radius);
+/* The community edit screen (#/community/:id) */
+.community-edit-name { margin: 2px 0 14px; font-size: 20px; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; word-break: auto-phrase; }
+.community-card {
+  padding: 14px; margin-bottom: 14px; border-radius: var(--radius);
   background: rgba(255, 255, 255, .13); border: 1px solid rgba(255, 255, 255, .22);
 }
-.me-community-head { display: flex; align-items: center; gap: 10px; }
-.me-community-name { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.me-community-title { font-weight: 800; font-size: 15px; overflow-wrap: anywhere; }
-.me-community-role, .me-community-here {
-  font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
-  background: rgba(255, 255, 255, .22); color: #fff;
-}
-.me-community-here { background: #fff; color: var(--ui); }
-.me-community-open { flex: none; }
+.community-card .field { margin-bottom: 8px; }
+.community-card .section-label { margin: 0 0 6px; color: #fff; }
+.community-card .error:empty { display: none; }
+.community-rename .btn { background: #fff; color: var(--ui); box-shadow: none; }
+.community-edit-home { display: block; margin: 12px auto 0; }
 
-.invite-panel { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .26); }
+.invite-panel { margin-top: 8px; }
 .invite-open { width: 100%; background: #fff; color: var(--ui); box-shadow: none; }
 .invite-form { margin-top: 12px; }
 .invite-label { font-size: 12px; font-weight: 700; color: var(--on-sea-2); margin: 4px 0 8px; }
@@ -1739,3 +1686,101 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .invite-row .btn-small { flex: none; padding: 0 12px; }
 .invite-revoke { color: #ffdad2; }
 /* ==== end コミュニティ ==== */
+
+/* ==== 2026-10-26 map header, post button, community sheet, DM tab ==== */
+:root { --header-h: calc(52px + env(safe-area-inset-top)); }
+
+/* One solid bar over the top of the map; the map starts below it. The bar runs edge to edge (and
+   under the status bar of a phone); what is in it keeps the width of the column below. */
+.map-header {
+  pointer-events: auto; align-self: stretch; margin: 0 -14px;
+  padding-top: env(safe-area-inset-top);
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 1px 0 rgba(16, 42, 71, .08), 0 6px 16px rgba(16, 42, 71, .10);
+}
+.map-header-inner {
+  display: flex; align-items: center; gap: 8px;
+  height: 52px; width: 100%; max-width: 548px; margin: 0 auto; padding: 0 14px;
+}
+/* 「{name} ▾」: the name gives way (an ellipsis) before the arrow does. */
+.header-community {
+  flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; gap: 6px;
+  margin-left: -6px; padding: 0 8px; border-radius: 10px; text-align: left;
+  font-size: 17px; font-weight: 800; line-height: 1.2; color: var(--ink);
+}
+.header-community-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-community-caret { flex: none; font-size: 13px; color: var(--ink-3); }
+.header-community:not(:disabled):active { background: var(--surface-2); }
+.header-community:disabled { cursor: default; opacity: 1; }
+.header-community.is-brand { color: var(--ui); }
+.header-tools { flex: none; display: flex; align-items: center; gap: 8px; }
+.header-icon, .map-header .filter-button {
+  position: relative; width: 40px; height: 40px; min-width: 40px; padding: 0; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-2); color: var(--ink-2); border: 0; box-shadow: none;
+}
+.header-icon:active, .map-header .filter-button:active { background: var(--surface-3); }
+.map-header .filter-button.on { background: var(--ui); color: #fff; }
+.map-header .filter-count {
+  position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+  border: 1.5px solid var(--surface); background: var(--accent); color: #fff;
+}
+.map-header .filter-button.on .filter-count { background: var(--accent); color: #fff; }
+.map-header .filter-panel { top: 46px; }
+/* The search box takes the left of the bar while it is open. */
+.map-header .search {
+  flex: 1; min-width: 0; height: 40px; padding: 0 6px 0 12px;
+  background: var(--surface-2); border: 1px solid var(--line); box-shadow: none;
+}
+.map-header .search:focus-within { background: #fff; border-color: var(--ui); }
+.map-header .search-input { font-size: 16px; }   /* 16px: no zoom on focus in iOS */
+.map-header .search-clear { width: 40px; height: 40px; padding: 0; justify-content: center; align-items: center; border-radius: 999px; }
+.map-header.searching .header-community, .map-header.searching #mapSearchOpen { display: none; }
+
+/* 投稿する: the round button at the bottom right, under the overview button. */
+.fab {
+  width: 56px; height: 56px; border-radius: 999px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--ui); color: #fff;
+  box-shadow: 0 2px 4px rgba(16, 42, 71, .18), 0 8px 20px rgba(16, 42, 71, .28);
+}
+.fab:active { transform: scale(.94); }
+
+/* The community sheet: a row to switch, and 編集 beside it where I am an admin. */
+.community-item { display: flex; align-items: center; gap: 8px; }
+.community-item .community-row { flex: 1; min-width: 0; }
+.community-edit {
+  flex: none; min-height: 40px; padding: 0 16px;
+  background: var(--surface-2); color: var(--ui); border: 1px solid var(--line); box-shadow: none; font-weight: 800;
+}
+
+/* The edit screen sits on the sea-coloured page: the cards are white so every line is easy to read. */
+.screen.tinted .community-card {
+  --on-sea: var(--ink); --on-sea-2: var(--ink-2); --on-sea-3: var(--ink-3);
+  background: var(--surface); color: var(--ink); border-color: var(--line);
+}
+.screen.tinted .community-card .section-label, .screen.tinted .community-card .label-text { color: var(--ink); }
+.screen.tinted .community-card .input { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.screen.tinted .community-card .input::placeholder { color: var(--ink-3); }
+.screen.tinted .community-card .error { color: var(--bad); }
+.community-card .invite-open { background: var(--ui); color: #fff; }
+.community-card .invite-chip { color: var(--ink-2); background: var(--surface-2); border-color: var(--line); }
+.community-card .invite-chip.on { background: var(--ui); color: #fff; border-color: var(--ui); }
+.community-card .invite-result { background: var(--surface-2); }
+.community-card .invite-row { border-top-color: var(--line); }
+.community-card .invite-copy, .community-card .invite-row-copy { background: var(--surface-2); color: var(--ui); border: 1px solid var(--line); }
+.community-card .invite-revoke { background: var(--surface-2); color: var(--bad); border: 1px solid var(--line); }
+.community-card .btn-small { min-height: 40px; }
+.community-edit-home { color: #fff; }
+
+/* On a wide screen the post panel sits at the left: below the bar, not over it. */
+@media (min-width: 768px) and (min-height: 500px) {
+  .sheet { top: calc(var(--header-h) + 16px); max-height: min(80dvh, calc(100dvh - var(--header-h) - 32px)); }
+  /* the community list opens right under its button, at the left of the centred column */
+  .sheet:has(.community-item) { left: max(16px, calc(50% - 260px)); top: calc(var(--header-h) + 4px); }
+}
+
+/* The DM list is a tab now. */
+.dm-row.unread .list-row-title { font-weight: 800; }
+/* ==== end 2026-10-26 ==== */

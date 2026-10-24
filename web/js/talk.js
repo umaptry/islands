@@ -13,8 +13,8 @@ import { closeSheet, confirmAction, toast } from './ui.js';
 import { refreshNotifications } from './screens/notifications.js';
 import { notify, state } from './state.js';
 import {
-  afterPress, buildTalkIndex, dmHashFor, emptyTalkIndex, introPrompt, introSeen, markIntroSeen,
-  roomIdFor, talkLabelOf, talkOn, talkStateFor,
+  afterPress, buildTalkIndex, dmHashFor, emptyTalkIndex, introPrompt, introSeen, markDmSeen, markIntroSeen,
+  readDmSeen, roomIdFor, talkLabelOf, talkOn, talkStateFor, unreadRooms,
 } from './talk-rules.js';
 
 /** localStorage, or null where the browser refuses it (private windows throw). */
@@ -80,6 +80,82 @@ export function clearTalk() {
   if (!state.talk.peers.size && !state.talk.byTarget.size && !state.talk.at) return;
   state.talk = emptyTalkIndex();
   notify('talk');
+}
+
+// ---------------------------------------------------------------- the DM tab
+
+/** The DM tab is there when signed in and 「話してみたい」 is on. */
+export const dmTabVisible = () => Boolean(state.account) && talkAvailable();
+
+export function paintDmBadge() {
+  const badge = document.getElementById('dmBadge');
+  if (!badge) return;
+  badge.hidden = state.dmUnread === 0;
+  badge.textContent = state.dmUnread > 9 ? '9+' : String(state.dmUnread);
+}
+
+/** The room ids with something new (see unreadRooms in talk-rules.js for the rule). */
+export function unreadRoomIds(rooms = state.dmRooms) {
+  if (!state.account) return new Set();
+  const unreadFrom = new Set((state.dmNotices || []).filter((row) => row.unread && row.actor_id)
+    .map((row) => row.actor_id));
+  const seen = readDmSeen(browserStorage(), state.account.id);
+  return new Set(unreadRooms(rooms, seen, { unreadFrom }).map((room) => room.room_id));
+}
+
+/** Count again from what is held (after the rooms or the notices changed, or a room was seen). */
+export function recomputeDmUnread() {
+  state.dmUnread = dmTabVisible() ? unreadRoomIds().size : 0;
+  paintDmBadge();
+  return state.dmUnread;
+}
+
+/** The DM list screen (or a poll) has just read the rooms. */
+export function useDmRooms(rooms) {
+  state.dmRooms = Array.isArray(rooms) ? rooms : [];
+  return recomputeDmUnread();
+}
+
+/** This room has been seen up to `stamp` (its newest message): opened, or sent into. */
+export function seeDmRoom(roomId, stamp) {
+  if (!state.account) return;
+  markDmSeen(browserStorage(), state.account.id, roomId, stamp);
+  recomputeDmUnread();
+}
+
+let dmLoading = null;
+let dmReadAt = 0;
+
+/** Read the rooms for the badge. `maxAge` skips the read when the last one is recent enough. */
+export function refreshDmRooms({ maxAge = 0 } = {}) {
+  if (!dmTabVisible()) {
+    clearDm();
+    return Promise.resolve();
+  }
+  if (maxAge && Date.now() - dmReadAt < maxAge) return Promise.resolve();
+  if (dmLoading) return dmLoading;
+  const owner = state.account.id;
+  dmLoading = (async () => {
+    try {
+      const rooms = await data.dmRooms();
+      if (state.account?.id !== owner) return;   // signed out or switched meanwhile
+      dmReadAt = Date.now();
+      useDmRooms(rooms);
+    } catch {
+      /* a missed read keeps the badge as it is */
+    } finally {
+      dmLoading = null;
+    }
+  })();
+  return dmLoading;
+}
+
+export function clearDm() {
+  dmReadAt = 0;
+  state.dmRooms = [];
+  state.dmNotices = [];
+  state.dmUnread = 0;
+  paintDmBadge();
 }
 
 // ---------------------------------------------------------------- the button

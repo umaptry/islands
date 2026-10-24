@@ -1,5 +1,5 @@
-// The small parts around the map: nearby islands, the island card,
-// the mini map and the "this week" switch. map.js owns the screen;
+// The small parts around the map: nearby islands, the island card
+// and the mini map. map.js owns the screen;
 // this file only draws these parts and calls the map module.
 //
 // The map module is imported as a namespace on purpose: a name it does not
@@ -240,20 +240,6 @@ function setupMini() {
   box.addEventListener('pointercancel', stop);
 }
 
-// ---------------------------------------------------------------- this week
-
-function paintBusy() {
-  const button = $('busyToggle');
-  if (typeof mapApi.setBusyMode !== 'function') { button.hidden = true; return; }
-  button.hidden = false;
-  const on = typeof mapApi.busyMode === 'function' && mapApi.busyMode();
-  button.setAttribute('aria-checked', String(on));
-  button.classList.toggle('on', on);
-  const count = typeof mapApi.busyCount === 'function' ? mapApi.busyCount() : null;
-  $('busyText').textContent = on && finite(count) ? `今週の反応 ${count}件` : '今週の反応';
-  $('busyNote').hidden = !on;
-}
-
 // ---------------------------------------------------------------- first-visit hint
 
 // 「島をタップ」: once, after the tryout, pointing at the island nearest to it.
@@ -316,7 +302,7 @@ export function showTrialHint() {
 
 // ---------------------------------------------------------------- shared
 
-/** The mini map sits under whatever the top strip holds (search, chips, the
+/** The mini map sits under whatever the top strip holds (the header, chips, the
  * trial banner), so it is placed from the strip's real height. */
 function syncTopHeight() {
   const top = document.querySelector('#map .map-top');
@@ -327,7 +313,6 @@ function syncTopHeight() {
 export function refreshExtras() {
   placeTrialHint();
   refreshNearIslands();
-  paintBusy();
   scheduleMini();
   syncTopHeight();
 }
@@ -337,7 +322,6 @@ function onCamera() {
   scheduleMini();
   clearTimeout(nearTimer);
   nearTimer = setTimeout(refreshNearIslands, NEAR_SETTLE_MS);
-  if (typeof mapApi.busyCount === 'function' && $('busyToggle').classList.contains('on')) paintBusy();
 }
 
 export function setupMapExtras({ openPost }) {
@@ -348,12 +332,6 @@ export function setupMapExtras({ openPost }) {
     mapApi.onIslandTap(({ key, island }) => openIslandCard(island, key));
   }
   if (typeof mapApi.onCameraChange === 'function') mapApi.onCameraChange(onCamera);
-
-  $('busyToggle').addEventListener('click', () => {
-    const on = !(typeof mapApi.busyMode === 'function' && mapApi.busyMode());
-    mapApi.setBusyMode(on);
-    paintBusy();
-  });
 
   // A post sheet opening replaces the card; dragging the map puts it away.
   document.addEventListener('sheet:state', () => { if (sheetOpen() && cardIsland) closeIslandCard(); });

@@ -14,7 +14,9 @@ import pytest
 import app as application
 from conftest import CAMPING_A, CAMPING_B, Person
 from core.config import (
+    COMMUNITY_ERROR_NAME,
     COMMUNITY_ERROR_POST,
+    COMMUNITY_ERROR_RENAME_ADMIN_ONLY,
     INVITE_ERROR_ADMIN_ONLY,
     INVITE_ERROR_ADMIN_ONLY_LIST,
     INVITE_ERROR_ADMIN_ONLY_REVOKE,
@@ -451,13 +453,15 @@ def test_idempotent_retry_with_a_community_gives_the_same_post(people):
 def test_local_community_routes_do_not_exist_in_production(fresh_client, monkeypatch):
     monkeypatch.setitem(application.state, "local_mode", False)
     bodies = {"/api/local/invites/claim": {"code": "x"}, "/api/local/invites": {"community_id": "x"},
-              "/api/local/communities": {"name": "x"}, "/api/local/settings/invite-only": {"value": True}}
+              "/api/local/communities": {"name": "x"},
+              "/api/local/communities/x/rename": {"name": "x"}, "/api/local/settings/invite-only": {"value": True}}
     for method, path in (("get", "/api/local/communities/mine"),
                          ("get", "/api/local/invites/check/x"),
                          ("post", "/api/local/invites/claim"),
                          ("post", "/api/local/invites"),
                          ("get", "/api/local/invites?community_id=x"),
                          ("post", "/api/local/invites/x/revoke"),
+                         ("post", "/api/local/communities/x/rename"),
                          ("get", f"/api/local/communities/{uuid.uuid4()}/map"),
                          ("post", "/api/local/communities"),
                          ("get", "/api/local/settings/invite-only"),
@@ -472,6 +476,73 @@ def test_a_community_name_is_readable_by_id_without_signing_in(people, fresh_cli
     cid = store().seed_demo_community()
     assert fresh_client.get(f"/api/local/communities/{cid}").json() == {"id": cid, "name": LOCAL_DEMO_COMMUNITY_NAME}
     assert fresh_client.get(f"/api/local/communities/{uuid.uuid4()}").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# renaming a community (rename_community)
+# --------------------------------------------------------------------------
+
+def rename(person, community_id, name):
+    return post(person, f"/api/local/communities/{community_id}/rename", {"name": name})
+
+
+def test_an_admin_renames_the_community_and_everybody_sees_the_new_name(people, fresh_client):
+    admin = people("admin@example.com", "かんり")
+    member = people("member@example.com", "めんば")
+    cid = make_community(admin, "BAR")
+    join(member, admin, cid)
+    response = rename(admin, cid, "週末の会")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"name": "週末の会"}
+    assert [c["name"] for c in get(admin, "/api/local/communities/mine").json()["communities"]] == ["週末の会"]
+    assert [c["name"] for c in get(member, "/api/local/communities/mine").json()["communities"]] == ["週末の会"]
+    assert fresh_client.get(f"/api/local/communities/{cid}").json() == {"id": cid, "name": "週末の会"}
+
+
+def test_the_new_name_is_trimmed_including_full_width_spaces(people):
+    admin = people("admin@example.com", "かんり")
+    cid = make_community(admin, "BAR")
+    assert rename(admin, cid, " 　 夜の会 	　").json() == {"name": "夜の会"}
+    assert rename(admin, cid, "Saturday Morning Run").json() == {"name": "Saturday Morning Run"}
+    assert store().community_info(cid)["name"] == "Saturday Morning Run"
+
+
+@pytest.mark.parametrize("name,ok", [("あ", True), ("あ" * 40, True), ("あ" * 41, False), ("", False),
+                                     (" 　 ", False), ("a" * 41, False)])
+def test_the_name_is_one_to_forty_characters_after_trimming(people, name, ok):
+    admin = people("admin@example.com", "かんり")
+    cid = make_community(admin, "BAR")
+    response = rename(admin, cid, name)
+    if ok:
+        assert response.status_code == 200
+        assert response.json() == {"name": name.strip(" 　")}
+    else:
+        assert response.status_code == 400
+        assert response.json()["detail"] == COMMUNITY_ERROR_NAME
+        assert store().community_info(cid)["name"] == "BAR"
+
+
+def test_only_an_admin_of_that_community_can_rename_it(people):
+    admin = people("admin@example.com", "かんり")
+    other_admin = people("other@example.com", "べつ")
+    member = people("member@example.com", "めんば")
+    outsider = people("outsider@example.com", "そと")
+    cid = make_community(admin, "BAR")
+    other = make_community(other_admin, "別の会")
+    join(member, admin, cid)
+    for who in (member, outsider, other_admin):
+        response = rename(who, cid, "乗っ取り")
+        assert response.status_code == 403, who
+        assert response.json()["detail"] == COMMUNITY_ERROR_RENAME_ADMIN_ONLY
+    assert rename(admin, other, "乗っ取り").status_code == 403
+    assert rename(admin, str(uuid.uuid4()), "どこか").status_code == 403
+    assert store().community_info(cid)["name"] == "BAR"
+    assert store().community_info(other)["name"] == "別の会"
+
+
+def test_renaming_needs_a_login(fresh_client):
+    response = fresh_client.post(f"/api/local/communities/{uuid.uuid4()}/rename", json={"name": "x"})
+    assert response.status_code == 401
 
 
 # --------------------------------------------------------------------------

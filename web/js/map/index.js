@@ -13,6 +13,7 @@
 
 import { config, energyOf, interactionsOf, islandColor, radiusOf } from '../config.js';
 import { matchesFilters, state, filtering } from '../state.js';
+import { freshIslandKeys } from '../fresh-rules.js';
 import { clip, desktopSheet, sheetOpen, toast } from '../ui.js';
 import {
   INK, REDUCED_MOTION, drawBirds, drawBoats, drawFog, drawSeaMarks, drawWhales,
@@ -75,7 +76,7 @@ function zoomLevel() {
   return { z, level: z >= DEEP_AT ? 'deep' : z >= NEAR_AT ? 'near' : 'far' };
 }
 
-// The canvas runs under the search bar and the bottom controls. `frame` is how
+// The canvas runs under the header bar and the bottom controls. `frame` is how
 // much of it, top and bottom, they cover: the camera centres in what is left and
 // no name is put where it cannot be read.
 let frame = { top: 96, bottom: 120 };
@@ -109,7 +110,7 @@ function chromeBoxes() {
 function measureChrome() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #busyToggle, #islandCard')]
+  return [...document.querySelectorAll('#map .map-header, #mapDigest, #trialBanner, #participantStop, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #islandCard')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -738,7 +739,7 @@ function render() {
   ctx.fillStyle = config().energy.biome_colors.sea;
   ctx.fillRect(0, 0, width, height);
   refreshClock();
-  refreshActivity();
+  refreshFresh();
   renderMap(time);
   notifyCamera();
 }
@@ -853,71 +854,45 @@ function paintSun() {
   ctx.restore();
 }
 
-// ---------------------------------------------------------------- this week
+// ---------------------------------------------------------------- new islands
 
-// The week's activity switch: with it on, only the posts that saw something in
-// the last seven days are drawn as usual; the rest step back like posts a
-// filter left out.
-const WEEK_MS = 7 * 24 * 3600 * 1000;
-const WHOLE_MAP_Z = 1.2;   // zoomed out this far, the loaded posts are all of them
-let busyOn = false;
-let busyIds = new Set();
-let busyIslands = new Set();   // islandKey of the islands holding one of them
-let busyTotal = 0;
-let busyWhole = null;   // the count last made with the whole map in view
-let activitySeen = { posts: null, connections: null, islands: null, revision: -1, minute: -1 };
+// Zoomed out, an island glows while it holds a post that is new to me: written in the last seven days,
+// not mine, not opened yet. Which posts those are is decided by the screen (screens/map.js with
+// fresh-rules.js) and handed in here as a set of ids; this module only draws the glow.
+let freshIds = new Set();
+let freshIslands = new Set();   // islandKey of the islands holding one of them
+let freshSeen = { ids: null, islands: null, revision: -1 };
 
-export function setBusyMode(on) { busyOn = Boolean(on); }
-export function busyMode() { return busyOn; }
-/** How many posts saw something in the last seven days. Counted over what is
- * loaded; the map holds only the posts near the screen when zoomed in, so the
- * number last made with (nearly) the whole map in view is kept and returned while
- * zoomed in, rather than a count that shrinks as you come closer. */
-export function busyCount() {
-  refreshActivity();
-  return busyWhole === null ? busyTotal : busyWhole;
+export function setFreshPosts(ids) {
+  freshIds = ids instanceof Set ? ids : new Set(ids || []);
+  freshSeen = { ids: null, islands: null, revision: -1 };
 }
 
-/** Counted again only when the posts, lines or islands changed (or a minute
- * went by), never every frame. */
-function refreshActivity() {
-  const minute = Math.floor(Date.now() / CLOCK_MS);
-  const was = activitySeen;
-  if (was.posts === state.posts && was.connections === state.connections
-      && was.islands === state.islands && was.revision === state.revision
-      && was.minute === minute) return;
-  activitySeen = {
-    posts: state.posts, connections: state.connections, islands: state.islands,
-    revision: state.revision, minute,
-  };
-  const since = Date.now() - WEEK_MS;
-  const recent = (stamp) => { const at = Date.parse(stamp); return Number.isFinite(at) && at >= since; };
-  const ids = new Set();
-  state.posts.forEach((post) => { if (recent(post.created_at)) ids.add(post.id); });
-  (state.connections || []).forEach((row) => {
-    if (!recent(row.last_at)) return;
-    ids.add(row.a_post);
-    ids.add(row.b_post);
-  });
-  busyIds = ids;
-  busyTotal = [...ids].filter((id) => state.postsById.has(id)).length;
-  if (zoomLevel().z <= WHOLE_MAP_Z) busyWhole = busyTotal;
-  busyIslands = new Set(state.islands
-    .filter((island) => (island.post_ids || []).some((id) => ids.has(id))).map(islandKey));
+/** The islands that glow, counted again only when the ids, the islands or the posts changed. */
+function refreshFresh() {
+  const was = freshSeen;
+  if (was.ids === freshIds && was.islands === state.islands && was.revision === state.revision) return;
+  freshSeen = { ids: freshIds, islands: state.islands, revision: state.revision };
+  freshIslands = freshIslandKeys(state.islands, freshIds, islandKey);
 }
 
-/** Whether a post is drawn faint and cannot be tapped: left out by the filter,
- * or quiet this week while the week switch is on. */
+/** For tests and checks: the keys of the islands that glow right now. */
+export function freshIslandSet() {
+  refreshFresh();
+  return new Set(freshIslands);
+}
+
+/** Whether a post is drawn faint and cannot be tapped: left out by the filter. */
 function steppedBack(post, sifting) {
-  return (sifting && !matchesFilters(post)) || (busyOn && !busyIds.has(post.id));
+  return sifting && !matchesFilters(post);
 }
 
-/** Zoomed out: a soft warm light breathing on each island with something going on. */
-function drawBusyGlow(places, motion) {
+/** Zoomed out: a soft warm light breathing on each island with something new. */
+function drawFreshGlow(places, motion) {
   const breath = motion === null ? 0.5 : (Math.sin(motion * 1.8) + 1) / 2;
   ctx.save();
   places.forEach((place) => {
-    if (!busyIslands.has(islandKey(place.island))) return;
+    if (!freshIslands.has(islandKey(place.island))) return;
     const spot = toScreen(place.island.cx, place.island.cy);
     const radius = 46 + breath * 14;
     const gradient = ctx.createRadialGradient(spot.x, spot.y, 0, spot.x, spot.y, radius);
@@ -1219,7 +1194,7 @@ function renderMap(time) {
   // and not while the map is showing who joined a post.
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting));
 
-  if (far && busyOn) drawBusyGlow(places, motion);
+  if (far && freshIslands.size) drawFreshGlow(places, motion);
 
   // Settlements and their landmarks, back to front.
   places.sort((a, b) => a.foot - b.foot).forEach((place) => {
