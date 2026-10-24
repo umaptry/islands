@@ -16,7 +16,7 @@
 --   * それ以外（コメント・反応・通報・書き込み・通知・話してみたい）は is_member_of_post = メンバーであること。
 --
 -- 画像: 第1段では「一覧」を自分のフォルダだけに絞る。URL を知っている人は開ける（公開の入れ物のまま。
--- 非公開の入れ物は 10/30 のあと）。
+-- 非公開の入れ物は後日）。
 --
 -- ここでは変えないもの（古い画面でエラーにならないよう、空を返すだけにする）: map_cells / energy_cells /
 -- islands_state / island_events は取り上げずに 0 件にする。取り上げるのは古い画面が無くなってから。
@@ -475,7 +475,7 @@ $$;
 -- 8. 画像の一覧（storage）: 自分のフォルダだけ
 -- ===========================================================================
 -- ログインしただけの部外者にも、他人のフォルダの一覧が見えないようにする。アップロードは upsert しないので
--- select は要らない。URL を知っている人は開ける（公開の入れ物のまま。10/30 のあとに非公開へ）。
+-- select は要らない。URL を知っている人は開ける（公開の入れ物のまま。後日に非公開へ）。
 drop policy if exists post_images_read on storage.objects;
 create policy post_images_read on storage.objects for select to authenticated
   using (bucket_id = 'post-images'
