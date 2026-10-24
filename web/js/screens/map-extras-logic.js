@@ -80,3 +80,9 @@ export function trialView({ trial, islands, width, height, fit, around = 3 }) {
     scale: Math.max(fit, Math.min(fit * 3, scale)),
   };
 }
+
+/** An open search box closes when the map (anything outside the header) is touched, but only while
+ * nothing is typed: a search in progress stays, the touch just moves the map. */
+export function searchClosesOnTouch({ open, value = '', query = '', inside = false }) {
+  return Boolean(open) && !inside && !String(value).trim() && !String(query).trim();
+}

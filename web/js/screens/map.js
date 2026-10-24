@@ -20,7 +20,7 @@ import { openReactors } from '../components/reactors.js';
 import { chatInput, postChat } from '../components/chat.js';
 import { loadDigest, paintMarks, setupMeet } from './meet.js';
 import { refreshExtras, hideTrialHint, setupMapExtras, showTrialHint } from './map-extras.js';
-import { trialView } from './map-extras-logic.js';
+import { searchClosesOnTouch, trialView } from './map-extras-logic.js';
 import {
   abortReveal, fitCamera, focusOn, initMap, onCameraSettled, participantView, playReveal,
   resize, ripple, setFreshPosts, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
@@ -577,6 +577,19 @@ function setupChrome() {
     setSearchOpen(true);
   });
   $('mapSearchClear').addEventListener('click', closeSearch);
+  // An empty search box gives the bar back to the community name as soon as the map (or anything
+  // outside the header) is touched. Capture phase: the map may stop the event before the page sees it.
+  const closeEmptySearch = (event) => {
+    const open = !$('mapSearchBox').hidden;
+    if (!open) return;
+    const inside = $('mapHeader').contains(event.target);
+    if (!searchClosesOnTouch({ open, value: $('mapSearch').value, query: state.filters.query, inside })) return;
+    $('mapSearch').value = '';
+    setSearchOpen(false);
+    $('mapSearch').blur();
+  };
+  document.addEventListener('pointerdown', closeEmptySearch, true);
+  document.addEventListener('wheel', closeEmptySearch, { capture: true, passive: true });
   $('mapPost').addEventListener('click', () => {
     playSe('click');
     navigate('#/post');

@@ -263,6 +263,16 @@ export function crossesLand(posts, from, to, cells = []) {
   return blockedBy(sampleLand(posts, from, to, cells));
 }
 
+// Open water this long (world units) on the straight line between two posts
+// means they are not on one piece of land, whatever the island list says.
+const GAP_WORLD = 20;
+
+/** Is there open water on the straight line, in a stretch at least GAP_WORLD
+ * long? `land` is sampleLand's answer for a line `length` long. */
+export function hasWaterGap(land, length) {
+  return runsOf(land).some((run) => !run.land && (run.to - run.from) * length >= GAP_WORLD);
+}
+
 // The answers are kept per line until the ground changes, so no frame computes
 // them. The ground is the list of posts (a new array when the map fetches or the
 // ground is rebuilt), the coarse cells, the islands and the reach factor; a post
@@ -294,12 +304,14 @@ function blockedOf(view, row, print) {
     // way). The stretches - a sea route's two ends (its own shores) are roads for
     // cars, the water between is for boats - are found along the bowed curve the
     // route is drawn on, in the drawn direction (the end with the smaller id first).
-    const blocked = blockedBy(sampleLand(view.posts, row.a_at, row.b_at, cells));
+    const straight = sampleLand(view.posts, row.a_at, row.b_at, cells);
+    const blocked = blockedBy(straight);
+    const gap = hasWaterGap(straight, Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]));
     const flip = String(row.a) > String(row.b);
     const from = flip ? row.b_at : row.a_at;
     const to = flip ? row.a_at : row.b_at;
     const bow = bowOf(from, to, hashId(`${row.a}|${row.b}`), SEA_BEND);
-    answers.set(key, { blocked, runs: runsOf(sampleLand(view.posts, from, to, cells, bow)) });
+    answers.set(key, { blocked, gap, runs: runsOf(sampleLand(view.posts, from, to, cells, bow)) });
   }
   return answers.get(key);
 }
@@ -390,7 +402,13 @@ function layout(view) {
     // One named island can be several pieces of land; a road stays on one.
     const landA = landOf ? landOf(row.a_post) : null;
     const landB = landOf ? landOf(row.b_post) : null;
-    const sameIsland = Boolean(a) && a === b && (!landA || !landB || landA === landB);
+    let sameIsland = Boolean(a) && a === b && (!landA || !landB || landA === landB);
+    // Zoomed in, the island list holds only the islands in view, and a post
+    // that no listed island has is given the nearest one's: two islands far
+    // apart then read as one, and the sea between them was drawn as a road
+    // (2026-10-25, the user). When a post's piece of land is not known, the
+    // ground decides: open water between the two ends is not an island's road.
+    const unsure = sameIsland && (!landA || !landB) && Boolean(view.posts);
     const p = toScreen(from[0], from[1]);
     const q = toScreen(to[0], to[1]);
     const route = routeOf.get(row) || null;
@@ -399,8 +417,15 @@ function layout(view) {
     let group = route ? route.key : linkKey(row);
     if (!route && !sameIsland && landA && landB) group = [landKey(landA), landKey(landB)].sort().join('|');
     // Over water with posts to check: a sea route unless land is in the way.
-    const ground = !sameIsland && Boolean(route) && Boolean(view.posts) ? blockedOf(view, row, print) : null;
-    const sea = Boolean(ground) && !ground.blocked;
+    let ground = null;
+    if (unsure) {
+      ground = blockedOf(view, row, print);
+      if (ground.gap) sameIsland = false;
+      else ground = null;
+    } else if (!sameIsland && Boolean(route) && Boolean(view.posts)) {
+      ground = blockedOf(view, row, print);
+    }
+    const sea = Boolean(ground) && !ground.blocked && !sameIsland;
     lines.push({
       row, sameIsland, route, group,
       // The stretches of a sea route, along the way it is drawn (from -> to).

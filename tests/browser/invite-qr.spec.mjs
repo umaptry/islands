@@ -121,7 +121,7 @@ test('「会の投稿も一緒に開く」を切り替えるとリンクと QR �
   await card.locator('.invite-open').click();
   await card.locator('.invite-make').click();
   const field = card.locator('.invite-url');
-  await expect(field).toBeVisible();
+  await expect(field).toBeAttached();
   const plain = await field.inputValue();
   expect(plain).not.toContain('?post=');
   const qrBefore = await card.locator('.invite-qr svg path').getAttribute('d');
@@ -148,7 +148,7 @@ test('更新: 確かめてから作り直すと、前のリンクは止まり新
   await card.locator('.invite-open').click();
   await card.locator('.invite-make').click();
   const field = card.locator('.invite-url');
-  await expect(field).toBeVisible();
+  await expect(field).toBeAttached();
   const [oldCode] = await activeCodes(admin, id);
 
   await card.locator('.invite-renew').click();

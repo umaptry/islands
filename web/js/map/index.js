@@ -20,6 +20,8 @@ import {
   hashId, makeLabelSpace,
 } from './decor.js';
 import { detectLandmasses, membership } from './landmass.js';
+import { cameraAt, viewHolding } from './camera-path.js';
+import { clearTownSpot, landmarkSlots } from './spots.js';
 import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
 import { kinLines } from './kin.js';
 import { preloadSprites } from './sprites.js';
@@ -216,17 +218,11 @@ export function showAll({ then } = {}) {
   const duration = REDUCED_MOTION ? 0 : 700;
   const began = performance.now();
   const step = (now) => {
-    const t = duration ? Math.min(1, (now - began) / duration) : 1;
+    const t = duration ? Math.max(0, Math.min(1, (now - began) / duration)) : 1;
     const k = 1 - (1 - t) ** 3;
-    const scale = from.scale * (to.scale / from.scale) ** k;
-    // The point under the middle of the screen slides to where the fitted view
-    // has it, so the ground neither lurches nor drifts on the way.
-    state.camera = {
-      scale,
-      fit: to.fit,
-      x: from.x + (to.x - from.x) * k,
-      y: from.y + (to.y - from.y) * k,
-    };
+    // One zoom about a fixed point of the screen (camera-path.js), so the ground
+    // neither lurches nor swings out over the fog on the way.
+    state.camera = { ...cameraAt(from, to, k), fit: to.fit };
     if (t < 1) {
       tween = requestAnimationFrame(step);
       return;
@@ -332,9 +328,11 @@ let tween = 0;
 
 /** Fly the camera to a world point at a new zoom (Q57: tap, and it comes closer).
  *
- * The zoom changes geometrically and the point slides linearly to its spot, so
- * the ground neither lurches nor drifts sideways on the way. Any touch stops it
- * where it is. Reduced motion jumps straight there.
+ * Zoom and slide are one move (camera-path.js): the point grows toward its spot
+ * on the screen in a straight line, rather than the map zooming on its middle
+ * and sliding afterwards (2026-10-25, the user). Any touch stops it where it is.
+ * Reduced motion jumps straight there. (`t` never goes below 0: a frame's clock
+ * can be older than the moment of the call, which used to start with a shrink.)
  */
 export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = null, then } = {}) {
   cancelAnimationFrame(tween);
@@ -345,18 +343,18 @@ export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = 
   // `y`, in canvas px, puts the point exactly there instead of `lift` of the
   // way down the free frame.
   const anchorY = y ?? frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
-  const start = toWorld(anchorX, anchorY);
+  const goal = viewHolding(worldX, worldY, anchorX, anchorY, to);
   const duration = REDUCED_MOTION ? 0 : 480;
   const began = performance.now();
   const step = (now) => {
-    const t = duration ? Math.min(1, (now - began) / duration) : 1;
+    const t = duration ? Math.max(0, Math.min(1, (now - began) / duration)) : 1;
     const k = 1 - (1 - t) ** 3;
-    const scale = from.scale * (to / from.scale) ** k;
-    const wx = start.x + (worldX - start.x) * k;
-    const wy = start.y + (worldY - start.y) * k;
-    state.camera.scale = scale;
-    state.camera.x = anchorX - wx * scale;
-    state.camera.y = anchorY - wy * scale;
+    // Zoom and slide as one move (camera-path.js): the post grows toward its
+    // spot in a straight line instead of the map zooming on its middle first.
+    const view = cameraAt(from, goal, k);
+    state.camera.scale = view.scale;
+    state.camera.x = view.x;
+    state.camera.y = view.y;
     if (t < 1) {
       tween = requestAnimationFrame(step);
       return;
@@ -1633,11 +1631,15 @@ function townHome(island, members, span, grown) {
   const near = posts.slice()
     .sort((a, b) => Math.hypot(a.x - island.cx, a.y - island.cy) - Math.hypot(b.x - island.cx, b.y - island.cy))
     .slice(0, 40);
-  let best = null;      // best point where the town fits
-  let bestScore = -1;
+  // First choice: a spot the town fits that no pin covers (the pins are screen
+  // px, so the clearance is a safe few world units), with its landmarks clear too.
+  // Only an island with no such spot falls back to the old choice below.
+  const clearSpot = clearTownSpot(posts, island, { ring, span, grown, land, stands: standsOnLand });
+  let best = clearSpot ? { x: clearSpot.x, y: clearSpot.y } : null;      // best point where the town fits
+  let bestScore = clearSpot ? 8 : -1;
   let spare = null;     // best land point at all, for a grown island
   let spareScore = -1;
-  [{ x: island.cx, y: island.cy }, ...near].some((c) => {
+  if (!clearSpot) [{ x: island.cx, y: island.cy }, ...near].some((c) => {
     if (!land(c.x, c.y)) return false;
     let score = 0;
     for (let k = 0; k < 8; k += 1) {
@@ -1653,13 +1655,9 @@ function townHome(island, members, span, grown) {
   if (!best && grown) best = spare;
   let home = null;
   if (best) {
-    // Landmarks stand round the town in town-sized steps.
-    const slots = LANDMARK_SPOTS.map(([dx, dy]) => {
-      const x = best.x + dx * worldSize(TIER_SIZES[2]);
-      const y = best.y + dy * worldSize(TIER_SIZES[2]);
-      return { x, y, land: land(x, y) };
-    });
-    home = { x: best.x, y: best.y, slots };
+    // Landmarks stand round the town in town-sized steps, on land and, where
+    // there is room, clear of every pin.
+    home = { x: best.x, y: best.y, slots: landmarkSlots(best, span, posts, land, { unit: worldSize(TIER_SIZES[2]), markMin: worldSize(36), spots: LANDMARK_SPOTS }) };
   }
   homeCache.set(key, { sig, home });
   return home;

@@ -428,3 +428,26 @@ test('an arch is a dotted line, not a solid one', () => {
   assert.equal(dashes.length, 1);
   assert.ok(dashes[0][0] < 1 && dashes[0][1] > 2, 'round dots with gaps');
 });
+
+test('zoomed in, with only one island on the list, the sea between two islands stays a sea route (not a road)', () => {
+  lines.resetLinks();
+  const open = [post('w', 100, 100), post('e', 800, 100)];
+  // The island list holds only what is in view: "east" is missing, so its post
+  // falls back to the nearest listed island, "west", and both ends read as one.
+  const listed = [seaIslands[0]];
+  const view = seaView(open, [seaRow()], { islands: listed });
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), ['sea']);
+  // The same with land in the way: an arch, never a road.
+  const blocked = open.concat(post('m', 450, 110));
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, seaView(blocked, [seaRow()], { islands: listed }))), ['arch']);
+  // Two ends that really are on one stretch of land stay a road.
+  const joined = [post('w', 100, 100), post('e', 800, 100)].concat([200, 300, 400, 500, 600, 700].map((x) => post(`j${x}`, x, 100)));
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, seaView(joined, [seaRow()], { islands: listed }))), ['road']);
+});
+
+test('open water of a stretch long enough is a gap; a short bay is not', () => {
+  const land = (flags) => flags.map(Boolean);
+  assert.equal(lines.hasWaterGap(land([1, 1, 0, 0, 0, 0, 1, 1]), 800), true);
+  assert.equal(lines.hasWaterGap(land([1, 1, 0, 1, 1, 1, 1, 1]), 100), false);
+  assert.equal(lines.hasWaterGap(land([1, 1, 1, 1]), 800), false);
+});

@@ -15,6 +15,7 @@ import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './rea
 import { setupPush, syncPush } from './push.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
+import { watchScreenTone } from './screen-tone.js';
 import { setupFeedback } from './feedback.js';
 import { setupAudio } from './audio.js';
 import { setupAuth, setupGuidance, setupProfileSetup, setupWelcome } from './screens/auth.js';
@@ -92,6 +93,7 @@ async function boot() {
   setupAudio();
   setupWelcome();
   setupIcons();
+  watchScreenTone();
   setupKeyboardGuard();
   document.addEventListener('map:version-changed', () => {
     const node = document.getElementById('mapVersionNotice');

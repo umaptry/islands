@@ -247,7 +247,9 @@ function invitePanel(entry) {
 
   function linkView(row) {
     const url = linkOf(row);
-    const field = el('input', { className: 'input invite-url', type: 'text', attrs: { readonly: '', 'aria-label': '招待リンク' } });
+    // Not shown: 「リンクをコピー」 is how a person gets the link. The field only holds the text
+    // for the copy (and its select-and-copy fallback), so it is kept out of sight.
+    const field = el('input', { className: 'invite-url', type: 'text', attrs: { readonly: '', tabindex: '-1', 'aria-hidden': 'true' } });
     field.value = url;
     const qrBox = el('div', { className: 'invite-qr' });
     const paintQr = (text) => {
@@ -276,10 +278,17 @@ function invitePanel(entry) {
     toggle.addEventListener('change', () => { postOn = toggle.checked; picker.hidden = !postOn; swap(); });
     picker.addEventListener('change', () => { postId = picker.value; swap(); });
 
+    // The switch comes first: it changes the link and the QR below it.
     return el('div', { className: 'invite-live' },
+      el('label', { className: 'invite-switch' },
+        el('span', { className: 'invite-switch-text', text: '会の投稿も一緒に開く' }),
+        toggle,
+        el('span', { className: 'invite-switch-track', attrs: { 'aria-hidden': 'true' } })),
+      mine.length ? null : el('p', { className: 'invite-note', text: 'この会に投稿すると、その投稿も一緒に開けるようになります。' }),
+      picker,
       qrBox,
       el('p', { className: 'invite-line', attrs: { 'aria-label': inviteLineText(row) } },
-        el('span', { className: 'invite-line-expiry', text: inviteRowText(row).expiry.replace(/ /g, ' ') }),
+        el('span', { className: 'invite-line-expiry', text: inviteRowText(row).expiry.replace(/ /g, ' ') }),
         el('span', { className: 'invite-line-dot', text: '・', attrs: { 'aria-hidden': 'true' } }),
         el('span', { className: 'invite-line-uses', text: inviteRowText(row).uses })),
       field,
@@ -290,12 +299,6 @@ function invitePanel(entry) {
         typeof navigator.share === 'function'
           ? actionButton('share', 'シェア', 'invite-share', () => shareLink(row)) : null,
         actionButton('download', '保存', 'invite-save', () => saveImage(row))),
-      el('label', { className: 'invite-switch' },
-        el('span', { className: 'invite-switch-text', text: '会の投稿も一緒に開く' }),
-        toggle,
-        el('span', { className: 'invite-switch-track', attrs: { 'aria-hidden': 'true' } })),
-      mine.length ? null : el('p', { className: 'invite-note', text: 'この会に投稿すると、その投稿も一緒に開けるようになります。' }),
-      picker,
       el('div', { className: 'invite-manage' },
         el('button', {
           className: 'btn btn-small btn-quiet invite-renew', attrs: { type: 'button' }, text: '更新', disabled: busy,
