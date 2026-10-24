@@ -20,6 +20,7 @@ import { attachLongPress } from '../longpress.js';
 import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
 import { joinTerms, joinWord } from '../recruit-rules.js';
+import { talkLabelOf, talkButtonText, withdrawPrompt } from '../talk-rules.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -30,6 +31,8 @@ document.addEventListener('pointerdown', (event) => {
 // One subscription for all mounted cards; removed cards retain no subscriptions.
 subscribe(() => {
   document.querySelectorAll('.post-card[data-post-id]').forEach((card) => {
+    // Before the post lookup: a post opened from far away is not in the viewport list.
+    card.querySelectorAll('[data-talk]').forEach((node) => node._talkPaint && node._talkPaint());
     const post = state.postsById.get(card.dataset.postId) || state.myPosts.find((p) => p.id === card.dataset.postId);
     if (!post) return;
     card.querySelectorAll('[data-count]').forEach((node) => { node.textContent = post[node.dataset.count] || 0; });
@@ -70,6 +73,9 @@ const JOIN = { kind: 'join', label: '参加', countKey: 'join_count', tone: 'joi
  * @param options.onReact  (kind) => Promise
  * @param options.onEdit / onDelete / onOpenAuthor / onReport / onComments
  * @param options.onSeeParticipants  () => void, shown on 「参加者募集中」 posts
+ * @param options.talk  { state, onPress, onWithdraw, onOpenDm } for 「話してみたい」; `state`
+ *                      is 'none' | 'pressed' | 'matched' | null (or a function giving one).
+ *                      Absent: no button. The button's name is /api/config talk.label.
  * @param options.onSeeReactors  (kind) => void, run when you hold いいね / 手伝えるかも on your own post
  * @param options.compact  drop the image and the footer (used in list contexts)
  */
@@ -152,6 +158,7 @@ export function postCard(post, options = {}) {
         on: { click: () => options.onSeeParticipants(post) },
       }));
     }
+    if (options.talk) foot.append(talkButton(options.talk));
     card.append(foot);
   }
   if (mine) {
@@ -160,6 +167,60 @@ export function postCard(post, options = {}) {
     card.append(views);
   }
   return card;
+}
+
+/**
+ * 「話してみたい」: a wide round button under 参加, in the accent colour so it is
+ * not mistaken for 参加. Three states - the name, the name with 「（押しました）」
+ * and a small line under it, and 「DM を開く」. Pressing again on the second asks
+ * before taking it back. It repaints itself when state.talk changes (see the
+ * subscription at the top), and stays hidden (null) for people I share no 会 with.
+ */
+function talkButton(talk) {
+  const label = talkLabelOf(config());
+  const word = el('span', { className: 'pt-word' });
+  const button = el('button', { className: 'post-talk-button', attrs: { type: 'button' } }, word);
+  const note = el('p', { className: 'post-talk-note' });
+  const wrap = el('div', { className: 'post-talk', attrs: { 'data-talk': '' } }, button, note);
+  const current = () => (typeof talk.state === 'function' ? talk.state() : talk.state);
+
+  const paint = () => {
+    const now = current();
+    wrap.hidden = !now;
+    if (!now) return;
+    const text = talkButtonText(now, label);
+    word.textContent = text.word;
+    note.textContent = text.note;
+    note.hidden = !text.note;
+    button.dataset.state = now;
+    button.setAttribute('aria-pressed', String(now === 'pressed'));
+  };
+  wrap._talkPaint = paint;
+
+  button.addEventListener('click', async () => {
+    if (button.dataset.busy) return;
+    const now = current();
+    button.dataset.busy = '1';
+    button.disabled = true;
+    try {
+      if (now === 'none') {
+        button.classList.remove('pop');
+        void button.offsetWidth;
+        button.classList.add('pop');
+        await talk.onPress?.();
+      } else if (now === 'pressed') {
+        if (await confirmAction(withdrawPrompt(label))) await talk.onWithdraw?.();
+      } else if (now === 'matched') {
+        talk.onOpenDm?.();
+      }
+    } finally {
+      delete button.dataset.busy;
+      button.disabled = false;
+      paint();
+    }
+  });
+  paint();
+  return wrap;
 }
 
 /** Only ever on your own post, and only once somebody has looked. */

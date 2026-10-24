@@ -33,6 +33,7 @@ export const state = {
   ripples: [],            // { x, y, at, size, color } rings that answer an action
   removed: new Set(),     // ids deleted this session: the map's ground forgets them
   fetched: null,          // { minX, minY, maxX, maxY } fetched in full by the last refresh
+  talk: { peers: new Set(), byTarget: new Map(), at: 0 },   // 「話してみたい」: who shares a 会 with me, and what I pressed
 };
 
 export function subscribe(listener) {

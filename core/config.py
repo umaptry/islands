@@ -364,7 +364,13 @@ NOTIFICATION_CATEGORY_OF = {
     # similar switch went away it follows the island category (in the app
     # only, never pushed; see NEVER_PUSHED and core/notifications.allows).
     "quiet_post": "island",
+    # 2026-10-26: 「話してみたい」と DM. They use the existing switches (the settings
+    # screen does not change): the talk lines are reactions, a new message is a reply.
+    "talk_wish": "reaction", "talk_match": "reaction", "dm": "reply",
 }
+# Only these are folded into one line ("A ほか2人") when they follow each other. The
+# talk lines are shown one by one: a talk_wish has no actor and no post.
+CHAINED_NOTIFICATION_TYPES = frozenset({"like", "help", "join"})
 # Types that stay inside the app whatever the settings say.
 NEVER_PUSHED = frozenset({"quiet_post"})
 REACTION_GROUP_MINUTES = 10
@@ -467,6 +473,24 @@ POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
 # 「参加者募集中」 posts may carry a sign-up deadline (a Japan-time date, open until
 # the end of that day) and a first-come capacity.
 RECRUIT_TAG = "参加者募集中"
+
+# 「話してみたい」（仮名）: the button's name lives here and nowhere else. The screen
+# reads it from /api/config (talk.label), and the push texts are built from it.
+# NO romance words (the legal check depends on it).
+# The notice reads 「誰かが、あなたと{label}と言っています」, so the name must end like a verb
+# in the 〜たい / 〜したい form (話してみたい, 挨拶したい ...). A noun or 「気になる」 breaks the sentence.
+# After renaming: run the node tests (PUSH_TEXT vs screen texts) and retake the screenshots.
+TALK_LABEL = "話してみたい"
+# Wishes older than this are swept by press_talk (and hidden by my_talk_state).
+TALK_WISH_DAYS = 14
+DM_BODY_MAX = 1000
+DM_ROOM_EXCERPT = 30
+# The words press_talk raises (PostgREST {"message"}; local mode 4xx {"detail"}).
+# A person who is not in a shared meeting and a blocked person get the SAME words.
+TALK_ERROR_LOGIN = "ログインしてください。"
+TALK_ERROR_SELF = "自分には押せません。"
+TALK_ERROR_NOT_PEER = "この相手には押せません。"
+DM_ERROR_SEND = "このDMには送信できません。"
 RECRUIT_CAPACITY_MIN = 1
 RECRUIT_CAPACITY_MAX = 999
 RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today

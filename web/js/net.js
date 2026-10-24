@@ -18,6 +18,7 @@ import { config, isLocal } from './config.js';
 import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
+import { readPress, readSent, talkRefusal } from './talk-rules.js';
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -111,6 +112,15 @@ function joinError(error) {
   const text = joinRefusal(error?.message);
   return text ? new ApiError(text, error.status) : error;
 }
+
+/** A refused press / send, said in words for a person (same idea as joinError). */
+function talkError(error, context = 'talk') {
+  return new ApiError(talkRefusal(error?.message, context), error?.status ?? 0);
+}
+
+// "From the beginning" for the DM poll. The filter is always written out, so the
+// grant check in tests/frontend/net-grants.test.mjs sees every column it uses.
+const DM_EPOCH = '1970-01-01T00:00:00Z';
 
 /** PostgREST nests an embedded table; every screen wants it flat. */
 function flatten(row, into) {
@@ -237,10 +247,76 @@ const supabaseBackend = {
     });
     return true;
   },
+  // ---- 「話してみたい」 and the DM. Rows are never read from talk_wishes: the
+  // database answers only through these functions (and 2-person RLS on the DM tables).
+  async talkPeers() {
+    const rows = await rpc('talk_peers', {});
+    return (rows || []).map((row) => (typeof row === 'string' ? row : row.account_id)).filter(Boolean);
+  },
+  async talkState() {
+    return (await rpc('my_talk_state', {})) || [];
+  },
+  async pressTalk(target) {
+    try {
+      return readPress(await rpc('press_talk', { target }));
+    } catch (error) {
+      throw talkError(error, 'talk');
+    }
+  },
+  async withdrawTalk(target) {
+    try {
+      await rpc('withdraw_talk', { target });
+    } catch (error) {
+      throw talkError(error, 'talk');
+    }
+    return true;
+  },
+  async dmRooms() {
+    return (await rpc('dm_room_list', {})) || [];
+  },
+  async dmMessages(roomId, after) {
+    return restCall('dm_messages', {
+      params: {
+        select: 'id,room_id,sender_id,body,created_at',
+        room_id: `eq.${roomId}`, created_at: `gt.${after || DM_EPOCH}`, order: 'created_at.asc', limit: '500',
+      },
+    });
+  },
+  async sendDm(roomId, body) {
+    try {
+      const rows = await restCall('dm_messages', {
+        method: 'POST',
+        params: { select: 'id,room_id,sender_id,body,created_at' },
+        prefer: 'return=representation',
+        body: { room_id: roomId, sender_id: session.userId(), body },
+      });
+      return readSent(rows);
+    } catch (error) {
+      throw talkError(error, 'dm');
+    }
+  },
+  async block(blockedId) {
+    await restCall('dm_blocks', {
+      method: 'POST',
+      params: { on_conflict: 'blocker_id,blocked_id' },
+      prefer: 'return=minimal,resolution=ignore-duplicates',
+      body: { blocker_id: session.userId(), blocked_id: blockedId },
+    });
+    return true;
+  },
+  async unblock(blockedId) {
+    await restCall('dm_blocks', {
+      method: 'DELETE',
+      params: { blocker_id: `eq.${session.userId()}`, blocked_id: `eq.${blockedId}` },
+    });
+    return true;
+  },
   /** Reactions to one post within ten minutes as one entry (item 22). */
   async listNotificationFeed(limit = 50) {
     const rows = await rpc('notification_feed', { limit_n: limit });
-    const actorIds = [...new Set(rows.map((row) => row.actor_id).filter(Boolean))];
+    // Nobody is looked up for 「誰かが…」: the row's actor is not shown, whoever it names.
+    const actorIds = [...new Set(rows.filter((row) => row.type !== 'talk_wish')
+      .map((row) => row.actor_id).filter(Boolean))];
     const accounts = actorIds.length
       ? await restCall('accounts', {
         params: { select: 'id,display_name,icon_id,avatar_path', id: `in.(${actorIds.join(',')})` },
@@ -341,6 +417,43 @@ const localBackend = {
   removeReaction: async (postId, kind) => {
     const params = new URLSearchParams({ post_id: postId, kind });
     await api.del(`/api/local/reactions?${params}`);
+    return true;
+  },
+  talkPeers: async () => (await api.get('/api/local/talk/peers')).peers || [],
+  talkState: async () => (await api.get('/api/local/talk/state')).state || [],
+  pressTalk: async (target) => {
+    try {
+      return readPress(await api.post('/api/local/talk/press', { target }));
+    } catch (error) {
+      throw talkError(error, 'talk');
+    }
+  },
+  withdrawTalk: async (target) => {
+    try {
+      await api.post('/api/local/talk/withdraw', { target });
+    } catch (error) {
+      throw talkError(error, 'talk');
+    }
+    return true;
+  },
+  dmRooms: async () => (await api.get('/api/local/dm/rooms')).rooms || [],
+  dmMessages: async (roomId, after) => {
+    const query = after ? `?${new URLSearchParams({ after })}` : '';
+    return (await api.get(`/api/local/dm/rooms/${encodeURIComponent(roomId)}/messages${query}`)).messages || [];
+  },
+  sendDm: async (roomId, body) => {
+    try {
+      return readSent(await api.post(`/api/local/dm/rooms/${encodeURIComponent(roomId)}/messages`, { body }));
+    } catch (error) {
+      throw talkError(error, 'dm');
+    }
+  },
+  block: async (blockedId) => {
+    await api.post('/api/local/dm/blocks', { blocked_id: blockedId });
+    return true;
+  },
+  unblock: async (blockedId) => {
+    await api.del(`/api/local/dm/blocks/${encodeURIComponent(blockedId)}`);
     return true;
   },
   listNotificationFeed: async (limit = 50) =>

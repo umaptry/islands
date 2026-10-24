@@ -469,6 +469,26 @@
   <div class="scroller" id="userBody"></div>
 </section>
 
+<!-- ============ 12. DM: the rooms that have opened ============ -->
+<section id="dmList" class="screen tinted">
+  <div class="topbar-inline">
+    <button class="icon-button" id="dmListBack" aria-label="戻る">←</button>
+    <h2 class="screen-title">DM</h2>
+  </div>
+  <div class="scroller" id="dmListBody"></div>
+</section>
+
+<!-- ============ 13. DM: one room (no bottom nav: the input sits at the foot) ============ -->
+<section id="dmRoom" class="screen tinted">
+  <div class="topbar-inline dm-top">
+    <button class="icon-button" id="dmRoomBack" aria-label="DM の一覧へ戻る">←</button>
+    <button class="dm-who" id="dmRoomWho" type="button"></button>
+    <button class="btn btn-small btn-quiet" id="dmRoomBlock" type="button" hidden>ブロック</button>
+  </div>
+  <div class="dm-thread" id="dmThread"></div>
+  <div class="dm-foot" id="dmFoot"></div>
+</section>
+
 <!-- ============ shared ============ -->
 <nav class="bottom-nav" id="bottomNav" hidden>
   <button class="nav-item on" data-route="#/map"><span class="nav-icon">🗺</span><span class="nav-label">マップ</span></button>

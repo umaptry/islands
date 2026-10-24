@@ -74,9 +74,11 @@ from core.prompts import weekly_prompt
 from core import post_extras
 from core.config import (
     AWAY_DIGEST_COUNT,
+    DM_BODY_MAX,
     EXAMPLE_POSTS,
     EXTRA_PROMPTS,
     RECRUIT_TAG,
+    TALK_LABEL,
     PREVIEW_ISLAND_RADIUS,
     PREVIEW_NEIGHBORS,
     CONNECTION_CACHE_SECONDS,
@@ -138,7 +140,7 @@ from core.similarity import (
     shared_keywords,
     similarity_view,
 )
-from core.store import StoreError, create_store
+from core.store import StoreError, TalkRefused, create_store
 
 ROOT = Path(__file__).resolve().parent
 ARTIFACTS = Path(os.environ.get("MAP_ARTIFACTS_DIR") or str(ROOT / "artifacts"))
@@ -531,6 +533,15 @@ def post_extras_on():
     False the fields are ignored (never sent to the database) and the screen is told
     through features.post_extras."""
     return bool(getattr(state["store"], "supports_post_extras", True))
+
+
+def talk_on():
+    """Whether 「話してみたい」/ DM can run (2026-10-26).
+
+    False until supabase/migrations/20261026000000_talk_and_dm.sql has been run on the
+    production database; the memory store always can. The screen shows nothing while
+    this is False, so the code may go out before the SQL."""
+    return bool(getattr(state["store"], "supports_talk", True))
 
 
 def extras_for_new_post(payload, tags):
@@ -1267,6 +1278,10 @@ PUSH_TEXT = {
     "connection": "初めてやりとりしました。地図に線が引かれます。",
     "similar": "話題や目標が近い人が参加しました。",
     "island": "島が変わりました。",
+    # 2026-10-26. talk_wish names nobody (the row has no actor); dm never carries the text.
+    "talk_wish": f"誰かが、あなたと{TALK_LABEL}と言っています",
+    "talk_match": "{name}さんと、お互いに『" + TALK_LABEL + "』でした。DMが開きました",
+    "dm": "{name}さんからメッセージが届きました",
 }
 PUSH_GROUP_TEXT = "あなたの投稿に反応しました。"
 
@@ -1312,6 +1327,14 @@ def push_message(entry):
     if entry["type"] == "island":
         title = f"島「{payload['name']}」" if payload.get("name") else "島"
         body = f"{payload['cause']}。" if payload.get("cause") else PUSH_TEXT["island"]
+    elif entry["type"] == "talk_wish":
+        # Never reads the actors: whoever pressed is not in the row, and must not get in.
+        title = "だれか"
+        body = PUSH_TEXT["talk_wish"]
+    elif entry["type"] in ("talk_match", "dm"):
+        first = (entry["actors"][0] if entry["actors"] else None) or {}
+        title = first.get("display_name") or "だれか"
+        body = PUSH_TEXT[entry["type"]].format(name=title)
     else:
         first = (entry["actors"][0] if entry["actors"] else None) or {}
         title = first.get("display_name") or "だれか"
@@ -1544,7 +1567,9 @@ def config():
         "example_posts": list(EXAMPLE_POSTS),
         # post_extras: the database can keep the prompt / sign-up deadline / capacity.
         # False on a production database the 2026-10-20 SQL has not reached yet.
-        "features": {"post_extras": post_extras_on()},
+        "features": {"post_extras": post_extras_on(), "talk": talk_on()},
+        # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
+        "talk": {"label": TALK_LABEL},
         "island_colors": list(ISLAND_COLORS),
         "limits": {
             "body_min": MIN_TEXT_LENGTH,
@@ -1619,6 +1644,10 @@ def health():
         post_extras_ok = bool(state["store"].post_extras_ready()) if store_ok else False
     except StoreError:
         post_extras_ok = False
+    try:
+        talk_ok = bool(state["store"].talk_ready()) if store_ok else False
+    except StoreError:
+        talk_ok = False
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
@@ -1634,6 +1663,7 @@ def health():
         "active_map_version": runtime["active_version"],
         "island_names_ready": island_names_ok,
         "post_extras_ready": post_extras_ok,
+        "talk_ready": talk_ok,
         "ready": store_ok and compatible and not runtime["maintenance"] and island_names_ok,
         "not_ready_reasons": not_ready,
     }
@@ -2593,6 +2623,106 @@ def local_report(payload: ReportCreate, request: Request):
     require_local()
     user_id = current_user(request)
     state["store"].add_report(user_id, payload.post_id, payload.comment_id, payload.reason)
+    return {"ok": True}
+
+
+# -- 「話してみたい」and DM (2026-10-26) ------------------------------------------
+# Stand-ins for the database functions the browser calls itself in a deployment
+# (talk_peers, my_talk_state, press_talk, withdraw_talk, dm_room_list) and for the
+# dm_messages / dm_blocks tables. The words of a refusal are the database's.
+
+class TalkTarget(BaseModel):
+    target: str
+
+
+class DmBody(BaseModel):
+    body: str
+
+
+class DmBlock(BaseModel):
+    blocked_id: str
+
+
+def _talk_refusal(error):
+    return HTTPException(status_code=error.status, detail=str(error))
+
+
+@app.get("/api/local/talk/peers")
+def local_talk_peers(request: Request):
+    require_local()
+    return {"peers": state["store"].talk_peers(current_user(request))}
+
+
+@app.get("/api/local/talk/state")
+def local_talk_state(request: Request):
+    require_local()
+    return {"state": state["store"].talk_state(current_user(request))}
+
+
+@app.post("/api/local/talk/press")
+def local_talk_press(payload: TalkTarget, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return state["store"].press_talk(user_id, payload.target)
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
+@app.post("/api/local/talk/withdraw")
+def local_talk_withdraw(payload: TalkTarget, request: Request):
+    require_local()
+    try:
+        state["store"].withdraw_talk(current_user(request), payload.target)
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+    return {"ok": True}
+
+
+@app.get("/api/local/dm/rooms")
+def local_dm_rooms(request: Request):
+    require_local()
+    return {"rooms": state["store"].dm_room_list(current_user(request))}
+
+
+@app.get("/api/local/dm/rooms/{room_id}/messages")
+def local_dm_messages(room_id: str, request: Request, after: str | None = None):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"messages": state["store"].dm_messages(user_id, room_id, after)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="after は時刻で指定してください。")
+
+
+@app.post("/api/local/dm/rooms/{room_id}/messages")
+def local_dm_send(room_id: str, payload: DmBody, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"message": state["store"].send_dm(user_id, room_id, payload.body)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+    except StoreError:
+        raise HTTPException(status_code=422, detail=f"メッセージは1〜{DM_BODY_MAX}字で入力してください。")
+
+
+@app.post("/api/local/dm/blocks")
+def local_dm_block(payload: DmBlock, request: Request):
+    require_local()
+    try:
+        state["store"].block_dm(current_user(request), payload.blocked_id)
+    except StoreError:
+        raise HTTPException(status_code=422, detail="ブロックできませんでした。")
+    return {"ok": True}
+
+
+@app.delete("/api/local/dm/blocks/{blocked_id}")
+def local_dm_unblock(blocked_id: str, request: Request):
+    require_local()
+    state["store"].unblock_dm(current_user(request), blocked_id)
     return {"ok": True}
 
 

@@ -37,6 +37,16 @@ import httpx
 import numpy as np
 
 from core.config import ENERGY_CELL_SIZE
+from core.config import (
+    DM_BODY_MAX,
+    DM_ERROR_SEND,
+    DM_ROOM_EXCERPT,
+    RECRUIT_TAG,
+    TALK_ERROR_LOGIN,
+    TALK_ERROR_NOT_PEER,
+    TALK_ERROR_SELF,
+    TALK_WISH_DAYS,
+)
 from core.energy import computed_energy, total_energy
 from core.post_extras import (
     CLOSED_DEADLINE, CLOSED_FULL, ERROR_CLOSED, ERROR_FULL, EXTRA_COLUMNS, closed_state, shape,
@@ -102,6 +112,10 @@ ISLAND_STATE_COLUMNS = ISLAND_STATE_BASE_COLUMNS + "," + ",".join(ISLAND_NAME_CO
 # How long a "columns are there" / "columns are missing" check is trusted.
 NAME_COLUMNS_CHECK_SECONDS = 60
 POST_EXTRAS_CHECK_SECONDS = 60
+# The table the 2026-10-26 migration ends up with; the server asks for it (service key)
+# to learn whether 「話してみたい」/ DM can be switched on.
+TALK_STATS = "talk_stats"
+TALK_CHECK_SECONDS = 60
 ISLAND_EVENT_COLUMNS = "id,island_id,kind,cause,place,before,after,created_at"
 PUSH_CONFIG_COLUMNS = "vapid_public,vapid_private,dispatch_url"
 PUSH_SUBSCRIPTION_COLUMNS = "id,account_id,endpoint,p256dh,auth,user_agent,created_at"
@@ -170,6 +184,15 @@ class StoreError(RuntimeError):
     pass
 
 
+class TalkRefused(StoreError):
+    """A 「話してみたい」/ DM rule said no. str(error) is the Japanese sentence the
+    database function raises; `status` is the local-mode HTTP code."""
+
+    def __init__(self, message, status=422):
+        super().__init__(message)
+        self.status = status
+
+
 # ---------------------------------------------------------------------------
 # memory
 # ---------------------------------------------------------------------------
@@ -200,6 +223,11 @@ class MemoryStore:
         self._island_run_at = None
         self._views = set()         # (post_id, viewer)
         self._push_pending = []     # notification ids not yet taken by the dispatcher
+        self._talk_wishes = {}      # (from_id, to_id) -> {event_post_id, created_at}
+        self._dm_rooms = {}         # room id -> {id, user_a, user_b, event_post_id, created_at}
+        self._dm_messages = []      # oldest first
+        self._dm_blocks = set()     # (blocker_id, blocked_id)
+        self._talk_stats = {}       # JST day -> {pressed, matched}: counts only
         self._push_config = {"vapid_public": None, "vapid_private": None, "dispatch_url": None}
         self._push_subscriptions = {}  # endpoint -> row
         self._presence = {}         # account_id -> datetime the app is on screen until
@@ -684,6 +712,204 @@ class MemoryStore:
                 if row["recipient_id"] == recipient_id and not row["read_at"]
             )
 
+    # -- 「話してみたい」and DM (2026-10-26) -------------------------------------
+    #
+    # The same rules as supabase/migrations/20261026000000_talk_and_dm.sql, in the
+    # same order, so local mode refuses what the database refuses. In a deployment
+    # the browser calls those functions itself (with the person's JWT, which a
+    # service key cannot stand in for), so SupabaseStore only has talk_ready().
+
+    supports_talk = True
+
+    def talk_ready(self):
+        return True
+
+    def _is_meeting(self, post):
+        return bool(post) and not post.get("deleted_at") and RECRUIT_TAG in (post.get("tags") or [])
+
+    def _is_member(self, post, account_id):
+        return post["author_id"] == account_id or (post["id"], account_id, "join") in self._reactions
+
+    def _talk_shared_event(self, a, b):
+        """The newest meeting both are in (its author or a joiner), or None. Lock held."""
+        meetings = [post for post in self._posts.values()
+                    if self._is_meeting(post) and self._is_member(post, a) and self._is_member(post, b)]
+        if not meetings:
+            return None
+        return max(meetings, key=lambda post: (_stamp(post["created_at"]), post["id"]))["id"]
+
+    def _talk_blocked(self, a, b):
+        return (a, b) in self._dm_blocks or (b, a) in self._dm_blocks
+
+    def _room_between(self, a, b):
+        low, high = sorted((a, b))
+        for room in self._dm_rooms.values():
+            if room["user_a"] == low and room["user_b"] == high:
+                return room
+        return None
+
+    def _talk_stat(self, column):
+        day = (datetime.now(timezone.utc) + timedelta(hours=9)).date().isoformat()
+        row = self._talk_stats.setdefault(day, {"pressed": 0, "matched": 0})
+        row[column] += 1
+
+    def talk_peers(self, me):
+        """Everybody in a meeting I am in, except me and anyone blocked either way."""
+        with self._lock:
+            peers = set()
+            for post in self._posts.values():
+                if not self._is_meeting(post) or not self._is_member(post, me):
+                    continue
+                peers.add(post["author_id"])
+                peers.update(actor for (pid, actor, kind) in self._reactions
+                             if pid == post["id"] and kind == "join")
+            peers.discard(me)
+            return sorted(person for person in peers if not self._talk_blocked(me, person))
+
+    def talk_state(self, me):
+        """[{target, state: pressed|matched, room_id}]. Never says who pressed me."""
+        horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
+        with self._lock:
+            out = [{"target": to_id, "state": "pressed", "room_id": None}
+                   for (from_id, to_id), wish in self._talk_wishes.items()
+                   if from_id == me and _stamp(wish["created_at"]) > horizon]
+            out += [{"target": room["user_b"] if room["user_a"] == me else room["user_a"],
+                     "state": "matched", "room_id": room["id"]}
+                    for room in self._dm_rooms.values() if me in (room["user_a"], room["user_b"])]
+        return out
+
+    def press_talk(self, me, target):
+        """{"matched": bool, "room_id": str|None}. Raises TalkRefused (Japanese words).
+
+        A one-sided press and a repeated press answer the same and look the same."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN)
+        if not target or target == me:
+            raise TalkRefused(TALK_ERROR_SELF)
+        with self._lock:
+            shared = self._talk_shared_event(me, target)
+            if shared is None or self._talk_blocked(me, target):
+                raise TalkRefused(TALK_ERROR_NOT_PEER)
+            horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
+            for key in [key for key, wish in self._talk_wishes.items()
+                        if _stamp(wish["created_at"]) < horizon]:
+                del self._talk_wishes[key]
+            room = self._room_between(me, target)
+            if room:
+                return {"matched": True, "room_id": room["id"]}
+            if (target, me) in self._talk_wishes:
+                low, high = sorted((me, target))
+                room = {"id": str(uuid.uuid4()), "user_a": low, "user_b": high,
+                        "event_post_id": shared, "created_at": _now()}
+                self._dm_rooms[room["id"]] = room
+                self._talk_wishes.pop((me, target), None)
+                self._talk_wishes.pop((target, me), None)
+                # Both are told, by name (the other person is the actor).
+                self._notify(me, target, None, None, "talk_match")
+                self._notify(target, me, None, None, "talk_match")
+                self._talk_stat("matched")
+                return {"matched": True, "room_id": room["id"]}
+            if (me, target) not in self._talk_wishes:
+                self._talk_wishes[(me, target)] = {"event_post_id": shared, "created_at": _now()}
+                # Nameless and meeting-less. Not added again for 24 hours after the last one
+                # (read or not): the lines never count the people, and press-withdraw-press
+                # cannot be used to keep sending anonymous notices.
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+                if not any(row["recipient_id"] == target and row["type"] == "talk_wish"
+                           and _stamp(row["created_at"]) > cutoff
+                           for row in self._notifications.values()):
+                    self._notify(target, None, None, None, "talk_wish")
+                self._talk_stat("pressed")
+            return {"matched": False, "room_id": None}
+
+    def withdraw_talk(self, me, target):
+        """Take back a one-sided press. After a match there is nothing left to take back."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN)
+        with self._lock:
+            self._talk_wishes.pop((me, target), None)
+
+    def _room_of(self, me, room_id):
+        room = self._dm_rooms.get(room_id)
+        if not room or me not in (room["user_a"], room["user_b"]):
+            return None
+        return room
+
+    def dm_room_list(self, me):
+        with self._lock:
+            rows = []
+            for room in self._dm_rooms.values():
+                if me not in (room["user_a"], room["user_b"]):
+                    continue
+                other = room["user_b"] if room["user_a"] == me else room["user_a"]
+                account = self._accounts.get(other) or {}
+                post = self._posts.get(room["event_post_id"]) if room["event_post_id"] else None
+                live = post if post and not post.get("deleted_at") else None
+                last = next((m for m in reversed(self._dm_messages) if m["room_id"] == room["id"]), None)
+                rows.append({
+                    "room_id": room["id"], "other_id": other,
+                    "other_name": account.get("display_name", ""),
+                    "other_icon_id": account.get("icon_id", "0"),
+                    "other_avatar_path": account.get("avatar_path"),
+                    "event_post_id": live["id"] if live else None,
+                    "event_excerpt": live["body"][:DM_ROOM_EXCERPT] if live else None,
+                    "last_body": last["body"][:60] if last else None,
+                    "last_at": last["created_at"] if last else None,
+                    "blocked_by_me": (me, other) in self._dm_blocks,
+                    "created_at": room["created_at"],
+                })
+        rows.sort(key=lambda row: _stamp(row["last_at"] or row["created_at"]), reverse=True)
+        return rows
+
+    def dm_messages(self, me, room_id, after=None):
+        """The room's messages, oldest first (after: only newer than that time)."""
+        with self._lock:
+            if not self._room_of(me, room_id):
+                raise TalkRefused(DM_ERROR_SEND, status=404)
+            since = _stamp(after) if after else None
+            return [dict(m) for m in self._dm_messages
+                    if m["room_id"] == room_id and (since is None or _stamp(m["created_at"]) > since)]
+
+    def send_dm(self, me, room_id, body):
+        text = (body or "").strip(" \t\r\n　")
+        if not 1 <= len(text) <= DM_BODY_MAX or len(body) > 4000:
+            raise StoreError("body")
+        with self._lock:
+            room = self._room_of(me, room_id)
+            other = None
+            if room:
+                other = room["user_b"] if room["user_a"] == me else room["user_a"]
+            # The words match the database's: not being in the room and being blocked
+            # (by either side) are not told apart.
+            if not room or self._talk_blocked(me, other):
+                raise TalkRefused(DM_ERROR_SEND, status=403)
+            stamp = _stamp(_now())
+            if self._dm_messages and stamp <= _stamp(self._dm_messages[-1]["created_at"]):
+                # The clock can repeat itself (Windows); polling with `created_at > T`
+                # would miss the second message. The database's microseconds rarely tie.
+                stamp = _stamp(self._dm_messages[-1]["created_at"]) + timedelta(microseconds=1)
+            message = {"id": str(uuid.uuid4()), "room_id": room_id, "sender_id": me,
+                       "body": body, "created_at": stamp.isoformat()}
+            self._dm_messages.append(message)
+            # One unread notice per sender within 10 minutes is enough; the text is never in it.
+            # (Opening a room directly does not mark it read, so it must not mute for ever.)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+            if not any(row["recipient_id"] == other and row["actor_id"] == me and row["type"] == "dm"
+                       and row["read_at"] is None and _stamp(row["created_at"]) > cutoff
+                       for row in self._notifications.values()):
+                self._notify(other, me, None, None, "dm")
+            return dict(message)
+
+    def block_dm(self, me, blocked_id):
+        if not blocked_id or blocked_id == me or blocked_id not in self._accounts:
+            raise StoreError("blocked_id")
+        with self._lock:
+            self._dm_blocks.add((me, blocked_id))
+
+    def unblock_dm(self, me, blocked_id):
+        with self._lock:
+            self._dm_blocks.discard((me, blocked_id))
+
     # -- notification settings ---------------------------------------------
 
     def get_notification_settings(self, account_id):
@@ -975,6 +1201,8 @@ class SupabaseStore:
         self._names_checked_at = None
         self._has_post_extras = False      # until the database shows the 2026-10-20 columns
         self._extras_checked_at = None
+        self._has_talk = False             # until the database shows the 2026-10-26 tables
+        self._talk_checked_at = None
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1127,6 +1355,57 @@ class SupabaseStore:
             return self.post_extras_ready()
         except StoreError:
             return self._has_post_extras
+
+    # -- 「話してみたい」/ DM (2026-10-26) ----------------------------------------
+    # The browser calls press_talk, talk_peers, ... itself with the person's JWT (they
+    # run as that person, which a service key cannot), so this class only has to know
+    # whether the migration has been run: features.talk follows it.
+
+    @staticmethod
+    def _missing_talk_table(response):
+        if response.status_code not in (400, 404):
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42P01", "PGRST205", "PGRST200") or TALK_STATS in text
+
+    def talk_ready(self):
+        """True when talk_stats exists (cached for a minute). Raises StoreError when
+        the database cannot be asked."""
+        now = time.monotonic()
+        if self._talk_checked_at is not None and now - self._talk_checked_at < TALK_CHECK_SECONDS:
+            return self._has_talk
+        try:
+            response = self._send("GET", TALK_STATS, label="話してみたいの表の確認",
+                                  allow_statuses=(400, 404),
+                                  params={"select": "day", "limit": "1"})
+        except StoreError:
+            self._talk_checked_at = now - TALK_CHECK_SECONDS + 10
+            raise
+        if response.status_code < 300:
+            ready = True
+        elif self._missing_talk_table(response):
+            ready = False
+        else:
+            self._talk_checked_at = now - TALK_CHECK_SECONDS + 10
+            raise StoreError("話してみたいの表の確認")
+        if ready != self._has_talk or self._talk_checked_at is None:
+            print("[store] talk tables " + ("found; 話してみたい / DM are on" if ready else
+                  "missing; 話してみたい / DM are off until "
+                  "supabase/migrations/20261026000000_talk_and_dm.sql is run"), flush=True)
+        self._has_talk = ready
+        self._talk_checked_at = now
+        return ready
+
+    @property
+    def supports_talk(self):
+        try:
+            return self.talk_ready()
+        except StoreError:
+            return self._has_talk
 
     def _without_extras(self, data):
         if self.supports_post_extras:

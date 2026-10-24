@@ -32,6 +32,8 @@ import { heatObject } from '../components/heatobject.js';
 import { ripple } from '../map/index.js';
 import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
 import { openOnMap, showTrial } from './map.js';
+import { browserStorage } from '../talk.js';
+import { takePendingPost } from '../return-post.js';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -427,7 +429,9 @@ async function submit() {
     // Straight onto the map, where the new ground rises and the face lands
     // (as in the design mock). The 「あなたの島」 page that used to come first
     // had only the island's name left on it once its list of near people went.
-    await landOnMap(result);
+    // A new person who arrived through a link to a post (#/map?post=...) lands on
+    // their own island first, and then the post they were invited to opens.
+    await landOnMap(result, firstPost ? takePendingPost(browserStorage()) : null);
     // The star is for other people; say so, or the author sees nothing happen.
     if (recruitNote(payload.tags)) toast(recruitNote(payload.tags).trim());
   } catch (error) {
@@ -444,8 +448,8 @@ async function submit() {
 }
 
 /** Open the new post on the map, with a ripple where it landed. */
-async function landOnMap(result) {
-  await openOnMap(result.id);
+async function landOnMap(result, thenOpen = null) {
+  await openOnMap(result.id, { thenOpen });
   ripple(result.x, result.y, { big: true });
 }
 

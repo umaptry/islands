@@ -23,6 +23,8 @@ import { onboardingStep, setOnboardingStep } from '../onboarding.js';
 import { navigate, screen } from '../router.js';
 import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
+import { browserStorage, refreshTalk } from '../talk.js';
+import { mapLinkFor, takePendingPost } from '../return-post.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
 
 // ---------------------------------------------------------------- welcome
@@ -278,8 +280,12 @@ export async function afterSignIn() {
     refreshMyPosts().catch(() => {}),
     refreshMyReactions().catch(() => {}),
     refreshNotifications().catch(() => {}),
+    refreshTalk(),
   ]);
-  navigate('#/map');
+  // Came here from a link to one post (#/map?post=...): straight back to it. A new
+  // person is not here yet - theirs opens after the first post (compose.js).
+  const waiting = onboardingStep() ? null : takePendingPost(browserStorage());
+  navigate(waiting ? mapLinkFor(waiting) : '#/map');
 }
 
 // ---------------------------------------------------------------- avatar

@@ -32,7 +32,10 @@ SERVICE_KEY = "test-service-role-key"
 # table -> {id: row}
 TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notifications": {},
           "notification_settings": {}, "islands_state": {}, "island_events": {},
-          "post_views": {}, "push_config": {}, "push_subscriptions": {}, "push_presence": {}}
+          "post_views": {}, "push_config": {}, "push_subscriptions": {}, "push_presence": {},
+          "talk_stats": {}}
+# Tables the database does not have yet (before a migration is run): PostgREST answers 404.
+MISSING_TABLES = set()
 SEQUENCE = {"n": 0}
 ISLAND_RUN = {"at": None}
 
@@ -166,6 +169,9 @@ class FakePostgrest(BaseHTTPRequestHandler):
         # notifications, and answers a bare embed with 300 instead of guessing.
         if self._table() == "posts" and "accounts(" in query.get("select", [""])[0]:
             return self._send(300, {"code": "PGRST201", "message": "ambiguous embed"})
+        if self._table() in MISSING_TABLES:
+            return self._send(404, {"code": "PGRST205", "message":
+                                    f"Could not find the table 'public.{self._table()}'"})
         rows = [row for row in TABLES[self._table()].values() if self._filters(query)(row)]
         rows.sort(key=lambda row: row.get("created_at") or "")
 
@@ -961,3 +967,32 @@ def test_memory_store_wakes_the_dispatcher_except_for_quiet_posts():
     assert [row["type"] for row in claimed] == ["quiet_post", "similar"]
     assert "pushed_at" not in claimed[0]
     assert memory.claim_pending_pushes() == []
+
+
+# -- 「話してみたい」/ DM: features.talk follows the migration (2026-10-26) ----------------
+
+def test_talk_is_off_until_the_table_exists_and_on_after(store):
+    MISSING_TABLES.add("talk_stats")
+    try:
+        store._talk_checked_at = None
+        assert store.talk_ready() is False
+        assert store.supports_talk is False
+        MISSING_TABLES.discard("talk_stats")
+        assert store.talk_ready() is False, "the answer is kept for a minute"
+        store._talk_checked_at = None  # the minute is over
+        assert store.talk_ready() is True
+        assert store.supports_talk is True
+    finally:
+        MISSING_TABLES.discard("talk_stats")
+        store._talk_checked_at = None
+
+
+def test_a_database_that_cannot_be_asked_raises_and_keeps_the_last_answer(flaky, monkeypatch):
+    monkeypatch.setattr("core.store.RETRY_BACKOFF", 0.001)
+    FlakyPostgrest.failures_left = 99
+    assert flaky.supports_talk is False
+    # the failure is remembered for ~10 seconds (no hammering); after that it raises again
+    assert flaky.talk_ready() is False
+    flaky._talk_checked_at = None
+    with pytest.raises(StoreError):
+        flaky.talk_ready()

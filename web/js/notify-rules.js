@@ -15,7 +15,13 @@ export const CATEGORY_OF = Object.freeze({
   // Q34: a post nobody has answered yet, recommended to people nearby.
   // Follows the island switch (see interrupts() for the one exception).
   quiet_post: 'island',
+  // 「話してみたい」 and the DM (2026-10-24). Mirrors core/config.py exactly.
+  talk_wish: 'reaction', talk_match: 'reaction', dm: 'reply',
 });
+
+/** The three kinds that belong to 「話してみたい」 / DM. */
+export const TALK_TYPES = Object.freeze(['talk_wish', 'talk_match', 'dm']);
+export const isTalkType = (type) => TALK_TYPES.includes(type);
 
 /** The three switches, in the order the settings list them.
  *
@@ -39,7 +45,21 @@ export const KIND_TEXT = Object.freeze({
   island: '島が変わりました。',
   // Never "nobody answered": to the reader it is only a recommendation.
   quiet_post: '近くの島に、話が合いそうな投稿があります。',
+  // Templates: {label} is the button's name from /api/config, {name} the other
+  // person. The same words as PUSH_TEXT, so the lock screen and the list agree.
+  talk_wish: '誰かが、あなたと{label}と言っています',
+  talk_match: '{name}さんと、お互いに『{label}』でした。DMが開きました',
+  dm: '{name}さんからメッセージが届きました',
 });
+
+/** The small line under a 「話してみたい」 / DM row. */
+export const TALK_HINT = Object.freeze({
+  talk_wish: '地図で参加者の投稿を見てみよう',
+  talk_match: 'DMを開く',
+  dm: 'DMを開く',
+});
+
+const fill = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
 export const GROUP_TEXT = 'あなたの投稿に反応しました。';
 
 export const categoryOf = (type) => CATEGORY_OF[type] || type;
@@ -112,6 +132,8 @@ export function interrupts(entry, settings) {
 export function attachActors(entries, accounts) {
   const byId = new Map((accounts || []).map((account) => [account.id, account]));
   return (entries || []).map((entry) => {
+    // Nobody is named on 「誰かが…」: not even a face, whatever the row holds.
+    if (entry.type === 'talk_wish') return { ...entry, actor_id: null, actors: [] };
     if (Array.isArray(entry.actors)) return entry;
     const actor = entry.actor_id ? byId.get(entry.actor_id) : null;
     return { ...entry, actors: actor ? [actor] : [] };
@@ -119,7 +141,8 @@ export function attachActors(entries, accounts) {
 }
 
 /** Who to name: the newest person, "ほか N人" for the rest. An island names itself. */
-export function headline(entry) {
+export function headline(entry, talkLabel = '') {
+  if (isTalkType(entry.type)) return talkHeadline(entry, talkLabel);
   if (entry.type === 'island') {
     const name = (entry.payload || {}).name;
     return name ? `島「${name}」` : '島';
@@ -129,13 +152,34 @@ export function headline(entry) {
   return entry.others ? `${name} ほか${entry.others}人` : name;
 }
 
-export function bodyText(entry) {
+export function bodyText(entry, talkLabel = '') {
+  if (isTalkType(entry.type)) return talkLabel ? TALK_HINT[entry.type] : '';
   const payload = entry.payload || {};
   if (entry.type === 'island') return payload.cause ? `${payload.cause}。` : KIND_TEXT.island;
   if (entry.type === 'quiet_post') return payload.message || KIND_TEXT.quiet_post;
   if (entry.others) return GROUP_TEXT;
   return KIND_TEXT[entry.type] || GROUP_TEXT;
 }
+
+/** The sentence for a 「話してみたい」 / DM row. "誰か" never comes from the row:
+ * talk_wish is anonymous by design, so nothing but the label is read. */
+function talkHeadline(entry, label) {
+  if (!label) return 'お知らせが届いています';
+  const first = (entry.actors && entry.actors[0]) || {};
+  const name = entry.type === 'talk_wish' ? '' : (first.display_name || '相手');
+  return fill(KIND_TEXT[entry.type], { label, name });
+}
+
+/** Unread rows that a DM list would show a dot for: from this person, or all. */
+export function unreadDmCount(entries, otherId = null) {
+  return (entries || []).filter((entry) => entry.unread
+    && (entry.type === 'dm' || entry.type === 'talk_match')
+    && (!otherId || entry.actor_id === otherId)).length;
+}
+
+/** Ids of the matched-DM rows, to notice a new one (the buttons then re-read). */
+export const matchSignature = (entries) =>
+  (entries || []).filter((entry) => entry.type === 'talk_match').flatMap(rowIds).sort().join(',');
 
 export function rowIds(entry) {
   return Array.isArray(entry.ids) && entry.ids.length ? entry.ids : [entry.id];

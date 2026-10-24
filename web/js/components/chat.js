@@ -156,9 +156,13 @@ export function postChat(postId, { onCountChange, onReply } = {}) {
   return { node: wrap, refresh, destroy };
 }
 
-/** The input under a thread. replyTo(comment) makes the next message an answer to one. */
-export function chatInput(postId, { onSent } = {}) {
-  const limit = config().limits.comment_max;
+/** The input under a thread. replyTo(comment) makes the next message an answer to one.
+ *
+ * The DM room (screens/dm.js) reuses it: `send(body)` replaces the comment
+ * request, `limit` and `placeholder` its words, and `quiet` leaves out the
+ * 「送信しました」 toast that a conversation does not need on every line. */
+export function chatInput(postId, { onSent, send: sendBody, limit: maxLength, placeholder, quiet = false } = {}) {
+  const limit = maxLength || config().limits.comment_max;
   // A message may run over several lines (2026-10-21). On a touch screen the
   // keyboard's return key starts a new line and the button sends; with a real
   // keyboard Enter sends and Shift+Enter starts a new line.
@@ -166,7 +170,7 @@ export function chatInput(postId, { onSent } = {}) {
   const field = el('textarea', {
     className: 'chat-input',
     attrs: {
-      rows: 1, placeholder: 'メッセージを入力...', maxlength: limit,
+      rows: 1, placeholder: placeholder || 'メッセージを入力...', maxlength: limit,
       enterkeyhint: touch ? 'enter' : 'send', autocomplete: 'off',
       'aria-label': 'メッセージ',
     },
@@ -239,10 +243,10 @@ export function chatInput(postId, { onSent } = {}) {
     answering = null;
     showBar('');
     try {
-      await data.addComment(postId, body, answer?.id || null);
+      const sent = sendBody ? await sendBody(body) : await data.addComment(postId, body, answer?.id || null);
       buzz('tap');
-      toast('送信しました');
-      if (onSent) onSent();
+      if (!quiet) toast('送信しました');
+      if (onSent) onSent(sent);
     } catch (error) {
       field.value = body;
       if (answer) replyTo(answer);

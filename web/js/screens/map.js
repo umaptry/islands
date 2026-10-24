@@ -29,6 +29,8 @@ import { noteLinks } from '../map/lines.js';
 import { isRecruiting, markRead } from '../map/reads.js';
 import { buzz, viewerKey } from '../feedback.js';
 import { playSe, setAmbient } from '../audio.js';
+import { browserStorage, refreshTalk, talkOptionsFor } from '../talk.js';
+import { savePendingPost, validPostId } from '../return-post.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -84,15 +86,33 @@ export async function showTrial() {
   }
 }
 
-export async function openOnMap(postId) {
+/** `thenOpen`: a post to open once the landing show of a brand-new post is over
+ * (a new person who came through a link: first their own island, then the 会 they
+ * were invited to). */
+export async function openOnMap(postId, { thenOpen = null } = {}) {
   if (!await navigate('#/map')) return;
   const fresh = justPosted(postId);
   if (fresh) {
-    playNewPost(fresh);
+    playNewPost(fresh, thenOpen);
     return;
   }
+  await openLinkedPost(thenOpen || postId);
+}
+
+/** Open a post wherever it is on the map and bring the camera to it. */
+export async function openLinkedPost(postId) {
   await openPost(postId);
   if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+}
+
+/** 「誰かが、あなたと…と言っています」 leads here: the 会 with its participants
+ * shown, so the card of the person you might talk to is one tap away. */
+export async function openParticipantsOf(postId) {
+  if (!await navigate('#/map')) return;
+  let post = state.postsById.get(postId) || null;
+  if (!post && postId) post = await data.getPost(postId).catch(() => null);
+  if (post && isRecruiting(post)) await showParticipants(post);
+  else if (post) await openLinkedPost(post.id);
 }
 
 // A post you wrote a moment ago is introduced once, with the full show; any
@@ -109,7 +129,7 @@ function justPosted(postId) {
   return Number.isFinite(age) && age > -60000 && age < JUST_POSTED_MS ? post : null;
 }
 
-function playNewPost(post) {
+function playNewPost(post, thenOpen = null) {
   introduced.add(post.id);
   if (sheetOpen()) closeSheet();
   setParticipantView(null);
@@ -121,8 +141,7 @@ function playNewPost(post) {
   playReveal(post, {
     then: async () => {
       landing = null;
-      await openPost(post.id);
-      if (state.selected?.id === post.id) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+      await openLinkedPost(thenOpen || post.id);
     },
   });
 }
@@ -466,6 +485,8 @@ export async function openPost(postId, { expand = false, back = null } = {}) {
   // when the sheet is only a way to read the writer's words.
   if (!participantView()) markRead(post.id);
   await renderSheet(post, generation, back);
+  // Somebody may have joined the same 会 since the last read; the button follows.
+  refreshTalk({ maxAge: 20000 });
 }
 
 async function renderSheet(post, generation, back = null) {
@@ -503,6 +524,7 @@ async function renderSheet(post, generation, back = null) {
     onDelete: () => removeOwnPost(post),
     onReport: mine ? null : () => report(post),
     onSeeParticipants: isRecruiting(post) ? () => showParticipants(post) : null,
+    talk: talkOptionsFor(post),
     onSeeReactors: mine ? (kind) => openReactors({
       post, kind,
       onOpenProfile: (id) => {
@@ -603,7 +625,11 @@ export async function react(postId, kind) {
     }
     // Only 参加 (and messages) draw a route since 2026-10-22: いいね and
     // 手伝えるかも have nothing new to fetch.
-    if (kind === 'join') refreshConnections({ fresh: true });
+    if (kind === 'join') {
+      refreshConnections({ fresh: true });
+      // Joining or leaving a 会 changes who I may press 「話してみたい」 for.
+      refreshTalk();
+    }
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));
     else state.reactions.delete(reactionKey(postId, kind));
@@ -745,7 +771,7 @@ function startPolling() {
     if (document.hidden || document.querySelector('.screen.active').id !== 'map') return;
     // Lines alongside the map, not after it: a slow map refresh held them up.
     await Promise.all([refreshMap(), refreshConnections()]);
-    await Promise.all([refreshIslands(), refreshMyReactions()]);
+    await Promise.all([refreshIslands(), refreshMyReactions(), refreshTalk({ maxAge: 60000 })]);
   }, POLL_MS);
 
   document.addEventListener('visibilitychange', async () => {
@@ -777,7 +803,7 @@ export function setupMapScreen() {
         paintParticipantBar();
       }
     },
-    async enter() {
+    async enter(_params, query) {
       setAmbient(true);
       startMap();   // no-op the first time: initMap starts the loop itself
       if (!booted) {
@@ -810,7 +836,16 @@ export function setupMapScreen() {
       refreshMyViews();
       // Not awaited: the map is already up, and the pill can arrive a moment later.
       loadDigest();
-      if (restorePost && activeScreen() === 'map') {
+      refreshTalk({ maxAge: 20000 });
+      // #/map?post=<id>: a link to one post, which opens for anybody. A visitor
+      // who is not signed in keeps it, so signing in or registering (even through
+      // Google, which leaves the page) brings them back to it.
+      const linked = query ? query.get('post') : null;
+      if (validPostId(linked) && activeScreen() === 'map') {
+        restorePost = null;
+        if (!state.account) savePendingPost(browserStorage(), linked);
+        await openLinkedPost(linked);
+      } else if (restorePost && activeScreen() === 'map') {
         const postId = restorePost;
         restorePost = null;
         await openPost(postId);

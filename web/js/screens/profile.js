@@ -20,6 +20,8 @@ import { buzz, canBuzz, feedbackSettings, resumeAudio, setFeedback, sound } from
 import { CATEGORIES, defaultSettings, iosOtherBrowser, mergeSettings, settingsRows } from '../notify-rules.js';
 import { disablePush, enablePush, forgetDevice, pushStatus } from '../push.js';
 import { loadNotifySettings, useNotifySettings } from './notifications.js';
+import { talkAvailable } from '../talk.js';
+import { unreadDmCount } from '../notify-rules.js';
 
 let editDraft = null;
 
@@ -174,6 +176,21 @@ async function renderMe() {
     text: 'islands の使い方を見る',
     on: { click: () => { markGuidanceReview(); navigate('#/guidance?review=1'); } },
   }));
+  // The way into the DM: only where 「話してみたい」 is switched on.
+  if (talkAvailable()) {
+    const unread = unreadDmCount(state.notifications);
+    body.append(el('button', {
+      className: 'list-row me-dm', attrs: { type: 'button', id: 'meDm' },
+      on: { click: () => navigate('#/dm') },
+    },
+      el('span', { className: 'me-dm-icon' }, icon('message', 20)),
+      el('div', { className: 'list-row-body' },
+        el('div', { className: 'list-row-title', text: 'DM' }),
+        el('div', { className: 'list-row-sub', text: '2人だけで話せるメッセージ' })),
+      unread ? el('span', { className: 'unread-badge', text: `未読 ${unread}件` }) : null,
+      el('span', { className: 'stack-go', text: '›', attrs: { 'aria-hidden': 'true' } }),
+    ));
+  }
   refreshMyViews();
 
   let posts = state.myPosts;
