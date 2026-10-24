@@ -153,27 +153,50 @@ def test_the_nameless_notice_has_nobody_in_it(cast):
     assert get(guest, "/api/local/notifications").json()["notifications"] == []
 
 
-def test_reading_does_not_reopen_the_door_for_press_withdraw_press(cast):
+def read_all(person, kinds):
+    ids = [row["id"] for row in person.inbox(kinds)]
+    person.client.post("/api/local/notifications/read", json={"ids": ids}, headers=person.headers)
+
+
+def test_after_it_is_read_the_next_person_who_presses_is_told_at_once(cast):
     host, guest, guest2, *_ = cast
     press(guest, host)
-    ids = [row["id"] for row in host.inbox({"talk_wish"})]
-    host.client.post("/api/local/notifications/read", json={"ids": ids}, headers=host.headers)
+    press(guest2, host)
+    assert len(host.inbox({"talk_wish"})) == 1, "unread: any number of people, one line"
+    read_all(host, {"talk_wish"})
+    guest2.client.post("/api/local/talk/withdraw", json={"target": host.id}, headers=guest2.headers)
+    press(guest2, host)
+    rows = host.inbox({"talk_wish"})
+    assert len(rows) == 2, "read, so the next press makes a new line right away (no 24 hours)"
+    assert sum(1 for row in rows if not row["read_at"]) == 1
+    assert all(row["actor_id"] is None for row in rows)
+
+
+def test_one_person_cannot_keep_notifying_the_same_person(cast):
+    host, guest, *_ = cast
+    store = application.state["store"]
+    press(guest, host)
+    for _ in range(3):
+        read_all(host, {"talk_wish"})
+        guest.client.post("/api/local/talk/withdraw", json={"target": host.id}, headers=guest.headers)
+        press(guest, host)
+    assert len(host.inbox({"talk_wish"})) == 1, "press, withdraw, press: once per 14 days"
+    # after 14 days the record is gone and the same person can notify again
+    store._talk_wish_notices[(guest.id, host.id)] = (
+        datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
+    read_all(host, {"talk_wish"})
     guest.client.post("/api/local/talk/withdraw", json={"target": host.id}, headers=guest.headers)
     press(guest, host)
-    press(guest2, host)
-    assert len(host.inbox({"talk_wish"})) == 1
+    assert len(host.inbox({"talk_wish"})) == 2
 
 
-def test_after_a_day_a_new_press_makes_a_new_line(cast):
+def test_the_notice_record_is_kept_only_when_a_notice_was_written(cast):
     host, guest, guest2, *_ = cast
     store = application.state["store"]
     press(guest, host)
-    old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
-    for row in store._notifications.values():
-        if row["type"] == "talk_wish":
-            row["created_at"] = old
-    press(guest2, host)
-    assert len(host.inbox({"talk_wish"})) == 2
+    press(guest2, host)  # covered by the unread line: nothing written, nothing recorded
+    assert (guest.id, host.id) in store._talk_wish_notices
+    assert (guest2.id, host.id) not in store._talk_wish_notices
 
 
 def test_an_old_unread_dm_notice_does_not_mute_a_new_one(cast):

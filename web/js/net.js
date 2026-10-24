@@ -19,6 +19,7 @@ import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
 import { readPress, readSent, talkRefusal } from './talk-rules.js';
+import { communitiesOn } from './community-rules.js';
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -105,7 +106,8 @@ const POST_COLUMNS =
 // The new columns only exist once the migration has been run; asking for them
 // before that would be a 400 on every post read.
 const postColumns = () =>
-  (config().features?.post_extras ? `${POST_COLUMNS},prompt,recruit_deadline,recruit_capacity` : POST_COLUMNS);
+  (config().features?.post_extras ? `${POST_COLUMNS},prompt,recruit_deadline,recruit_capacity` : POST_COLUMNS)
+  + (communitiesOn(config()) ? ',community_id' : '');
 
 /** A refused join (recruit_closed / recruit_full) said in words for a person. */
 function joinError(error) {
@@ -147,6 +149,34 @@ const supabaseBackend = {
     return rpc('map_posts', {
       min_x: minX, min_y: minY, max_x: maxX, max_y: maxY, limit_n: limit,
     });
+  },
+  // ---- communities and invites. Rows of the invite tables are never read directly:
+  // the database answers through these functions.
+  async communityMapPosts(community, { minX, minY, maxX, maxY, limit }) {
+    return rpc('community_map_posts', {
+      community, min_x: minX, min_y: minY, max_x: maxX, max_y: maxY, limit_n: limit,
+    });
+  },
+  async myCommunities() {
+    return (await rpc('my_communities', {})) || [];
+  },
+  /** A community's name by id (anybody may read it); null when unknown. */
+  async communityInfo(id) {
+    const rows = await restCall('communities', {
+      params: { select: 'id,name', id: `eq.${id}`, limit: '1' },
+    });
+    return rows.length ? rows[0] : null;
+  },
+  checkInvite: (code) => rpc('check_invite', { code }),
+  claimInvite: (code) => rpc('claim_invite', { code }),
+  createInvite: ({ community_id: community, minutes, until_end_of_day: untilEndOfDay }) =>
+    rpc('create_invite', { community, minutes, until_end_of_day: untilEndOfDay }),
+  async listInvites(community) {
+    return (await rpc('list_invites', { community })) || [];
+  },
+  async revokeInvite(invite) {
+    await rpc('revoke_invite', { invite });
+    return true;
   },
   async mapCells({ minX, minY, maxX, maxY }) {
     return rpc('map_cells', { min_x: minX, min_y: minY, max_x: maxX, max_y: maxY });
@@ -382,6 +412,24 @@ const localBackend = {
   },
   async mapCells(bounds) {
     return (await api.get(`/api/local/cells?${box(bounds)}`)).cells;
+  },
+  async communityMapPosts(community, bounds) {
+    const params = box(bounds);
+    params.set('limit', bounds.limit);
+    return (await api.get(`/api/local/communities/${encodeURIComponent(community)}/map?${params}`)).posts;
+  },
+  myCommunities: async () => (await api.get('/api/local/communities/mine')).communities || [],
+  // Not part of the agreed routes: a development server may or may not have it.
+  communityInfo: (id) => api.get(`/api/local/communities/${encodeURIComponent(id)}`, { auth: false })
+    .catch(() => null),
+  checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`, { auth: false }),
+  claimInvite: (code) => api.post('/api/local/invites/claim', { code }),
+  createInvite: (body) => api.post('/api/local/invites', body),
+  listInvites: async (community) =>
+    (await api.get(`/api/local/invites?${new URLSearchParams({ community_id: community })}`)).invites || [],
+  revokeInvite: async (invite) => {
+    await api.post(`/api/local/invites/${encodeURIComponent(invite)}/revoke`, {});
+    return true;
   },
   getPost: (id) => api.get(`/api/local/post/${id}`).catch((error) => {
     if (error.status === 404) return null;

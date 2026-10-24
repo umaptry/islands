@@ -197,8 +197,11 @@ function fitTarget(posts, extent) {
   };
 }
 
-export function fitCamera(posts = state.posts, extent = null) {
+export function fitCamera(posts = state.posts, extent = null, { reset = false } = {}) {
   if (extent) fitExtent = extent;
+  // Another community's map: the old box must not frame this one (an empty map
+  // falls back to the seed box).
+  else if (reset) fitExtent = null;
   state.camera = fitTarget(posts, extent);
 }
 

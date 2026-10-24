@@ -34,6 +34,10 @@ export const state = {
   removed: new Set(),     // ids deleted this session: the map's ground forgets them
   fetched: null,          // { minX, minY, maxX, maxY } fetched in full by the last refresh
   talk: { peers: new Set(), byTarget: new Map(), at: 0 },   // 「話してみたい」: who shares a 会 with me, and what I pressed
+  communities: [],        // the communities I am in: { id, slug, name, role } (features.communities)
+  communitiesLoaded: false,
+  communityId: null,      // the one whose map I am looking at
+  viewCommunity: null,    // { id, name }: a linked post's community that I am not in (read only)
 };
 
 export function subscribe(listener) {

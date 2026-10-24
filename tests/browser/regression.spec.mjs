@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 
+// 手元モードはコミュニティが有効なので、新しい人は先に「デモ」コミュニティに入る（招待コードは手元の起動時に用意される）。
+
 test('landing, anonymous guard and navigation fit each viewport', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#welcome')).toHaveClass(/active/);
@@ -22,6 +24,8 @@ test('new profile reaches guidance before the first post, including after reload
     const email = `guide-${crypto.randomUUID()}@example.com`;
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
+    await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
+    await (await import('/static/js/communities.js')).refreshCommunities();
     await navigate('#/setup');
   });
   await page.locator('#setupName').fill('ガイド確認');
@@ -45,8 +49,8 @@ test('new profile reaches guidance before the first post, including after reload
 });
 
 test('reference registration saves profile and completes the first post', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('#welcomeRegister').click();
+  await page.goto('/#/invite/demo-invite-code-local-0001');
+  await page.locator('#inviteRegister').click();
   await page.locator('#authEmail').fill(`register-${crypto.randomUUID()}@example.com`);
   await expect(page.locator('#authSend')).toBeDisabled();
   await page.locator('#registerName').fill('登録の確認');
@@ -96,6 +100,8 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
     const email = `browser-${crypto.randomUUID()}@example.com`;
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
+    await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
+    await (await import('/static/js/communities.js')).refreshCommunities();
     state.account = (await api.put('/api/account/me', { display_name: '比較用', icon_id: '1' })).account;
     return (await api.post('/api/posts', { body: '週末はソロキャンプに出かけて、焚き火を眺めながら静かに過ごすのが好きです。', motivation: 50 })).id;
   });
@@ -154,8 +160,8 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
 
 
 test('a post image opens in the viewer with close and reactions, and closes by button, Escape and back', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('#welcomeRegister').click();
+  await page.goto('/#/invite/demo-invite-code-local-0001');
+  await page.locator('#inviteRegister').click();
   await page.locator('#authEmail').fill(`viewer-${crypto.randomUUID()}@example.com`);
   await page.locator('#registerName').fill('画像の確認');
   await page.locator('#registerAffiliation').fill('islands');
@@ -235,6 +241,8 @@ test('guidance can be skipped and the last button invites a first post', async (
     const email = `skip-${crypto.randomUUID()}@example.com`;
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
+    await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
+    await (await import('/static/js/communities.js')).refreshCommunities();
     await navigate('#/setup');
   });
   await page.locator('#setupName').fill('スキップ確認');
@@ -283,6 +291,8 @@ async function signInForFirstPost(page, label) {
     const email = `${name}-${crypto.randomUUID()}@example.com`;
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
+    await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
+    await (await import('/static/js/communities.js')).refreshCommunities();
     state.account = (await api.put('/api/account/me', { display_name: name, icon_id: '1' })).account;
   }, label);
 }

@@ -1618,3 +1618,118 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 /* ==== end 「話してみたい」 ==== */
 .dm-row .list-row-sub { color: var(--on-sea-2); }
 .dm-row .dm-row-event { color: var(--on-sea-3); font-size: 11px; }
+
+/* ==== コミュニティ・招待 (2026-10-24) ==== */
+
+/* The round button at the map's top left: 「{名前} ▾」 */
+.community-pill {
+  align-self: flex-start; pointer-events: auto;
+  max-width: 100%; height: 34px; padding: 0 14px; border-radius: 999px;
+  margin-left: max(0px, calc((100% - 520px) / 2));
+  background: #fff; color: var(--ui); border: 1px solid rgba(16, 42, 71, .06);
+  box-shadow: var(--float-shadow);
+  font-size: 13px; font-weight: 800; line-height: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.community-pill:not(.static):active { transform: scale(.97); }
+.community-pill.static { cursor: default; color: var(--ink-2); }
+.community-row.on .stack-who { color: var(--ui); }
+.community-row .stack-who { flex: 1; width: auto; }
+.community-row .stack-text { flex: none; font-size: 12px; color: var(--ink-3); }
+.community-hint { margin: 12px 2px 0; font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+
+/* A person in no community gets words where the map would be. */
+.map-notice {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; padding: 96px 24px 96px;
+}
+.map-notice-card {
+  pointer-events: auto; width: 100%; max-width: 340px; text-align: center;
+  background: rgba(255, 255, 255, .96); color: var(--ink); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 22px 20px;
+}
+.map-notice-title { margin: 0 0 8px; font-size: 16px; font-weight: 800; line-height: 1.6; text-wrap: pretty; }
+.map-notice-sub { margin: 0 0 4px; font-size: 13px; color: var(--ink-2); line-height: 1.7; text-wrap: pretty; }
+.map-notice-card .btn { margin-top: 12px; background: var(--ui); color: #fff; box-shadow: none; }
+#map.no-community .search-row, #map.no-community .near-islands, #map.no-community .map-controls,
+#map.no-community .digest-pill, #map.no-community .mini-map { display: none; }
+
+/* The sentence that takes the place of "create an account". */
+.invite-only-note {
+  margin: 16px 0 0; padding: 12px 14px; border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .42);
+  color: #fff; font-size: 13px; line-height: 1.7; text-wrap: pretty; word-break: auto-phrase;
+}
+#authInviteNote { margin: 0 0 20px; }
+
+/* The invite page: same shape as the sign-in page. */
+#invite { overflow-y: auto; }
+#invite .auth-scroll { display: flex; flex-direction: column; flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px; overflow: visible; }
+#invite .brand-inline { font-size: 36px; line-height: 40px; margin: 0 0 32px; }
+#invite .screen-title { font-size: 24px; line-height: 1.5; margin-bottom: 12px; overflow-wrap: anywhere; text-wrap: balance; word-break: auto-phrase; }
+#invite .lede { margin-bottom: 24px; line-height: 1.7; text-wrap: pretty; }
+#invite .btn { margin-top: 12px; }
+#invite .returning { margin: 28px 0 0; font-weight: 700; font-size: 14px; }
+#invite .returning + .btn { margin-top: 10px; }
+
+/* 「{名前} に投稿」 over the composer. */
+.compose-community {
+  align-self: flex-start; margin: 0 0 12px; padding: 5px 12px; border-radius: 999px;
+  background: rgba(255, 255, 255, .22); border: 1px solid rgba(255, 255, 255, .45);
+  color: #fff; font-size: 12px; font-weight: 700; line-height: 1.5; max-width: 100%;
+  overflow-wrap: anywhere;
+}
+#compose.compose-blocked .scroller > :not(.compose-community) { display: none; }
+.compose-community.blocked { border-radius: var(--radius-sm); background: rgba(255, 255, 255, .95); color: var(--bad); font-weight: 600; padding: 10px 14px; }
+
+/* マイページ: コミュニティ */
+.me-communities { margin: 4px 0 16px; }
+.me-community-empty {
+  margin: 0; padding: 12px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.7;
+  background: rgba(255, 255, 255, .13); border: 1px solid rgba(255, 255, 255, .22); color: var(--on-sea-2);
+}
+.me-community {
+  padding: 12px 14px; margin-bottom: 10px; border-radius: var(--radius);
+  background: rgba(255, 255, 255, .13); border: 1px solid rgba(255, 255, 255, .22);
+}
+.me-community-head { display: flex; align-items: center; gap: 10px; }
+.me-community-name { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.me-community-title { font-weight: 800; font-size: 15px; overflow-wrap: anywhere; }
+.me-community-role, .me-community-here {
+  font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
+  background: rgba(255, 255, 255, .22); color: #fff;
+}
+.me-community-here { background: #fff; color: var(--ui); }
+.me-community-open { flex: none; }
+
+.invite-panel { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .26); }
+.invite-open { width: 100%; background: #fff; color: var(--ui); box-shadow: none; }
+.invite-form { margin-top: 12px; }
+.invite-label { font-size: 12px; font-weight: 700; color: var(--on-sea-2); margin: 4px 0 8px; }
+.invite-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.invite-chip {
+  min-height: 34px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 700;
+  color: #fff; background: rgba(255, 255, 255, .14); border: 1px solid rgba(255, 255, 255, .5);
+}
+.invite-chip.on { background: #fff; color: var(--ui); border-color: #fff; }
+.invite-note { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--on-sea-2); text-wrap: pretty; }
+.invite-check { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; font-size: 13px; font-weight: 600; }
+.invite-check input { width: 20px; height: 20px; flex: none; accent-color: var(--ui); }
+.invite-post-select { width: 100%; min-height: 42px; margin-bottom: 10px; font-size: 14px; }
+.invite-post-select option { color: var(--ink); }
+.invite-make { margin-top: 12px; background: var(--ui); color: #fff; }
+.invite-result { margin-top: 12px; padding: 12px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, .16); }
+.invite-result-row { display: flex; gap: 8px; align-items: center; }
+.invite-url { flex: 1; min-width: 0; font-size: 12px; padding: 8px 10px; }
+.invite-copy { flex: none; background: #fff; color: var(--ui); box-shadow: none; }
+.invite-list { margin-top: 14px; }
+.invite-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, .18);
+}
+.invite-row-body { flex: 1; min-width: 0; }
+.invite-row-expiry { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.invite-row-uses { font-size: 11px; color: var(--on-sea-3); margin-top: 2px; }
+.invite-row .btn-small { flex: none; padding: 0 12px; }
+.invite-revoke { color: #ffdad2; }
+/* ==== end コミュニティ ==== */

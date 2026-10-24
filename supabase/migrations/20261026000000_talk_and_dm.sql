@@ -27,8 +27,13 @@
 --       「だれか」、画面の headline の「だれか」）。古いコードや知らない描画が来ても「だれか」と出るだけ。
 --   よって (b)。さらに: post_id・comment_id・payload・island_id・event_id も NULL（会の投稿を入れると
 --   押せる人が絞れるため）。notification_feed が NULL の actor で「ほか -1人」を返さないよう others を 0 以上にする。
---   talk_wish は人数を数えない: 受け取る人に未読の talk_wish がすでにあれば、2通目は書かない
---   （未読の行の数で押した人数が分からない）。
+--   talk_wish は人数を数えない。間引き方は2つ（10/24 に変更。「24時間は足さない」はやめた。BAR の夜に
+--   2人目・3人目が押しても届かないのは困るため）:
+--     1. 受け取る人に「未読」の talk_wish がすでにあれば足さない（読む前に何人押しても「誰か」は1行。
+--        読んだあとに押されれば、すぐ新しい通知とプッシュが出る。未読の行の数で人数は分からない）。
+--     2. 同じ人から同じ人への talk_wish 通知は14日に1回まで（押す→取り消す→押すを繰り返しても増えない。
+--        いやがらせ対策）。記録は talk_wish_notices(from_id, to_id, notified_at)。全拒否の表で、
+--        受け取る人は読めない（押した人の情報は受け取る人から見えない）。通知を実際に書いたときだけ記録する。
 --
 -- 足すだけの変更で、何度流しても壊れない。古いコードは新しい表も関数も type も使わないので、
 -- そのまま動く。コードより前でも後でもよい。流すまでは、新しいコードが talk_stats の有無を見て
@@ -62,6 +67,16 @@ create table if not exists public.talk_wishes (
 );
 create index if not exists talk_wishes_to_idx      on public.talk_wishes (to_id);
 create index if not exists talk_wishes_created_idx on public.talk_wishes (created_at);
+
+-- 片思い通知を実際に書いた記録（同じ人から同じ人へは14日に1回まで）。押した人を含むので全拒否。
+create table if not exists public.talk_wish_notices (
+  from_id     uuid not null references public.accounts (id) on delete cascade,
+  to_id       uuid not null references public.accounts (id) on delete cascade,
+  notified_at timestamptz not null default now(),
+  primary key (from_id, to_id),
+  check (from_id <> to_id)
+);
+create index if not exists talk_wish_notices_at_idx on public.talk_wish_notices (notified_at);
 
 create table if not exists public.dm_rooms (
   id            uuid primary key default gen_random_uuid(),
@@ -108,21 +123,24 @@ create table if not exists public.talk_stats (
 -- 2. Privileges and row level security
 -- ===========================================================================
 alter table public.talk_wishes enable row level security;
+alter table public.talk_wish_notices enable row level security;
 alter table public.dm_rooms    enable row level security;
 alter table public.dm_messages enable row level security;
 alter table public.dm_blocks   enable row level security;
 alter table public.talk_stats  enable row level security;
 
-revoke all on public.talk_wishes, public.dm_rooms, public.dm_messages,
+revoke all on public.talk_wishes, public.talk_wish_notices, public.dm_rooms, public.dm_messages,
               public.dm_blocks, public.talk_stats
   from anon, authenticated;
 
 -- talk_wishes と talk_stats: 誰も入れない policy を1つだけ。サーバーのキー(service_role)は RLS を通らない。
 drop policy if exists talk_wishes_none on public.talk_wishes;
+drop policy if exists talk_wish_notices_none on public.talk_wish_notices;
 drop policy if exists talk_stats_none  on public.talk_stats;
 create policy talk_wishes_none on public.talk_wishes for all using (false) with check (false);
+create policy talk_wish_notices_none on public.talk_wish_notices for all using (false) with check (false);
 create policy talk_stats_none  on public.talk_stats  for all using (false) with check (false);
-grant all on public.talk_wishes, public.talk_stats to service_role;
+grant all on public.talk_wishes, public.talk_wish_notices, public.talk_stats to service_role;
 
 -- dm_rooms: 読めるのは自分が入っている部屋だけ。書くのは関数だけ（insert/update/delete の権限も policy も無い）。
 drop policy if exists dm_rooms_select on public.dm_rooms;
@@ -316,13 +334,18 @@ begin
     raise exception 'この相手には押せません。';
   end if;
 
+  -- 同じ受け取る人に、別々の2人が同時に押しても、「未読の通知があれば足さない」の判定を
+  -- 見逃さない（2行出ない）よう、受け取る人ごとに順番に処理する。ロックを取る順は
+  -- いつも「受け取る人 → 2人1組」。この順を変えるとデッドロックになりうる。
+  perform pg_advisory_xact_lock(hashtextextended('talk-target:' || target::text, 0));
   -- 同じ2人が同時に押しても、お互いの行を見逃さないよう、組ごとに順番に処理する。
   lo := least(me, target);
   hi := greatest(me, target);
   perform pg_advisory_xact_lock(hashtextextended(lo::text || ':' || hi::text, 0));
 
-  -- ついでの掃除。2週間より古い片思いは消える。
+  -- ついでの掃除。2週間より古い片思いと、2週間より古い「通知を書いた記録」は消える。
   delete from public.talk_wishes where created_at < now() - interval '14 days';
+  delete from public.talk_wish_notices where notified_at < now() - interval '14 days';
 
   -- すでに部屋がある（両思い済み）。何も増やさない。
   select r.id into found_room from public.dm_rooms r where r.user_a = lo and r.user_b = hi;
@@ -351,14 +374,20 @@ begin
   on conflict (from_id, to_id) do nothing;
   get diagnostics new_rows = row_count;
   if new_rows > 0 then
-    -- 名前なし・会なし（actor_id, post_id などはすべて NULL）。受け取る人に直近24時間の
-    -- talk_wish があれば（読んだかどうかに関係なく）足さない。行の数で押した人数が分からないように、
-    -- そして「押す→取り消す→押す」で匿名の通知を送り続けられないように。
-    insert into public.notifications (recipient_id, actor_id, type)
-    select target, null::uuid, 'talk_wish'
-     where not exists (select 1 from public.notifications n
-                        where n.recipient_id = target and n.type = 'talk_wish'
-                          and n.created_at > now() - interval '24 hours');
+    -- 名前なし・会なし（actor_id, post_id などはすべて NULL）。足さないのは次の2つのとき:
+    --   1. 受け取る人に未読の talk_wish がすでにある（読む前は何人押しても「誰か」は1行）
+    --   2. 同じ人から同じ人へ、14日以内に通知を書いている（押す→取り消す→押すで送り続けられない）
+    -- 読まれたあとに別の人（または14日後の同じ人）に押されれば、すぐ新しい通知になる。
+    if not exists (select 1 from public.notifications n
+                    where n.recipient_id = target and n.type = 'talk_wish' and n.read_at is null)
+       and not exists (select 1 from public.talk_wish_notices k
+                        where k.from_id = me and k.to_id = target
+                          and k.notified_at > now() - interval '14 days') then
+      insert into public.notifications (recipient_id, actor_id, type)
+      values (target, null::uuid, 'talk_wish');
+      insert into public.talk_wish_notices (from_id, to_id) values (me, target)
+      on conflict (from_id, to_id) do update set notified_at = now();
+    end if;
     insert into public.talk_stats (day, pressed) values (today, 1)
     on conflict (day) do update set pressed = public.talk_stats.pressed + 1;
   end if;

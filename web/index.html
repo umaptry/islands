@@ -48,6 +48,7 @@
     <h2>同じ場の中に、<br>まだ知らない接点がある。</h2>
     <p class="welcome-lead">ひとこと書くだけで、<br>話の合う人が見つかる地図。</p>
     <svg class="welcome-art" viewBox="0 0 200 200" aria-hidden="true" focusable="false"><g fill="none" stroke="rgba(255,255,255,.5)" stroke-dasharray="3 5"><circle cx="100" cy="108" r="52"/><circle cx="100" cy="108" r="82"/></g><ellipse cx="100" cy="108" rx="43" ry="30" fill="#9DD9F5"/><ellipse cx="100" cy="108" rx="37" ry="25" fill="#EAD39A"/><ellipse cx="100" cy="107" rx="29" ry="19" fill="#94C973"/><ellipse cx="100" cy="106" rx="20" ry="14" fill="#5AAE72"/><ellipse cx="160" cy="60" rx="26" ry="19" fill="#9DD9F5"/><ellipse cx="160" cy="60" rx="20" ry="14" fill="#EAD39A"/><ellipse cx="160" cy="59" rx="12" ry="8" fill="#94C973"/><ellipse cx="160" cy="58" rx="3" ry="3" fill="#5AAE72"/><ellipse cx="38" cy="64" rx="24" ry="18" fill="#9DD9F5"/><ellipse cx="38" cy="64" rx="18" ry="13" fill="#EAD39A"/><ellipse cx="38" cy="63" rx="10" ry="7" fill="#94C973"/><ellipse cx="38" cy="62" rx="3" ry="2" fill="#5AAE72"/><ellipse cx="44" cy="162" rx="25" ry="18" fill="#9DD9F5"/><ellipse cx="44" cy="162" rx="19" ry="13" fill="#EAD39A"/><ellipse cx="44" cy="161" rx="11" ry="7" fill="#94C973"/><ellipse cx="44" cy="160" rx="3" ry="2" fill="#5AAE72"/><ellipse cx="162" cy="158" rx="24" ry="18" fill="#9DD9F5"/><ellipse cx="162" cy="158" rx="18" ry="13" fill="#EAD39A"/><ellipse cx="162" cy="157" rx="10" ry="7" fill="#94C973"/><ellipse cx="162" cy="156" rx="3" ry="2" fill="#5AAE72"/><g transform="translate(100 104) scale(1.25)"><circle cx="0" cy="0" r="10" fill="#FF5A5F" stroke="#fff" stroke-width="1.6"/><text x="0" y="3.6" fill="#fff" font-size="10" font-weight="700" text-anchor="middle" font-family="sans-serif">あ</text></g><g transform="translate(160 58) scale(0.8)"><circle cx="0" cy="0" r="10" fill="#FF8A1F" stroke="#fff" stroke-width="1.6"/><text x="0" y="3.6" fill="#fff" font-size="10" font-weight="700" text-anchor="middle" font-family="sans-serif">K</text></g><g transform="translate(38 62) scale(0.8)"><circle cx="0" cy="0" r="10" fill="#FF5A5F" stroke="#fff" stroke-width="1.6"/><text x="0" y="3.6" fill="#fff" font-size="10" font-weight="700" text-anchor="middle" font-family="sans-serif">M</text></g><g transform="translate(44 160) scale(0.8)"><circle cx="0" cy="0" r="10" fill="#FF8A1F" stroke="#fff" stroke-width="1.6"/><text x="0" y="3.6" fill="#fff" font-size="10" font-weight="700" text-anchor="middle" font-family="sans-serif">S</text></g><g transform="translate(162 156) scale(0.8)"><circle cx="0" cy="0" r="10" fill="#FF5A5F" stroke="#fff" stroke-width="1.6"/><text x="0" y="3.6" fill="#fff" font-size="10" font-weight="700" text-anchor="middle" font-family="sans-serif">R</text></g></svg>
+    <p class="invite-only-note" id="welcomeInviteNote" hidden></p>
     <div id="welcomeOAuth"></div>
     <p class="legal-note legal-note-top">登録・ログインすると、<a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したことになります。</p>
     <div class="divider" id="welcomeDivider" hidden><span>または</span></div>
@@ -65,6 +66,7 @@
 
     <div class="auth-step" data-step="email">
       <h2 class="screen-title">はじめる</h2>
+      <p class="invite-only-note" id="authInviteNote" hidden></p>
       <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
       <div id="registerFields" hidden>
         <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
@@ -97,6 +99,23 @@
       <button class="btn btn-block" id="authVerify" disabled>次へ</button>
       <button class="btn btn-quiet btn-block" id="authBack">メールアドレスを入れ直す</button>
     </div>
+  </div>
+</section>
+
+<!-- ============ 2b. invite (#/invite/:code) ============ -->
+<section id="invite" class="screen tinted">
+  <div class="scroller auth-scroll">
+    <h1 class="brand-inline">islands</h1>
+    <h2 class="screen-title" id="inviteTitle">招待を確認しています</h2>
+    <p class="lede" id="inviteLede"></p>
+    <div class="error" id="inviteError" role="alert"></div>
+    <div id="inviteOAuth"></div>
+    <button class="btn btn-block" id="inviteJoin" type="button" hidden>このコミュニティに参加する</button>
+    <button class="btn btn-block" id="inviteRegister" type="button" hidden>メールで登録</button>
+    <p class="returning" id="inviteReturning" hidden>すでにアカウントがある人は</p>
+    <button class="btn btn-outline btn-block" id="inviteLogin" type="button" hidden>ログイン</button>
+    <button class="btn btn-quiet btn-block" id="inviteHome" type="button" hidden>最初の画面へ</button>
+    <p class="legal-note" id="inviteLegal" hidden>続けると、<a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したことになります。</p>
   </div>
 </section>
 
@@ -184,6 +203,7 @@
   </div>
 
   <div class="scroller">
+    <p class="compose-community" id="composeCommunity" hidden></p>
     <p class="lede" id="composeLede">やってきたこと・やってみたいことを書いてください。<br>この文章だけで、地図の中のどこに立つかが決まります。</p>
 
     <div class="examples" id="composeExamples" hidden>
@@ -304,6 +324,7 @@
   <canvas id="stage"></canvas>
 
   <div class="map-top">
+    <button class="community-pill" id="mapCommunity" type="button" hidden></button>
     <div class="search-row">
       <div class="search">
         <span class="search-icon" aria-hidden="true"></span>
@@ -341,6 +362,14 @@
     <button class="round-button" id="mapOverview" type="button" aria-label="地図全体を見る">
       <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.9 5.6 3.9 9S14.600 18.400 12 21c-2.600-2.600-3.900-5.600-3.900-9S9.400 5.600 12 3Z"/></svg>
     </button>
+  </div>
+  <div class="map-notice" id="mapNotice" hidden>
+    <div class="map-notice-card">
+      <p class="map-notice-title" id="mapNoticeTitle"></p>
+      <p class="map-notice-sub" id="mapNoticeSub"></p>
+      <button class="btn btn-small" id="mapNoticeLogin" type="button" hidden>ログイン</button>
+      <button class="btn btn-small" id="mapNoticeRetry" type="button" hidden>もう一度読み込む</button>
+    </div>
   </div>
   <div class="map-status" id="mapStatus" role="status" hidden>
     <span id="mapStatusText"></span>

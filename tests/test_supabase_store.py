@@ -33,7 +33,10 @@ SERVICE_KEY = "test-service-role-key"
 TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notifications": {},
           "notification_settings": {}, "islands_state": {}, "island_events": {},
           "post_views": {}, "push_config": {}, "push_subscriptions": {}, "push_presence": {},
-          "talk_stats": {}}
+          "talk_stats": {}, "communities": {}, "community_members": {}, "app_settings": {}}
+# The accounts BEFORE INSERT trigger of the communities migration: while "on", a NEW account
+# (no row yet, no claim) is answered with the 400 PostgREST gives for its Japanese exception.
+INVITE_GUARD = {"on": False, "claimed": set()}
 # Tables the database does not have yet (before a migration is run): PostgREST answers 404.
 MISSING_TABLES = set()
 SEQUENCE = {"n": 0}
@@ -45,6 +48,8 @@ def reset():
         rows.clear()
     SEQUENCE["n"] = 0
     ISLAND_RUN["at"] = None
+    INVITE_GUARD["on"] = False
+    INVITE_GUARD["claimed"].clear()
     empty_push_config()
 
 
@@ -100,6 +105,8 @@ class FakePostgrest(BaseHTTPRequestHandler):
                     checks.append(lambda row, k=key, v=wanted: _text(row.get(k)) == v)
                 elif value == "is.null":
                     checks.append(lambda row, k=key: row.get(k) is None)
+                elif value == "not.is.null":
+                    checks.append(lambda row, k=key: row.get(k) is not None)
                 elif value.startswith("in."):
                     wanted = set(value[4:-1].split(","))
                     checks.append(lambda row, k=key, v=wanted: str(row.get(k)) in v)
@@ -192,6 +199,12 @@ class FakePostgrest(BaseHTTPRequestHandler):
 
         if parsed.path.rsplit("/", 2)[-2] == "rpc":
             return self._rpc(table, record)
+
+        if (table == "accounts" and INVITE_GUARD["on"] and isinstance(record, dict)
+                and record.get("id") not in TABLES["accounts"]
+                and record.get("id") not in INVITE_GUARD["claimed"]):
+            return self._send(400, {"code": "P0001", "details": None, "hint": "invite_required",
+                                    "message": "islands は招待制です。コミュニティの招待リンクから登録してください。"})
 
         rows = TABLES[table]
         select = parse_qs(parsed.query).get("select", ["*"])[0]
@@ -996,3 +1009,160 @@ def test_a_database_that_cannot_be_asked_raises_and_keeps_the_last_answer(flaky,
     flaky._talk_checked_at = None
     with pytest.raises(StoreError):
         flaky.talk_ready()
+
+
+# -- communities and invite links: features.communities follows the migration (2026-10-26) ----
+
+COMMUNITIES_SQL_WORDS = "islands は招待制です。コミュニティの招待リンクから登録してください。"
+
+
+def reset_communities(store):
+    MISSING_TABLES.discard("communities")
+    store._communities_checked_at = None
+    store._invite_only_checked_at = None
+    TABLES["communities"].clear()
+    TABLES["community_members"].clear()
+    TABLES["app_settings"].clear()
+    INVITE_GUARD["on"] = False
+    INVITE_GUARD["claimed"].clear()
+
+
+def add_community(name="BAR"):
+    """What the operator's create_community does: the first row of communities."""
+    community = str(uuid.uuid4())
+    TABLES["communities"][community] = {"id": community, "name": name}
+    return community
+
+
+def test_communities_are_off_until_the_table_exists_and_has_a_community(store):
+    reset_communities(store)
+    MISSING_TABLES.add("communities")
+    try:
+        assert store.communities_ready() is False
+        assert store.supports_communities is False
+        MISSING_TABLES.discard("communities")
+        assert store.communities_ready() is False, "the answer is kept for a minute"
+        store._communities_checked_at = None  # the minute is over
+        assert store.communities_ready() is False, (
+            "the table exists but nobody made a community yet: the new code behaves like the old one, "
+            "so a release that goes out before the first community does not show everybody an empty map")
+        add_community()
+        assert store.communities_ready() is False, "kept for a minute"
+        store._communities_checked_at = None
+        assert store.communities_ready() is True
+        assert store.supports_communities is True
+    finally:
+        reset_communities(store)
+
+
+def test_invite_only_is_false_before_the_migration_and_follows_app_settings_after(store):
+    reset_communities(store)
+    try:
+        MISSING_TABLES.add("communities")
+        assert store.invite_only() is False, "no table, no invite_only"
+        MISSING_TABLES.discard("communities")
+        add_community()
+        store._communities_checked_at = None
+        store._invite_only_checked_at = None
+        assert store.invite_only() is False, "no row: false"
+        TABLES["app_settings"]["invite_only"] = {"key": "invite_only", "value": True}
+        assert store.invite_only() is False, "cached for a minute"
+        store._invite_only_checked_at = None
+        assert store.invite_only() is True
+        TABLES["app_settings"]["invite_only"]["value"] = False
+        store._invite_only_checked_at = None
+        assert store.invite_only() is False
+    finally:
+        reset_communities(store)
+
+
+def test_membership_is_read_from_community_members(store):
+    reset_communities(store)
+    try:
+        who, community = str(uuid.uuid4()), str(uuid.uuid4())
+        assert store.is_community_member(community, who) is False
+        TABLES["community_members"]["x"] = {"id": "x", "community_id": community, "account_id": who,
+                                            "role": "member"}
+        assert store.is_community_member(community, who) is True
+        assert store.is_community_member(community, str(uuid.uuid4())) is False
+        assert store.is_community_member(str(uuid.uuid4()), who) is False
+    finally:
+        reset_communities(store)
+
+
+def test_the_posts_of_each_community_are_listed_for_lines_and_neighbours(store):
+    reset_communities(store)
+    try:
+        assert store.post_communities() == {}, "no community yet"
+        community, other = add_community(), add_community("もう一つ")
+        store._communities_checked_at = None  # the minute is over
+        author = account(store)
+        a = store.insert_post({**sample(author), "community_id": community})
+        b = store.insert_post({**sample(author), "community_id": other})
+        store.insert_post(sample(author))   # no community: not listed
+        assert store.post_communities() == {a["id"]: community, b["id"]: other}
+        MISSING_TABLES.add("communities")
+        store._communities_checked_at = None
+        assert store.post_communities() == {}, "before the migration there is nothing to ask"
+    finally:
+        reset_communities(store)
+
+
+def test_a_post_carries_its_community_and_the_read_gives_it_back(store):
+    reset_communities(store)
+    try:
+        author, community = account(store), add_community()
+        created = store.insert_post({**sample(author), "community_id": community})
+        assert created["community_id"] == community
+        assert store.get_post(created["id"])["community_id"] == community
+        plain = store.insert_post(sample(author))
+        assert plain["community_id"] is None
+        assert store.get_post(plain["id"])["community_id"] is None
+    finally:
+        reset_communities(store)
+
+
+def test_before_the_migration_a_community_id_is_never_sent_or_asked_for(store):
+    reset_communities(store)
+    MISSING_TABLES.add("communities")
+    try:
+        author = account(store)
+        created = store.insert_post({**sample(author), "community_id": str(uuid.uuid4())})
+        assert "community_id" not in TABLES["posts"][created["id"]], "never written to a database without it"
+        assert created["community_id"] is None and store.get_post(created["id"])["community_id"] is None
+        assert "community_id" not in store._post_columns()
+    finally:
+        reset_communities(store)
+
+
+def test_a_new_account_without_an_invite_is_refused_in_the_triggers_words(store):
+    from core.store import InviteRequired
+    reset_communities(store)
+    try:
+        existing = account(store)
+        INVITE_GUARD["on"] = True
+        with pytest.raises(InviteRequired) as caught:
+            store.upsert_account(str(uuid.uuid4()), {"display_name": "しんき"})
+        assert str(caught.value) == COMMUNITIES_SQL_WORDS and caught.value.status == 403
+        # the existing person's profile save (merge-duplicates) is not refused
+        assert store.upsert_account(existing, {"bio": "ふつうに保存"})["bio"] == "ふつうに保存"
+        # and a claimed new person can be made
+        claimed = str(uuid.uuid4())
+        INVITE_GUARD["claimed"].add(claimed)
+        assert store.upsert_account(claimed, {"display_name": "しょうたい"})["display_name"] == "しょうたい"
+    finally:
+        reset_communities(store)
+
+
+def test_any_other_bad_request_on_an_account_save_is_still_a_plain_store_error(store, monkeypatch):
+    class Bad:
+        status_code = 400
+        text = '{"code":"23514","message":"check violated"}'
+
+        def json(self):
+            return {"code": "23514", "message": "check violated"}
+
+    monkeypatch.setattr(store, "_send", lambda *a, **k: Bad())
+    with pytest.raises(StoreError) as caught:
+        store.upsert_account(str(uuid.uuid4()), {"display_name": "x"})
+    assert type(caught.value) is StoreError

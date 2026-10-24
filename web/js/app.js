@@ -25,12 +25,16 @@ import { setupProfile } from './screens/profile.js';
 import { setupDm } from './screens/dm.js';
 import { browserStorage, clearTalk, refreshTalk, talkAvailable } from './talk.js';
 import { mapLinkFor, postIdFromHash, savePendingPost, takePendingPost } from './return-post.js';
+import { setupInvite, settleSession } from './screens/invite.js';
+import { communitiesActive, dropCommunities, refreshCommunities } from './communities.js';
+import { parseInviteHash } from './community-rules.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/welcome', 'welcome');
 route('#/auth', 'auth');
 route('#/setup', 'setup');
 route('#/guidance', 'guidance');
+route('#/invite/:code', 'invite');
 route('#/map', 'map');
 route('#/post', 'compose');
 route('#/post/:id/edit', 'compose');
@@ -91,6 +95,7 @@ async function boot() {
   document.getElementById('mapVersionReload').addEventListener('click', () => location.reload());
   document.addEventListener('route:error', () => toast('読み込めませんでした。もう一度お試しください。'));
   setupAuth();
+  setupInvite();
   setupProfileSetup();
   setupGuidance();
   setupCompose();
@@ -116,9 +121,11 @@ async function boot() {
   if (redirect === 'failed') toast('ログインできませんでした。もう一度お試しください。');
 
   let invalidatedSession = false;
+  let accountRead = false;
   if (session.signedIn()) {
     try {
       const result = await api.get('/api/account/me');
+      accountRead = true;
       state.account = result.account;
       // A deleted user can still have an unexpired JWT in this browser.
       if (!state.account) {
@@ -131,6 +138,23 @@ async function boot() {
       // their place for no reason.
       if (error.status === 401) { session.signOut(); invalidatedSession = true; }
       else toast('接続できませんでした。あとでもう一度お試しください。');
+    }
+  }
+
+  // Communities. A waiting invite (kept across a Google sign-in, which wipes the
+  // address) is used now, before anything else decides where this person goes. On
+  // an invite link itself the page asks first, so it is not used behind their back.
+  // Only when the account was actually read: a server hiccup must not look like
+  // "a new person without an invite" and sign somebody out.
+  if (session.signedIn() && !invalidatedSession && accountRead && communitiesActive()) {
+    if (parseInviteHash(window.location.hash)) {
+      await refreshCommunities();
+    } else {
+      const settledInvite = await settleSession(state.account);
+      if (settledInvite.blocked) {
+        toast(settledInvite.message);
+        invalidatedSession = true;
+      }
     }
   }
 
@@ -191,6 +215,7 @@ async function boot() {
       state.notifySettings = null;
       paintBadge();
       clearTalk();
+      dropCommunities();
     }
     // Also rings on every token refresh; both only act when the person changed.
     syncRealtime();

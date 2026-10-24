@@ -124,16 +124,56 @@ set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4","
 select lives_ok($$select public.withdraw_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'withdraw works');
 select is((select count(*)::int from public.my_talk_state()), 0, 'and the press is gone');
 
--- 押す→取り消す→押す: 相手が読んだあとでも、24時間は新しい通知を作らない
+-- 読まれたあとは、別の人に押されればすぐ新しい通知になる（24時間待たない）
 reset role;
 update public.notifications set read_at = now() where type = 'talk_wish';
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4","role":"authenticated"}';
-select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'press again after a read');
-select lives_ok($$select public.withdraw_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'and withdraw again');
+select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$,
+                'another person presses after the notice was read');
 reset role;
-select is((select count(*)::int from public.notifications where type = 'talk_wish'), 1,
-          'press, withdraw, press does not make a new notice, even after it was read');
+select is((select count(*)::int from public.notifications where type = 'talk_wish'), 2,
+          'once read, the next press makes a new notice at once');
+select is((select count(*)::int from public.notifications where type = 'talk_wish' and read_at is null), 1,
+          'and only the new one is unread');
+select ok((select actor_id is null and post_id is null and payload is null
+             from public.notifications where type = 'talk_wish' and read_at is null),
+          'the new one is as nameless as the first');
+
+-- 押す→取り消す→押す: 同じ人から同じ人へは14日に1回まで（読まれたあとでも）
+update public.notifications set read_at = now() where type = 'talk_wish';
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2","role":"authenticated"}';
+select lives_ok($$select public.withdraw_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'withdraw again');
+select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'and press again after a read');
+reset role;
+select is((select count(*)::int from public.notifications where type = 'talk_wish'), 2,
+          'press, withdraw, press by the same person: no new notice within 14 days, even after a read');
+select is((select count(*)::int from public.talk_wish_notices), 2, 'two records: one per pair that was notified');
+
+-- 14日たてば、同じ人からの通知がまた出る
+update public.talk_wish_notices set notified_at = now() - interval '15 days'
+ where from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2';
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2","role":"authenticated"}';
+select lives_ok($$select public.withdraw_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'withdraw once more');
+select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'and press once more');
+reset role;
+select is((select count(*)::int from public.notifications where type = 'talk_wish'), 3,
+          'after 14 days the same person can notify again');
+select is((select count(*)::int from public.talk_wish_notices
+            where from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2'
+              and notified_at > now() - interval '1 minute'), 1, 'and the record is renewed');
+
+-- 後始末（guest two の片思いを取り下げる）と、通知を書いた記録は誰からも読めない
+update public.notifications set read_at = now() where type = 'talk_wish';
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4","role":"authenticated"}';
+select lives_ok($$select public.withdraw_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'guest two takes back');
+reset role;
+select ok(not has_table_privilege('authenticated', 'public.talk_wish_notices', 'SELECT'),
+          'the notice records cannot be read by the person who was pressed');
+select ok(not has_table_privilege('anon', 'public.talk_wish_notices', 'SELECT'), 'nor by anon');
 set local role authenticated;
 
 -- -----------------------------------------------------------------------

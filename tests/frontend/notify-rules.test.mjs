@@ -279,7 +279,7 @@ test('presence is sent when it changes and repeated before it runs out', () => {
 
 // ---------------------------------------------------------------- 「話してみたい」 and DM (2026-10-24)
 
-const LABEL = '話してみたい';
+const LABEL = 'もっと話したい';
 const AKI = '22222222-2222-4222-8222-222222222222';
 const talkRow = (type, extra = {}) => ({ id: `${type}-1`, type, unread: true, actor_id: AKI, post_id: null, created_at: '2026-10-30T20:00:00Z', ...extra });
 

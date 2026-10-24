@@ -25,6 +25,8 @@ import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
 import { browserStorage, refreshTalk } from '../talk.js';
 import { mapLinkFor, takePendingPost } from '../return-post.js';
+import { entryView, readPendingInvite } from '../community-rules.js';
+import { settleSession } from './invite.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
 
 // ---------------------------------------------------------------- welcome
@@ -35,7 +37,13 @@ export function setupWelcome() {
   $('welcomeBrowse').addEventListener('click', () => navigate('#/map'));
   screen('welcome', { enter() {
     const box = clear($('welcomeOAuth'));
-    const providers = config().oauth || [];
+    // With invite_only, accounts come from an invite link: no "create an account"
+    // here, only a way to log in and the sentence that says why.
+    const entry = entryView({ cfg: config(), hasInvite: Boolean(readPendingInvite(browserStorage())) });
+    $('welcomeInviteNote').hidden = !entry.note;
+    $('welcomeInviteNote').textContent = entry.note;
+    $('welcomeRegister').hidden = !entry.canRegister;
+    const providers = entry.canRegister ? (config().oauth || []) : [];
     providers.forEach((provider) => box.append(el('button', {
       className: `btn btn-block ${OAUTH[provider]?.className || ''}`,
       text: OAUTH[provider]?.register || `${provider}で登録`,
@@ -201,7 +209,10 @@ export function setupAuth() {
 
   screen('auth', {
     enter: (_params, query) => {
-      registerIntent = query?.get('intent') === 'register';
+      const entry = entryView({ cfg: config(), hasInvite: Boolean(readPendingInvite(browserStorage())) });
+      registerIntent = query?.get('intent') === 'register' && entry.canRegister;
+      $('authInviteNote').hidden = entry.canRegister;
+      $('authInviteNote').textContent = entry.note;
       $('registerFields').hidden = !registerIntent;
       $('auth').classList.toggle('register', registerIntent);
       $('authLede').textContent = registerIntent ? '下記の情報を入力してください。' : 'メールアドレスを入力してください。';
@@ -247,6 +258,15 @@ export async function afterSignIn() {
     return;
   }
   state.account = result.account;
+  // An invite waiting from before the sign-in is used now, before any profile is
+  // saved (a new account needs it to exist at all). Without one, where accounts
+  // come only by invitation, a person who is new here is turned away.
+  const settled = await settleSession(state.account);
+  if (settled.blocked) {
+    toast(settled.message);
+    await navigate('#/welcome');
+    return;
+  }
   if (!state.account || !state.account.display_name) {
     if (registerIntent && $('registerName').value.trim()) {
       try {

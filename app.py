@@ -74,6 +74,7 @@ from core.prompts import weekly_prompt
 from core import post_extras
 from core.config import (
     AWAY_DIGEST_COUNT,
+    COMMUNITY_ERROR_POST,
     DM_BODY_MAX,
     EXAMPLE_POSTS,
     EXTRA_PROMPTS,
@@ -140,7 +141,7 @@ from core.similarity import (
     shared_keywords,
     similarity_view,
 )
-from core.store import StoreError, TalkRefused, create_store
+from core.store import InviteRequired, Refused, StoreError, TalkRefused, create_store
 
 ROOT = Path(__file__).resolve().parent
 ARTIFACTS = Path(os.environ.get("MAP_ARTIFACTS_DIR") or str(ROOT / "artifacts"))
@@ -209,6 +210,7 @@ _islands_lock = threading.Lock()
 # comments straight to Supabase, so the server cannot know when a line changes;
 # it re-reads at most every CONNECTION_CACHE_SECONDS instead.
 _connections_cache = {"stamp": 0.0, "value": None}
+_community_connections_cache = {}   # community id -> {"stamp", "value"}: the lines of that community's map
 _connections_lock = threading.Lock()
 # Held while one tracking step runs in this process. The database claim
 # (claim_island_run) is what keeps two instances apart.
@@ -312,6 +314,13 @@ async def lifespan(_app):
             os.environ.get("EMBEDDING_CACHE_PATH", str(ROOT / ".cache" / "embeddings.sqlite3")))
         state["model"] = CachedEmbedder(state["model"], cache, state["manifest"]["embedding"])
     state["local_mode"] = state["store"].backend == "memory"
+    if state["local_mode"] and not local_mode_allowed():
+        # A production deploy that lost SUPABASE_URL / SUPABASE_SERVICE_KEY would otherwise quietly
+        # become an open server whose login hands the code out on screen and whose dev switches
+        # (the invite_only switch, expiring an invite) need no login. Stop instead.
+        raise RuntimeError(
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定のまま Cloud Run で起動しようとしました。"
+            "環境変数を確かめてください（手元モードは ISLANDS_LOCAL=1 のときだけ許されます）。")
     if _gemini and not state["local_mode"] and os.environ.get("MAP_RUNTIME_CHECK") != "1":
         raise RuntimeError("Production Gemini requires MAP_RUNTIME_CHECK=1 and the model-runtime migration")
     state["images"] = {}
@@ -324,6 +333,11 @@ async def lifespan(_app):
         poke_push_dispatch()
 
     if state["local_mode"]:
+        # The 「デモ」 community and its fixed invite code (for tests and for trying the screens
+        # by hand), and the optional switch for invite-only sign-up. Local mode only.
+        state["store"].seed_demo_community()
+        if os.environ.get("ISLANDS_LOCAL_INVITE_ONLY") == "1":
+            state["store"].set_invite_only(True)
         # Easy to miss otherwise: the app works perfectly, and then a restart
         # silently erases everyone who signed up.
         rule = "!" * 70
@@ -403,6 +417,9 @@ class PostCreate(BaseModel):
     prompt: str | None = None
     recruit_deadline: Any = None
     recruit_capacity: Any = None
+    # 2026-10-26. The community whose map this post belongs to. Ignored while
+    # features.communities is false; otherwise the author must be a member.
+    community_id: str | None = None
 
 
 class PostPreview(BaseModel):
@@ -495,15 +512,16 @@ def optional_user(request):
     return user_id
 
 
-def check_rate_limit(key):
+def check_rate_limit(key, maximum=None):
     if RATE_LIMIT_OFF:
         return True
+    maximum = RATE_LIMIT_MAX if maximum is None else maximum
     now = time.time()
     with _rate_lock:
         log = _rate_log[key]
         while log and now - log[0] > RATE_LIMIT_WINDOW:
             log.popleft()
-        if len(log) >= RATE_LIMIT_MAX:
+        if len(log) >= maximum:
             return False
         log.append(now)
     return True
@@ -542,6 +560,27 @@ def talk_on():
     production database; the memory store always can. The screen shows nothing while
     this is False, so the code may go out before the SQL."""
     return bool(getattr(state["store"], "supports_talk", True))
+
+
+def communities_on():
+    """Whether communities and invite links can run (2026-10-26).
+
+    False until supabase/migrations/20261026010000_communities_and_invites.sql has been run
+    on the production database; the memory store always can. While it is False the screen
+    keeps the old behaviour (one map for everybody, sign-up without an invite) and a
+    community_id sent with a post is ignored."""
+    return bool(getattr(state["store"], "supports_communities", True))
+
+
+def invite_only_on():
+    """Whether new accounts need an invite (app_settings.invite_only; about a minute of
+    cache in the production store). Always False while communities are off."""
+    if not communities_on():
+        return False
+    try:
+        return bool(state["store"].invite_only())
+    except StoreError:
+        return False
 
 
 def extras_for_new_post(payload, tags):
@@ -877,12 +916,17 @@ def fresh_lines_due():
         return True
 
 
-def connection_lines(force=False):
-    """Every line between two people, strongest first (cached briefly)."""
+def connection_lines(force=False, community=None):
+    """Every line between two people, strongest first (cached briefly).
+
+    With `community`, only that community's map: the lines come from interactions on its posts and
+    end on its posts (a person who is in two communities has a line on each map, never one that
+    runs to a post on another map)."""
     now = time.time()
     with _connections_lock:
-        cached = _connections_cache["value"]
-        if cached is not None and not force and now - _connections_cache["stamp"] < CONNECTION_CACHE_SECONDS:
+        holder = _connections_cache if not community else _community_connections_cache.get(community)
+        cached = holder["value"] if holder else None
+        if cached is not None and not force and now - holder["stamp"] < CONNECTION_CACHE_SECONDS:
             return cached
     store = state["store"]
     events = store.interaction_events(since=CONNECTIONS_SINCE)
@@ -890,6 +934,10 @@ def connection_lines(force=False):
     # person's post standing closest to it; somebody with no post that has a
     # place is drawn from their most energetic one.
     posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+    if community:
+        of_community = store.post_communities()
+        posts = [post for post in posts if of_community.get(post["id"]) == community]
+        events = [event for event in events if of_community.get(event.get("post_id")) == community]
     where, best = home_posts(posts)
     by_author = defaultdict(list)
     for post in posts:
@@ -912,13 +960,17 @@ def connection_lines(force=False):
             row[f"{side}_name"] = person.get("display_name", "")
             row[f"{side}_icon"] = person.get("icon_id", "0")
     with _connections_lock:
-        _connections_cache.update({"stamp": now, "value": value})
+        if community:
+            _community_connections_cache[community] = {"stamp": now, "value": value}
+        else:
+            _connections_cache.update({"stamp": now, "value": value})
     return value
 
 
 def invalidate_connections():
     with _connections_lock:
         _connections_cache["stamp"] = 0.0
+        _community_connections_cache.clear()
 
 
 def landmark_ranker(islands, posts_by_id):
@@ -1474,7 +1526,7 @@ def similarity_of(cosine):
     return cosine_percent(cosine, anchors)
 
 
-def neighbors_for(post_id, terms, limit):
+def neighbors_for(post_id, terms, limit, community=None):
     """Ranked neighbours with shared words, straight off the ANN index.
 
     Ranking is by the 448-dim cosine and never by distance on the map. The map
@@ -1482,7 +1534,14 @@ def neighbors_for(post_id, terms, limit):
     34% of true neighbours survive the projection.
     """
     try:
-        ranked = state["store"].nearest_posts(post_id, limit)
+        if community:
+            # Only people on the same community's map. The index knows nothing of communities, so
+            # ask for more and keep the ones that belong.
+            of_community = state["store"].post_communities()
+            ranked = [pair for pair in state["store"].nearest_posts(post_id, min(max(limit * 6, 60), 300))
+                      if of_community.get(pair[0]) == community][:limit]
+        else:
+            ranked = state["store"].nearest_posts(post_id, limit)
     except StoreError:
         return []
     return neighbor_rows(ranked, terms)
@@ -1567,7 +1626,10 @@ def config():
         "example_posts": list(EXAMPLE_POSTS),
         # post_extras: the database can keep the prompt / sign-up deadline / capacity.
         # False on a production database the 2026-10-20 SQL has not reached yet.
-        "features": {"post_extras": post_extras_on(), "talk": talk_on()},
+        "features": {"post_extras": post_extras_on(), "talk": talk_on(),
+                     "communities": communities_on()},
+        # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
+        "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
         "talk": {"label": TALK_LABEL},
         "island_colors": list(ISLAND_COLORS),
@@ -1648,6 +1710,10 @@ def health():
         talk_ok = bool(state["store"].talk_ready()) if store_ok else False
     except StoreError:
         talk_ok = False
+    try:
+        communities_ok = bool(state["store"].communities_ready()) if store_ok else False
+    except StoreError:
+        communities_ok = False
     return {
         "ok": True,
         "seed_count": len(state["seed_coords"]),
@@ -1664,6 +1730,7 @@ def health():
         "island_names_ready": island_names_ok,
         "post_extras_ready": post_extras_ok,
         "talk_ready": talk_ok,
+        "communities_ready": communities_ok,
         "ready": store_ok and compatible and not runtime["maintenance"] and island_names_ok,
         "not_ready_reasons": not_ready,
     }
@@ -1682,15 +1749,21 @@ def islands(response: Response):
 
 
 @app.get("/api/connections")
-def connections(response: Response, person: str = "", fresh: str = ""):
+def connections(response: Response, person: str = "", fresh: str = "", community: str = ""):
     """Lines between people. Public: a line is visible to everybody, not just the two.
 
     `fresh` comes from somebody who just reacted or wrote. In production that
     write goes to the database directly, so this server's cache cannot know of
     it: recount now (at most once every few seconds, whoever asks).
     """
+    scope = None
+    if community and communities_on():
+        try:
+            scope = str(uuid.UUID(community))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="コミュニティが不正です。")
     try:
-        rows = connection_lines(force=bool(fresh) and fresh_lines_due())
+        rows = connection_lines(force=bool(fresh) and fresh_lines_due(), community=scope)
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     if person:
@@ -2022,7 +2095,7 @@ def create_post(payload: PostCreate, request: Request):
         canon = {"body": body, "tags": clean_tags(payload.tags),
                  "motivation": clean_motivation(payload.motivation), "image_path": payload.image_path or None}
         # Only when given, so a retry key made before 2026-10-20 still finds its post.
-        for name in ("prompt", "recruit_deadline", "recruit_capacity"):
+        for name in ("prompt", "recruit_deadline", "recruit_capacity", "community_id"):
             if getattr(payload, name) is not None:
                 canon[name] = getattr(payload, name)
         canonical = json.dumps(canon, sort_keys=True, ensure_ascii=False, default=str)
@@ -2046,6 +2119,20 @@ def create_post(payload: PostCreate, request: Request):
 
     tags = clean_tags(payload.tags)
     extras = extras_for_new_post(payload, tags) if post_extras_on() else {}
+    # The community: only members post to it (checked here, because the server is the only
+    # writer of posts). Not sent, or communities not switched on yet: a post with none, as before.
+    if communities_on() and payload.community_id:
+        try:
+            community_id = str(uuid.UUID(payload.community_id))
+        except ValueError:
+            raise HTTPException(status_code=403, detail=COMMUNITY_ERROR_POST)
+        try:
+            member = store.is_community_member(community_id, user_id)
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。もう一度お試しください。")
+        if not member:
+            raise HTTPException(status_code=403, detail=COMMUNITY_ERROR_POST)
+        extras = {**extras, "community_id": community_id}
 
     x, y, cluster_id, terms, vector, centred = project(body)
     record = {
@@ -2326,7 +2413,9 @@ def neighbors(post: str = "", limit: int = ORBIT_NEIGHBOR_COUNT):
     return {
         "post": post,
         "island": island_of(post),
-        "neighbors": neighbors_for(post, origin.get("terms") or [], limit),
+        # A post of a community is near the people of that community only (its map).
+        "neighbors": neighbors_for(post, origin.get("terms") or [], limit,
+                                   community=origin.get("community_id") if communities_on() else None),
     }
 
 
@@ -2361,8 +2450,14 @@ def pair(a: str = "", b: str = ""):
 # nothing else running, and a test suite that needs no services.
 # --------------------------------------------------------------------------
 
+def local_mode_allowed():
+    """Local mode is a developer's stand-in. On Cloud Run (K_SERVICE is set) it is refused unless
+    ISLANDS_LOCAL=1 says it is meant."""
+    return not os.environ.get("K_SERVICE") or os.environ.get("ISLANDS_LOCAL") == "1"
+
+
 def require_local():
-    if not state.get("local_mode"):
+    if not state.get("local_mode") or not local_mode_allowed():
         raise HTTPException(status_code=404, detail="not found")
 
 
@@ -2647,6 +2742,9 @@ def _talk_refusal(error):
     return HTTPException(status_code=error.status, detail=str(error))
 
 
+_refusal = _talk_refusal  # the same shape for communities and invites (a Refused has a status)
+
+
 @app.get("/api/local/talk/peers")
 def local_talk_peers(request: Request):
     require_local()
@@ -2723,6 +2821,150 @@ def local_dm_block(payload: DmBlock, request: Request):
 def local_dm_unblock(blocked_id: str, request: Request):
     require_local()
     state["store"].unblock_dm(current_user(request), blocked_id)
+    return {"ok": True}
+
+
+# -- communities and invite links (2026-10-26) ------------------------------------
+# Stand-ins for the database functions the browser calls itself in a deployment
+# (check_invite, claim_invite, create_invite, list_invites, revoke_invite, my_communities,
+# community_map_posts). The words of a refusal are the database's. 4xx {detail} here,
+# PostgREST {message} there. The last three routes (create a community, the invite_only
+# switch, expiring an invite) have no SQL-function twin: in production an operator does
+# those in the SQL editor. They exist for tests and for trying the screens by hand.
+
+class InviteCode(BaseModel):
+    code: str
+
+
+class InviteCreate(BaseModel):
+    community_id: str
+    minutes: int = 60
+    until_end_of_day: bool = False
+
+
+class CommunityCreate(BaseModel):
+    name: str
+    slug: str | None = None
+
+
+class InviteOnlySwitch(BaseModel):
+    value: bool
+
+
+INVITE_CHECK_LIMIT = 100  # checks per rate-limit window and client address
+
+
+@app.get("/api/local/communities/mine")
+def local_my_communities(request: Request):
+    require_local()
+    return {"communities": state["store"].my_communities(current_user(request))}
+
+
+@app.get("/api/local/invites/check/{code}")
+def local_check_invite(code: str, request: Request):
+    """{"valid", "community_name", "reason"} and nothing else. Anybody may ask."""
+    require_local()
+    client = request.client.host if request.client else "?"
+    if not check_rate_limit(f"invite-check:{client}", INVITE_CHECK_LIMIT):
+        raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
+    return state["store"].check_invite(code)
+
+
+@app.post("/api/local/invites/claim")
+def local_claim_invite(payload: InviteCode, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return state["store"].claim_invite(user_id, payload.code)
+    except Refused as error:
+        raise _refusal(error)
+
+
+@app.post("/api/local/invites")
+def local_create_invite(payload: InviteCreate, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return state["store"].create_invite(user_id, payload.community_id, payload.minutes,
+                                            payload.until_end_of_day)
+    except Refused as error:
+        raise _refusal(error)
+
+
+@app.get("/api/local/invites")
+def local_list_invites(request: Request, community_id: str = ""):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"invites": state["store"].list_invites(user_id, community_id)}
+    except Refused as error:
+        raise _refusal(error)
+
+
+@app.post("/api/local/invites/{invite_id}/revoke")
+def local_revoke_invite(invite_id: str, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        state["store"].revoke_invite(user_id, invite_id)
+    except Refused as error:
+        raise _refusal(error)
+    return {"ok": True}
+
+
+@app.get("/api/local/communities/{community_id}")
+def local_community_info(community_id: str):
+    """{id, name} of one community (production: a read of the communities table)."""
+    require_local()
+    info = state["store"].community_info(community_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="not found")
+    return info
+
+
+@app.get("/api/local/communities/{community_id}/map")
+def local_community_map(community_id: str, min_x: float = MAP_MIN, min_y: float = MAP_MIN,
+                        max_x: float = MAP_MAX, max_y: float = MAP_MAX,
+                        limit: int = MAP_POST_LIMIT):
+    """community_map_posts: the same rows as /api/local/map, for one community only."""
+    require_local()
+    limit = max(1, min(int(limit), 2000))
+    return {"posts": state["store"].community_map_posts(community_id, min_x, min_y, max_x, max_y, limit)}
+
+
+@app.post("/api/local/communities")
+def local_create_community(payload: CommunityCreate, request: Request):
+    """Dev helper: make a community with the signed-in person as its admin (an operator's
+    `select create_community(...)` in production)."""
+    require_local()
+    user_id = current_user(request)
+    try:
+        community_id = state["store"].create_community(payload.name, payload.slug, user_id)
+    except StoreError:
+        raise HTTPException(status_code=422, detail="コミュニティ名は1〜40字で、スラッグは重ならないようにしてください。")
+    return {"community_id": community_id, "name": payload.name.strip(), "slug": payload.slug}
+
+
+@app.get("/api/local/settings/invite-only")
+def local_get_invite_only():
+    require_local()
+    return {"invite_only": state["store"].invite_only()}
+
+
+@app.post("/api/local/settings/invite-only")
+def local_set_invite_only(payload: InviteOnlySwitch):
+    """Dev helper: flip app_settings.invite_only (production: one UPDATE in the SQL editor)."""
+    require_local()
+    state["store"].set_invite_only(payload.value)
+    return {"invite_only": state["store"].invite_only()}
+
+
+@app.post("/api/local/invites/{invite_id}/expire")
+def local_expire_invite(invite_id: str):
+    """Dev helper: make an invite already past its expiry (for an 'expired link' test)."""
+    require_local()
+    if not state["store"].expire_invite(invite_id):
+        raise HTTPException(status_code=404, detail="見つかりませんでした。")
     return {"ok": True}
 
 
@@ -2825,6 +3067,9 @@ def account_update(payload: AccountPatch, request: Request):
                 _logger.exception("profile embedding failed")
                 fields.update({f"vec_{key}": None for key in touched})
         account = store.upsert_account(user_id, fields)
+    except InviteRequired as error:
+        # invite_only is on and this is a NEW account with no invite (the database trigger's words).
+        raise HTTPException(status_code=error.status, detail=str(error))
     except StoreError:
         raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
     if touched and any(fields.get(f"vec_{key}") is not None for key in people.VECTOR_FIELDS):

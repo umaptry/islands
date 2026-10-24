@@ -11,7 +11,7 @@ const AKI = '22222222-2222-4222-8222-222222222222';
 const BEN = '33333333-3333-4333-8333-333333333333';
 const CHI = '44444444-4444-4444-8444-444444444444';
 const ROOM = '55555555-5555-4555-8555-555555555555';
-const LABEL = '話してみたい';
+const LABEL = 'もっと話したい';
 
 const cfg = (talk, label = LABEL) => ({ features: { talk }, talk: { label } });
 
@@ -32,7 +32,7 @@ test('nothing shows unless features.talk is exactly true and a label arrived', (
 
 test('the label is never written in the rules: every sentence takes it as input', () => {
   const code = source.replace(/\/\/.*$/gm, '');
-  assert.ok(!code.includes(LABEL), 'the name 話してみたい must come from /api/config');
+  assert.ok(!code.includes(LABEL), 'the name もっと話したい must come from /api/config');
   assert.ok(rules.talkButtonText('none', 'ほげ').word === 'ほげ');
   assert.ok(rules.talkButtonText('pressed', 'ほげ').word.startsWith('ほげ'));
   assert.ok(rules.introPrompt('ほげ').title.includes('ほげ'));
