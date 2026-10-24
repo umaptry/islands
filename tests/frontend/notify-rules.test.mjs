@@ -24,7 +24,11 @@ test('every kind belongs to the category the server files it under', () => {
 test('the list says what the lock screen says', () => {
   const block = app.match(/PUSH_TEXT = \{([\s\S]*?)\n\}/)[1];
   const pushed = Object.fromEntries([...block.matchAll(/"(\w+)":\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
-  for (const [kind, text] of Object.entries(pushed)) assert.equal(rules.KIND_TEXT[kind], text, kind);
+  // The 「話してみたい」 kinds are built from the button's name: see the test further down.
+  for (const [kind, text] of Object.entries(pushed)) {
+    if (rules.TALK_TYPES.includes(kind)) continue;
+    assert.equal(rules.KIND_TEXT[kind], text, kind);
+  }
   assert.equal(rules.GROUP_TEXT, app.match(/PUSH_GROUP_TEXT = "([^"]+)"/)[1]);
   assert.ok(!/反応がない|反応がありません|だれも/.test(rules.KIND_TEXT.quiet_post));
 });
@@ -271,4 +275,124 @@ test('presence is sent when it changes and repeated before it runs out', () => {
   assert.equal(rules.shouldSendPresence(0, 75, 0, 1, every), true);
   assert.equal(rules.shouldSendPresence(0, 0, 0, every * 10, every), false);
   assert.equal(rules.shouldSendPresence(75, 0, 0, 1, every), true);
+});
+
+// ---------------------------------------------------------------- 「話してみたい」 and DM (2026-10-24)
+
+const LABEL = 'もっと話してみたい';
+const AKI = '22222222-2222-4222-8222-222222222222';
+const talkRow = (type, extra = {}) => ({ id: `${type}-1`, type, unread: true, actor_id: AKI, post_id: null, created_at: '2026-10-30T20:00:00Z', ...extra });
+
+test('the three new kinds are filed like the server files them, so the badge and switches follow', () => {
+  assert.equal(rules.categoryOf('talk_wish'), 'reaction');
+  assert.equal(rules.categoryOf('talk_match'), 'reaction');
+  assert.equal(rules.categoryOf('dm'), 'reply');
+  assert.deepEqual([...rules.TALK_TYPES], ['talk_wish', 'talk_match', 'dm']);
+  const settings = rules.defaultSettings();
+  for (const type of rules.TALK_TYPES) {
+    assert.equal(rules.interrupts({ type }, settings), true, `${type} interrupts while its switch is on`);
+  }
+  settings.reply.in_app = false;
+  assert.equal(rules.interrupts({ type: 'dm' }, settings), false, 'a DM follows the 返信・メッセージ switch');
+  assert.equal(rules.interrupts({ type: 'talk_wish' }, settings), true);
+});
+
+test('talk_wish says only 誰かが…, whoever the row names', () => {
+  const entry = rules.attachActors([talkRow('talk_wish', { actor_id: AKI })],
+    [{ id: AKI, display_name: 'あき', icon_id: '1', avatar_path: null }])[0];
+  assert.deepEqual(entry.actors, [], 'no face is attached');
+  assert.equal(entry.actor_id, null);
+  assert.equal(rules.headline(entry, LABEL), `誰かが、あなたと${LABEL}と言っています`);
+  assert.equal(rules.headline(entry, LABEL), '誰かが、あなたともっと話してみたいと言っています');
+  assert.equal(rules.bodyText(entry, LABEL), '地図で参加者の投稿を見てみよう');
+  // Even a row that already carries actors, with a name and "ほか N人", reveals nothing and counts nothing.
+  const loud = { ...talkRow('talk_wish'), actors: [{ display_name: 'あき' }], others: 3 };
+  const line = `${rules.headline(loud, LABEL)}${rules.bodyText(loud, LABEL)}`;
+  assert.ok(!line.includes('あき') && !line.includes('ほか') && !/\d/.test(line));
+  assert.ok(!rules.headline(entry, LABEL).includes('人'));
+});
+
+test('talk_match names the other person and points at the DM', () => {
+  const entry = { ...talkRow('talk_match'), actors: [{ id: AKI, display_name: 'あき' }] };
+  assert.equal(rules.headline(entry, LABEL), `あきさんと、お互いに『${LABEL}』でした。DMが開きました`);
+  assert.equal(rules.headline(entry, LABEL), 'あきさんと、お互いに『もっと話してみたい』でした。DMが開きました');
+  assert.equal(rules.bodyText(entry, LABEL), 'DMを開く');
+  const nameless = { ...talkRow('talk_match'), actors: [] };
+  assert.ok(rules.headline(nameless, LABEL).startsWith('相手さんと'));
+});
+
+test('a name that already ends in さん is not given a second さん', () => {
+  const entry = { ...talkRow('talk_match'), actors: [{ id: AKI, display_name: 'たなかさん' }] };
+  assert.equal(rules.headline(entry, LABEL), `たなかさんと、お互いに『${LABEL}』でした。DMが開きました`);
+});
+
+test('a DM row names the sender and never carries a message', () => {
+  const entry = { ...talkRow('dm'), actors: [{ id: AKI, display_name: 'あき' }], payload: { body: 'ひみつの本文' } };
+  assert.equal(rules.headline(entry, LABEL), 'あきさんからメッセージが届きました');
+  assert.equal(rules.bodyText(entry, LABEL), 'DMを開く');
+  assert.ok(!`${rules.headline(entry, LABEL)}${rules.bodyText(entry, LABEL)}`.includes('ひみつ'));
+});
+
+test('without a label (the feature off) these rows say something neutral and nothing else', () => {
+  for (const type of rules.TALK_TYPES) {
+    const entry = { ...talkRow(type), actors: [{ display_name: 'あき' }] };
+    assert.equal(rules.headline(entry, ''), 'お知らせが届いています');
+    assert.equal(rules.headline(entry), 'お知らせが届いています');
+    assert.equal(rules.bodyText(entry, ''), '');
+  }
+});
+
+test('the other kinds read exactly as before when no label is passed', () => {
+  const like = { id: 'l1', type: 'like', unread: true, actors: [{ display_name: 'ゆう' }], others: 2 };
+  assert.equal(rules.headline(like), 'ゆう ほか2人');
+  assert.equal(rules.bodyText(like), rules.GROUP_TEXT);
+  assert.equal(rules.bodyText({ type: 'comment', actors: [{}] }), rules.KIND_TEXT.comment);
+});
+
+test('the button name on the server is the agreed one, and the lock screen reads the same as the list', () => {
+  assert.equal(config.match(/TALK_LABEL\s*=\s*"([^"]+)"/)[1], LABEL);
+});
+
+test('the templates match the server\'s PUSH_TEXT once the button\'s name is put in', () => {
+  const block = app.match(/PUSH_TEXT = \{([\s\S]*?)\n\}/)[1];
+  const label = config.match(/TALK_LABEL\s*=\s*"([^"]+)"/)[1];
+  // PUSH_TEXT writes these as an f-string or "..." + TALK_LABEL + "...": evaluate both.
+  const serverText = (key) => {
+    const line = block.split('\n').map((l) => l.trim()).find((l) => l.startsWith(`"${key}":`));
+    assert.ok(line, `PUSH_TEXT has ${key}`);
+    const expression = line.replace(/^"\w+":\s*/, '').replace(/,$/, '');
+    return expression.split(/\s\+\s/).map((piece) => {
+      if (piece === 'TALK_LABEL') return label;
+      return piece.match(/^f?"(.*)"$/)[1].replace(/\{TALK_LABEL\}/g, label);
+    }).join('');
+  };
+  for (const type of rules.TALK_TYPES) {
+    const mine = rules.KIND_TEXT[type].replace('{label}', label);
+    assert.equal(mine, serverText(type), `${type} on the lock screen and in the list`);
+  }
+  // Wherever it lives, the anonymous one has no {name} and the DM has no body.
+  assert.ok(!rules.KIND_TEXT.talk_wish.includes('{name}'));
+  assert.ok(!/body|本文/.test(rules.KIND_TEXT.dm));
+});
+
+test('unreadDmCount: unread 両方 rows, optionally from one person', () => {
+  const other = '33333333-3333-4333-8333-333333333333';
+  const entries = [
+    talkRow('dm', { id: 'a' }), talkRow('talk_match', { id: 'b' }),
+    talkRow('dm', { id: 'c', actor_id: other }), talkRow('dm', { id: 'd', unread: false }),
+    talkRow('talk_wish', { id: 'e' }), talkRow('like', { id: 'f' }),
+  ];
+  assert.equal(rules.unreadDmCount(entries), 3);
+  assert.equal(rules.unreadDmCount(entries, AKI), 2);
+  assert.equal(rules.unreadDmCount(entries, other), 1);
+  assert.equal(rules.unreadDmCount(null), 0);
+});
+
+test('matchSignature changes only when a new 「お互いに」 row appears', () => {
+  const one = [talkRow('talk_match', { id: 'm1' }), talkRow('dm', { id: 'd1' })];
+  const same = [talkRow('talk_match', { id: 'm1' }), talkRow('dm', { id: 'd1' }), talkRow('dm', { id: 'd2' })];
+  const more = [...same, talkRow('talk_match', { id: 'm2', actor_id: 'x' })];
+  assert.equal(rules.matchSignature(one), rules.matchSignature(same), 'a DM message does not re-read the buttons');
+  assert.notEqual(rules.matchSignature(one), rules.matchSignature(more));
+  assert.equal(rules.matchSignature([]), '');
 });

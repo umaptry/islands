@@ -32,7 +32,8 @@ export function icon(name, size = 22) {
 
 export function setupIcons() {
   const ids = { composeBack: 'back', editBack: 'back', userBack: 'back', composeImageBtn: 'image',
-    composeImageClear: 'close', mapSearchClear: 'close', sheetClose: 'close' };
+    composeImageClear: 'close', mapSearchClear: 'close', sheetClose: 'close',
+    dmListBack: 'back', dmRoomBack: 'back' };
   Object.entries(ids).forEach(([id, name]) => document.getElementById(id)?.replaceChildren(icon(name)));
   document.querySelector('.search-icon')?.replaceChildren(icon('search', 18));
   document.querySelector('#mapFilterBtn > span')?.replaceChildren(icon('filter', 20));

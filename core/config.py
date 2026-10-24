@@ -364,7 +364,13 @@ NOTIFICATION_CATEGORY_OF = {
     # similar switch went away it follows the island category (in the app
     # only, never pushed; see NEVER_PUSHED and core/notifications.allows).
     "quiet_post": "island",
+    # 2026-10-26: 「話してみたい」と DM. They use the existing switches (the settings
+    # screen does not change): the talk lines are reactions, a new message is a reply.
+    "talk_wish": "reaction", "talk_match": "reaction", "dm": "reply",
 }
+# Only these are folded into one line ("A ほか2人") when they follow each other. The
+# talk lines are shown one by one: a talk_wish has no actor and no post.
+CHAINED_NOTIFICATION_TYPES = frozenset({"like", "help", "join"})
 # Types that stay inside the app whatever the settings say.
 NEVER_PUSHED = frozenset({"quiet_post"})
 REACTION_GROUP_MINUTES = 10
@@ -467,6 +473,48 @@ POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
 # 「参加者募集中」 posts may carry a sign-up deadline (a Japan-time date, open until
 # the end of that day) and a first-come capacity.
 RECRUIT_TAG = "参加者募集中"
+
+# 「もっと話してみたい」（仮名）: the button's name lives here and nowhere else. The screen
+# reads it from /api/config (talk.label), and the push texts are built from it.
+# NO romance words (the legal check depends on it).
+# The notice reads 「誰かが、あなたと{label}と言っています」, so the name must end like a verb
+# in the 〜たい / 〜したい form (話してみたい, 挨拶したい ...). A noun or 「気になる」 breaks the sentence.
+# After renaming: run the node tests (PUSH_TEXT vs screen texts) and retake the screenshots.
+TALK_LABEL = "もっと話してみたい"
+# Wishes older than this are swept by press_talk (and hidden by my_talk_state).
+TALK_WISH_DAYS = 14
+DM_BODY_MAX = 1000
+DM_ROOM_EXCERPT = 30
+# The words press_talk raises (PostgREST {"message"}; local mode 4xx {"detail"}).
+# A person who is not in a shared meeting and a blocked person get the SAME words.
+TALK_ERROR_LOGIN = "ログインしてください。"
+TALK_ERROR_SELF = "自分には押せません。"
+TALK_ERROR_NOT_PEER = "この相手には押せません。"
+DM_ERROR_SEND = "このDMには送信できません。"
+
+# Communities and invite links (2026-10-26, supabase/migrations/20261026010000_communities_and_invites.sql).
+# The words the database functions raise (PostgREST {"message"}; local mode 4xx {"detail"}).
+INVITE_ERROR_REQUIRED = "islands は招待制です。コミュニティの招待リンクから登録してください。"
+INVITE_ERROR_UNKNOWN = "招待リンクが見つかりません。管理者に新しいリンクをもらってください。"
+INVITE_ERROR_REVOKED = "招待リンクは止められています。管理者に新しいリンクをもらってください。"
+INVITE_ERROR_EXPIRED = "招待リンクの期限が切れています。管理者に新しいリンクをもらってください。"
+INVITE_ERROR_ADMIN_ONLY = "このコミュニティの招待リンクは、管理者だけが作れます。"
+INVITE_ERROR_ADMIN_ONLY_LIST = "このコミュニティの招待リンクは、管理者だけが見られます。"
+INVITE_ERROR_ADMIN_ONLY_REVOKE = "この招待リンクは、管理者だけが止められます。"
+INVITE_ERROR_MINUTES = "有効な時間は1分から30日の間で指定してください。"
+COMMUNITY_ERROR_POST = "このコミュニティに投稿できません。"
+# create_invite: minutes is 1..INVITE_MINUTES_MAX; until_end_of_day ends at 23:59 Japan time
+# (and moves to the next day when less than INVITE_END_OF_DAY_MIN_MINUTES would be left).
+INVITE_MINUTES_MAX = 43200
+INVITE_END_OF_DAY_MIN_MINUTES = 10
+INVITE_CODE_LENGTH = 24
+# Local mode only: the community and the fixed invite code made at start-up (for tests and
+# for trying the screens by hand). The code is long enough to look like a real one.
+LOCAL_DEMO_COMMUNITY_NAME = "デモ"
+LOCAL_DEMO_COMMUNITY_SLUG = "demo"
+LOCAL_DEMO_INVITE_CODE = "demo-invite-code-local-0001"
+# How long the server trusts what it read from app_settings (invite_only).
+INVITE_ONLY_CACHE_SECONDS = 60
 RECRUIT_CAPACITY_MIN = 1
 RECRUIT_CAPACITY_MAX = 999
 RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today

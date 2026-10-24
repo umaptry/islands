@@ -32,6 +32,10 @@ import { heatObject } from '../components/heatobject.js';
 import { ripple } from '../map/index.js';
 import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
 import { openOnMap, showTrial } from './map.js';
+import { browserStorage } from '../talk.js';
+import { takePendingPost } from '../return-post.js';
+import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
+import { postingTarget } from '../community-rules.js';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -47,6 +51,7 @@ let touched = false;     // the heat slider has been moved (a new post cannot go
 let heat = null;         // the HeatObject above the slider
 let selectedPrompt = null;   // "weekly", an extra prompt's key, or null
 let promptPosts = [];        // my posts, to hide the extra prompts already used
+let postBlocked = false;     // communities are on and I am in none: there is no map to post to
 
 // The prompts and the recruit fields exist only once the database has the columns.
 const extrasOn = () => Boolean(config().features?.post_extras);
@@ -78,7 +83,7 @@ function paintCounter() {
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
-  $('composeSubmit').disabled = submitting || length < min || length > max || !touched;
+  $('composeSubmit').disabled = submitting || postBlocked || length < min || length > max || !touched;
   // Say why the button waits, but only once the words are fine: a missing body
   // is already told by the counter.
   $('composeHint').hidden = Boolean(editing) || touched || length < min || length < 1 || length > max;
@@ -289,6 +294,27 @@ export function setupCompose() {
       requestKey = draft?.requestKey || null;
       requestBody = draft?.requestBody || null;
 
+      // 「{コミュニティ名} に投稿」: a post goes to the community whose map is open.
+      // My communities could not be read earlier: ask again, and if that fails too, say so
+      // (a post with no community is on nobody's map, and nobody is sent away over a bad connection).
+      if (communitiesActive() && !editing && !state.communitiesLoaded) await refreshCommunities();
+      const target = postingTarget({
+        on: communitiesActive(), editing: Boolean(editing), scope: currentScope(), known: state.communitiesLoaded,
+      });
+      postBlocked = target.blocked;
+      // Nothing to type into when nothing can be posted: the box is hidden, the ← still works.
+      $('compose').classList.toggle('compose-blocked', target.blocked);
+      $('composeCommunity').hidden = !target.show;
+      $('composeCommunity').textContent = target.blocked ? target.message : target.text;
+      $('composeCommunity').classList.toggle('blocked', target.blocked);
+      if (target.blocked && !target.unknown && firstPost) {
+        // A new account that is in no community has nowhere to post; do not leave it
+        // stuck on the first-post step. The map says what to do.
+        setOnboardingStep(null);
+        navigate('#/map', { replace: true });
+        return;
+      }
+
       $('composeTitle').textContent = editing ? '投稿を編集' : '新規投稿';
       $('composeSubmit').textContent = editing ? '保存' : '投稿する';
       $('composeMoveNotice').hidden = !editing;
@@ -387,6 +413,10 @@ async function submit() {
     tags: selectedTags(),
     motivation: Number($('composeMotivation').value),
   };
+  if (communitiesActive() && !editing) {
+    const scope = currentScope();
+    if (scope.mode === 'community') payload.community_id = scope.id;
+  }
   Object.assign(payload, extrasPayload({
     enabled: extrasOn(),
     editing: Boolean(editing),
@@ -427,7 +457,9 @@ async function submit() {
     // Straight onto the map, where the new ground rises and the face lands
     // (as in the design mock). The 「あなたの島」 page that used to come first
     // had only the island's name left on it once its list of near people went.
-    await landOnMap(result);
+    // A new person who arrived through a link to a post (#/map?post=...) lands on
+    // their own island first, and then the post they were invited to opens.
+    await landOnMap(result, firstPost ? takePendingPost(browserStorage()) : null);
     // The star is for other people; say so, or the author sees nothing happen.
     if (recruitNote(payload.tags)) toast(recruitNote(payload.tags).trim());
   } catch (error) {
@@ -444,8 +476,8 @@ async function submit() {
 }
 
 /** Open the new post on the map, with a ripple where it landed. */
-async function landOnMap(result) {
-  await openOnMap(result.id);
+async function landOnMap(result, thenOpen = null) {
+  await openOnMap(result.id, { thenOpen });
   ripple(result.x, result.y, { big: true });
 }
 

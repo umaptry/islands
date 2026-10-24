@@ -13,6 +13,7 @@ appears in the list; it just does not count towards the badge or pop up.
 from datetime import datetime, timedelta
 
 from core.config import (
+    CHAINED_NOTIFICATION_TYPES,
     NOTIFICATION_CATEGORIES,
     NOTIFICATION_CATEGORY_OF,
     REACTION_GROUP_MINUTES,
@@ -43,7 +44,9 @@ def group_feed(rows, limit=50):
     for row in ordered:
         category = category_of(row["type"])
         stamp = parse_time(row["created_at"])
-        if category == "reaction":
+        # Same as notification_feed(): only like/help/join fold together. talk_wish
+        # (no actor, no post) and talk_match are reactions by category but stand alone.
+        if row["type"] in CHAINED_NOTIFICATION_TYPES:
             chain = open_chain.get(row.get("post_id"))
             if chain and stamp - chain[1] <= window:
                 chain[0].append(row)

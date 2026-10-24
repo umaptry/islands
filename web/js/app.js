@@ -22,12 +22,19 @@ import { setupCompose, setupReveal } from './screens/compose.js';
 import { setupMapScreen, refreshMyPosts } from './screens/map.js';
 import { refreshNotifications, setupNotifications, paintBadge } from './screens/notifications.js';
 import { setupProfile } from './screens/profile.js';
+import { setupDm } from './screens/dm.js';
+import { browserStorage, clearTalk, refreshTalk, talkAvailable } from './talk.js';
+import { mapLinkFor, postIdFromHash, savePendingPost, takePendingPost } from './return-post.js';
+import { setupInvite, settleSession } from './screens/invite.js';
+import { communitiesActive, dropCommunities, refreshCommunities } from './communities.js';
+import { parseInviteHash } from './community-rules.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/welcome', 'welcome');
 route('#/auth', 'auth');
 route('#/setup', 'setup');
 route('#/guidance', 'guidance');
+route('#/invite/:code', 'invite');
 route('#/map', 'map');
 route('#/post', 'compose');
 route('#/post/:id/edit', 'compose');
@@ -35,11 +42,15 @@ route('#/notifications', 'notifications');
 route('#/me', 'me');
 route('#/me/edit', 'profileEdit');
 route('#/u/:id', 'user');
+route('#/dm', 'dmList');
+route('#/dm/:id', 'dmRoom');
 
 // Signed out, you can look at the map and read a post; you cannot write, react
 // or have an inbox. Sending somebody to the sign-in screen is a redirect and
 // not an error page, so the address they typed is the one they come back to.
-const NEEDS_ACCOUNT = new Set(['#/post', '#/post/:id/edit', '#/notifications', '#/me', '#/me/edit']);
+const NEEDS_ACCOUNT = new Set([
+  '#/post', '#/post/:id/edit', '#/notifications', '#/me', '#/me/edit', '#/dm', '#/dm/:id',
+]);
 
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
@@ -51,6 +62,8 @@ setGuard((pattern) => {
   if (NEEDS_ACCOUNT.has(pattern) && !signedIn) {
     return session.signedIn() ? '#/setup' : '#/auth';
   }
+  // The DM does not exist while features.talk is off (the code can ship first).
+  if (pattern.startsWith('#/dm') && !talkAvailable()) return '#/map';
   // A finished account has no business back on the sign-in or setup screens.
   if (signedIn && pattern === '#/auth') return '#/map';
   // The icon-photo step comes after the name is saved, so a named account is
@@ -82,6 +95,7 @@ async function boot() {
   document.getElementById('mapVersionReload').addEventListener('click', () => location.reload());
   document.addEventListener('route:error', () => toast('読み込めませんでした。もう一度お試しください。'));
   setupAuth();
+  setupInvite();
   setupProfileSetup();
   setupGuidance();
   setupCompose();
@@ -89,9 +103,15 @@ async function boot() {
   setupMapScreen();
   setupNotifications();
   setupProfile();
+  setupDm();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   screen('booting', {});
+
+  // A link to one post (#/map?post=<id>) is read first of all: the OAuth return
+  // below wipes the address, and an unfinished sign-up is sent elsewhere by the
+  // guard. Kept in storage, it is opened when the person is ready (see below).
+  const linkedPost = postIdFromHash(window.location.hash);
 
   // An OAuth round trip comes back with the token in the fragment, which is
   // also where the router looks. Consume it before the router runs, or the
@@ -101,9 +121,11 @@ async function boot() {
   if (redirect === 'failed') toast('ログインできませんでした。もう一度お試しください。');
 
   let invalidatedSession = false;
+  let accountRead = false;
   if (session.signedIn()) {
     try {
       const result = await api.get('/api/account/me');
+      accountRead = true;
       state.account = result.account;
       // A deleted user can still have an unexpired JWT in this browser.
       if (!state.account) {
@@ -119,6 +141,28 @@ async function boot() {
     }
   }
 
+  // Communities. A waiting invite (kept across a Google sign-in, which wipes the
+  // address) is used now, before anything else decides where this person goes. On
+  // an invite link itself the page asks first, so it is not used behind their back.
+  // Only when the account was actually read: a server hiccup must not look like
+  // "a new person without an invite" and sign somebody out.
+  if (session.signedIn() && !invalidatedSession && accountRead && communitiesActive()) {
+    if (parseInviteHash(window.location.hash)) {
+      await refreshCommunities();
+    } else {
+      const settledInvite = await settleSession(state.account);
+      if (settledInvite.blocked) {
+        toast(settledInvite.message);
+        invalidatedSession = true;
+      }
+    }
+  }
+
+  // Not signed in, or signed in but not yet through the first-post steps: the
+  // link waits. (A finished account is simply taken to it by the router.)
+  const settled = Boolean(state.account && state.account.display_name) && !onboardingStep();
+  if (linkedPost && (invalidatedSession || !settled)) savePendingPost(browserStorage(), linkedPost);
+
   // The first route is decided BEFORE the router starts, not after. Starting
   // the router and then navigating raced: the router's own apply() was still
   // awaiting the map's first fetch, so the second navigate found it busy and
@@ -126,8 +170,12 @@ async function boot() {
   // over a map screen.
   if (!window.location.hash || invalidatedSession) {
     let first = '#/welcome';
-    if (state.account && state.account.display_name) first = '#/map';
-    else if (session.signedIn()) first = '#/setup';
+    if (state.account && state.account.display_name) {
+      first = '#/map';
+      // Came back from Google (or any fresh load) with a post waiting for them.
+      const waiting = onboardingStep() ? null : takePendingPost(browserStorage());
+      if (waiting) first = mapLinkFor(waiting);
+    } else if (session.signedIn()) first = '#/setup';
     history.replaceState(null, '', first);
   }
 
@@ -145,6 +193,7 @@ async function boot() {
   if (state.account) {
     refreshMyPosts();
     refreshNotifications();
+    refreshTalk();
   }
   paintBadge();
   syncRealtime();
@@ -165,6 +214,8 @@ async function boot() {
       state.notifications = [];
       state.notifySettings = null;
       paintBadge();
+      clearTalk();
+      dropCommunities();
     }
     // Also rings on every token refresh; both only act when the person changed.
     syncRealtime();

@@ -124,6 +124,11 @@ jobs:
   database-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # The CLI's default, public.ecr.aws, refuses anonymous pulls from the shared runner IPs
+      # (toomanyrequests: Data limit exceeded, every run since 2026-10-23). Supabase publishes the
+      # same images on ghcr.io; the CLI reads this variable (internal/utils/docker.go, GetRegistry).
+      SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@v4

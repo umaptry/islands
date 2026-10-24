@@ -112,7 +112,7 @@ export function show(id) {
   $$('.screen').forEach((node) => node.classList.toggle('active', node.id === id));
   // The nav is hidden on the screens you have to finish before you can use the
   // app - a guidance you are half way through, a sign-in, a first profile.
-  const chrome = ['map', 'notifications', 'me', 'user', 'compose', 'profileEdit'].includes(id);
+  const chrome = ['map', 'notifications', 'me', 'user', 'compose', 'profileEdit', 'dmList'].includes(id);
   $('bottomNav').hidden = !chrome;
   document.body.classList.toggle('has-nav', chrome);
 }

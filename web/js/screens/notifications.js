@@ -15,11 +15,12 @@ import { api, data } from '../net.js';
 import { activeScreen, navigate, screen } from '../router.js';
 import { state } from '../state.js';
 import { openOnMap } from './map.js';
+import { openDmForNotification, refreshTalk, talkAvailable, talkLabel } from '../talk.js';
 import { icon } from '../icons.js';
 import { moment } from '../feedback.js';
 import { $, clear, clip, el, timeAgo } from '../ui.js';
 import {
-  arrivals, bodyText, defaultSettings, headline, knownIds, mergeSettings, rowIds, unreadCount,
+  arrivals, bodyText, defaultSettings, headline, knownIds, matchSignature, mergeSettings, rowIds, unreadCount,
 } from '../notify-rules.js';
 
 const ARRIVAL_MS = 5000;
@@ -33,11 +34,15 @@ let loading = null;        // the refresh in flight
 let again = false;         // asked for once more while it was in flight
 
 const TONES = { like: 'like', help: 'help', join: 'join', comment: 'comment', reply: 'comment',
-  connection: 'join', similar: 'help', island: 'join', quiet_post: 'help' };
+  connection: 'join', similar: 'help', island: 'join', quiet_post: 'help',
+  talk_wish: 'join', talk_match: 'join', dm: 'comment' };
 const BAND_ICONS = { like: '♥', help: '✋', join: '➕', comment: '💬', reply: '💬',
-  connection: '➕', similar: '✋', island: '📍', quiet_post: '✋' };
+  connection: '➕', similar: '✋', island: '📍', quiet_post: '✋',
+  talk_wish: '💬', talk_match: '💬', dm: '💬' };
 const ICONS = { like: 'heart', help: 'help', join: 'hand', comment: 'message', reply: 'message',
-  connection: 'hand', similar: 'user', island: 'pin', quiet_post: 'user' };
+  connection: 'hand', similar: 'user', island: 'pin', quiet_post: 'user',
+  talk_wish: 'user', talk_match: 'message', dm: 'message' };
+let matchSeen = null;      // the 「お互いに」 rows known, so the buttons re-read when a new one arrives
 
 /**
  * This person's three switches. Read once per account; a failed read leaves
@@ -107,8 +112,21 @@ async function load() {
   state.notifications = entries;
   state.unread = unreadCount(entries, settings);
   paintBadge();
+  followTalk(entries);
   if (activeScreen() === 'notifications' && signature(entries) !== painted) paintList();
   announce(entries, settings, account.id);
+}
+
+/** A new 「お互いに」 row means a DM has opened: re-read what the cards show. A new
+ * DM message while the list or a room is open is passed on to dm.js. */
+function followTalk(entries) {
+  if (!talkAvailable()) return;
+  const matches = matchSignature(entries);
+  if (matches !== matchSeen) {
+    matchSeen = matches;
+    refreshTalk();
+  }
+  if (['dmList', 'dmRoom'].includes(activeScreen())) document.dispatchEvent(new CustomEvent('dm:maybe-new'));
 }
 
 const signature = (entries) =>
@@ -128,11 +146,14 @@ function announce(entries, settings, accountId) {
   if (!fresh.length) return;
   moment(fresh.some((entry) => entry.type === 'connection') ? 'connect' : 'notify');
   if (activeScreen() === 'notifications') return;
-  const entry = fresh[0];
+  // The DM screens already show the message itself; a band for it would only repeat it.
+  const shown = ['dmList', 'dmRoom'].includes(activeScreen()) ? fresh.filter((row) => row.type !== 'dm') : fresh;
+  if (!shown.length) return;
+  const entry = shown[0];
   $('arrivalIcon').textContent = BAND_ICONS[entry.type] || '🔔';
   const text = $('arrivalText');
-  text.textContent = clip(`${headline(entry)}　${bodyText(entry)}`, 38);
-  if (fresh.length > 1) text.append(el('span', { className: 'arrival-more', text: `（ほか${fresh.length - 1}件）` }));
+  text.textContent = clip(`${headline(entry, talkLabel())}　${bodyText(entry, talkLabel())}`, 38);
+  if (shown.length > 1) text.append(el('span', { className: 'arrival-more', text: `（ほか${shown.length - 1}件）` }));
   const band = $('arrival');
   band.hidden = false;
   requestAnimationFrame(() => band.classList.add('on'));
@@ -219,10 +240,10 @@ function paintList() {
       el('span', { className: 'notif-icon' }, icon(ICONS[entry.type] || 'bell')),
       el('span', { className: 'notif-body' },
         el('span', { className: 'notif-head' },
-          el('b', { text: headline(entry) }),
+          el('b', { text: headline(entry, talkLabel()) }),
           el('span', { className: 'notif-time', text: timeAgo(entry.created_at) }),
         ),
-        el('span', { className: 'notif-text', text: bodyText(entry) }),
+        el('span', { className: 'notif-text', text: bodyText(entry, talkLabel()) }),
       ),
       entry.unread ? el('i', { className: 'notif-dot' }) : null,
     );
@@ -241,8 +262,31 @@ async function open(entry) {
       // worth interrupting anybody over; the next refresh corrects it either way.
     });
   }
+  // 「話してみたい」 rows lead somewhere of their own; the rest open their post.
+  if (entry.type === 'talk_wish') {
+    // The row carries no post on purpose (it would reveal who pressed), so it goes to the map.
+    await navigate('#/map');
+    return;
+  }
+  if (entry.type === 'talk_match' || entry.type === 'dm') {
+    await openDmForNotification(entry);
+    return;
+  }
   if (!entry.post_id) return;
   await openOnMap(entry.post_id);
+}
+
+/** Opening a room reads that person's DM rows: the dot and the badge go with it. */
+export function markDmNotificationsRead(otherId) {
+  const rows = state.notifications.filter((entry) => entry.unread && entry.actor_id === otherId
+    && (entry.type === 'dm' || entry.type === 'talk_match'));
+  if (!rows.length) return;
+  rows.forEach((entry) => { entry.unread = false; });
+  state.unread = unreadCount(state.notifications, state.notifySettings);
+  paintBadge();
+  data.markNotificationsRead(rows.flatMap(rowIds)).catch(() => {
+    // The next refresh corrects a lost read mark.
+  });
 }
 
 export function setupNotifications() {
