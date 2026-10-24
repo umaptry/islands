@@ -22,7 +22,7 @@ import {
 import { detectLandmasses, membership } from './landmass.js';
 import { cameraAt, viewHolding } from './camera-path.js';
 import { clearTownSpot, landmarkSlots } from './spots.js';
-import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
+import { drawKin, drawLinks, drawPlanes, islandFinder, waterBetween } from './lines.js';
 import { kinLines } from './kin.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
@@ -1007,7 +1007,7 @@ function connectionsInFilter() {
 
 /** The dotted lines to people like you (kin.js), for this frame. While
  * searching or filtering, only those whose both ends match, like the roads. */
-function kinPlan(meId, sifting) {
+function kinPlan(meId, sifting, ground = null, cells = NO_CELLS) {
   if (!meId || !state.myPosts.length || !state.neighbors.size) return [];
   const linked = new Set();
   state.connections.forEach((row) => {
@@ -1015,8 +1015,13 @@ function kinPlan(meId, sifting) {
     else if (row.b === meId) linked.add(row.a);
   });
   const neighbors = new Map([...state.neighbors].map(([id, held]) => [id, held.rows]));
+  // Listed on an island: trusted as it is. Only a post the island list lacks (zoomed in, only the islands
+  // in view are listed) is on the nearest island's word, and then the ground decides.
+  const listed = new Set(state.islands.flatMap((island) => island.post_ids || []));
+  const waterGap = ground ? (post, row) => !(listed.has(post.id) && listed.has(row.id))
+    && waterBetween(ground, cells, [post.x, post.y], [row.x, row.y]) : null;
   const lines = kinLines({
-    mine: state.myPosts, neighbors, islandOf: islandFinder(state.islands), linked, me: meId,
+    mine: state.myPosts, neighbors, islandOf: islandFinder(state.islands), linked, me: meId, waterGap,
   });
   if (!sifting) return lines;
   const mineById = new Map(state.myPosts.map((post) => [post.id, post]));
@@ -1190,7 +1195,7 @@ function renderMap(time) {
   const linePlan = drawLinks(ctx, lineView);
   // Dotted lines to people like you: yours alone, only close up (DETAIL_AT),
   // and not while the map is showing who joined a post.
-  if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting));
+  if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, view.posts, view.cells));
 
   if (far && freshIslands.size) drawFreshGlow(places, motion);
 

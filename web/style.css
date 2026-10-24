@@ -489,6 +489,11 @@ body.kb-open .island-card { bottom: calc(env(safe-area-inset-bottom) + 12px); }
 .post-author-text { display: flex; flex-direction: column; min-width: 0; }
 .post-author-name { font-weight: 700; font-size: 14px; }
 .post-author-time { font-size: 11px; color: var(--ink-3); }
+/* The avatar and name open that person's profile: tappable, but quiet (a faint arrow, an underline on hover). */
+.post-author { cursor: pointer; border-radius: 10px; }
+.post-author-name::after { content: ' ›'; color: var(--ink-3); font-weight: 400; }
+.post-author:hover .post-author-name { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ink-3); }
+.post-author:focus-visible { outline: 2px solid var(--ink-3); outline-offset: 2px; }
 .post-tools { position: relative; flex: none; }
 
 .post-menu { position: relative; }

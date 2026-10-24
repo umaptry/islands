@@ -319,6 +319,8 @@ function invitePanel(entry) {
     panel.append(error);
   }
 
+  // Opened straight by URL, my posts are not loaded yet: read them now so 「会の投稿も一緒に開く」 can be switched on.
+  if (!mine.length && state.account) loadMine();
   refresh();
   return panel;
 }

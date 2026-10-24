@@ -57,3 +57,15 @@ test('nothing to draw without islands, neighbours or a position', () => {
     mine: [{ id: 'm1', x: null, y: 0 }], neighbors: new Map([['m1', ranked]]), islandOf, me: 'me',
   }), []);
 });
+
+test('open water between two ends the island list calls one island makes it an arch, not straight dots', () => {
+  // Zoomed in, the nearest-island fallback can put two far islands together: the ground decides.
+  const ranked = [row('a1', 'a', 110), row('b1', 'b', 130)];
+  const waterGap = (post, other) => other.id === 'b1';
+  const lines = kinLines({ mine, neighbors: new Map([['m1', ranked]]), islandOf, me: 'me', waterGap });
+  assert.deepEqual(lines.map((line) => [line.person, line.across]), [['a', false], ['b', true]]);
+  // The arch quota is one: a second water-separated person is not drawn.
+  const two = [row('b1', 'b', 130), row('c1', 'c', 140)];
+  const only = kinLines({ mine, neighbors: new Map([['m1', two]]), islandOf, me: 'me', waterGap: () => true });
+  assert.equal(only.length, KIN_OTHER_ISLAND);
+});

@@ -29,7 +29,7 @@ import { noteLinks } from '../map/lines.js';
 import { isRecruiting, markRead } from '../map/reads.js';
 import { buzz, viewerKey } from '../feedback.js';
 import { playSe, setAmbient } from '../audio.js';
-import { browserStorage, refreshTalk, talkOptionsFor } from '../talk.js';
+import { browserStorage, refreshTalk } from '../talk.js';
 import { savePendingPost, validPostId } from '../return-post.js';
 import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
 import {
@@ -237,7 +237,7 @@ export async function openLinkedPost(postId) {
 }
 
 /** 「誰かが、あなたと…と言っています」 leads here: the 会 with its participants
- * shown, so the card of the person you might talk to is one tap away. */
+ * shown, so the person you might talk to (their card, then their profile) is one tap away. */
 export async function openParticipantsOf(postId) {
   if (!await navigate('#/map')) return;
   let post = state.postsById.get(postId) || null;
@@ -728,8 +728,6 @@ export async function openPost(postId, { expand = false, back = null } = {}) {
   // when the sheet is only a way to read the writer's words.
   if (!participantView()) markRead(post.id);
   await renderSheet(post, generation, back);
-  // Somebody may have joined the same 会 since the last read; the button follows.
-  refreshTalk({ maxAge: 20000 });
 }
 
 async function renderSheet(post, generation, back = null) {
@@ -767,7 +765,6 @@ async function renderSheet(post, generation, back = null) {
     onDelete: () => removeOwnPost(post),
     onReport: mine ? null : () => report(post),
     onSeeParticipants: isRecruiting(post) ? () => showParticipants(post) : null,
-    talk: talkOptionsFor(post),
     onSeeReactors: mine ? (kind) => openReactors({
       post, kind,
       onOpenProfile: (id) => {
@@ -870,7 +867,7 @@ export async function react(postId, kind) {
     // 手伝えるかも have nothing new to fetch.
     if (kind === 'join') {
       refreshConnections({ fresh: true });
-      // Joining or leaving a 会 changes who I may press 「話してみたい」 for.
+      // Joining or leaving a 会 changes who I may press 「話してみたい」 for (on their profile).
       refreshTalk();
     }
   } catch (error) {
@@ -1015,7 +1012,7 @@ function startPolling() {
     if (scope.mode === 'none') return;
     // Lines alongside the map, not after it: a slow map refresh held them up.
     await Promise.all([refreshMap(), refreshConnections()]);
-    await Promise.all([refreshIslands(), refreshMyReactions(), refreshTalk({ maxAge: 60000 })]);
+    await Promise.all([refreshIslands(), refreshMyReactions()]);
   }, POLL_MS);
 
   document.addEventListener('visibilitychange', async () => {
@@ -1104,7 +1101,6 @@ export function setupMapScreen() {
       refreshMyViews();
       // Not awaited: the map is already up, and the pill can arrive a moment later.
       loadDigest();
-      refreshTalk({ maxAge: 20000 });
       // #/map?post=<id>: a link to one post, which opens for anybody. A visitor
       // who is not signed in keeps it, so signing in or registering (even through
       // Google, which leaves the page) brings them back to it.

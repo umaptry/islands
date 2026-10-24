@@ -1,5 +1,5 @@
-// 「もっと話してみたい」 button: one part, used under a post card and on somebody's
-// profile. Three states - the name, the name with 「（押しました）」, and 「DM を開く」 -
+// 「もっと話してみたい」 button: one part, used only on somebody's profile (it is
+// about a person, never about a post). Three states - the name, the name with 「（押しました）」, and 「DM を開く」 -
 // and a small line under it that is there from the start and names the person.
 // Pressing again on the second asks before taking it back. The state lives in
 // state.talk (one record per person), so every copy on screen follows it.
@@ -18,7 +18,7 @@ subscribe(() => {
 });
 
 /**
- * `talk` is { state, name, onPress, onWithdraw, onOpenDm } (see talkOptionsFor in
+ * `talk` is { state, name, onPress, onWithdraw, onOpenDm } (see talkOptionsForPerson in
  * talk.js). Hidden while `state` is null: signed out, your own, no shared 会.
  */
 export function talkButton(talk) {

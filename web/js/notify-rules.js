@@ -54,7 +54,7 @@ export const KIND_TEXT = Object.freeze({
 
 /** The small line under a 「話してみたい」 / DM row. */
 export const TALK_HINT = Object.freeze({
-  talk_wish: '地図で参加者の投稿を見てみよう',
+  talk_wish: '参加者のプロフィールから押せます',
   talk_match: 'DMを開く',
   dm: 'DMを開く',
 });

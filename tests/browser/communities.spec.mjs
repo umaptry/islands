@@ -296,3 +296,17 @@ test('コミュニティの一覧を読めなかったとき、会員は「入�
   await expect(outsider.page.locator('#composeBody')).toBeHidden();
   await noSideScroll(outsider.page);
 });
+
+test('編集画面を URL で直接開いても、自分の投稿が読み込まれて「会の投稿も一緒に開く」が押せる', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '直接のご');
+  const bar = await makeCommunity(admin, `BAR ${unique()}`);
+  const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です');
+  await makeInviteLink(admin, bar.community_id);
+  // 開き直す: 地図を通らないので、自分の投稿はまだ読み込まれていない
+  await admin.page.goto(`/?again=${unique()}#/community/${bar.community_id}`);
+  const card = admin.page.locator(`#communityEditBody .community-invites[data-community-id="${bar.community_id}"]`);
+  await card.locator('.invite-qr').waitFor({ timeout: 15000 });
+  await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
+  await card.locator('.invite-with-post').check();
+  await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);
+});

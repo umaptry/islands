@@ -161,17 +161,11 @@ export function clearDm() {
 // ---------------------------------------------------------------- the button
 
 /**
- * `options.talk` for a card, or null where there is no button: signed out,
- * your own post, or the feature off. `state()` is read on every repaint, so the
- * button follows state.talk without the card being built again.
+ * The button's options for a person, or null where there is no button: signed out,
+ * yourself, or the feature off. Only the profile screen uses it: the button is about
+ * a person, never a post. `state()` is read on every repaint, so the button follows
+ * state.talk without being built again.
  */
-export function talkOptionsFor(post) {
-  if (!post) return null;
-  return talkOptionsForPerson(post.author_id, post.display_name);
-}
-
-/** The same options for a person (the profile screen uses this: one button, one
- * state, whichever screen it is on). */
 export function talkOptionsForPerson(target, name = '') {
   if (!talkAvailable() || !state.account || !target || target === state.account.id) return null;
   return {

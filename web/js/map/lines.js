@@ -273,6 +273,12 @@ export function hasWaterGap(land, length) {
   return runsOf(land).some((run) => !run.land && (run.to - run.from) * length >= GAP_WORLD);
 }
 
+/** Is there open water between two world points, over the given ground? (The guard against a
+ * nearest-island fallback calling two far islands one; see layout and kin.js.) */
+export function waterBetween(posts, cells, from, to) {
+  return hasWaterGap(sampleLand(posts, from, to, cells), Math.hypot(from[0] - to[0], from[1] - to[1]));
+}
+
 // The answers are kept per line until the ground changes, so no frame computes
 // them. The ground is the list of posts (a new array when the map fetches or the
 // ground is rebuilt), the coarse cells, the islands and the reach factor; a post

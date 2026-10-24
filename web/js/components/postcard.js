@@ -20,7 +20,6 @@ import { attachLongPress } from '../longpress.js';
 import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
 import { joinTerms, joinWord } from '../recruit-rules.js';
-import { talkButton } from './talk-button.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -71,10 +70,6 @@ const JOIN = { kind: 'join', label: '参加', countKey: 'join_count', tone: 'joi
  * @param options.onReact  (kind) => Promise
  * @param options.onEdit / onDelete / onOpenAuthor / onReport / onComments
  * @param options.onSeeParticipants  () => void, shown on 「参加者募集中」 posts
- * @param options.talk  { state, name, onPress, onWithdraw, onOpenDm } for 「話してみたい」; `state`
- *                      is 'none' | 'pressed' | 'matched' | null (or a function giving one).
- *                      Absent: no button. Build it with talkOptionsFor / talkOptionsForPerson (they fill `name`;
- *                      without it the small line says 「この人」). The button's name is /api/config talk.label.
  * @param options.onSeeReactors  (kind) => void, run when you hold いいね / 手伝えるかも on your own post
  * @param options.compact  drop the image and the footer (used in list contexts)
  */
@@ -157,7 +152,6 @@ export function postCard(post, options = {}) {
         on: { click: () => options.onSeeParticipants(post) },
       }));
     }
-    if (options.talk) foot.append(talkButton(options.talk));
     card.append(foot);
   }
   if (mine) {

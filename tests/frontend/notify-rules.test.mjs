@@ -304,7 +304,7 @@ test('talk_wish says only 誰かが…, whoever the row names', () => {
   assert.equal(entry.actor_id, null);
   assert.equal(rules.headline(entry, LABEL), `誰かが、あなたと${LABEL}と言っています`);
   assert.equal(rules.headline(entry, LABEL), '誰かが、あなたともっと話してみたいと言っています');
-  assert.equal(rules.bodyText(entry, LABEL), '地図で参加者の投稿を見てみよう');
+  assert.equal(rules.bodyText(entry, LABEL), '参加者のプロフィールから押せます');
   // Even a row that already carries actors, with a name and "ほか N人", reveals nothing and counts nothing.
   const loud = { ...talkRow('talk_wish'), actors: [{ display_name: 'あき' }], others: 3 };
   const line = `${rules.headline(loud, LABEL)}${rules.bodyText(loud, LABEL)}`;

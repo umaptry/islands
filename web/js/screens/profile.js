@@ -27,7 +27,7 @@ let editDraft = null;
 
 // ---------------------------------------------------------------- shared
 
-function header(account, { own } = {}) {
+function header(account, { own, talk } = {}) {
   const link = safeUrl(account.link_url);
   const photo = avatar(account, 80);
   photo.classList.add('profile-avatar');
@@ -48,6 +48,9 @@ function header(account, { own } = {}) {
         : null,
       el('span', { text: account.display_name || '' }),
     ),
+    // Right under the name: the first thing after who this person is. Hidden (null) for yourself,
+    // signed out, the feature off, or somebody you share no 会 with.
+    talk ? el('div', { className: 'profile-talk' }, talkButton(talk)) : null,
     account.bio ? el('p', { className: 'profile-bio', text: account.bio }) : null,
     link
       ? el('a', {
@@ -521,14 +524,10 @@ async function renderUser(accountId) {
     return;
   }
 
-  clear(body).append(header(account, { own: false }));
-  // The same button as under a post card; it stays hidden (null state) for yourself,
-  // signed out, the feature off, or somebody you share no 会 with.
+  // 「もっと話してみたい」 is about a person, so it lives only here, never on a post card.
   const talk = talkOptionsForPerson(accountId, account.display_name);
-  if (talk) {
-    body.append(el('div', { className: 'profile-talk' }, talkButton(talk)));
-    refreshTalk({ maxAge: 20000 });
-  }
+  clear(body).append(header(account, { own: false, talk }));
+  if (talk) refreshTalk({ maxAge: 20000 });
   const counts = countsFor(posts, links);
   const panel = el('div', { className: 'profile-panel' });
   body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, false, links, accountId)), panel);
