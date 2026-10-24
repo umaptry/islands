@@ -14,10 +14,17 @@ insert into public.accounts(id, display_name) values
   ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'reader'),
   ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'third')
 on conflict (id) do nothing;
-insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c)
+-- 2026-10-27: 投稿はコミュニティのもの。3人とも同じコミュニティのメンバー（メンバーだけが読める）。
+insert into public.communities(id, name) values ('04040404-0404-4404-8404-040404040404', 'social');
+insert into public.community_members(community_id, account_id) values
+  ('04040404-0404-4404-8404-040404040404', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+  ('04040404-0404-4404-8404-040404040404', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+  ('04040404-0404-4404-8404-040404040404', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c, community_id)
 select ('00000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', repeat('A', 40), i, i, 0,
-       array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448)
+       array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448),
+       '04040404-0404-4404-8404-040404040404'
   from generate_series(1, 2) i;
 
 -- -----------------------------------------------------------------------
@@ -154,8 +161,10 @@ reset role;
 -- -----------------------------------------------------------------------
 -- 6. The island record and the run lock
 -- -----------------------------------------------------------------------
-select ok(has_table_privilege('anon', 'public.island_events', 'SELECT'), 'anon can read changes');
-select ok(has_table_privilege('anon', 'public.islands_state', 'SELECT'), 'anon can read islands');
+select ok(not has_table_privilege('anon', 'public.island_events', 'SELECT'),
+          'anon cannot read changes (members-only, 2026-10-27)');
+select ok(not has_table_privilege('anon', 'public.islands_state', 'SELECT'),
+          'anon cannot read islands (members-only, 2026-10-27)');
 select ok(not has_table_privilege('anon', 'public.island_runs', 'SELECT'), 'the run lock is private');
 select ok(not has_table_privilege('anon', 'public.notification_settings', 'SELECT'),
           'settings are not public');

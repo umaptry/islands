@@ -62,7 +62,8 @@ select ok(not has_table_privilege('authenticated', 'public.communities', 'INSERT
           'a client cannot make a community');
 select ok(not has_table_privilege('authenticated', 'public.communities', 'UPDATE'), 'nor edit one');
 select ok(not has_table_privilege('authenticated', 'public.communities', 'DELETE'), 'nor delete one');
-select ok(has_table_privilege('anon', 'public.communities', 'SELECT'), 'names are public');
+select ok(not has_table_privilege('anon', 'public.communities', 'SELECT'),
+          'anon reads no community (members-only, 2026-10-27; the invite screen uses check_invite)');
 select ok(not has_table_privilege('authenticated', 'public.community_members', 'INSERT'),
           'members are added by functions only');
 select ok(not has_table_privilege('authenticated', 'public.community_members', 'UPDATE'),
@@ -81,7 +82,7 @@ select ok(not has_function_privilege('anon', 'public.revoke_invite(uuid)', 'exec
 select ok(not has_function_privilege('anon', 'public.my_communities()', 'execute'), 'anon has no communities');
 select ok(has_function_privilege('anon', 'public.check_invite(text)', 'execute'), 'anon can check an invite');
 select ok(has_function_privilege('anon', 'public.community_map_posts(uuid, double precision, double precision, double precision, double precision, integer)', 'execute'),
-          'anon can read a community map');
+          'anon can still call it (an old tab gets an empty answer, not an error; the rows are members-only)');
 select ok(not has_function_privilege('authenticated', 'public.create_community(text, text, uuid)', 'execute'),
           'only the operator makes communities');
 select ok(has_function_privilege('service_role', 'public.create_community(text, text, uuid)', 'execute'),
@@ -272,22 +273,36 @@ select bar, 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1a1', 'admin' from comm;
 -- -----------------------------------------------------------------------
 -- 7. コミュニティごとの地図
 -- -----------------------------------------------------------------------
+-- 2026-10-27: 地図もメンバーだけ。ログインしていない人は空、メンバーは自分のコミュニティだけ。
 set local role anon;
+set local request.jwt.claims to '{"role":"anon"}';
+select is((select count(*)::int from public.community_map_posts((select bar from comm), -10, -10, 10, 10, 100)), 0,
+          'anon gets an empty community map (members-only)');
+select is((select count(*)::int from public.map_posts(-10, -10, 10, 10, 100)), 0,
+          'and an empty map_posts');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1a1","role":"authenticated"}';
 select is((select count(*)::int from public.community_map_posts((select bar from comm), -10, -10, 10, 10, 100)), 1,
-          'BAR''s map has BAR''s post only');
+          'BAR''s map has BAR''s post only, for a member');
 select is((select body from public.community_map_posts((select bar from comm), -10, -10, 10, 10, 100)), 'BAR の投稿',
           'the right one');
-select is((select count(*)::int from public.community_map_posts((select other from comm), -10, -10, 10, 10, 100)), 1,
-          'the other map has its own post only');
+select is((select count(*)::int from public.community_map_posts((select other from comm), -10, -10, 10, 10, 100)), 0,
+          'a member of BAR gets nothing from the other community''s map');
 select is((select count(*)::int from public.community_map_posts(gen_random_uuid(), -10, -10, 10, 10, 100)), 0,
           'a community that does not exist has an empty map');
-select is((select count(*)::int from public.map_posts(-10, -10, 10, 10, 100)), 3,
-          'the old map_posts is unchanged and still shows everything');
+select is((select count(*)::int from public.map_posts(-10, -10, 10, 10, 100)), 1,
+          'map_posts shows only the communities I am in (and not the post with no community)');
 select is((select count(*)::int from public.community_map_posts((select bar from comm), 5, 5, 10, 10, 100)), 0,
           'the box still limits it');
+set local request.jwt.claims to '{"sub":"c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1a2","role":"authenticated"}';
+select is((select count(*)::int from public.community_map_posts((select other from comm), -10, -10, 10, 10, 100)), 1,
+          'the other community''s member reads the other map');
+select is((select count(*)::int from public.community_map_posts((select bar from comm), -10, -10, 10, 10, 100)), 0,
+          'and not BAR''s');
 reset role;
 update public.posts set deleted_at = now() where id = '00000000-0000-4000-8000-000000002001';
-set local role anon;
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1a1","role":"authenticated"}';
 select is((select count(*)::int from public.community_map_posts((select bar from comm), -10, -10, 10, 10, 100)), 0,
           'a deleted post leaves the map');
 reset role;

@@ -13,6 +13,11 @@ insert into public.accounts(id, display_name) values
   ('12121212-1212-4121-8121-121212121212', 'listener'),
   ('34343434-3434-4343-8343-343434343434', 'neighbour')
 on conflict (id) do nothing;
+-- 2026-10-27: 二人は同じコミュニティのメンバー（投稿のある通知は、そのメンバーだけが読める）。
+insert into public.communities(id, name) values ('07070707-0707-4707-8707-070707070707', 'push');
+insert into public.community_members(community_id, account_id) values
+  ('07070707-0707-4707-8707-070707070707', '12121212-1212-4121-8121-121212121212'),
+  ('07070707-0707-4707-8707-070707070707', '34343434-3434-4343-8343-343434343434');
 
 -- -----------------------------------------------------------------------
 -- 1. Server-only tables
@@ -75,19 +80,20 @@ select is((select count(*)::int from public.push_presence), 0, 'and the row is g
 -- -----------------------------------------------------------------------
 -- 4. Notifications: pushed_at, quiet_post, the trigger
 -- -----------------------------------------------------------------------
-insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c) values
+insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c, community_id) values
   ('00000000-0000-4000-8000-000000000701', '34343434-3434-4343-8343-343434343434',
    '近くの島の投稿', 1, 1, 0,
-   array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448));
+   array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448),
+   '07070707-0707-4707-8707-070707070707');
 
 select ok(not has_column_privilege('authenticated', 'public.notifications', 'pushed_at', 'UPDATE'),
           'the browser cannot mark its own notifications as pushed');
 select has_trigger('public', 'notifications', 'notifications_push', 'new rows poke the dispatcher');
 
 select lives_ok(
-  $$insert into public.notifications(recipient_id, type, post_id, payload) values
+  $$insert into public.notifications(recipient_id, type, post_id, payload, community_id) values
     ('12121212-1212-4121-8121-121212121212', 'quiet_post',
-     '00000000-0000-4000-8000-000000000701', '{}'::jsonb)$$,
+     '00000000-0000-4000-8000-000000000701', '{}'::jsonb, '07070707-0707-4707-8707-070707070707')$$,
   'quiet_post is a notification type');
 select throws_ok(
   $$insert into public.notifications(recipient_id, type) values
