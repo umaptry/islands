@@ -27,7 +27,9 @@ import {
 } from '../map/index.js';
 import { noteLinks } from '../map/lines.js';
 import { isRecruiting, markRead } from '../map/reads.js';
-import { buzz, viewerKey } from '../feedback.js';
+import { buzz, feedbackSettings, viewerKey } from '../feedback.js';
+import { SWITCH_FX_MS } from '../feedback-rules.js';
+import { currentTone, pageSeaFor } from '../screen-tone.js';
 import { playSe, setAmbient } from '../audio.js';
 import { browserStorage, refreshTalk } from '../talk.js';
 import { mapLinkFor, savePendingPost, validPostId } from '../return-post.js';
@@ -122,6 +124,12 @@ function applyIslands() {
   if (scope.mode === 'none') state.islands = [];
   else if (scoped()) state.islands = islandsInScope(rawIslands, new Set(state.posts.map((post) => post.id)), state.saturated);
   else state.islands = rawIslands;
+  // The lines (map/lines.js, kin.js) decide road / sea route / arch from the islands of the whole map, not
+  // the ones in view, so the same two posts are joined the same way at every zoom.
+  if (scope.mode === 'none') state.worldIslands = null;
+  else if (scoped() && state.worldPosts) {
+    state.worldIslands = islandsInScope(rawIslands, new Set(state.worldPosts.map((post) => post.id)), state.worldSaturated);
+  } else state.worldIslands = state.islands;
 }
 
 /** The sheet that lists my communities (the current one marked). An admin's row also has 「編集」, which
@@ -157,10 +165,28 @@ function editCommunity(id) {
   navigate(`#/community/${encodeURIComponent(id)}`);
 }
 
+/** The answer to switching community: a sound, a buzz (phones that have one), the sea washing over the
+ * map, and the new name settling into the header. Reduced motion keeps only the sound and the buzz. */
+function switchFeel() {
+  playSe('switch');
+  buzz('switch');
+  if (feedbackSettings().reduceMotion) return;
+  const button = $('mapCommunity');
+  button.classList.add('switched');
+  setTimeout(() => button.classList.remove('switched'), SWITCH_FX_MS + 100);
+  const wash = el('div', { className: 'switch-wash', attrs: { 'aria-hidden': 'true' } });
+  wash.style.setProperty('--wash-sea', pageSeaFor(currentTone()));
+  wash.style.setProperty('--wash-ms', `${SWITCH_FX_MS}ms`);
+  wash.addEventListener('animationend', () => wash.remove());
+  setTimeout(() => wash.remove(), SWITCH_FX_MS + 300);   // in case the animation never runs
+  $('map').append(wash);
+}
+
 async function switchCommunity(id) {
   closeSheet();
   if (id === scope.id) return;
   if (!chooseCurrent(id)) return;
+  switchFeel();
   applyScope(null);
   await loadScope();
   refreshNeighbors();
@@ -173,6 +199,8 @@ async function loadScope() {
   state.selected = null;
   rawIslands = [];
   state.islands = [];
+  state.worldIslands = null;
+  state.worldPosts = null;
   state.connections = [];
   state.terrainGrid = null;
   closeSheet();
@@ -326,6 +354,8 @@ export async function refreshMap({ fitFirst = false } = {}) {
           maxX: world.max + span, maxY: world.max + span }, config().limits.map_post_limit);
         if (generation !== mapRequest) return false;
         worldCount = all.length;
+        state.worldPosts = all;
+        state.worldSaturated = all.length >= config().limits.map_post_limit;
         fitCamera([], postsExtent(all, radiusOf), { reset: true });
       } else {
         const result = await api.get('/api/map/bounds');

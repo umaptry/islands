@@ -310,3 +310,58 @@ test('編集画面を URL で直接開いても、自分の投稿が読み込ま
   await card.locator('.invite-with-post').check();
   await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);
 });
+
+test('コミュニティを切り替えると、効果音・振動・海の波が出て、600ms 以内に消え、名前が入れ替わる', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '切替のひと');
+  await makeCommunity(admin, `一つ目 ${unique()}`);
+  await makeCommunity(admin, `二つ目 ${unique()}`);
+  await admin.context.addInitScript(() => {
+    window.__buzz = [];
+    Object.defineProperty(navigator, 'vibrate', { configurable: true, value: (pattern) => { window.__buzz.push(pattern); return true; } });
+  });
+  await admin.page.goto(`/?m=${unique()}#/map`);
+  await expect(admin.page.locator('#mapCommunity')).toContainText('▾');
+  await admin.page.locator('#mapCommunity').click();
+  await admin.page.locator('#sheet.on #communityList').waitFor();
+  const other = admin.page.locator('.community-row:not(.on)');
+  const otherName = (await other.locator('.stack-who').innerText()).trim();
+  await admin.page.evaluate(() => {
+    window.__washSeen = 0;
+    new MutationObserver(() => { if (document.querySelector('.switch-wash')) window.__washSeen += 1; })
+      .observe(document.getElementById('map'), { childList: true });
+  });
+  await other.click();
+  await expect(admin.page.locator('.switch-wash')).toBeAttached();
+  await expect(admin.page.locator('#mapCommunity')).toHaveClass(/switched/);
+  await admin.page.waitForTimeout(250);
+  await admin.page.screenshot({ path: `C:/Users/tatsu/Desktop/Claude Code/islands_261012/_pw_tmp/fb2/rest/switch-wash-${testInfo.project.name}.png` });
+  await expect(admin.page.locator('.switch-wash')).toHaveCount(0, { timeout: 1000 });
+  await expect(admin.page.locator('#mapCommunity')).toContainText(otherName);
+  expect(await admin.page.evaluate(() => window.__buzz)).toEqual([[12, 50, 22]]);
+  // 同じコミュニティをもう一度選んでも、何も起きない
+  await admin.page.locator('#mapCommunity').click();
+  await admin.page.locator('#sheet.on #communityList').waitFor();
+  await admin.page.locator('.community-row.on').click();
+  await admin.page.waitForTimeout(150);
+  await expect(admin.page.locator('.switch-wash')).toHaveCount(0);
+  expect(await admin.page.evaluate(() => window.__buzz)).toHaveLength(1);
+});
+
+test('動きを減らす設定のときは、波の演出は出さず、振動だけ出る', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '切替のふたり');
+  await makeCommunity(admin, `一つ目 ${unique()}`);
+  await makeCommunity(admin, `二つ目 ${unique()}`);
+  await admin.context.addInitScript(() => {
+    window.__buzz = [];
+    localStorage.setItem('islands.feedback', JSON.stringify({ sound: true, vibrate: true, reduceMotion: true }));
+    Object.defineProperty(navigator, 'vibrate', { configurable: true, value: (pattern) => { window.__buzz.push(pattern); return true; } });
+  });
+  await admin.page.goto(`/?m=${unique()}#/map`);
+  await expect(admin.page.locator('#mapCommunity')).toContainText('▾');
+  await admin.page.locator('#mapCommunity').click();
+  await admin.page.locator('#sheet.on #communityList').waitFor();
+  await admin.page.locator('.community-row:not(.on)').click();
+  await admin.page.waitForTimeout(300);
+  await expect(admin.page.locator('.switch-wash')).toHaveCount(0);
+  expect(await admin.page.evaluate(() => window.__buzz)).toEqual([[12, 50, 22]]);
+});

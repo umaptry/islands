@@ -20,13 +20,14 @@ export const KIN_OTHER_ISLAND = 1;
 /**
  * @param mine       your posts [{ id, x, y }]
  * @param neighbors  Map: your post id -> ranked rows [{ id, author_id, x, y }], best first
- * @param islandOf   (postId, [x, y]) -> the island it stands on, or null
  * @param linked     Set of account ids you already have a solid line with
  * @param me         your account id
- * @param waterGap   optional (fromPost, toRow) -> true when open water lies between the two ends. Zoomed in,
- *                   the island list holds only the islands in view and islandOf falls back to the nearest
- *                   centre, so two far-apart islands can read as one; the ground then decides (as in
- *                   lines.js). Asked only for pairs islandOf puts on the same island.
+ * @param islandOf   (postId, [x, y]) -> the island it stands on, or null. Must come from the islands of the WHOLE map, not the ones in view, and waterGap from
+ *                   the whole map's ground (index.js worldLines), so a pair is straight dots or an arch
+ *                   the same way at every zoom (the roads are decided the same way, lines.js decideLink).
+ * @param waterGap   optional (fromPost, toRow) -> true when open water lies between the two ends: with a
+ *                   nearest-centre fallback two far-apart islands can read as one, and the ground then
+ *                   decides (as in lines.js). Asked only for pairs islandOf puts on the same island.
  * @returns [{ key, from: { x, y }, to: { x, y }, across, mine, post, person, row }]
  */
 export function kinLines({ mine, neighbors, islandOf, linked = new Set(), me, waterGap = null }) {
