@@ -53,15 +53,19 @@ select is((select array_agg(account_id order by account_id) from public.talk_pee
           array['c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c402', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c403', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c405']::uuid[],
           'c04 peers: members of both communities');
 select is((select (public.press_talk('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401') ->> 'matched')::boolean), true, 'c04 presses back: a room opens (no meeting in common)');
+-- dm_rooms is closed to signed-in people: read it as the test's owner.
+reset role;
 select is((select event_post_id from public.dm_rooms
-            where user_a = least('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c404') and user_b = greatest('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c404')),
+            where user_a = least('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401'::uuid, 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c404'::uuid) and user_b = greatest('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401'::uuid, 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c404'::uuid)),
           null::uuid, 'a room without a common meeting has no event_post_id');
 
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c402","role":"authenticated"}';
 select is((select (public.press_talk('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401') ->> 'matched')::boolean), true, 'c02 presses back: a room opens');
+-- dm_rooms is closed to signed-in people: read it as the test's owner.
+reset role;
 select is((select event_post_id from public.dm_rooms
-            where user_a = least('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c402') and user_b = greatest('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401', 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c402')),
+            where user_a = least('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401'::uuid, 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c402'::uuid) and user_b = greatest('c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c401'::uuid, 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c402'::uuid)),
           '00000000-0000-4000-8000-000000004001'::uuid, 'a room with a common meeting carries it');
 
 -- c03 (K2 のみ) は c04 だけ。c01 とは何もない
