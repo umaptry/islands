@@ -55,6 +55,13 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False}
 
 
+def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):
+    data = client.get("/api/config").json()
+    assert [item["text"] for item in data["post_starters"]] == [
+        "昔がんばってたのは、", "最近はまってるのは、", "今度やってみたいのは、"]
+    assert [item["key"] for item in data["post_starters"]] == [item["key"] for item in data["extra_prompts"]]
+
+
 def test_health_reports_the_columns_and_ready_does_not_depend_on_them(client):
     data = client.get("/api/health").json()
     assert data["post_extras_ready"] is True

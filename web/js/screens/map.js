@@ -12,7 +12,7 @@ import {
   hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, subscribe, upsertPost, notify,
 } from '../state.js';
 import {
-  $, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
+  $, avatar, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
   sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
@@ -38,6 +38,7 @@ import {
   canPostFromMap, canSwitch, headerTitle, islandsInScope, linkIsClosed, mapNotice, postsExtent,
 } from '../community-rules.js';
 import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
+import { nearestPosts } from '../nearby-rules.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -252,7 +253,7 @@ export async function showTrial() {
 /** `thenOpen`: a post to open once the landing show of a brand-new post is over
  * (a new person who came through a link: first their own island, then the 会 they
  * were invited to). */
-export async function openOnMap(postId, { thenOpen = null } = {}) {
+export async function openOnMap(postId, { thenOpen = null, afterLand = null } = {}) {
   const fresh = justPosted(postId);
   // Any other post (a notification, somebody's page): go through the link, which also turns the map to the
   // post's own community and, if the viewer cannot read it, says so calmly.
@@ -262,10 +263,64 @@ export async function openOnMap(postId, { thenOpen = null } = {}) {
   }
   if (!await navigate('#/map')) return;
   if (fresh) {
-    playNewPost(fresh, thenOpen);
+    playNewPost(fresh, thenOpen, afterLand);
     return;
   }
   await openLinkedPost(thenOpen || postId);
+}
+
+// ---------------------------------------------------------------- nearby posts (after the first post)
+
+const NEARBY_WAIT_MS = 900;   // let the new island settle before the card comes up
+
+/** The posts of the map that is open, the whole of it (the viewport holds only the part in view). */
+async function nearbyCandidates() {
+  if (scope.mode === 'none') return [];
+  const world = config().world;
+  const span = (world.max - world.min) * 2;
+  try {
+    return await readPosts({ minX: world.min - span, minY: world.min - span,
+      maxX: world.max + span, maxY: world.max + span }, config().limits.map_post_limit);
+  } catch {
+    return state.posts;   // the ones already on screen are better than none
+  }
+}
+
+/** 「あなたの近くの投稿」: right after a first post, up to three people who stand nearest to it. `thenOpen`
+ * (the post an invite link led to) opens once the card is closed. */
+export async function showNearbyPosts(post, { thenOpen = null } = {}) {
+  await new Promise((resolve) => setTimeout(resolve, NEARBY_WAIT_MS));
+  const near = nearestPosts(await nearbyCandidates(), post, { meId: state.account?.id, gone: state.removed });
+  if (activeScreen() !== 'map') return;
+  let picked = false;
+  const body = openSheet({
+    onClose: () => {
+      state.selected = null;
+      // Another card taken up in the meantime (a tap on the map) means the person has moved on.
+      if (!picked && thenOpen) setTimeout(() => { if (!sheetOpen()) openLinkedPost(thenOpen); }, 0);
+    },
+  });
+  clear($('sheetFoot'));
+  const rows = near.map((entry) => el('li', {},
+    el('button', {
+      className: 'stack-row nearby-row', attrs: { type: 'button', 'data-post-id': entry.id },
+      on: { click: () => { picked = true; closeSheet(); openLinkedPost(entry.id); } },
+    },
+    avatar(entry, 32),
+    el('span', { className: 'nearby-who', text: entry.display_name || '' }),
+    el('span', { className: 'stack-text nearby-text', text: clip(entry.body, 40) }),
+    el('span', { className: 'stack-go', text: '›', attrs: { 'aria-hidden': 'true' } }))));
+  clear(body).append(
+    el('h3', { className: 'stack-title', text: 'あなたの近くの投稿' }),
+    el('p', { className: 'nearby-lede', text: '近くにいる人ほど、似た話をしています' }),
+    rows.length
+      ? el('ul', { className: 'stack-list nearby-list', attrs: { id: 'nearbyList' } }, rows)
+      : el('p', { className: 'nearby-empty', attrs: { id: 'nearbyEmpty' }, text: 'まだ近くに投稿がありません。仲間が投稿すると、ここに並びます。' }),
+    el('button', {
+      className: 'btn btn-block nearby-close', attrs: { type: 'button', id: 'nearbyClose' }, text: '地図を見る',
+      on: { click: () => closeSheet() },
+    }),
+  );
 }
 
 /** Open a post wherever it is on the map and bring the camera to it. */
@@ -298,7 +353,7 @@ function justPosted(postId) {
   return Number.isFinite(age) && age > -60000 && age < JUST_POSTED_MS ? post : null;
 }
 
-function playNewPost(post, thenOpen = null) {
+function playNewPost(post, thenOpen = null, afterLand = null) {
   introduced.add(post.id);
   if (sheetOpen()) closeSheet();
   setParticipantView(null);
@@ -310,7 +365,10 @@ function playNewPost(post, thenOpen = null) {
   playReveal(post, {
     then: async () => {
       landing = null;
-      await openLinkedPost(thenOpen || post.id);
+      // afterLand takes the place of opening the card (the first post: the nearby posts come instead,
+      // and it opens `thenOpen` itself once it is closed).
+      if (afterLand) await afterLand();
+      else await openLinkedPost(thenOpen || post.id);
     },
   });
 }

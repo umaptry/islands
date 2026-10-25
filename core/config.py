@@ -467,6 +467,13 @@ EXTRA_PROMPTS = (
     {"key": "future", "text": "今度やってみたいこと",
      "example": "今度、陶芸教室で器づくりに挑戦してみたいです。一緒に体験しませんか"},
 )
+# The opening words offered on the first post (chips over the box). Each key is one of
+# EXTRA_PROMPTS' keys, and a chosen chip is recorded as the post's `prompt` like that prompt.
+POST_STARTERS = (
+    {"key": "past", "text": "昔がんばってたのは、"},
+    {"key": "now", "text": "最近はまってるのは、"},
+    {"key": "future", "text": "今度やってみたいのは、"},
+)
 # What a post's `prompt` may be: the weekly one or an extra one.
 POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
 

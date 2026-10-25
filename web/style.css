@@ -1462,6 +1462,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .guidance-skip:hover { color: #fff; }
 .slide h2 { text-wrap: balance; word-break: auto-phrase; }
 .slide-note { word-break: auto-phrase; text-wrap: pretty; }
+.slide .talk-name { white-space: nowrap; }
 #guidanceNext { flex: 1.6; white-space: nowrap; }
 #guidanceBack { flex: 1; }
 /* ==== end lane W ==== */
@@ -1605,6 +1606,13 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .community-row .stack-who { flex: 1; width: auto; }
 .community-row .stack-text { flex: none; font-size: 12px; color: var(--ink-3); }
 .community-hint { margin: 12px 2px 0; font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+
+/* After the first post: the posts standing nearest to it, in the sheet. */
+.nearby-lede { margin: -4px 2px 6px; font-size: 12.5px; color: var(--ink-3); line-height: 1.6; }
+.nearby-row .avatar { flex: none; }
+.nearby-who { flex: none; width: 5.5em; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nearby-empty { margin: 10px 2px 4px; font-size: 13.5px; color: var(--ink-2); line-height: 1.7; word-break: auto-phrase; }
+.nearby-close { margin-top: 14px; min-height: 48px; }
 
 /* A person in no community gets words where the map would be. */
 .map-notice {

@@ -278,11 +278,12 @@ test.describe('スイッチ「入」のとき', () => {
     await expect(guest.page.locator('#guidance')).toHaveClass(/active/);
     await guest.page.locator('#guidanceSkip').click();
     await expect(guest.page.locator('#compose')).toHaveClass(/active/);
-    await guest.page.locator('#composeOwnBtn').click();
     await guest.page.locator('#composeBody').fill('最近はコーヒーを自分で焙煎しています');
     await guest.page.locator('#composeMotivation').evaluate((node) => { node.value = '55'; node.dispatchEvent(new Event('input', { bubbles: true })); });
     await guest.page.locator('#composeSubmit').click();
     await expect(guest.page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
+    // 最初の投稿のあとは「あなたの近くの投稿」のカードが先に出る。閉じると、招待で一緒に開く投稿が開く。
+    await guest.page.locator('#nearbyClose').click({ timeout: 30000 });
     await guest.page.locator('#sheet.on .post-card').waitFor({ timeout: 30000 });
     await expect(guest.page.locator('#sheet.on .post-card')).toContainText('朝の散歩');
     expect(guest.problems.errors).toEqual([]);

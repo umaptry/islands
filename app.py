@@ -78,6 +78,7 @@ from core.config import (
     DM_BODY_MAX,
     EXAMPLE_POSTS,
     EXTRA_PROMPTS,
+    POST_STARTERS,
     RECRUIT_TAG,
     TALK_LABEL,
     PREVIEW_ISLAND_RADIUS,
@@ -1946,6 +1947,7 @@ def config():
         # 2026-10-20: prompts that go away for a person once they posted with them
         # (the browser decides from the `prompt` of that person's posts).
         "extra_prompts": [dict(item) for item in EXTRA_PROMPTS],
+        "post_starters": [dict(item) for item in POST_STARTERS],
         "example_posts": list(EXAMPLE_POSTS),
         # post_extras: the database can keep the prompt / sign-up deadline / capacity.
         # False on a production database the 2026-10-20 SQL has not reached yet.
