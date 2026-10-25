@@ -6,7 +6,15 @@ const load = async (path) => readFile(new URL(`../../web/js/${path}`, import.met
 const dataUrl = (source) => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
 const palette = dataUrl(await load('map/palette.js'));
 const heat = dataUrl(await load('heat.js'));
+// avatars.js reaches for the network layer; the pins only need these two, so stand in for them.
+const drawn = [];
+globalThis.__faceDrawn = drawn;
+const avatars = dataUrl(`
+  export const faceKey = (who) => (who.avatar_path ? (globalThis.__photoReady ? 'photo:' + who.avatar_path : null) : 'emoji:3');
+  export const drawFace = (c, who) => globalThis.__faceDrawn.push(who);
+`);
 const source = (await load('map/pins.js'))
+  .replace("'../avatars.js'", () => `'${avatars}'`)
   .replace("'./palette.js'", () => `'${palette}'`)
   .replace("'../heat.js'", () => `'${heat}'`);
 const pins = await import(dataUrl(source));
@@ -53,6 +61,33 @@ test('the sprite key tells apart every look that changes the picture', () => {
   }
   assert.equal(keys.size, 8);
   assert.equal(pins.pinSpriteKey(base), pins.pinSpriteKey({ ...base }));
+  // A face is part of the key; the initial no longer is once a face shows.
+  const faced = pins.pinSpriteKey({ ...base, face: 'photo:a.jpg' });
+  assert.notEqual(faced, pins.pinSpriteKey(base));
+  assert.notEqual(faced, pins.pinSpriteKey({ ...base, face: 'photo:b.jpg' }));
+  assert.notEqual(faced, pins.pinSpriteKey({ ...base, face: 'emoji:3' }));
+  assert.equal(faced, pins.pinSpriteKey({ ...base, face: 'photo:a.jpg', initial: 'Z' }));
+});
+
+test('a pin shows the initial until the photo is ready, then the face, from another sprite', () => {
+  const target = { getTransform: () => ({ a: 1 }), globalAlpha: 1, texts: 0 };
+  const ctx = new Proxy(target, {
+    get: (t, name) => (name === 'fillText' ? () => { t.texts += 1; } : name in t ? t[name] : () => ({ addColorStop() {} })),
+    set: (t, name, value) => { t[name] = value; return true; },
+  });
+  globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return ctx; } };
+  pins.clearPinCache();
+  drawn.length = 0;
+  const opts = { heat: 50, size: 22, initial: 'A', face: { icon_id: 'photo', avatar_path: 'a.jpg' } };
+  globalThis.__photoReady = false;
+  pins.drawPostPin(ctx, 10, 10, opts);
+  assert.equal(drawn.length, 0);
+  assert.ok(target.texts > 0);
+  globalThis.__photoReady = true;
+  pins.drawPostPin(ctx, 10, 10, opts);
+  assert.equal(drawn.length, 1);
+  pins.drawPostPin(ctx, 10, 10, opts);   // cached now: not painted again
+  assert.equal(drawn.length, 1);
 });
 
 test('drawPostPin gives back a flat result for a bad size and does not throw', () => {

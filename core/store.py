@@ -78,6 +78,7 @@ POSTS = "posts"
 REACTIONS = "reactions"
 COMMENTS = "comments"
 NOTIFICATIONS = "notifications"
+DM_BLOCKS = "dm_blocks"
 REPORTS = "reports"
 NOTIFICATION_SETTINGS = "notification_settings"
 ISLANDS_STATE = "islands_state"
@@ -129,6 +130,9 @@ ISLAND_STATE_BASE_COLUMNS = ("id,name,label,tier,score_total,score_recent,score_
                              "author_ids,cx,cy,landmarks,challenger,quiet,active,last_activity_at,"
                              "created_at,updated_at")
 ISLAND_STATE_COLUMNS = ISLAND_STATE_BASE_COLUMNS + "," + ",".join(ISLAND_NAME_COLUMNS)
+# The column the 2026-10-28 migration added (the one-line intro). Tracked apart from the name
+# columns: a database that has the names but not this still keeps AI names.
+ISLAND_INTRO_COLUMN = "intro"
 # How long a "columns are there" / "columns are missing" check is trusted.
 NAME_COLUMNS_CHECK_SECONDS = 60
 POST_EXTRAS_CHECK_SECONDS = 60
@@ -868,15 +872,23 @@ class MemoryStore:
                 community_id=row.get("community_id"),
             )) for row in rows]
 
-    def recent_notifications(self, kind, since, recipient_id=None):
-        """Rows of one type since a time, for the per-day limits."""
+    def recent_notifications(self, kind, since, recipient_id=None, recipient_ids=None):
+        """Rows of one type since a time, for the per-day limits (`recipient_ids`: only theirs)."""
         start = _stamp(_since(since))
+        wanted = None if recipient_ids is None else set(recipient_ids)
         with self._lock:
             return [
                 dict(row) for row in self._notifications.values()
                 if row["type"] == kind and _stamp(row["created_at"]) >= start
                 and (recipient_id is None or row["recipient_id"] == recipient_id)
+                and (wanted is None or row["recipient_id"] in wanted)
             ]
+
+    def blocked_with(self, account_id):
+        """Everybody `account_id` blocked or was blocked by (either way), as a set of ids."""
+        with self._lock:
+            return ({b for (a, b) in self._dm_blocks if a == account_id}
+                    | {a for (a, b) in self._dm_blocks if b == account_id})
 
     def _notification_visible(self, row, viewer):
         """notifications_read: the recipient's own rows, minus those about a post they are not a
@@ -958,6 +970,10 @@ class MemoryStore:
             return None
         return max(meetings, key=lambda post: (_stamp(post["created_at"]), post["id"]))["id"]
 
+    def _talk_same_community(self, a, b):
+        """True when both are members of at least one common community. Lock held."""
+        return a != b and any(aid == a and (cid, b) in self._members for (cid, aid) in self._members)
+
     def _talk_blocked(self, a, b):
         return (a, b) in self._dm_blocks or (b, a) in self._dm_blocks
 
@@ -974,9 +990,11 @@ class MemoryStore:
         row[column] += 1
 
     def talk_peers(self, me):
-        """Everybody in a meeting I am in, except me and anyone blocked either way."""
+        """Everybody in a community I am in, plus everybody in a meeting I am in (the meeting
+        rule only matters while members_only is off), except me and anyone blocked either way."""
         with self._lock:
-            peers = set()
+            peers = {aid for (cid, mine) in self._members if mine == me
+                     for (c2, aid) in self._members if c2 == cid}
             strict = self._app_settings.get(MEMBERS_ONLY_KEY)
             for post in self._posts.values():
                 if not self._is_meeting(post) or not self._is_member(post, me):
@@ -1011,8 +1029,11 @@ class MemoryStore:
         if not target or target == me:
             raise TalkRefused(TALK_ERROR_SELF)
         with self._lock:
+            # A shared community is enough; the newest common meeting (if any) is only the
+            # event_post_id of the room / press, None when they have none.
             shared = self._talk_shared_event(me, target)
-            if shared is None or self._talk_blocked(me, target):
+            if ((shared is None and not self._talk_same_community(me, target))
+                    or self._talk_blocked(me, target)):
                 raise TalkRefused(TALK_ERROR_NOT_PEER)
             # A press (talk_wishes) is kept until it is withdrawn or matched. Only the
             # record of the anonymous notice has a limit.
@@ -1661,6 +1682,8 @@ class SupabaseStore:
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT)
         self._has_name_columns = True      # until the database says otherwise
         self._names_checked_at = None
+        self._has_intro_column = True      # same, for islands_state.intro
+        self._intro_checked_at = None
         self._has_post_extras = False      # until the database shows the 2026-10-20 columns
         self._extras_checked_at = None
         self._has_talk = False             # until the database shows the 2026-10-26 tables
@@ -2346,13 +2369,29 @@ class SupabaseStore:
         )
         return response.json()
 
-    def recent_notifications(self, kind, since, recipient_id=None):
+    def recent_notifications(self, kind, since, recipient_id=None, recipient_ids=None):
         params = {"select": self._notification_columns(), "type": f"eq.{kind}",
                   "created_at": f"gte.{_since(since)}", "order": "created_at.desc",
                   "limit": "1000"}
         if recipient_id is not None:
             params["recipient_id"] = f"eq.{recipient_id}"
-        return self._get(NOTIFICATIONS, params, label="通知の読み込み")
+        if recipient_ids is None:
+            return self._get(NOTIFICATIONS, params, label="通知の読み込み")
+        # Only these people's rows, a few dozen ids per request: a busy day elsewhere can
+        # never push them past the 1000-row page and quietly lift a per-person limit.
+        ids, rows = sorted(set(recipient_ids)), []
+        for start in range(0, len(ids), 40):
+            rows += self._get(NOTIFICATIONS, {**params, "recipient_id": f"in.({','.join(ids[start:start + 40])})"},
+                              label="通知の読み込み")
+        return rows
+
+    def blocked_with(self, account_id):
+        """Everybody `account_id` blocked or was blocked by (either way), as a set of ids."""
+        rows = self._get(DM_BLOCKS, {"select": "blocker_id,blocked_id",
+                                     "or": f"(blocker_id.eq.{account_id},blocked_id.eq.{account_id})"},
+                         label="ブロックの読み込み")
+        return ({row["blocked_id"] for row in rows if row["blocker_id"] == account_id}
+                | {row["blocker_id"] for row in rows if row["blocked_id"] == account_id})
 
     # -- notification settings ---------------------------------------------
 
@@ -2538,8 +2577,29 @@ class SupabaseStore:
         # 42703 must not be taken for "the migration has not been run".
         return code in ("42703", "PGRST204") and any(name in text for name in ISLAND_NAME_COLUMNS)
 
+    @staticmethod
+    def _missing_intro_column(response):
+        """True when a 400 says islands_state.intro does not exist (yet)."""
+        if response.status_code != 400:
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42703", "PGRST204") and ISLAND_INTRO_COLUMN in text
+
+    def _remember_missing_intro_column(self):
+        if self._has_intro_column:
+            print("[store] islands_state has no intro column yet; island intros are not saved "
+                  "until supabase/migrations/20261028000000_island_intro.sql is run", flush=True)
+        self._has_intro_column = False
+        self._intro_checked_at = time.monotonic()
+
     def _island_columns(self):
         columns = ISLAND_STATE_COLUMNS if self._has_name_columns else ISLAND_STATE_BASE_COLUMNS
+        if self._has_intro_column:
+            columns += "," + ISLAND_INTRO_COLUMN
         # community_id exists after supabase/migrations/20261027000000_members_only_prep.sql; it is
         # only named while members_only is on, so the code also runs before that SQL.
         return columns + ",community_id" if self._members_only_value is True else columns
@@ -2551,7 +2611,11 @@ class SupabaseStore:
                 and time.monotonic() - self._names_checked_at >= NAME_COLUMNS_CHECK_SECONDS):
             self._has_name_columns = True
             self._names_checked_at = time.monotonic()
-        for _ in range(2):
+        if (not self._has_intro_column and self._intro_checked_at is not None
+                and time.monotonic() - self._intro_checked_at >= NAME_COLUMNS_CHECK_SECONDS):
+            self._has_intro_column = True
+            self._intro_checked_at = time.monotonic()
+        for _ in range(3):
             params = {"select": self._island_columns(), "order": "created_at.asc"}
             if active_only:
                 params["active"] = "is.true"
@@ -2563,6 +2627,9 @@ class SupabaseStore:
                                   allow_statuses=(400,))
             if response.status_code < 300:
                 return response.json()
+            if self._has_intro_column and self._missing_intro_column(response):
+                self._remember_missing_intro_column()
+                continue
             if self._has_name_columns and self._missing_name_columns(response):
                 self._remember_missing_name_columns()
                 continue
@@ -2601,7 +2668,11 @@ class SupabaseStore:
     def save_island_states(self, rows):
         if not rows:
             return 0
-        for _ in range(2):
+        if (not self._has_intro_column and self._intro_checked_at is not None
+                and time.monotonic() - self._intro_checked_at >= NAME_COLUMNS_CHECK_SECONDS):
+            self._has_intro_column = True
+            self._intro_checked_at = time.monotonic()
+        for _ in range(3):
             keys = self._island_columns().split(",")
             stamp = _now()
             response = self._send(
@@ -2613,6 +2684,9 @@ class SupabaseStore:
             )
             if response.status_code < 300:
                 return len(rows)
+            if self._has_intro_column and self._missing_intro_column(response):
+                self._remember_missing_intro_column()
+                continue
             if self._has_name_columns and self._missing_name_columns(response):
                 self._remember_missing_name_columns()
                 continue

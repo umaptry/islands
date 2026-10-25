@@ -7,7 +7,7 @@
 // stopping the whole page from loading.
 
 import { state } from '../state.js';
-import { $, clear, clip, closeSheet, el, sheetOpen } from '../ui.js';
+import { $, avatar, clear, clip, closeSheet, el, sheetOpen } from '../ui.js';
 import { icon } from '../icons.js';
 import { PALETTE, TIMES } from '../map/palette.js';
 import * as mapApi from '../map/index.js';
@@ -17,6 +17,7 @@ import {
 
 const NEAR_COUNT = 3;
 const MINI_SIZE = 96;
+const RESIDENT_FACES = 5;     // faces on the island card
 const NEAR_SETTLE_MS = 400;   // wait for the camera to stop before choosing "near" again
 
 let handlers = { openPost: () => {} };
@@ -89,10 +90,8 @@ function openIslandCard(island, key = islandKey(island)) {
   if (!cardIsland) cardOpener = document.activeElement;
   cardIsland = island;
   const card = clear($('islandCard'));
-  // A named island (AI or hand-made name) already says what it is about, so its
-  // card shows no topics; only genre-named islands list "いま話題".
-  const named = island.name_source === 'ai' || island.name_source === 'manual';
-  const topics = named ? [] : (island.topics || []).slice(0, 3);
+  const intro = String(island.intro || '').trim();
+  const residents = (island.residents || []).slice(0, RESIDENT_FACES);
   const ids = island.post_ids || [];
   const recent = recentPosts(ids, state.postsById, 2);
 
@@ -104,10 +103,14 @@ function openIslandCard(island, key = islandKey(island)) {
     el('h3', { className: 'island-card-name', text: islandName(island) }),
     el('p', { className: 'island-card-count', text: `${island.people ?? 0}人・投稿${ids.length}件` }),
   );
-  if (topics.length) {
-    card.append(el('div', { className: 'island-card-topics' },
-      el('span', { className: 'island-card-label', text: 'いま話題' }),
-      ...topics.map((topic) => el('span', { className: 'island-topic', text: topic }))));
+  // One line about the island, and a few of the people living on it.
+  if (intro) card.append(el('p', { className: 'island-card-intro', text: intro }));
+  if (residents.length) {
+    const more = Math.max(0, (island.people ?? 0) - residents.length);
+    card.append(el('div', { className: 'island-card-residents', attrs: { 'aria-label': '住人' } },
+      el('span', { className: 'island-card-label', text: '住人' }),
+      el('span', { className: 'face-stack' }, ...residents.map((person) => avatar(person, 30))),
+      more > 0 ? el('span', { className: 'island-card-more', text: `+${more}` }) : null));
   }
   if (recent.length) {
     card.append(el('div', { className: 'island-card-posts' }, ...recent.map((post) => el('button', {

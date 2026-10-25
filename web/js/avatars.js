@@ -144,6 +144,22 @@ function photoFor(path) {
   return entry.ready ? entry.img : null;
 }
 
+/** What drawFace would paint for somebody right now, as a short key, or null while
+ * their photo is still coming (a caller that has a fallback shows that instead,
+ * and finds the key changed once 'avatar:loaded' has fired). The key changes
+ * whenever the picture does, so it can name a cached sprite. */
+export function faceKey(who) {
+  const person = who && typeof who === 'object' ? who : { icon_id: who };
+  const path = person.avatar_path;
+  if (path) {
+    if (photoFor(path)) return `photo:${path}`;
+    const entry = photos.get(path);
+    if (!entry || !entry.failed) return null;
+  }
+  if (!hasEmoji(person.icon_id)) return 'silhouette';
+  return `emoji:${Math.abs(parseInt(person.icon_id, 10) || 0) % EMOJI.length}`;
+}
+
 /** The person-shaped silhouette on a canvas, inside a disc of radius `r`. */
 function drawSilhouette(ctx, x, y, r) {
   ctx.save();

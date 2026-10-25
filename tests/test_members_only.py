@@ -98,6 +98,11 @@ def world(fresh_client, people):
     w.legacy = w.outsider.post(SOLDERING)            # a post that belongs to no community
     w.a_posts = {w.pa["id"], w.pa2["id"], w.pa3["id"], w.pa4["id"]}
     w.b_posts = {w.pb["id"], w.pb2["id"], w.pb3["id"]}
+    # Posting on a shared island sent "moved in" notices while the switch was off; these tests
+    # count the notifications they make themselves.
+    with store()._lock:
+        store()._notifications.clear()
+        store()._push_pending.clear()
     application.invalidate_islands()
     application.invalidate_connections()
     yield w
@@ -840,15 +845,17 @@ def test_the_local_community_row_is_for_members(world):
     assert call(None, f"GET", f"/api/local/communities/{world.A}").status_code == 401
 
 
-def test_talk_needs_both_people_to_be_in_the_community_the_meeting_was_posted_to(world):
+def test_talk_needs_both_people_to_be_in_a_common_community(world):
     meeting = world.member_a.post(CAMPING_A, tags=[RECRUIT_TAG], community_id=world.A)
     assert world.member_a2.react(meeting["id"], "join").status_code == 200
     assert world.ex.react(meeting["id"], "join").status_code == 200
     on(world)
-    assert get(world.member_a, "/api/local/talk/peers").json()["peers"] == sorted([world.member_a2.id, world.ex.id])
+    # peers: everybody in a community I am in (the meeting is no longer needed)
+    in_a = [world.admin_a.id, world.member_a2.id, world.both.id, world.ex.id]
+    assert get(world.member_a, "/api/local/talk/peers").json()["peers"] == sorted(in_a)
     ex_member(world)
     # peers: the one who left is out of both ends
-    assert get(world.member_a, "/api/local/talk/peers").json()["peers"] == [world.member_a2.id]
+    assert get(world.member_a, "/api/local/talk/peers").json()["peers"] == sorted(in_a[:3])
     assert get(world.ex, "/api/local/talk/peers").json()["peers"] == []
     refused = call(world.member_a, "POST", "/api/local/talk/press", json={"target": world.ex.id})
     assert refused.status_code == 422                               # the words of "this person cannot be pressed"
@@ -1244,3 +1251,28 @@ def test_the_sql_files_give_up_on_a_lock_and_hide_unscoped_island_notifications(
     assert lockdown.count("'island', 'quiet_post', 'similar') or") == 2   # the policy and the feed
     assert "count(*) = 1" not in lockdown                                   # legacy rows are never dropped by a head count
     assert "_mo_legacy_owner" in lockdown
+
+
+def test_talk_reaches_the_members_of_a_community_without_any_meeting(world):
+    on(world)
+    # same community, no meeting at all: peers, pressable, and the room has no event
+    assert world.member_a2.id in get(world.member_a, "/api/local/talk/peers").json()["peers"]
+    assert call(world.member_a, "POST", "/api/local/talk/press", json={"target": world.member_a2.id}).status_code == 200
+    assert call(world.member_a2, "POST", "/api/local/talk/press", json={"target": world.member_a.id}).json()["matched"]
+    room = get(world.member_a, "/api/local/dm/rooms").json()["rooms"][0]
+    assert room["event_post_id"] is None and room["event_excerpt"] is None
+    # only a different community: neither peers nor pressable
+    assert world.member_b.id not in get(world.member_a, "/api/local/talk/peers").json()["peers"]
+    assert call(world.member_a, "POST", "/api/local/talk/press", json={"target": world.member_b.id}).status_code == 422
+    # a person who is in both communities can be pressed from either side
+    assert world.both.id in get(world.member_b, "/api/local/talk/peers").json()["peers"]
+    # blocked: refused with the same words
+    assert call(world.member_a, "POST", "/api/local/dm/blocks", json={"blocked_id": world.both.id}).status_code in (200, 204)
+    assert call(world.member_a, "POST", "/api/local/talk/press", json={"target": world.both.id}).status_code == 422
+    # a meeting in common puts its id on the room
+    meeting = world.member_a.post(CAMPING_A, tags=[RECRUIT_TAG], community_id=world.A)
+    assert world.admin_a.react(meeting["id"], "join").status_code == 200
+    assert call(world.member_a, "POST", "/api/local/talk/press", json={"target": world.admin_a.id}).status_code == 200
+    assert call(world.admin_a, "POST", "/api/local/talk/press", json={"target": world.member_a.id}).json()["matched"]
+    rooms = get(world.admin_a, "/api/local/dm/rooms").json()["rooms"]
+    assert rooms[0]["event_post_id"] == meeting["id"]

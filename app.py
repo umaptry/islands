@@ -89,6 +89,7 @@ from core.config import (
     ISLAND_COLORS,
     ISLAND_GENRES,
     ISLAND_NOTIFY_PER_DAY,
+    ISLAND_RESIDENTS_SHOWN,
     ISLAND_RUN_MIN_SECONDS,
     LANDMARK_CANDIDATES,
     MAP_MAX,
@@ -121,8 +122,11 @@ from core.config import (
     PRESENCE_PING_SECONDS,
     PUSH_FRESH_MINUTES,
     PUSH_TTL_SECONDS,
+    QUIET_POST_ENABLED,
     QUIET_POST_MAX_DAYS,
     QUIET_POST_VISIT_DAYS,
+    RESIDENT_NOTIFY_PER_DAY,
+    RESIDENT_NOTIFY_PER_PERSON_DAY,
     SIMILAR_NOTIFY_PER_DAY,
     SIMILAR_NOTIFY_THRESHOLD,
     SIMILAR_PEOPLE_COUNT,
@@ -183,6 +187,8 @@ PUSH_AUTO = os.environ.get("ISLANDS_AUTO_PUSH", "1") == "1"
 # A burst of pokes runs the dispatcher at most once per this many seconds.
 PUSH_MIN_GAP_SECONDS = 1.0
 PUSH_URL = "/#/notifications"
+# A "new resident" push opens the map, where the catch-up shows who moved in.
+PUSH_URL_RESIDENT = "/#/map"
 
 _logger = logging.getLogger(__name__)
 
@@ -892,6 +898,7 @@ def live_islands(force=False, community=None):
         named = island_namer.overlay(named, saved)
     except StoreError:
         pass
+    attach_residents(named, posts)
     # Explicit membership replaces the client's former centre-distance guess.
     payload = named
     membership = {}
@@ -904,27 +911,94 @@ def live_islands(force=False, community=None):
     return payload
 
 
+def _created_stamp(value):
+    try:
+        return notices.parse_time(value).timestamp()
+    except (ValueError, TypeError, OverflowError, OSError):
+        return 0.0
+
+
+def attach_residents(islands, posts):
+    """Put on each island who lives there: `residents` (newest poster first, at most
+    ISLAND_RESIDENTS_SHOWN, with the profile bits a face needs) for the page, and the internal
+    `resident_ids` (every writer, newest first) and `author_counts` (posts per writer) for the
+    'moved in' notice. Accounts are read once for all islands, when the cache is rebuilt."""
+    by_id = {post["id"]: post for post in posts}
+    wanted = []
+    for island in islands:
+        latest, counts = {}, Counter()
+        for post_id in island.get("post_ids") or []:
+            post = by_id.get(post_id) or {}
+            author = post.get("author_id")
+            if not author:
+                continue
+            counts[author] += 1
+            latest[author] = max(latest.get(author, 0.0), _created_stamp(post.get("created_at")))
+        island["resident_ids"] = sorted(latest, key=lambda author: -latest[author])
+        island["author_counts"] = dict(counts)
+        wanted.extend(island["resident_ids"][:ISLAND_RESIDENTS_SHOWN])
+    accounts = {}
+    ids = sorted(set(wanted))
+    for start in range(0, len(ids), 40):
+        try:
+            for row in state["store"].list_accounts(ids[start:start + 40]):
+                accounts[row["id"]] = row
+        except Exception as error:  # faces are a nicety: the island is still drawn without them
+            _logger.warning("island residents: accounts unavailable (%s)", type(error).__name__)
+    for island in islands:
+        island["residents"] = [
+            {"id": who, "display_name": accounts[who].get("display_name") or "",
+             "icon_id": accounts[who].get("icon_id", "0"), "avatar_path": accounts[who].get("avatar_path")}
+            for who in island["resident_ids"][:ISLAND_RESIDENTS_SHOWN] if who in accounts]
+    return islands
+
+
 # Bookkeeping of island naming (post-id lists, timestamps): kept out of API answers.
-_INTERNAL_ISLAND_KEYS = ("name_basis", "name_tried_at", "name_hold")
+_INTERNAL_ISLAND_KEYS = ("name_basis", "name_tried_at", "name_hold", "resident_ids", "author_counts")
+
+
+def island_intro(island):
+    """The one-line intro: the AI's, else a plain sentence from the island's topic words
+    (not the island's own name), else None."""
+    if island.get("intro") and not island.get("name_hold"):
+        return island["intro"]
+    own = {island.get("name"), island.get("label")}
+    words = []
+    for word in island.get("topics") or []:
+        if word and word not in own and word not in words:
+            words.append(word)
+    words = words[:2]
+    if not words:
+        return None
+    return "".join(f"「{word}」" for word in words) + "の話をする人たちが住んでいます"
 
 
 def public_island(island):
-    """A copy of a live island without the naming bookkeeping; name_source is always set."""
+    """A copy of a live island without the naming bookkeeping; name_source is always set,
+    `intro` is a sentence or None, `residents` is always a list."""
     row = {key: value for key, value in island.items() if key not in _INTERNAL_ISLAND_KEYS}
     row["name_source"] = "terms" if island.get("name_hold") else (island.get("name_source") or "terms")
+    row["intro"] = island_intro(island)
+    row["residents"] = list(island.get("residents") or [])
     return row
 
 
-def island_of(post_id, community=None):
-    """The landmass a post is standing on, as it is named right now (among its community's posts
-    when `community` is given: members_only)."""
+def island_entry(post_id, community=None):
+    """The cached live island (with its internal keys) a post stands on, or None."""
     live_islands(**({} if community is None else {"community": community}))
     cache, lock = _island_holder(community)
     with lock:
         membership = cache["key"] or {}
         islands = cache["value"]
     index = membership.get(post_id)
-    return public_island(islands[index]) if index is not None and index < len(islands) else None
+    return islands[index] if index is not None and index < len(islands) else None
+
+
+def island_of(post_id, community=None):
+    """The landmass a post is standing on, as it is named right now (among its community's posts
+    when `community` is given: members_only)."""
+    entry = island_entry(post_id, community)
+    return public_island(entry) if entry is not None else None
 
 
 def island_for_viewer(post, user_id):
@@ -1396,17 +1470,18 @@ def notify_islands(events, states, now, community=None):
         members = set(store.community_member_ids(community))
         authors = {island: [person for person in people_ if person in members]
                    for island, people_ in authors.items()}
-    sent = Counter(
-        (row["recipient_id"], row.get("island_id"))
-        for row in store.recent_notifications("island", now - timedelta(days=1))
-    )
+    recent = store.recent_notifications("island", now - timedelta(days=1))
+    sent = Counter((row["recipient_id"], row.get("island_id")) for row in recent)
+    # Somebody just told that a new resident moved in is not told the same island again today.
+    moved_in = {(row["recipient_id"], row.get("island_id")) for row in recent
+                if (row.get("payload") or {}).get("kind") == "resident" and row.get("island_id")}
     rows = []
     for event in events:
         if event["kind"] not in ISLAND_NOTIFY_KINDS:
             continue
         for person in authors.get(event["island_id"], []):
             key = (person, event["island_id"])
-            if sent[key] >= ISLAND_NOTIFY_PER_DAY:
+            if sent[key] >= ISLAND_NOTIFY_PER_DAY or key in moved_in:
                 continue
             sent[key] += 1
             name = (event.get("after") or {}).get("name") or (event.get("before") or {}).get("name")
@@ -1417,6 +1492,71 @@ def notify_islands(events, states, now, community=None):
                 **({"community_id": community} if community else {}),
             })
     store.insert_notifications(rows)
+    return rows
+
+
+def _plain_name(display_name):
+    """A display name without a trailing 「さん」, so that 「さん」 can be added once."""
+    name = display_name or "だれか"
+    return name[:-2] if name.endswith("さん") and len(name) > 2 else name
+
+
+def notify_resident(post_id, author_id, display_name, community=None, now=None, post_community=None):
+    """Tell the other residents of an island that somebody with no post there before just moved in.
+
+    Called right after a post is saved (not by the tracking step, which runs every ten minutes at
+    the soonest). `community` is given with members_only (the islands are that community's);
+    `post_community` is the post's own community either way. Only CURRENT members of that
+    community are told and the row carries it, so the catch-up on its map finds it and nobody
+    outside it ever reads the newcomer's name. Nobody blocked by, or blocking, the newcomer is told.
+    Nothing is sent for the writer's second post on the island, for an island that this post
+    created, past RESIDENT_NOTIFY_PER_DAY for one recipient and island, or past
+    RESIDENT_NOTIFY_PER_PERSON_DAY for one recipient over all islands. Returns the rows written."""
+    store = state["store"]
+    now = now or datetime.now(timezone.utc)
+    tagged = community or post_community
+    entry = island_entry(post_id, community)
+    if entry is None or (entry.get("author_counts") or {}).get(author_id) != 1:
+        return []
+    others = [person for person in entry.get("resident_ids") or [] if person != author_id]
+    if tagged:
+        members = set(store.community_member_ids(tagged))
+        others = [person for person in others if person in members]
+    if others:
+        # Unreadable blocks: tell nobody rather than somebody who blocked the newcomer.
+        blocked = store.blocked_with(author_id)
+        others = [person for person in others if person not in blocked]
+    if not others:
+        return []
+    island_id = None
+    try:
+        states = store.island_states(communities={community}) if community else store.island_states()
+        _links, identity = island_tracking.match(states, [entry])
+        if 0 in identity:
+            island_id = states[identity[0]]["id"]
+    except StoreError:
+        pass
+    label = entry.get("label") or entry.get("name") or ""
+    island_key = island_id or label
+    earlier = [row for row in store.recent_notifications("island", now - timedelta(days=1), recipient_ids=others)
+               if (row.get("payload") or {}).get("kind") == "resident"]
+    per_island = Counter((row["recipient_id"], row.get("island_id") or (row.get("payload") or {}).get("name"))
+                         for row in earlier)
+    per_person = Counter(row["recipient_id"] for row in earlier)
+    rows = []
+    for person in others:
+        if (per_island[(person, island_key)] >= RESIDENT_NOTIFY_PER_DAY
+                or per_person[person] >= RESIDENT_NOTIFY_PER_PERSON_DAY):
+            continue
+        rows.append({
+            "recipient_id": person, "actor_id": author_id, "type": "island",
+            "post_id": post_id, "island_id": island_id,
+            "payload": {"kind": "resident", "name": label,
+                        "cause": f"{_plain_name(display_name)}さんが引っ越してきました"},
+            **({"community_id": tagged} if tagged else {}),
+        })
+    if rows:
+        store.insert_notifications(rows)
     return rows
 
 
@@ -1530,7 +1670,8 @@ def maybe_track_islands():
         except Exception:
             _logger.exception("island tracking failed")
         try:
-            notify_quiet_posts()
+            if QUIET_POST_ENABLED:  # off by default: the "resident" notice replaced it
+                notify_quiet_posts()
         except Exception:
             _logger.exception("quiet posts failed")
         finally:
@@ -1646,7 +1787,14 @@ def push_message(entry, hashed_tag=False):
     hashed_tag (members_only): the tag that groups reactions to one post is a hash, so the id of a
     post is not handed to the device's notification layer."""
     payload = entry.get("payload") or {}
-    if entry["type"] == "island":
+    url = PUSH_URL
+    if entry["type"] == "island" and payload.get("kind") == "resident":
+        first = (entry.get("actors") or [None])[0] or {}
+        who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
+        title = "新しい住人"
+        body = f"{payload.get('name') or '島'}に{who}さんが引っ越してきました"
+        url = PUSH_URL_RESIDENT
+    elif entry["type"] == "island":
         title = f"島「{payload['name']}」" if payload.get("name") else "島"
         body = f"{payload['cause']}。" if payload.get("cause") else PUSH_TEXT["island"]
     elif entry["type"] == "talk_wish":
@@ -1671,7 +1819,7 @@ def push_message(entry, hashed_tag=False):
             tag = webpush.topic_for(tag)
     else:
         tag = f"{entry['type']}-{entry['id']}"
-    return {"title": title, "body": body, "tag": tag, "url": PUSH_URL,
+    return {"title": title, "body": body, "tag": tag, "url": url,
             "kind": entry["category"], "at": entry["created_at"]}
 
 
@@ -2582,6 +2730,11 @@ def create_post(payload: PostCreate, request: Request):
             status_code=503, detail="保存に失敗しました。もう一度「地図にのせる」を押してください。"
         )
     invalidate_islands()
+    try:
+        notify_resident(row["id"], user_id, account.get("display_name", ""),
+                        community=community_id if members else None, post_community=community_id)
+    except Exception:  # a failed notice never costs the post
+        _logger.exception("resident notice failed")
 
     return {
         **row,

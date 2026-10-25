@@ -210,6 +210,7 @@ def update(previous, current, posts_by_id, events, now=None, rank_landmarks=None
             "name_source": island.get("name_source"),
             "name_basis": island.get("name_basis"),
             "name_tried_at": island.get("name_tried_at"),
+            "intro": island.get("intro"),
             "tier": tier,
             "score_total": points["total"],
             "score_recent": points["recent"],

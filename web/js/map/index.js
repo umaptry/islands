@@ -24,6 +24,7 @@ import { cameraAt, viewHolding } from './camera-path.js';
 import { clearTownSpot, landmarkSlots } from './spots.js';
 import { drawKin, drawLinks, drawPlanes, islandFinder, waterBetween } from './lines.js';
 import { kinLines } from './kin.js';
+import { sparkleLevel, sparkleSpots } from './sparkles.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
 import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
@@ -34,7 +35,7 @@ import { groundOf } from './coast.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
-import { PALETTE, PIN, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
+import { PALETTE, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
 
 let canvas = null;
 let ctx = null;
@@ -885,22 +886,36 @@ function steppedBack(post, sifting) {
   return sifting && !matchesFilters(post);
 }
 
-/** Zoomed out: a soft warm light breathing on each island with something new. */
+/** Zoomed out: a few small glints twinkling round the edge of each island with something new. */
 function drawFreshGlow(places, motion) {
-  const breath = motion === null ? 0.5 : (Math.sin(motion * 1.8) + 1) / 2;
   ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(40,55,80,0.4)';
   places.forEach((place) => {
-    if (!freshIslands.has(islandKey(place.island))) return;
+    const key = islandKey(place.island);
+    if (!freshIslands.has(key)) return;
     const spot = toScreen(place.island.cx, place.island.cy);
-    const radius = 46 + breath * 14;
-    const gradient = ctx.createRadialGradient(spot.x, spot.y, 0, spot.x, spot.y, radius);
-    gradient.addColorStop(0, PIN.mid);
-    gradient.addColorStop(1, `${PIN.mid}00`);
-    ctx.globalAlpha = 0.5 + breath * 0.25;
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
-    ctx.fill();
+    // The island's edge, guessed from its town's size.
+    const edge = Math.max(30, Math.min(110, place.size * 0.9 + 22));
+    sparkleSpots(key).forEach((glint) => {
+      const level = sparkleLevel(motion, glint.phase);
+      const r = (6 + 6 * glint.size) * (0.6 + 0.4 * level);
+      const x = spot.x + Math.cos(glint.angle) * edge * glint.ring;
+      const y = spot.y + Math.sin(glint.angle) * edge * glint.ring * 0.75;
+      ctx.globalAlpha = 0.6 + 0.4 * level;
+      ctx.beginPath();
+      const k = r * 0.2;   // how far the arms bow in: a plump 4-point star
+      ctx.moveTo(x, y - r);
+      ctx.quadraticCurveTo(x + k, y - k, x + r, y);
+      ctx.quadraticCurveTo(x + k, y + k, x, y + r);
+      ctx.quadraticCurveTo(x - k, y + k, x - r, y);
+      ctx.quadraticCurveTo(x - k, y - k, x, y - r);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle = level > 0.5 ? '#FFFFFF' : '#FFEFA8';
+      ctx.fill();
+    });
   });
   ctx.restore();
 }
@@ -1233,8 +1248,6 @@ function renderMap(time) {
   // and not while the map is showing who joined a post.
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
 
-  if (far && freshIslands.size) drawFreshGlow(places, motion);
-
   // Settlements and their landmarks, back to front.
   places.sort((a, b) => a.foot - b.foot).forEach((place) => {
     const { island, size, x, foot } = place;
@@ -1275,6 +1288,8 @@ function renderMap(time) {
   drawFog(ctx, view);
   paintTimeOfDay();
   if (tod === 'night') paintNightLights(places, townShow, calmOf);
+  // Over the time-of-day tint, so the glints stay white at any hour.
+  if (far && freshIslands.size) drawFreshGlow(places, motion);
 
   const claim = makeLabelSpace();
   chromeBoxes().forEach((box) => claim.block(box.x, box.y, box.w, box.h));
@@ -1822,6 +1837,8 @@ const PIN_FAR = 18;
 
 /** The letter a pin wears: the first character of the name. */
 const initialOf = (name) => Array.from(String(name || '').trim())[0] || '・';
+// The writer's face for a pin: posts carry icon_id and avatar_path of their author.
+const faceOf = (who) => (who ? { icon_id: who.icon_id, avatar_path: who.avatar_path } : null);
 const DIM = 0.2;
 
 // 「参加者を見てみる」: only the post's writer and the people who joined it stay
@@ -1987,7 +2004,7 @@ function drawPinsFar(visible, places, claim, meId, motion) {
   const onTown = (point) => places.some(({ box }) => box
     && point.x > box.left - 6 && point.x < box.right + 6 && point.y > box.top - 6 && point.y < box.bottom + 6);
   const pin = (post, point, extra = {}) => drawPostPin(ctx, point.x, point.y, {
-    heat: post.motivation, initial: initialOf(post.display_name), size: PIN_FAR, night, ...extra,
+    heat: post.motivation, initial: initialOf(post.display_name), face: faceOf(post), size: PIN_FAR, night, ...extra,
   });
   const claimPin = (point, head) => claim(point.x, (point.y + head) / 2, 24, Math.abs(point.y - head) + 26);
   visible.forEach(({ post, point, mine, out }) => {
@@ -2294,7 +2311,7 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     }
     const unread = isUnreadRecruit(post, meId) && !dim;
     const shown = drawPostPin(ctx, point.x, point.y, {
-      heat: post.motivation, initial: initialOf(post.display_name), size,
+      heat: post.motivation, initial: initialOf(post.display_name), face: faceOf(post), size,
       time: own, phase, mine: mine && !dim, selected: post.id === selectedId,
       openedFor: post.id === selectedId ? openedFor(post.id, motion) : null,
       recruit: unread, recruitQuiet: mine && !dim && isRecruiting(post), night,
@@ -2444,6 +2461,7 @@ function drawTrial(time) {
   ctx.globalAlpha = 0.75;
   drawPostPin(ctx, point.x, point.y, {
     heat: trial.motivation, initial: initialOf(trial.display_name || (state.account && state.account.display_name)),
+    face: faceOf(trial.icon_id != null || trial.avatar_path ? trial : state.account),
     size: TRY_SIZE, mine: true, tag: false, night: tod === 'night',
   });
   ctx.globalAlpha = 1;

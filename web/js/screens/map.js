@@ -1268,6 +1268,8 @@ export function setupMapScreen() {
         restorePost = null;
         await openPost(postId);
       }
+      // The map is up and nothing is open over it: the catch-up (catchup.js) may come.
+      document.dispatchEvent(new CustomEvent('map:ready'));
     },
   });
 }

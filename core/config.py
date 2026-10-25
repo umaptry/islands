@@ -375,6 +375,13 @@ CHAINED_NOTIFICATION_TYPES = frozenset({"like", "help", "join"})
 NEVER_PUSHED = frozenset({"quiet_post"})
 REACTION_GROUP_MINUTES = 10
 ISLAND_NOTIFY_PER_DAY = 1
+# 'resident' island notifications (somebody new moved onto your island): per recipient and island per day.
+RESIDENT_NOTIFY_PER_DAY = 3
+# ... and per recipient per day over all islands: a big community's first-post wave stays a few pushes.
+RESIDENT_NOTIFY_PER_PERSON_DAY = 5
+# Island residents shown on an island (newest poster first).
+ISLAND_RESIDENTS_SHOWN = 5
+ISLAND_INTRO_MAX_LENGTH = 30       # AI one-line intro; the column allows 60
 
 # 島の名前を AI（Gemini）で付ける。島の追跡処理（10分に1回まで）の中だけで呼ぶ。
 # 鍵なし・失敗・時間切れのときは、島の投稿の上位語から作る従来の名前のまま。
@@ -407,6 +414,8 @@ ISLAND_GENRES = (
 # Q34 quiet posts (all provisional). A post with no like/help/join/comment
 # between these ages is shown, in the app only, to a few people who stand
 # near it and still come by. Nobody is told the post went unanswered.
+# Off since 2026-10-28 (replaced by the 'resident' notice). QUIET_POST_ENABLED=1 turns it back on.
+QUIET_POST_ENABLED = os.environ.get("QUIET_POST_ENABLED", "0") == "1"
 QUIET_POST_MIN_HOURS = 24
 QUIET_POST_MAX_DAYS = 7
 QUIET_POST_NEAR_ISLANDS = 2       # besides the post's own island

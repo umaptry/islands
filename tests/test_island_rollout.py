@@ -279,3 +279,51 @@ def test_islands_carry_name_source_and_hide_the_bookkeeping(people, fresh_client
     live[0].update(name="手書き", name_source="manual")
     [third] = fresh_client.get("/api/islands").json()["islands"]
     assert third["name_source"] == "manual"
+
+
+# -- islands_state.intro (2026-10-28) ---------------------------------------
+
+class NoIntroClient(FakeClient):
+    """The 2026-10-12 columns are there; the 2026-10-28 intro column is not."""
+
+    def __init__(self):
+        super().__init__(has_columns=True)
+
+    def request(self, method, url, headers=None, params=None, json=None):
+        self.requests.append((method, params, json))
+        if method == "GET":
+            if "intro" in (params or {}).get("select", ""):
+                return Resp(400, {"code": "42703", "message": "column islands_state.intro does not exist"})
+            return Resp(200, [dict(row) for row in self.rows])
+        if any("intro" in row for row in json):
+            return Resp(400, {"code": "PGRST204", "message": "Could not find the 'intro' column of 'islands_state'"})
+        self.rows.extend(json)
+        return Resp(201, [])
+
+
+def test_without_the_intro_column_islands_are_still_read_and_saved_and_names_stay_on():
+    client = NoIntroClient()
+    client.rows = [{"id": "1", "name": "山"}]
+    store = store_with(client)
+    assert store.island_states() == [{"id": "1", "name": "山"}]
+    assert store.supports_island_names is True and store._has_intro_column is False
+    assert "name_source" in client.requests[-1][1]["select"] and "intro" not in client.requests[-1][1]["select"]
+    assert store.save_island_states([{"id": "2", "name": "海", "name_source": "ai", "intro": "x"}]) == 1
+    assert client.rows[-1]["name_source"] == "ai" and "intro" not in client.rows[-1]
+
+
+def test_saving_first_works_when_only_the_intro_column_turns_out_missing():
+    client = NoIntroClient()
+    store = store_with(client)
+    assert store.save_island_states([{"id": "1", "name": "山", "name_source": "ai", "intro": "x"}]) == 1
+    assert client.rows[0]["name_source"] == "ai" and "intro" not in client.rows[0]
+    assert store.supports_island_names is True
+
+
+def test_with_the_intro_column_it_is_sent_and_read():
+    client = FakeClient(has_columns=True)
+    store = store_with(client)
+    store.save_island_states([{"id": "1", "name": "山", "intro": "焚き火の人たち"}])
+    assert client.rows[0]["intro"] == "焚き火の人たち"
+    store.island_states()
+    assert "intro" in client.requests[-1][1]["select"]

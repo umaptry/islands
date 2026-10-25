@@ -22,11 +22,12 @@ import {
   openDmForNotification, recomputeDmUnread, refreshDmRooms, refreshTalk, talkAvailable, talkLabel,
 } from '../talk.js';
 import { icon } from '../icons.js';
+import { setupCatchup } from '../catchup.js';
 import { moment } from '../feedback.js';
-import { $, clear, clip, el, timeAgo } from '../ui.js';
+import { $, avatar, clear, clip, el, timeAgo } from '../ui.js';
 import {
   arrivals, bodyText, defaultSettings, dmMessageRows, headline, knownIds, listable, matchSignature, mergeSettings,
-  communityIdOf, isTalkType, rowIds, unreadCount,
+  communityIdOf, isResident, isTalkType, rowIds, unreadCount,
 } from '../notify-rules.js';
 
 const ARRIVAL_MS = 5000;
@@ -283,11 +284,13 @@ function paintList() {
 
   entries.forEach((entry) => {
     const card = el('button', {
-      className: `notif ${TONES[entry.type] || 'like'}${entry.unread ? '' : ' read'}`,
+      className: `notif ${TONES[entry.type] || 'like'}${entry.unread ? '' : ' read'}${isResident(entry) ? ' resident' : ''}`,
       attrs: { type: 'button' },
       on: { click: () => open(entry) },
     },
-      el('span', { className: 'notif-icon' }, icon(ICONS[entry.type] || 'bell')),
+      // A new resident shows their own face; the rest show the icon of their kind.
+      el('span', { className: 'notif-icon' }, isResident(entry) && entry.actors && entry.actors[0]
+        ? avatar(entry.actors[0], 36) : icon(ICONS[entry.type] || 'bell')),
       el('span', { className: 'notif-body' },
         el('span', { className: 'notif-head' },
           el('b', { text: headline(entry, talkLabel()) }),
@@ -327,6 +330,18 @@ async function open(entry) {
   await openOnMap(entry.post_id);
 }
 
+/** These rows were seen somewhere else (the catch-up): read them, the dot and the badge go with it. */
+function markRowsRead(rows) {
+  const unread = rows.filter((entry) => entry.unread);
+  if (!unread.length) return;
+  unread.forEach((entry) => { entry.unread = false; });
+  state.unread = unreadCount(state.notifications, state.notifySettings);
+  paintBadge();
+  data.markNotificationsRead(unread.flatMap(rowIds)).catch(() => {
+    // The next refresh corrects a lost read mark.
+  });
+}
+
 /** Opening a room reads that person's DM rows: the dot and the badge go with it. */
 export function markDmNotificationsRead(otherId) {
   const rows = [...state.notifications, ...state.dmNotices].filter((entry) => entry.unread
@@ -342,6 +357,11 @@ export function markDmNotificationsRead(otherId) {
 }
 
 export function setupNotifications() {
+  setupCatchup({
+    refresh: refreshNotifications,
+    markRead: markRowsRead,
+    openPost: (postId) => openOnMap(postId),
+  });
   $('arrival').addEventListener('click', () => {
     hideArrival();
     navigate(arrivalTarget);

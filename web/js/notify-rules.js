@@ -31,7 +31,7 @@ export const isTalkType = (type) => TALK_TYPES.includes(type);
 export const CATEGORIES = Object.freeze([
   { id: 'reply', title: '返信・メッセージ', note: 'あなたの投稿へのメッセージと、あなたへの返信' },
   { id: 'reaction', title: '反応', note: 'いいね・手伝えるかも・参加（10分ぶんをまとめます）' },
-  { id: 'island', title: '島の変化', note: 'あなたの投稿がある島の変化と、近くの投稿のお知らせ（島の変化は1つの島につき1日1件まで）' },
+  { id: 'island', title: '島の変化', note: 'あなたの投稿がある島の変化と、新しい住人のお知らせ（島の変化は1つの島につき1日1件まで、新しい住人は1つの島につき1日3件・全部で1日5件まで）' },
 ]);
 
 export const KIND_TEXT = Object.freeze({
@@ -54,7 +54,7 @@ export const KIND_TEXT = Object.freeze({
 
 /** The small line under a 「話してみたい」 / DM row. */
 export const TALK_HINT = Object.freeze({
-  talk_wish: '参加者のプロフィールから押せます',
+  talk_wish: '同じコミュニティの人のプロフィールから押せます',
   talk_match: 'DMを開く',
   dm: 'DMを開く',
 });
@@ -63,6 +63,10 @@ const fill = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => va
 export const GROUP_TEXT = 'あなたの投稿に反応しました。';
 
 export const categoryOf = (type) => CATEGORY_OF[type] || type;
+
+/** A 「新しい住人」 row: somebody moved onto an island of mine (type island, payload.kind resident). */
+export const isResident = (entry) => Boolean(entry) && entry.type === 'island'
+  && Boolean(entry.payload) && entry.payload.kind === 'resident';
 
 /** Everything on: what somebody who never opened the settings has. */
 export function defaultSettings() {
@@ -153,6 +157,7 @@ export function communityIdOf(entry, postCommunities = {}) {
 /** Who to name: the newest person, "ほか N人" for the rest. An island names itself. */
 export function headline(entry, talkLabel = '') {
   if (isTalkType(entry.type)) return talkHeadline(entry, talkLabel);
+  if (isResident(entry)) return '新しい住人';
   if (entry.type === 'island') {
     const name = (entry.payload || {}).name;
     return name ? `島「${name}」` : '島';
@@ -165,6 +170,13 @@ export function headline(entry, talkLabel = '') {
 export function bodyText(entry, talkLabel = '') {
   if (isTalkType(entry.type)) return talkLabel ? TALK_HINT[entry.type] : '';
   const payload = entry.payload || {};
+  // Same words as the push (PUSH_TEXT in app.py): 「{島}に{名前}さんが引っ越してきました」.
+  if (isResident(entry)) {
+    const who = String((entry.actors && entry.actors[0] && entry.actors[0].display_name) || '').trim();
+    const plain = who.endsWith('さん') && who.length > 2 ? who.slice(0, -2) : who;
+    const cause = payload.cause || (plain ? `${plain}さんが引っ越してきました` : '誰かが引っ越してきました');
+    return payload.name ? `${payload.name}に${cause}` : cause;
+  }
   if (entry.type === 'island') return payload.cause ? `${payload.cause}。` : KIND_TEXT.island;
   if (entry.type === 'quiet_post') return payload.message || KIND_TEXT.quiet_post;
   if (entry.others) return GROUP_TEXT;

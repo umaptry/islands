@@ -1,4 +1,5 @@
-// The post pin: a round badge with the writer's initial, drawn on the map canvas.
+// The post pin: a round badge with the writer's face (photo, emoji or silhouette;
+// the initial while a photo is still loading), drawn on the map canvas.
 // Its look follows the heat in the four steps of heat.js (see PIN in palette.js):
 // still, bobbing, soft round flames, blue flames. A recruiting pin sparkles itself.
 //
@@ -12,6 +13,7 @@
 
 import { PALETTE, PIN, mixHex, pinColor } from './palette.js';
 import { getHeatTier } from '../heat.js';
+import { drawFace, faceKey } from '../avatars.js';
 
 export { pinColor };
 
@@ -84,8 +86,10 @@ export function pinFrame(heat, time, phase = 0) {
 }
 
 /** The key one sprite is cached under. Only what changes the picture is in it. */
-export function pinSpriteKey({ dpr, tier, frame, size, gold, selected, initial }) {
-  return `p|${dpr}|${tier}|${frame}|${size}|${gold ? 1 : 0}|${selected ? 1 : 0}|${initial}`;
+export function pinSpriteKey({ dpr, tier, frame, size, gold, selected, initial, face = null }) {
+  // `face` is the avatars.js faceKey (null: show the initial); the initial only counts without one.
+  const look = face ? `f:${face}` : `i:${initial}`;
+  return `p|${dpr}|${tier}|${frame}|${size}|${gold ? 1 : 0}|${selected ? 1 : 0}|${look}`;
 }
 
 // ---------------------------------------------------------------- the sprite cache
@@ -214,7 +218,7 @@ function fillOf(tier) {
 /** The still picture of a pin (shadow, flame, badge, rim, letter) at scale s.
  * The open pin's picture has no shadow: it is lifted off the ground, and its
  * shadow is drawn where the ground is (drawPostPin). */
-function paintPin(c, tier, frame, s, { gold, selected, initial }) {
+function paintPin(c, tier, frame, s, { gold, selected, initial, face, who }) {
   c.save();
   c.scale(s, s);
   if (!selected) {
@@ -262,7 +266,22 @@ function paintPin(c, tier, frame, s, { gold, selected, initial }) {
     c.stroke();
   }
 
-  paintLetter(c, initial, edge);
+  if (face) paintFace(c, who);
+  else paintLetter(c, initial, edge);
+  c.restore();
+}
+
+const FACE_SIZE = 11.2;   // drawFace size: its radius is 0.66 of it, 7.4, inside the rim
+
+/** The writer's face inside the badge, in pin units. */
+function paintFace(c, who) {
+  c.save();
+  // A pale disc under it, so an emoji reads on any heat colour (a photo and the silhouette cover it).
+  c.fillStyle = 'rgba(255,255,255,0.88)';
+  c.beginPath();
+  c.arc(0, 0, FACE_SIZE * 0.66, 0, TAU);
+  c.fill();
+  drawFace(c, who, 0, 0, FACE_SIZE);
   c.restore();
 }
 
@@ -314,6 +333,8 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   // A bad size would throw in arc() or poison the hit test with NaN.
   if (!(size > 0)) return { top: y, headY: y, headR: 0 };
   const initial = firstChar(opts.initial);
+  const who = opts.face || null;
+  const face = who ? faceKey(who) : null;
   const tier = pinTier(heat);
   const spec = TIERS[tier];
   const s = pinScale(size, heat, selected);
@@ -394,20 +415,20 @@ export function drawPostPin(ctx, x, y, opts = {}) {
   }
 
   // The pin itself, swaying about its centre.
-  const key = pinSpriteKey({ dpr, tier, frame: fr, size: s, gold, selected, initial });
+  const key = pinSpriteKey({ dpr, tier, frame: fr, size: s, gold, selected, initial, face });
   const padX = 16 * s;
   const padUp = 28 * s;
   const entry = sprite(key, padX * 2, padUp + 15 * s, padX, padUp, dpr,
-    (c) => paintPin(c, tier, fr, s, { gold, selected, initial }));
+    (c) => paintPin(c, tier, fr, s, { gold, selected, initial, face, who }));
   ctx.save();
   ctx.translate(x, y + bob);
   if (angle) ctx.rotate(angle);
   if (entry) stamp(ctx, entry, 0, 0);
   else {
-    paintPin(ctx, tier, fr, s, { gold, selected, initial });
+    paintPin(ctx, tier, fr, s, { gold, selected, initial, face, who });
   }
 
-  if (sparkle) paintSparkle(ctx, tier, fr, s, time, initial);
+  if (sparkle) paintSparkle(ctx, tier, fr, s, time, face ? null : initial);
   ctx.restore();
 
   let top = y + geo.top + bob;
@@ -459,8 +480,9 @@ function paintSparkle(ctx, tier, frame, s, time, initial) {
     ctx.closePath();
     ctx.fill();
     ctx.restore();
-    // The letter was in the cached picture, under the band: put it back on top.
-    paintLetter(ctx, initial, fillOf(tier).edge);
+    // The letter was in the cached picture, under the band: put it back on top
+    // (a face is left under the band).
+    if (initial != null) paintLetter(ctx, initial, fillOf(tier).edge);
   }
   // Stars: two over the top of the badge, one low on the rim, taking turns.
   const stars = [[-4.5, -6.5, 1.0, '#FFFFFF'], [7.2, -7.5, 1.5, '#FFF3B0'], [5.2, 6.5, 0.8, '#FFFFFF']];

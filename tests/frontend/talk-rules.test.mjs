@@ -211,7 +211,7 @@ test('the top of a room names the 会 and says who can read it', () => {
   assert.equal(rules.dmIntro({ event_excerpt: 'ボードゲームの会' }, LABEL, clip),
     `「ボードゲーム…」で、お互いに『${LABEL}』を押しました。この DM は2人だけが見られます`);
   assert.equal(rules.dmIntro({ event_excerpt: null }, LABEL),
-    `同じ会で、お互いに『${LABEL}』を押しました。この DM は2人だけが見られます`);
+    `同じコミュニティで、お互いに『${LABEL}』を押しました。この DM は2人だけが見られます`);
   assert.equal(rules.dmEventLine({ event_excerpt: ' 朝ラン ' }), '朝ラン の会');
   assert.equal(rules.dmEventLine({ event_excerpt: null }), '');
 });
