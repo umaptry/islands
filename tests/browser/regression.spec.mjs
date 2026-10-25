@@ -398,7 +398,10 @@ test('after the first post a card lists up to three nearby posts, one per person
     { name: `うた${tag}`, bodies: ['公園で花の写真を撮るのが趣味です。'] },
     { name: `えり${tag}`, bodies: ['最近、花の写真を撮りに公園へ出かけています。'] },
   ]);
-  await signInForFirstPost(page, 'nearby-card');
+  // The server outlives one viewport's run: earlier runs left people with the same words (and, with a fixed
+  // name, the same name as mine). A name of this run's own tells "not mine" apart from "someone called that".
+  const me = `nearby-${tag}`;
+  await signInForFirstPost(page, me);
   await writeFirstPost(page, '休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
   const list = page.locator('#nearbyList');
   await expect(page.locator('#sheet')).toHaveClass(/on/, { timeout: 30000 });
@@ -407,7 +410,7 @@ test('after the first post a card lists up to three nearby posts, one per person
   await expect(list.locator('.nearby-row')).toHaveCount(3);
   const names = await list.locator('.nearby-who').allInnerTexts();
   expect(new Set(names).size).toBe(3);
-  expect(names).not.toContain('nearby-card');
+  expect(names).not.toContain(me);
   await expect(list.locator('.nearby-row .avatar').first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   // タップすると、その投稿が地図の上で開く
