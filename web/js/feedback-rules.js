@@ -25,6 +25,7 @@ export const BUZZ = Object.freeze({
   connect: [10, 40, 10, 40, 18],
   notify: [12, 50, 12],
   error: [30, 40, 30],
+  switch: [12, 50, 22],   // the community was switched: a short double tap
 });
 
 /** What a person who has never opened the settings gets. */
@@ -71,7 +72,10 @@ export function isViewerKey(text) {
 }
 
 /** The effects the design mock's sound set offers (audio.js). */
-export const SE_NAMES = Object.freeze(['success', 'click', 'hardClick', 'pop', 'fanfare']);
+export const SE_NAMES = Object.freeze(['success', 'click', 'hardClick', 'pop', 'fanfare', 'switch']);
+
+/** How long the wash over the map lasts when the community is switched (the header sheet). */
+export const SWITCH_FX_MS = 560;
 
 /** The same effect twice inside this gap is skipped, so quick taps never pile up. */
 export const SE_GAP_MS = 70;

@@ -1005,9 +1005,40 @@ function connectionsInFilter() {
   });
 }
 
+// For tests and checks: the kind of every line in the last frame, [[pair, 'road' | 'sea' | 'arch']], or null far out.
+let lastLineKinds = null;
+export const lineKindsNow = () => lastLineKinds;
+
+// The world the lines are decided from: every post the client holds (and, on a community map, every
+// post of the community, read once when it opened), merged by id, and the landmasses made of them.
+// Rebuilt only when the ground changes, never by the camera.
+let worldKept = { ground: null, worldPosts: null, posts: [], landOf: () => null, water: new Map() };
+function worldLines(ground) {
+  if (worldKept.ground !== ground || worldKept.worldPosts !== state.worldPosts) {
+    let posts = ground;
+    if (state.worldPosts && state.worldPosts.length) {
+      const byId = new Map(state.worldPosts.map((post) => [post.id, post]));
+      ground.forEach((post) => byId.set(post.id, post));
+      state.removed.forEach((id) => byId.delete(id));
+      posts = [...byId.values()];
+    }
+    const index = membership(detectLandmasses(posts));
+    worldKept = { ground, worldPosts: state.worldPosts, posts, landOf: (id) => index.get(id) || null, water: new Map() };
+  }
+  return worldKept;
+}
+
+/** Is there open water between two points, over the world's ground? Kept per pair until the ground changes. */
+function cachedWater(posts, from, to) {
+  const key = `${from}|${to}`;
+  const { water } = worldKept;
+  if (!water.has(key)) water.set(key, waterBetween(posts, NO_CELLS, from, to));
+  return water.get(key);
+}
+
 /** The dotted lines to people like you (kin.js), for this frame. While
  * searching or filtering, only those whose both ends match, like the roads. */
-function kinPlan(meId, sifting, ground = null, cells = NO_CELLS) {
+function kinPlan(meId, sifting, world) {
   if (!meId || !state.myPosts.length || !state.neighbors.size) return [];
   const linked = new Set();
   state.connections.forEach((row) => {
@@ -1017,11 +1048,13 @@ function kinPlan(meId, sifting, ground = null, cells = NO_CELLS) {
   const neighbors = new Map([...state.neighbors].map(([id, held]) => [id, held.rows]));
   // Listed on an island: trusted as it is. Only a post the island list lacks (zoomed in, only the islands
   // in view are listed) is on the nearest island's word, and then the ground decides.
-  const listed = new Set(state.islands.flatMap((island) => island.post_ids || []));
-  const waterGap = ground ? (post, row) => !(listed.has(post.id) && listed.has(row.id))
-    && waterBetween(ground, cells, [post.x, post.y], [row.x, row.y]) : null;
+  // Same world as the roads (worldLines), so a dotted line is straight or an arch at every zoom.
+  const islands = state.worldIslands || state.islands;
+  const listed = new Set(islands.flatMap((island) => island.post_ids || []));
+  const waterGap = world.posts ? (post, row) => !(listed.has(post.id) && listed.has(row.id))
+    && cachedWater(world.posts, [post.x, post.y], [row.x, row.y]) : null;
   const lines = kinLines({
-    mine: state.myPosts, neighbors, islandOf: islandFinder(state.islands), linked, me: meId, waterGap,
+    mine: state.myPosts, neighbors, islandOf: islandFinder(islands), linked, me: meId, waterGap,
   });
   if (!sifting) return lines;
   const mineById = new Map(state.myPosts.map((post) => [post.id, post]));
@@ -1182,20 +1215,23 @@ function renderMap(time) {
 
   // Lines between people run over the ground and under the towns and faces;
   // the planes that fly them go over the towns.
+  const world = worldLines(ground);
   const lineView = {
     rows: sifting ? connectionsInFilter() : state.connections, islands: state.islands,
+    // What a line is (road, sea route, arch) is decided from the whole map, not the part in view.
+    world: { islands: state.worldIslands || state.islands, posts: world.posts, cells: NO_CELLS, landOf: world.landOf },
     // The same posts and coarse layer the ground is drawn from, so whether a route crosses
     // land does not change with the latest viewport fetch.
     posts: ground, cells: state.saturated ? state.cells : NO_CELLS, toScreen, width, height, far, level,
-    landOf: (postId) => landIndex().get(postId) || null,
     span: config().world.max - config().world.min, phone: width < 700,
     // Vehicles shrink with the map: their size is by scale / maxScale.
     scale, maxScale: clampScale(Infinity),
   };
   const linePlan = drawLinks(ctx, lineView);
+  lastLineKinds = linePlan ? linePlan.lines.map((line) => [`${line.row.a_post}|${line.row.b_post}`, line.kind]) : null;
   // Dotted lines to people like you: yours alone, only close up (DETAIL_AT),
   // and not while the map is showing who joined a post.
-  if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, view.posts, view.cells));
+  if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
 
   if (far && freshIslands.size) drawFreshGlow(places, motion);
 
@@ -2512,13 +2548,3 @@ function postsRegion() {
   return { minX, minY, maxX, maxY };
 }
 
-// Per frame the lines only ask which land a post is on, so the answer is kept
-// until the posts in view are replaced (an energy change in place can leave it
-// a little stale, which at worst picks a boat for a walker).
-let landCache = { posts: null, index: new Map() };
-function landIndex() {
-  if (landCache.posts !== state.posts) {
-    landCache = { posts: state.posts, index: membership(detectLandmasses(state.posts)) };
-  }
-  return landCache.index;
-}

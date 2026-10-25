@@ -1712,6 +1712,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .invite-switch input:checked ~ .invite-switch-track::after { transform: translateX(18px); }
 .invite-switch input:focus-visible ~ .invite-switch-track { outline: 2px solid var(--ui); outline-offset: 2px; }
 .invite-switch input:disabled ~ * { opacity: .45; }
+.invite-form .invite-switch { margin-top: 16px; }
 .invite-manage { display: flex; gap: 10px; margin-top: 18px; }
 .invite-manage .btn { flex: 1; }
 .invite-revoke { color: var(--bad); }
@@ -1813,3 +1814,23 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 /* The DM list is a tab now. */
 .dm-row.unread .list-row-title { font-weight: 800; }
 /* ==== end 2026-10-26 ==== */
+
+/* Switching community (the header sheet): the sea washes over the map and the new name settles in. */
+.switch-wash {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 170%; z-index: 3; pointer-events: none;
+  background: linear-gradient(90deg, transparent 0, rgb(255 255 255 / .85) 6%, rgb(255 255 255 / .5) 11%,
+    color-mix(in srgb, var(--wash-sea, #46AEE6) 62%, #fff) 18%,
+    color-mix(in srgb, var(--wash-sea, #46AEE6) 62%, #fff) 85%, transparent 100%);
+  transform: translateX(-100%);
+  animation: switch-wash var(--wash-ms, 560ms) cubic-bezier(.45, .05, .35, 1) forwards;
+}
+@keyframes switch-wash {
+  0% { transform: translateX(-100%); opacity: .95; }
+  100% { transform: translateX(60%); opacity: .0; }
+}
+.header-community.switched .header-community-name { animation: switch-name .5s cubic-bezier(.2, .9, .3, 1.15) both; }
+@keyframes switch-name {
+  0% { opacity: 0; transform: translateY(-7px) scale(.96); }
+  45% { opacity: 0; transform: translateY(-7px) scale(.96); }
+  100% { opacity: 1; transform: none; }
+}

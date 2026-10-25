@@ -64,7 +64,7 @@ function invitePanel(entry) {
       mine = mineOf(list);
       if (!mine.some((post) => post.id === postId)) postId = mine[0]?.id || '';
       if (!mine.length) postOn = false;
-      if (rows.length) paint();
+      if (rows.length || step !== 'idle') paint();
     } catch { /* keep what is there */ }
   }
 
@@ -101,6 +101,28 @@ function invitePanel(entry) {
   }
 
   const linkOf = (row) => inviteUrlFor(window.location.origin, row.code, invitePostFor(postOn, postId));
+
+  // ---- 「会の投稿も一緒に開く」: the switch and the post picker. Shown with the expiry chips (before the link
+  // is made) and above the QR (after); `onChange` is what the caller does when either changes.
+  function postSwitch(onChange) {
+    const picker = el('select', { className: 'invite-post-select input', attrs: { 'aria-label': '一緒に開く投稿' } },
+      ...mine.map((post) => el('option', { text: clipBody(post.body), attrs: { value: post.id } })));
+    picker.value = postId;
+    picker.hidden = !postOn;
+    const toggle = el('input', { className: 'invite-with-post', type: 'checkbox', attrs: { role: 'switch' } });
+    toggle.checked = postOn;
+    toggle.disabled = !mine.length;
+    toggle.addEventListener('change', () => { postOn = toggle.checked; picker.hidden = !postOn; onChange(); });
+    picker.addEventListener('change', () => { postId = picker.value; onChange(); });
+    return [
+      el('label', { className: 'invite-switch' },
+        el('span', { className: 'invite-switch-text', text: '会の投稿も一緒に開く' }),
+        toggle,
+        el('span', { className: 'invite-switch-track', attrs: { 'aria-hidden': 'true' } })),
+      mine.length ? null : el('p', { className: 'invite-note', text: 'この会に投稿すると、その投稿も一緒に開けるようになります。' }),
+      picker,
+    ];
+  }
 
   // ---- the actions
   // Stops every given invite, carrying on past one that fails; returns how many could not be stopped.
@@ -229,6 +251,7 @@ function invitePanel(entry) {
   function chooseView(renewing) {
     return el('div', { className: 'invite-form' },
       ...expiryPicker(),
+      ...postSwitch(() => {}),   // the choice is kept in postOn / postId; the link made next carries it
       el('button', {
         className: 'btn btn-block invite-make', attrs: { type: 'button' }, disabled: busy,
         text: renewing ? '作り直す' : 'リンクを作る',
@@ -262,30 +285,16 @@ function invitePanel(entry) {
     };
     paintQr(url);
     prepareImage(row);
-    const picker = el('select', { className: 'invite-post-select input', attrs: { 'aria-label': '一緒に開く投稿' } },
-      ...mine.map((post) => el('option', { text: clipBody(post.body), attrs: { value: post.id } })));
-    picker.value = postId;
-    picker.hidden = !postOn;
     // The switch and the picked post only change the link text and the QR; the invite itself stays.
     const swap = () => {
       field.value = linkOf(row);
       paintQr(field.value);
       prepareImage(row);
     };
-    const toggle = el('input', { className: 'invite-with-post', type: 'checkbox', attrs: { role: 'switch' } });
-    toggle.checked = postOn;
-    toggle.disabled = !mine.length;
-    toggle.addEventListener('change', () => { postOn = toggle.checked; picker.hidden = !postOn; swap(); });
-    picker.addEventListener('change', () => { postId = picker.value; swap(); });
 
     // The switch comes first: it changes the link and the QR below it.
     return el('div', { className: 'invite-live' },
-      el('label', { className: 'invite-switch' },
-        el('span', { className: 'invite-switch-text', text: '会の投稿も一緒に開く' }),
-        toggle,
-        el('span', { className: 'invite-switch-track', attrs: { 'aria-hidden': 'true' } })),
-      mine.length ? null : el('p', { className: 'invite-note', text: 'この会に投稿すると、その投稿も一緒に開けるようになります。' }),
-      picker,
+      ...postSwitch(swap),
       qrBox,
       el('p', { className: 'invite-line', attrs: { 'aria-label': inviteLineText(row) } },
         el('span', { className: 'invite-line-expiry', text: inviteRowText(row).expiry.replace(/ /g, ' ') }),

@@ -304,3 +304,47 @@ test('止められなかったとき: 文が消えずに残り、更新で作っ
   await expect(card.locator('.invite-open')).toBeVisible();
   expect(await activeCodes(admin, id)).toHaveLength(0);
 });
+
+test('リンクを作る前に「会の投稿も一緒に開く」を決められる。作ったリンクは最初からその投稿つき', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '事前のひと', { create: `事前 ${unique()}`, init: withShare });
+  const id = admin.made.community_id;
+  const older = await makePost(admin, '古い投稿です', id);
+  const newer = await makePost(admin, '新しい投稿です', id);
+  const card = await openEdit(admin, id);
+  await card.locator('.invite-open').click();
+  // 期限のすぐ下に、投稿のスイッチがあり、「リンクを作る」はその後ろ
+  await expect(card.locator('.invite-chip')).toHaveCount(5);
+  await expect(card.locator('.invite-switch')).toBeVisible();
+  await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
+  await expect(card.locator('.invite-post-select')).toBeHidden();
+  const order = await card.locator('.invite-form').evaluate((form) => [...form.children].map((child) => child.className));
+  expect(order.findIndex((c) => c.includes('invite-chips'))).toBeLessThan(order.findIndex((c) => c.includes('invite-switch')));
+  expect(order.findIndex((c) => c.includes('invite-switch'))).toBeLessThan(order.findIndex((c) => c.includes('invite-make')));
+  await card.locator('.invite-switch').click();
+  await expect(card.locator('.invite-post-select')).toBeVisible();
+  await card.locator('.invite-post-select').selectOption(older);
+  await card.screenshot({ path: `C:/Users/tatsu/Desktop/Claude Code/islands_261012/_pw_tmp/fb2/rest/invite-choose-${testInfo.project.name}.png` });
+  await card.locator('.invite-make').click();
+  await expect(card.locator('.invite-qr svg')).toBeVisible();
+  const code = (await activeCodes(admin, id))[0];
+  await expect(card.locator('.invite-url')).toHaveValue(new RegExp(`#/invite/${code}[?]post=${older}$`));
+  await expect(card.locator('.invite-with-post')).toBeChecked();
+  await expect(card.locator('.invite-post-select')).toHaveValue(older);
+  // 上のスイッチは今までどおり使えて、切ると投稿なしのリンクになる
+  await card.locator('.invite-switch').click();
+  await expect(card.locator('.invite-url')).toHaveValue(new RegExp(`#/invite/${code}$`));
+  expect(newer).not.toBe(older);
+  expect(await activeCodes(admin, id)).toHaveLength(1);
+  await noSideScroll(admin.page);
+});
+
+test('投稿をつけずに作ったリンクは、今までどおり投稿なし', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '事前のふたり', { create: `事前2 ${unique()}`, init: withShare });
+  const id = admin.made.community_id;
+  await makePost(admin, 'ひとつだけ', id);
+  const card = await openEdit(admin, id);
+  await card.locator('.invite-open').click();
+  await card.locator('.invite-make').click();
+  await expect(card.locator('.invite-url')).toHaveValue(/#\/invite\/[^?]+$/);
+  await expect(card.locator('.invite-with-post')).not.toBeChecked();
+});

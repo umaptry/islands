@@ -15,6 +15,9 @@ export const state = {
   revision: 0,
   saturated: false,
   islands: [],            // named landmasses from /api/islands
+  worldIslands: null,     // the islands of this whole map, however much is in view (the lines' kinds are decided from these)
+  worldSaturated: false,  // that read hit its limit
+  worldPosts: null,       // every post of a community map, read once when it opens (the lines' ground); null when not read
   reactions: new Set(),   // "postId:kind" for everything I have reacted to
   notifications: [],      // the grouped feed, newest first (段6)
   unread: 0,              // unread entries whose kind may interrupt
