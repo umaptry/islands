@@ -112,7 +112,8 @@ export function setupSheetAccessibility() {
   sync();
 }
 
-export function openSheet({ expanded = false, onClose = null } = {}) {
+// fit: as tall as what is in it (a short card), not the half-height sheet of a post.
+export function openSheet({ expanded = false, onClose = null, fit = false } = {}) {
   if (sheetState.open) closeSheet();
   sheetFocus = document.activeElement;
   const sheet = $('sheet');
@@ -121,6 +122,7 @@ export function openSheet({ expanded = false, onClose = null } = {}) {
   sheetState.onClose = onClose;
   sheet.classList.add('on');
   sheet.classList.toggle('full', expanded);
+  sheet.classList.toggle('fit', fit);
   $('sheetScroll').scrollTop = 0;
   document.body.classList.add('sheet-open');
   document.dispatchEvent(new CustomEvent('sheet:state'));
@@ -145,7 +147,7 @@ export function closeSheet() {
   if (!sheetState.open) return;
   sheetState.open = false;
   sheetState.expanded = false;
-  $('sheet').classList.remove('on', 'full');
+  $('sheet').classList.remove('on', 'full', 'fit');
   document.body.classList.remove('sheet-open');
   const done = sheetState.onClose;
   sheetState.onClose = null;

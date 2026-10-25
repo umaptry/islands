@@ -36,6 +36,8 @@ test('new profile reaches guidance before the first post, including after reload
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   await expect(page.locator('#guidanceTrack > .slide').nth(0)).toBeVisible();
+  await expect(page.locator('#guidanceTrack > .slide')).toHaveCount(6);
+  await expect(page.locator('#guidanceDots .dot')).toHaveCount(6);
   await page.locator('#guidanceNext').click();
   await page.goto('/');
   await expect(page.locator('#guidance')).toHaveClass(/active/);
@@ -43,12 +45,11 @@ test('new profile reaches guidance before the first post, including after reload
   const slides = await page.locator('#guidanceTrack > *').count();
   for (let i = 1; i < slides; i++) await page.locator('#guidanceNext').click();
   await expect(page.locator('#compose')).toHaveClass(/active/);
-  await expect(page.locator('#composeLede')).toHaveText('ためしに１つ\n投稿してみましょう。');
+  await expect(page.locator('#composeLede')).toHaveText('ひとこと書いて、あなたの島を作りましょう。');
   await expect(page.locator('#bottomNav')).toBeHidden();
-  // 最初は例文だけ。「自分の言葉で書く」で入力欄が開く。
-  await expect(page.locator('#composeBody')).toBeHidden();
-  await page.locator('#composeOwnBtn').click();
+  // 入力欄は最初から開いている。例文は出ない。
   await expect(page.locator('#composeBody')).toBeVisible();
+  await expect(page.locator('#composeExamples')).toBeHidden();
   await expect(page.locator('#firstPostFooter #composeSubmit')).toBeVisible();
 });
 
@@ -68,10 +69,14 @@ test('reference registration saves profile and completes the first post', async 
   await expect(page.locator('#setupNameFields')).toBeHidden();
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
-  await expect(page.locator('#guidance h2').first()).toContainText('あなたが書いたひとことで');
+  await expect(page.locator('#guidance h2').first()).toHaveText('islandsへようこそ');
   const pages = await page.locator('#guidanceTrack > .slide').count();
+  expect(pages).toBe(6);
+  // 6枚目のボタンの名前は画面に書かず、/api/config の talk.label から入る。
+  const talkLabel = await page.evaluate(async () => (await import('/static/js/config.js')).config().talk.label);
+  await expect(page.locator('#guidanceTrack > .slide').nth(5).locator('h2')).toContainText(`『${talkLabel}』`);
+  await expect(page.locator('#guidanceTrack > .slide').nth(5).locator('.guidance-first-only')).toHaveCount(1);
   for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
-  await page.locator('#composeOwnBtn').click();
   await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
   // スライダーを一度動かすまで投稿できない。
   await expect(page.locator('#composeSubmit')).toBeDisabled();
@@ -179,7 +184,6 @@ test('a post image opens in the viewer with close and reactions, and closes by b
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   const pages = await page.locator('#guidanceTrack > .slide').count();
   for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
-  await page.locator('#composeOwnBtn').click();
   await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
   await page.locator('#composeMotivation').fill('70');
   // A 1x1 PNG is enough: the viewer does not care what the picture is.
@@ -303,27 +307,54 @@ async function signInForFirstPost(page, label) {
   }, label);
 }
 
-test('first post shows only the examples until "自分の言葉で書く" opens the form and focuses the body', async ({ page }) => {
-  await signInForFirstPost(page, 'two-step');
+test('first post: no examples, the box is open, and an opening phrase goes into it', async ({ page }) => {
+  await signInForFirstPost(page, 'starters');
   await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
   await expect(page.locator('#compose')).toHaveClass(/active/);
-  await expect(page.locator('#composeOwnBtn')).toBeVisible();
-  await expect(page.locator('#composeExampleList .example').first()).toBeVisible();
-  for (const id of ['#composeBody', '#composeMotivation', '#composeSubmit']) {
-    await expect(page.locator(id)).toBeHidden();
-  }
-  await page.locator('#composeOwnBtn').click();
-  await expect(page.locator('#composeBody')).toBeVisible();
-  await expect(page.locator('#composeBody')).toBeFocused();
+  await expect(page.locator('#composeExamples')).toBeHidden();
   await expect(page.locator('#composeOwnBtn')).toBeHidden();
-  await expect(page.locator('#firstPostFooter #composeSubmit')).toBeVisible();
+  await expect(page.locator('#composeExtraPrompts')).toBeHidden();
+  for (const id of ['#composeBody', '#composeMotivation', '#composeSubmit']) {
+    await expect(page.locator(id)).toBeVisible();
+  }
+  const chips = page.locator('#composeStarterList .extra-chip');
+  await expect(chips).toHaveText(['昔がんばってたのは、', '最近はまってるのは、', '今度やってみたいのは、']);
+  await chips.nth(1).click();
+  await expect(page.locator('#composeBody')).toHaveValue('最近はまってるのは、');
+  await expect(page.locator('#composeBody')).toBeFocused();
+  await expect(chips.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  // the cursor is at the end: what is typed next follows the phrase
+  await page.keyboard.type('ボードゲームです');
+  await expect(page.locator('#composeBody')).toHaveValue('最近はまってるのは、ボードゲームです');
+  // words the person wrote are not replaced by another phrase
+  await chips.nth(0).click();
+  await expect(page.locator('#composeBody')).toHaveValue('最近はまってるのは、ボードゲームです');
+  // a box holding only a phrase takes the next phrase in its place
+  await page.locator('#composeBody').fill('昔がんばってたのは、');
+  await chips.nth(2).click();
+  await expect(page.locator('#composeBody')).toHaveValue('今度やってみたいのは、');
+  // later posts keep the old prompts and have no opening phrases
+  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post'));
+  await expect(page.locator('#composeStarters')).toBeHidden();
+  await expect(page.locator('#composeExamples')).toBeHidden();
+});
+
+test('the chosen opening phrase is recorded as the post prompt', async ({ page }) => {
+  await signInForFirstPost(page, 'starter-prompt');
+  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
+  await page.locator('#composeStarterList .extra-chip').nth(0).click();
+  await page.keyboard.type('陸上部で長距離を走っていました');
+  await page.locator('#composeMotivation').fill('60');
+  await page.locator('#composeSubmit').click();
+  await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
+  const prompt = await page.evaluate(async () => (await import('/static/js/state.js')).state.myPosts.at(-1)?.prompt);
+  expect(prompt).toBe('past');
 });
 
 test('first post opens already expanded when a draft with text comes back', async ({ page }) => {
   await signInForFirstPost(page, 'draft-open');
   const go = (hash) => page.evaluate(async (h) => (await import('/static/js/router.js')).navigate(h), hash);
   await go('#/post?first=1');
-  await page.locator('#composeOwnBtn').click();
   await page.locator('#composeBody').fill('下書きに書いた文章は、戻ってきたときも残ります。');
   await go('#/map');
   await expect(page.locator('#map')).toHaveClass(/active/);
@@ -331,8 +362,83 @@ test('first post opens already expanded when a draft with text comes back', asyn
   await expect(page.locator('#compose')).toHaveClass(/active/);
   await expect(page.locator('#composeBody')).toBeVisible();
   await expect(page.locator('#composeBody')).toHaveValue('下書きに書いた文章は、戻ってきたときも残ります。');
-  await expect(page.locator('#composeOwnBtn')).toBeHidden();
 });
+
+// 最初の投稿のあと：近くの投稿のカード。見本の人たちを、デモのコミュニティに置く。
+async function seedNeighbours(page, rows) {
+  // rows: [{ name, bodies }]. Each person signs in on their own token.
+  for (const row of rows) {
+    const email = `${row.name}-${Math.random().toString(36).slice(2)}@example.com`;
+    const otp = await (await page.request.post('/api/local/auth/otp', { data: { email } })).json();
+    const got = await (await page.request.post('/api/local/auth/verify', { data: { email, code: otp.code } })).json();
+    const headers = { Authorization: `Bearer ${got.access_token}` };
+    await page.request.put('/api/account/me', { data: { display_name: row.name, icon_id: '1' }, headers });
+    await page.request.post('/api/local/invites/claim', { data: { code: 'demo-invite-code-local-0001' }, headers });
+    const mine = await (await page.request.get('/api/local/communities/mine', { headers })).json();
+    const communityId = mine.communities[0].id || mine.communities[0].community_id;
+    for (const body of row.bodies) {
+      await page.request.post('/api/posts', { data: { body, tags: [], motivation: 50, community_id: communityId }, headers });
+    }
+  }
+}
+
+async function writeFirstPost(page, body) {
+  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
+  await page.locator('#composeBody').fill(body);
+  await page.locator('#composeMotivation').fill('60');
+  await page.locator('#composeSubmit').click();
+  await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
+}
+
+test('after the first post a card lists up to three nearby posts, one per person, never mine', async ({ page }) => {
+  const tag = Math.random().toString(36).slice(2, 6);
+  await seedNeighbours(page, [
+    { name: `あき${tag}`, bodies: ['休日に公園を散歩しながら季節の花を撮影しています。', '週末は近所の公園でのんびり写真を撮っています。'] },
+    { name: `いく${tag}`, bodies: ['休日は写真を撮りながら街を歩くのが好きです。'] },
+    { name: `うた${tag}`, bodies: ['公園で花の写真を撮るのが趣味です。'] },
+    { name: `えり${tag}`, bodies: ['最近、花の写真を撮りに公園へ出かけています。'] },
+  ]);
+  // The server outlives one viewport's run: earlier runs left people with the same words (and, with a fixed
+  // name, the same name as mine). A name of this run's own tells "not mine" apart from "someone called that".
+  const me = `nearby-${tag}`;
+  await signInForFirstPost(page, me);
+  await writeFirstPost(page, '休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
+  const list = page.locator('#nearbyList');
+  await expect(page.locator('#sheet')).toHaveClass(/on/, { timeout: 30000 });
+  await expect(page.locator('#sheet .stack-title')).toHaveText('あなたの近くの投稿');
+  await expect(page.locator('#sheet .nearby-lede')).toHaveText('近くにいる人ほど、似た話をしています');
+  await expect(list.locator('.nearby-row')).toHaveCount(3);
+  const names = await list.locator('.nearby-who').allInnerTexts();
+  expect(new Set(names).size).toBe(3);
+  expect(names).not.toContain(me);
+  await expect(list.locator('.nearby-row .avatar').first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // タップすると、その投稿が地図の上で開く
+  const firstId = await list.locator('.nearby-row').first().getAttribute('data-post-id');
+  await list.locator('.nearby-row').first().click();
+  await expect(page.locator('#sheet.on .post-card')).toHaveAttribute('data-post-id', firstId, { timeout: 15000 });
+});
+
+test('the nearby card says so when nobody is near, and 「地図を見る」 closes it', async ({ page }) => {
+  await signInForFirstPost(page, 'nearby-none');
+  await page.route('**/api/local/communities/*/map*', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ posts: [] }),
+  }));
+  await writeFirstPost(page, '誰もいない島に最初に降りてみたいなと思っています。ゆっくり進めます。');
+  await expect(page.locator('#nearbyEmpty')).toHaveText('まだ近くに投稿がありません。仲間が投稿すると、ここに並びます。', { timeout: 30000 });
+  await expect(page.locator('#nearbyList')).toHaveCount(0);
+  await page.locator('#nearbyClose').click();
+  await expect(page.locator('#sheet')).not.toHaveClass(/on/);
+});
+
+// The trial (reveal screen, banner) stays until after 10/30, but nothing on the first post leads to it now:
+// call tryExample directly.
+async function tryExampleOnce(page) {
+  await page.evaluate(async () => {
+    const compose = await import('/static/js/screens/compose.js');
+    compose.tryExample('学生のころ吹奏楽部でトランペットを吹いていました。');
+  });
+}
 
 test('trial result lists the nearest named islands and offers the own-words post first', async ({ page }) => {
   await signInForFirstPost(page, 'reveal-near');
@@ -340,7 +446,7 @@ test('trial result lists the nearest named islands and offers the own-words post
     contentType: 'application/json',
     body: JSON.stringify({ x: 10, y: 10, island: { cluster_id: 1, label: '近い島A' } }),
   }));
-  await page.route('**/api/islands', (route) => route.fulfill({
+  await page.route('**/api/islands*', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ islands: [
       { cluster_id: 1, label: '近い島A', people: 4, cx: 11, cy: 10 },
@@ -350,8 +456,7 @@ test('trial result lists the nearest named islands and offers the own-words post
       { cluster_id: 5, label: '遠い島D', people: 1, cx: 900, cy: 900 },
     ] }),
   }));
-  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
-  await page.locator('#composeExampleList .example').first().click();
+  await tryExampleOnce(page);
   await expect(page.locator('#reveal')).toHaveClass(/active/, { timeout: 15000 });
   await expect(page.locator('.reveal-near-lede')).toHaveText('あなたの文に近い話をしている人は、このあたりにいます');
   const names = page.locator('.reveal-near-name');
@@ -370,7 +475,7 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
     contentType: 'application/json',
     body: JSON.stringify({ x: 10, y: 10, island: { cluster_id: 1, label: '近い島A' } }),
   }));
-  await page.route('**/api/islands', (route) => route.fulfill({
+  await page.route('**/api/islands*', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ islands: [
       { cluster_id: 1, label: '近い島A', people: 4, cx: 11, cy: 10 },
@@ -379,8 +484,7 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
     ] }),
   }));
   const tryOnce = async () => {
-    await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
-    await page.locator('#composeExampleList .example').first().click();
+    await tryExampleOnce(page);
     await expect(page.locator('#reveal')).toHaveClass(/active/, { timeout: 15000 });
     await page.locator('#revealToMap').click();
     await expect(page.locator('#map')).toHaveClass(/active/);
@@ -428,7 +532,7 @@ test('trial hint still works when localStorage refuses', async ({ page }) => {
     contentType: 'application/json',
     body: JSON.stringify({ x: 10, y: 10, island: { cluster_id: 1, label: '近い島A' } }),
   }));
-  await page.route('**/api/islands', (route) => route.fulfill({
+  await page.route('**/api/islands*', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ islands: [
       { cluster_id: 1, label: '近い島A', people: 4, cx: 11, cy: 10 },
@@ -437,8 +541,7 @@ test('trial hint still works when localStorage refuses', async ({ page }) => {
   }));
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
-  await page.locator('#composeExampleList .example').first().click();
+  await tryExampleOnce(page);
   await expect(page.locator('#reveal')).toHaveClass(/active/, { timeout: 15000 });
   await page.locator('#revealToMap').click();
   await expect(page.locator('#map')).toHaveClass(/active/);

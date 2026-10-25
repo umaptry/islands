@@ -4,6 +4,8 @@
 // two screens do not import each other.
 
 import { api } from '../net.js';
+import { membersOnly } from '../config.js';
+import { changesInScope } from '../community-rules.js';
 import { state } from '../state.js';
 import {
   $, avatar, clear, desktopSheet, el, openSheet, timeAgo,
@@ -66,8 +68,20 @@ export async function loadDigest() {
   paintMarks();
 }
 
+/** The changes of the map in front of me (members only: one community's; the digest holds them all). */
+function inView() {
+  return changesInScope(changes, { membersOnly: membersOnly(), communityId: state.communityId });
+}
+
 function unseen() {
-  return changes.filter((change) => !seen.has(change.id));
+  return inView().filter((change) => !seen.has(change.id));
+}
+
+/** Signing out: nothing of the last person's digest stays. */
+export function clearDigest() {
+  digestFor = null;
+  changes = [];
+  paintMarks();
 }
 
 /** The pill under the tabs and the rings on the map, both from what is unseen. */
@@ -98,9 +112,9 @@ function nameAt(change) {
 
 function openDigest() {
   const { body } = meetSheet();
-  body.append(el('h3', { className: 'meet-title', text: digestLabel(changes.length) }));
+  body.append(el('h3', { className: 'meet-title', text: digestLabel(inView().length) }));
   const list = el('div', { className: 'change-list' });
-  changes.forEach((change) => {
+  inView().forEach((change) => {
     const said = describeChange(change, { nameAt: () => nameAt(change) });
     const row = el('button', {
       className: `change-row${seen.has(change.id) ? ' seen' : ''}`,

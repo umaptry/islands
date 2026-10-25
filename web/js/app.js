@@ -20,7 +20,7 @@ import { setupFeedback } from './feedback.js';
 import { setupAudio } from './audio.js';
 import { setupAuth, setupGuidance, setupProfileSetup, setupWelcome } from './screens/auth.js';
 import { setupCompose, setupReveal } from './screens/compose.js';
-import { setupMapScreen, refreshMyPosts } from './screens/map.js';
+import { setupMapScreen, refreshMyPosts, forgetMapData } from './screens/map.js';
 import { refreshNotifications, setupNotifications, paintBadge } from './screens/notifications.js';
 import { setupProfile } from './screens/profile.js';
 import { setupDm } from './screens/dm.js';
@@ -228,6 +228,7 @@ async function boot() {
       clearDm();
       refreshNav();
       dropCommunities();
+      forgetMapData();
     }
     // Also rings on every token refresh; both only act when the person changed.
     syncRealtime();

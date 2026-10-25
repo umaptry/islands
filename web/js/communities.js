@@ -5,7 +5,7 @@
 // Silent when features.communities is false (communitiesActive() is then false and
 // the map is everybody's, as before).
 
-import { config } from './config.js';
+import { config, membersOnly } from './config.js';
 import { data } from './net.js';
 import { session } from './session.js';
 import { notify, state } from './state.js';
@@ -77,21 +77,60 @@ export function clearCommunities(accountId = accountKey()) {
 
 /** For sign-out: forget the lists but leave the remembered choice for next time. */
 export function dropCommunities() {
+  postCommunities.clear();
   state.communities = [];
   state.communitiesLoaded = false;
   state.communityId = null;
   state.viewCommunity = null;
 }
 
-/** What the map should show now. `linked` is the community of a linked post, if any. */
-export function currentScope(linked = null) {
+/** What the map should show now. `linked` is the community of a linked post, if any; `closed` (members only):
+ * the link led to something this person cannot read. */
+export function currentScope(linked = null, closed = false) {
   return mapScope({
     on: communitiesActive(),
     communities: state.communities,
     current: state.communityId,
     linked,
     viewing: state.viewCommunity,
+    membersOnly: membersOnly(),
+    closed,
   });
+}
+
+const postCommunities = new Map();   // post id -> community id ('' when the post could not be read)
+
+/** The community a post is in: from what is already on screen, else asked once (a failure is remembered as
+ * unknown for this page load, so a list of rows does not ask again and again). */
+export async function communityIdOfPost(postId) {
+  if (!postId) return '';
+  const known = state.postsById.get(postId) || state.myPosts.find((post) => post.id === postId);
+  if (known && known.community_id) return known.community_id;
+  if (postCommunities.has(postId)) return postCommunities.get(postId);
+  let id = '';
+  let answered = false;
+  try {
+    const post = await data.getPost(postId);
+    answered = true;
+    id = (post && post.community_id) || '';
+  } catch { /* unknown */ }
+  // Only an answer is remembered: a dropped connection, or a time before I was a member, is asked again.
+  if (answered && id) postCommunities.set(postId, id);
+  return id;
+}
+
+/** A community's name: from my list, else the community table (members read it); '' when unknown. */
+export async function communityNameFor(id) {
+  if (!id) return '';
+  const mine = state.communities.find((entry) => entry.id === id);
+  if (mine) return mine.name;
+  if (!state.account) return '';   // the table is for members: signed out there is nobody to ask for
+  try {
+    const info = await data.communityInfo(id);
+    return (info && info.name) || '';
+  } catch {
+    return '';
+  }
 }
 
 /** The community a post belongs to, with its name when I can find it. */

@@ -467,6 +467,13 @@ EXTRA_PROMPTS = (
     {"key": "future", "text": "今度やってみたいこと",
      "example": "今度、陶芸教室で器づくりに挑戦してみたいです。一緒に体験しませんか"},
 )
+# The opening words offered on the first post (chips over the box). Each key is one of
+# EXTRA_PROMPTS' keys, and a chosen chip is recorded as the post's `prompt` like that prompt.
+POST_STARTERS = (
+    {"key": "past", "text": "昔がんばってたのは、"},
+    {"key": "now", "text": "最近はまってるのは、"},
+    {"key": "future", "text": "今度やってみたいのは、"},
+)
 # What a post's `prompt` may be: the weekly one or an extra one.
 POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
 
@@ -481,8 +488,9 @@ RECRUIT_TAG = "参加者募集中"
 # in the 〜たい / 〜したい form (話してみたい, 挨拶したい ...). A noun or 「気になる」 breaks the sentence.
 # After renaming: run the node tests (PUSH_TEXT vs screen texts) and retake the screenshots.
 TALK_LABEL = "もっと話してみたい"
-# Wishes older than this are swept by press_talk (and hidden by my_talk_state).
-TALK_WISH_DAYS = 14
+# A press stays until it is withdrawn or matched. Only the anonymous talk_wish notice is
+# limited: once per this many days from the same person to the same person.
+TALK_NOTICE_DAYS = 14
 DM_BODY_MAX = 1000
 DM_ROOM_EXCERPT = 30
 # The words press_talk raises (PostgREST {"message"}; local mode 4xx {"detail"}).
@@ -519,6 +527,15 @@ LOCAL_DEMO_COMMUNITY_SLUG = "demo"
 LOCAL_DEMO_INVITE_CODE = "demo-invite-code-local-0001"
 # How long the server trusts what it read from app_settings (invite_only).
 INVITE_ONLY_CACHE_SECONDS = 60
+# Members-only posts (app_settings.members_only): a post of a community is read by that community's
+# members only. The server reads the switch at most this often, and a change reaches every
+# instance within it.
+MEMBERS_ONLY_CACHE_SECONDS = 15
+# ONE sentence for "no such post", "a post of another community" and "you are not a member":
+# the three must never be told apart (no existence leak).
+MEMBERS_ONLY_NOT_FOUND = "見つかりませんでした。"
+MEMBERS_ONLY_UNAVAILABLE = "現在、確認できません。しばらくしてからお試しください。"
+MEMBERS_ONLY_COMMUNITY_REQUIRED = "コミュニティを指定してください。"
 RECRUIT_CAPACITY_MIN = 1
 RECRUIT_CAPACITY_MAX = 999
 RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today

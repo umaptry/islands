@@ -13,13 +13,18 @@ insert into public.accounts(id, display_name) values
   ('ffffffff-ffff-4fff-8fff-ffffffffffff', 'reader')
 on conflict (id) do nothing;
 
-insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c) values
+-- 2026-10-27: 近い投稿はコミュニティの中だけで探す（p_community）。
+insert into public.communities(id, name) values ('06060606-0606-4606-8606-060606060606', 'views');
+
+insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c, community_id) values
   ('00000000-0000-4000-8000-000000000601', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
    '一つ目', 1, 1, 0,
-   array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448)),
+   array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448),
+   '06060606-0606-4606-8606-060606060606'),
   ('00000000-0000-4000-8000-000000000602', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
    '二つ目', 2, 2, 0,
-   array_fill(-1.0, array[448])::vector(448), array_fill(-1.0, array[448])::vector(448));
+   array_fill(-1.0, array[448])::vector(448), array_fill(-1.0, array[448])::vector(448),
+   '06060606-0606-4606-8606-060606060606');
 
 -- -----------------------------------------------------------------------
 -- 1. Counting, as the server does it
@@ -48,10 +53,12 @@ update public.posts set deleted_at = null where id = '00000000-0000-4000-8000-00
 -- -----------------------------------------------------------------------
 -- 2. Neighbours of a vector that was never saved
 -- -----------------------------------------------------------------------
-select is((select id from public.nearest_to_vector(array_fill(1.0, array[448])::vector(448)::text, 1)),
+select is((select id from public.nearest_to_vector(array_fill(1.0, array[448])::vector(448)::text, 1,
+                                         '06060606-0606-4606-8606-060606060606')),
           '00000000-0000-4000-8000-000000000601'::uuid,
           'the closest saved post comes first');
-select is((select count(*)::int from public.nearest_to_vector(array_fill(1.0, array[448])::vector(448)::text, 500)
+select is((select count(*)::int from public.nearest_to_vector(array_fill(1.0, array[448])::vector(448)::text, 500,
+                                                     '06060606-0606-4606-8606-060606060606')
             where id in ('00000000-0000-4000-8000-000000000601', '00000000-0000-4000-8000-000000000602')), 2,
           'k is capped, not refused');
 
@@ -65,7 +72,7 @@ select ok(not has_table_privilege('authenticated', 'public.post_views', 'INSERT'
           'views are written by the server only');
 select ok(not has_function_privilege('authenticated', 'public.post_view_counts(uuid)', 'execute'),
           'the browser cannot ask for anybody''s counts');
-select ok(not has_function_privilege('anon', 'public.nearest_to_vector(text,integer)', 'execute'),
+select ok(not has_function_privilege('anon', 'public.nearest_to_vector(text,integer,uuid)', 'execute'),
           'nor place a vector of its own');
 
 set local role authenticated;

@@ -616,6 +616,11 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 }
 .sheet.on { transform: none; visibility: visible; pointer-events: auto; }
 .sheet.full { height: calc(var(--viewport-height, 100dvh) * .9); }
+/* A short card (the nearby posts after a first post): as tall as its contents. The side panel of wider
+   screens is already as tall as its contents. */
+@media not all and (min-width: 768px) and (min-height: 500px) {
+  .sheet.fit:not(.full) { height: auto; max-height: calc(var(--viewport-height, 100dvh) * .9); }
+}
 
 .sheet-grip {
   height: 22px; flex: none; display: flex; align-items: center; justify-content: center;
@@ -1188,6 +1193,8 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .legal-note a { color: var(--on-sea); text-decoration: underline; text-underline-offset: 2px; }
 /* On the welcome screen the note sits above every way in, so it is read before any of them is pressed. */
 .legal-note-top { margin-top: 16px; text-align: left; }
+/* Under the links on the settings screen: how to leave, while there is no button for it. */
+.legal-note-sub { margin-top: 6px; }
 .avatar-pick { display: flex; flex-direction: column; align-items: center; gap: 18px; margin: 12px 0 28px; }
 .avatar-slot-large .avatar { box-shadow: 0 0 0 4px rgba(255, 255, 255, .6); }
 .avatar-pick .avatar-actions { justify-content: center; }
@@ -1460,6 +1467,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .guidance-skip:hover { color: #fff; }
 .slide h2 { text-wrap: balance; word-break: auto-phrase; }
 .slide-note { word-break: auto-phrase; text-wrap: pretty; }
+.slide .talk-name { white-space: nowrap; }
 #guidanceNext { flex: 1.6; white-space: nowrap; }
 #guidanceBack { flex: 1; }
 /* ==== end lane W ==== */
@@ -1603,6 +1611,13 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .community-row .stack-who { flex: 1; width: auto; }
 .community-row .stack-text { flex: none; font-size: 12px; color: var(--ink-3); }
 .community-hint { margin: 12px 2px 0; font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+
+/* After the first post: the posts standing nearest to it, in the sheet. */
+.nearby-lede { margin: -4px 2px 6px; font-size: 12.5px; color: var(--ink-3); line-height: 1.6; }
+.nearby-row .avatar { flex: none; }
+.nearby-who { flex: none; width: 5.5em; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nearby-empty { margin: 10px 2px 4px; font-size: 13.5px; color: var(--ink-2); line-height: 1.7; word-break: auto-phrase; }
+.nearby-close { margin-top: 14px; min-height: 48px; background: var(--ui); color: #fff; box-shadow: none; }
 
 /* A person in no community gets words where the map would be. */
 .map-notice {
@@ -1814,6 +1829,19 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 /* The DM list is a tab now. */
 .dm-row.unread .list-row-title { font-weight: 800; }
 /* ==== end 2026-10-26 ==== */
+
+/* Members only: which community a post or a notification is about (small), the note on other people's pages,
+   and the notice for what cannot be read. */
+.post-community, .notif-community {
+  display: block; margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--ink-3);
+  overflow-wrap: anywhere; max-width: 100%;
+}
+.notif-community { color: var(--on-sea-3); }
+.notif-community[hidden] { display: none; }
+.profile-shared-note { margin: 0 0 12px; font-size: 12px; line-height: 1.6; color: var(--on-sea-2); text-wrap: pretty; }
+.members-only-title { margin: 0 0 8px; font-size: 15px; font-weight: 800; line-height: 1.6; text-wrap: pretty; }
+#welcomeMembersNote { margin-top: 12px; }
+#welcomeMembersNote[hidden] { display: none; }
 
 /* Switching community (the header sheet): the sea washes over the map and the new name settles in. */
 .switch-wash {

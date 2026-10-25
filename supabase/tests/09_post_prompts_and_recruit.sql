@@ -146,21 +146,29 @@ select lives_ok(
     values ('00000000-0000-4000-8000-000000000901', 'a9a9a9a9-a9a9-4a9a-8a9a-a9a9a9a9a9a2', 'join')$$,
   'a post with no limits accepts joins');
 
--- 6. map_posts returns the new columns.
-select is((select recruit_closed from public.map_posts(-1000, -1000, 1000, 1000, 100)
+-- 6. 地図の読みは新しい列を返す。2026-10-27 から map_posts はメンバーの JWT がないと 0 件なので、
+--    サーバー専用の map_posts_for_community（列は同じ）で確かめる。
+insert into public.communities(id, name) values ('09090909-0909-4909-8909-090909090909', 'prompts');
+update public.posts set community_id = '09090909-0909-4909-8909-090909090909'
+ where id in ('00000000-0000-4000-8000-000000000901', '00000000-0000-4000-8000-000000000902',
+              '00000000-0000-4000-8000-000000000905');
+select is((select recruit_closed from public.map_posts_for_community('09090909-0909-4909-8909-090909090909', -1000, -1000, 1000, 1000, 100)
             where id = '00000000-0000-4000-8000-000000000905'),
           'deadline', 'map_posts says the post is closed by its deadline');
-select is((select prompt from public.map_posts(-1000, -1000, 1000, 1000, 100)
+select is((select prompt from public.map_posts_for_community('09090909-0909-4909-8909-090909090909', -1000, -1000, 1000, 1000, 100)
             where id = '00000000-0000-4000-8000-000000000902'),
           'past', 'map_posts returns the prompt');
-select is((select recruit_closed from public.map_posts(-1000, -1000, 1000, 1000, 100)
+select is((select recruit_closed from public.map_posts_for_community('09090909-0909-4909-8909-090909090909', -1000, -1000, 1000, 1000, 100)
             where id = '00000000-0000-4000-8000-000000000901'),
           null, 'and null for a post that takes joins');
 
 -- 7. Privileges: readable, but not writable from the browser.
-select ok(has_column_privilege('anon', 'public.posts', 'recruit_deadline', 'SELECT'),
-          'anyone can read the deadline');
-select ok(has_column_privilege('anon', 'public.posts', 'prompt', 'SELECT'), 'and the prompt');
+select ok(has_column_privilege('authenticated', 'public.posts', 'recruit_deadline', 'SELECT'),
+          'a signed-in person can read the deadline (their rows only: members-only)');
+select ok(has_column_privilege('authenticated', 'public.posts', 'prompt', 'SELECT'), 'and the prompt');
+select ok(not has_column_privilege('anon', 'public.posts', 'recruit_deadline', 'SELECT'),
+          'anon cannot (members-only, 2026-10-27)');
+select ok(not has_column_privilege('anon', 'public.posts', 'prompt', 'SELECT'), 'nor the prompt');
 select ok(not has_column_privilege('authenticated', 'public.posts', 'prompt', 'UPDATE'),
           'the browser cannot write the prompt');
 select ok(not has_column_privilege('authenticated', 'public.posts', 'recruit_capacity', 'UPDATE'),

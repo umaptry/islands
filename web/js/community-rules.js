@@ -16,6 +16,10 @@
 /** features.communities is the server's verdict (false until the tables exist). */
 export const communitiesOn = (cfg) => Boolean(cfg && cfg.features && cfg.features.communities === true);
 
+/** features.members_only: posts are readable by the members of their community only (the server's switch).
+ * Meaningful only with communities on; the code ships before the switch and behaves as before while it is off. */
+export const membersOnlyOn = (cfg) => communitiesOn(cfg) && cfg.features.members_only === true;
+
 /** New accounts only through an invite. Meaningless while communities are off. */
 export const inviteOnlyOn = (cfg) => communitiesOn(cfg) && cfg.invite_only === true;
 
@@ -24,6 +28,14 @@ export const inviteOnlyOn = (cfg) => communitiesOn(cfg) && cfg.invite_only === t
 export const INVITE_ONLY_NOTE = 'islands は招待制です。コミュニティの招待リンクから登録してください。';
 export const NOT_MEMBER_NOTE = 'まだコミュニティに入っていません。招待リンクから参加してください。';
 export const NEW_ACCOUNT_NOTE = 'このアカウントはまだ登録されていません。コミュニティの招待リンクから登録してください。';
+// Members only: one sentence for every case where a person cannot read a community (a link to a post of it,
+// signed out, not a member, a former member, a post that is gone). "Missing" and "not allowed" read the same.
+export const MEMBERS_ONLY_TITLE = 'このコミュニティのメンバーだけが見られます';
+export const MEMBERS_ONLY_SUB_SIGNED_IN = 'メンバーの人からもらった招待リンクを開くと、参加できます。';
+export const MEMBERS_ONLY_SUB_SIGNED_OUT = 'ログインするか、メンバーの人からもらった招待リンクを開いてください。';
+export const MEMBERS_ONLY_MAP_TITLE = '地図は、コミュニティのメンバーだけが見られます';
+export const WELCOME_MEMBERS_NOTE = 'islands は、コミュニティの人から届く招待リンクから参加します。';
+export const SHARED_ONLY_NOTE = '共通のコミュニティの投稿だけが表示されます';
 export const ASK_ADMIN = 'コミュニティの管理者に、新しいリンクをもらってください。';
 
 const REASON_TEXT = {
@@ -235,6 +247,15 @@ export function entryView({ cfg, hasInvite = false }) {
 }
 
 /**
+ * The welcome screen's way to look around without an account. Members only: there is nothing to look at,
+ * so the button is gone and a short line says that islands is joined through an invite link instead.
+ */
+export function browseView(cfg) {
+  const members = membersOnlyOn(cfg);
+  return { canBrowse: !members, note: members ? WELCOME_MEMBERS_NOTE : '' };
+}
+
+/**
  * A person signed in who has no account yet and holds no invite, where accounts
  * come only through an invite: they cannot be let in (Google signs anybody in).
  */
@@ -294,18 +315,50 @@ export function chooseCommunity(list, remembered) {
  * `linked` is the community of the post a link opened ({ id, name } or null);
  * `viewing` the one a visitor is already looking at.
  */
-export function mapScope({ on, communities, current, linked = null, viewing = null }) {
+export function mapScope({ on, communities, current, linked = null, viewing = null, membersOnly = false, closed = false }) {
   if (!on) return { mode: 'legacy' };
   const list = communities || [];
+  // Members only: a link to something I cannot read (a post that is missing and one that is not for me
+  // look alike) is a notice, and so is a community I am not in. The 'viewing' look is retired.
+  if (membersOnly && closed) return { mode: 'none', reason: 'closed' };
   if (linked && linked.id) {
     const mine = list.find((entry) => entry.id === linked.id);
     if (mine) return { mode: 'community', id: mine.id, name: mine.name };
+    if (membersOnly) return { mode: 'none', reason: 'closed' };
     return { mode: 'viewing', id: linked.id, name: linked.name || 'コミュニティ' };
   }
   const chosen = chooseCommunity(list, current);
   if (chosen) return { mode: 'community', id: chosen.id, name: chosen.name };
-  if (viewing && viewing.id) return { mode: 'viewing', id: viewing.id, name: viewing.name || 'コミュニティ' };
+  if (!membersOnly && viewing && viewing.id) return { mode: 'viewing', id: viewing.id, name: viewing.name || 'コミュニティ' };
   return { mode: 'none', reason: 'not-member' };
+}
+
+/**
+ * A link to a post could not be read (members only). `status` is the failure's HTTP status, null when
+ * the read answered with nothing. A dropped connection (0) or a server error (5xx) says nothing about
+ * the post: it is not "closed", the page just could not look.
+ */
+export function linkIsClosed({ signedIn, found, status = null, listKnown = true, mine = false }) {
+  if (found) return false;
+  if (!signedIn) return true;
+  // My own post that has no community: only I can read it, and no community's map holds it.
+  if (mine) return false;
+  // My communities could not be read: whether I am a member is not known, so nothing is "closed" yet.
+  if (!listKnown) return false;
+  if (status === null || status === undefined) return true;
+  // 401: the session ran out (the app signs out by itself); that is not "members only" either.
+  return !(status === 0 || status === 401 || status >= 500);
+}
+
+/**
+ * The away digest holds the changes of every community I am in. A community's map shows only its own
+ * (members only); with the switch off there is one map and nothing is dropped.
+ */
+export function changesInScope(changes, { membersOnly = false, communityId = null } = {}) {
+  const list = changes || [];
+  if (!membersOnly) return list;
+  if (!communityId) return [];
+  return list.filter((change) => change.community_id === communityId);
 }
 
 export const COMMUNITIES_UNREAD_NOTE = 'コミュニティを読み込めませんでした。';
@@ -318,19 +371,34 @@ export const LOGIN_OR_INVITE_NOTE = 'ログインするか、招待リンクか�
  *   inviteOnly  whether accounts need an invite right now. Before the switch is flipped (the
  *               release has gone out but invite_only is still false), "invite only" would be untrue.
  */
-export function mapNotice(scope, { signedIn, known = true, inviteOnly = true }) {
+export function mapNotice(scope, { signedIn, known = true, inviteOnly = true, membersOnly = false }) {
   if (!scope || scope.mode !== 'none') return null;
+  if (membersOnly && scope.reason === 'closed') {
+    return {
+      title: MEMBERS_ONLY_TITLE,
+      sub: signedIn ? MEMBERS_ONLY_SUB_SIGNED_IN : MEMBERS_ONLY_SUB_SIGNED_OUT,
+      login: !signedIn, retry: false, home: signedIn,
+    };
+  }
+  if (membersOnly && !signedIn) {
+    return {
+      title: MEMBERS_ONLY_MAP_TITLE,
+      sub: MEMBERS_ONLY_SUB_SIGNED_OUT,
+      login: true, retry: false, home: false,
+    };
+  }
   if (signedIn && !known) {
-    return { title: COMMUNITIES_UNREAD_NOTE, sub: '通信を確かめて、もう一度お試しください。', login: false, retry: true };
+    return { title: COMMUNITIES_UNREAD_NOTE, sub: '通信を確かめて、もう一度お試しください。', login: false, retry: true, home: false };
   }
   if (signedIn) {
-    return { title: NOT_MEMBER_NOTE, sub: '管理者からもらった招待リンクを開くと、そのコミュニティの地図に入れます。', login: false, retry: false };
+    return { title: NOT_MEMBER_NOTE, sub: '管理者からもらった招待リンクを開くと、そのコミュニティの地図に入れます。', login: false, retry: false, home: false };
   }
   return {
     title: inviteOnly ? INVITE_ONLY_NOTE : LOGIN_OR_INVITE_NOTE,
     sub: 'アカウントをお持ちの場合はログインしてください。',
     login: true,
     retry: false,
+    home: false,
   };
 }
 
@@ -558,4 +626,28 @@ export function islandsInScope(islands, postIds, saturated) {
   if (saturated) return list;
   // An island that does not say which posts it holds cannot be judged: it stays.
   return list.filter((island) => !Array.isArray(island.post_ids) || island.post_ids.some((id) => postIds.has(id)));
+}
+
+
+// ---------------------------------------------------------------- profiles and community names (members only)
+
+/**
+ * Posts of other people's pages: only those in a community I am in (the server and the database already
+ * leave the rest out; this keeps the page right whatever it is handed). My own page keeps every post of mine.
+ */
+export function visiblePostsOf(posts, { own, communities, membersOnly }) {
+  const rows = Array.isArray(posts) ? posts : [];
+  if (!membersOnly || own) return rows;
+  const mine = new Set((communities || []).map((entry) => entry.id));
+  return rows.filter((post) => post && post.community_id && mine.has(post.community_id));
+}
+
+/** What a profile says about the limit on what it shows: a small line on other people's pages. */
+export const profileNote = ({ own, membersOnly }) => (membersOnly && !own ? SHARED_ONLY_NOTE : '');
+
+/** The name of a community from my list, or '' when it is not there (a name is only a label). */
+export function communityNameIn(communities, id) {
+  if (!id) return '';
+  const found = (communities || []).find((entry) => entry.id === id);
+  return found ? found.name : '';
 }

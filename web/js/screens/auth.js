@@ -23,9 +23,9 @@ import { onboardingStep, setOnboardingStep } from '../onboarding.js';
 import { navigate, screen } from '../router.js';
 import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
-import { browserStorage, refreshTalk } from '../talk.js';
+import { browserStorage, refreshTalk, talkLabel } from '../talk.js';
 import { mapLinkFor, takePendingPost } from '../return-post.js';
-import { entryView, readPendingInvite } from '../community-rules.js';
+import { browseView, entryView, readPendingInvite } from '../community-rules.js';
 import { settleSession } from './invite.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
 
@@ -42,6 +42,11 @@ export function setupWelcome() {
     const entry = entryView({ cfg: config(), hasInvite: Boolean(readPendingInvite(browserStorage())) });
     $('welcomeInviteNote').hidden = !entry.note;
     $('welcomeInviteNote').textContent = entry.note;
+    // Members only: there is nothing to look at without an account, so no way to browse; a line says how to join.
+    const browse = browseView(config());
+    $('welcomeBrowse').hidden = !browse.canBrowse;
+    $('welcomeMembersNote').hidden = !browse.note;
+    $('welcomeMembersNote').textContent = browse.note;
     $('welcomeRegister').hidden = !entry.canRegister;
     const providers = entry.canRegister ? (config().oauth || []) : [];
     providers.forEach((provider) => box.append(el('button', {
@@ -463,10 +468,12 @@ export function setupGuidance() {
   let index = 0;
   let review = false;
   const track = () => $('guidanceTrack');
-  const dots = () => [...$('guidanceDots').children];
+  // The slide about the talk button is left out while the feature is off (no label to name).
+  const slides = () => [...track().children].filter((slide) => !slide.hidden);
+  const dots = () => [...$('guidanceDots').children].filter((dot) => !dot.hidden);
 
   function paint() {
-    const slides = [...track().children];
+    const slides = [...track().children].filter((slide) => !slide.hidden);
     track().style.transform = `translateX(${-index * 100}%)`;
     // The slides beside the one in view are only slid out of sight.
     slides.forEach((slide, i) => { slide.inert = i !== index; });
@@ -490,7 +497,7 @@ export function setupGuidance() {
   };
   $('guidanceSkip').addEventListener('click', finish);
   $('guidanceNext').addEventListener('click', () => {
-    const total = track().children.length;
+    const total = slides().length;
     if (index < total - 1) {
       index += 1;
       paint();
@@ -511,11 +518,18 @@ export function setupGuidance() {
       review = Boolean(query && query.get('review') === '1') && !onboardingStep();
       $('guidance').classList.toggle('is-review', review);
       $('guidanceSkip').textContent = review ? '閉じる' : 'スキップ';
+      // The button's name comes from /api/config (talk.label), never from this page.
+      const label = talkLabel();
+      $$('#guidance [data-talk-label]').forEach((node) => { node.textContent = label; });
+      const talkSlide = track().querySelector('[data-talk-slide]');
+      talkSlide.hidden = !label;
+      const talkDot = $('guidanceDots').children[[...track().children].indexOf(talkSlide)];
+      if (talkDot) talkDot.hidden = !label;
       if (review) {
         index = 0;
       } else {
         const saved = Number(onboardingStep());
-        index = Number.isInteger(saved) && saved >= 0 && saved < track().children.length ? saved : 0;
+        index = Number.isInteger(saved) && saved >= 0 && saved < slides().length ? saved : 0;
       }
       paint();
     },

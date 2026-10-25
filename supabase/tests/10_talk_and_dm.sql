@@ -15,12 +15,19 @@ insert into public.accounts(id, display_name) values
   ('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4', 'guest two')
 on conflict (id) do nothing;
 
+-- 2026-10-27: 会はコミュニティの投稿。host・guest・guest two はそのメンバー。outsider は入っていない。
+insert into public.communities(id, name) values ('10101010-1010-4010-8010-101010101010', 'talk');
+insert into public.community_members(community_id, account_id) values
+  ('10101010-1010-4010-8010-101010101010', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1'),
+  ('10101010-1010-4010-8010-101010101010', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2'),
+  ('10101010-1010-4010-8010-101010101010', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4');
+
 -- host の会（参加者募集中）。guest と guest two が参加。outsider は参加していない。
-insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c, tags)
+insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c, tags, community_id)
 values ('00000000-0000-4000-8000-000000001001', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1',
         '週末にみんなで集まります', 1, 1, 0,
         array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448),
-        array['参加者募集中']);
+        array['参加者募集中'], '10101010-1010-4010-8010-101010101010');
 insert into public.reactions(post_id, actor_id, kind) values
   ('00000000-0000-4000-8000-000000001001', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2', 'join'),
   ('00000000-0000-4000-8000-000000001001', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4', 'join');
@@ -308,18 +315,33 @@ select lives_ok(
   'and sending works again');
 
 -- -----------------------------------------------------------------------
--- 8. 2週間より古い片思いは、次に誰かが押したときに消える
+-- 8. 押した記録は消えない（15日前の片思いでも、押し返せば両思いになる）
 -- -----------------------------------------------------------------------
 reset role;
 insert into public.talk_wishes(from_id, to_id, created_at)
 values ('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2', now() - interval '15 days');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4","role":"authenticated"}';
-select is((select count(*)::int from public.my_talk_state()), 0, 'an old press no longer shows');
-select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'a press sweeps the old rows');
+select ok(exists (select 1 from public.my_talk_state()
+                   where target = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2' and state = 'pressed'),
+          'an old press (15 days) still shows as pressed');
+select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2')$$, 'a press by the same person again is harmless (the press cleanup no longer touches old rows)');
 reset role;
 select is((select count(*)::int from public.talk_wishes
-            where created_at < now() - interval '14 days'), 0, 'nothing older than two weeks is kept');
+            where from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4'
+              and to_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2'), 1, 'the 15-day-old press is kept');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2","role":"authenticated"}';
+select is((public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4') ->> 'matched')::boolean, true,
+          'pressing back after 15 days matches');
+reset role;
+select is((select count(*)::int from public.dm_rooms
+            where least(user_a, user_b) = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2'
+              and greatest(user_a, user_b) = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4'), 1, 'and the room exists');
+select is((select count(*)::int from public.talk_wishes
+            where (from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4' and to_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2')
+               or (from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2' and to_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4')), 0,
+          'a match removes both rows as before');
 
 -- -----------------------------------------------------------------------
 -- 9. 古いコードの書き方でも動く
@@ -330,8 +352,8 @@ select lives_ok(
             '00000000-0000-4000-8000-000000001001', 'join')$$,
   'a join notification is written as before');
 select lives_ok(
-  $$insert into public.notifications(recipient_id, actor_id, type, payload)
-    values ('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1', null, 'island', '{"name":"x"}')$$,
+  $$insert into public.notifications(recipient_id, actor_id, type, payload, community_id)
+    values ('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1', null, 'island', '{"name":"x"}', '10101010-1010-4010-8010-101010101010')$$,
   'an island notification still has no actor');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1","role":"authenticated"}';

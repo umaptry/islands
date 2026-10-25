@@ -78,6 +78,7 @@ from core.config import (
     DM_BODY_MAX,
     EXAMPLE_POSTS,
     EXTRA_PROMPTS,
+    POST_STARTERS,
     RECRUIT_TAG,
     TALK_LABEL,
     PREVIEW_ISLAND_RADIUS,
@@ -94,6 +95,9 @@ from core.config import (
     MAP_MIN,
     MAP_POST_LIMIT,
     MAX_AFFILIATION_LENGTH,
+    MEMBERS_ONLY_COMMUNITY_REQUIRED,
+    MEMBERS_ONLY_NOT_FOUND,
+    MEMBERS_ONLY_UNAVAILABLE,
     MAX_BIO_LENGTH,
     MAX_COMMENT_LENGTH,
     MAX_LINK_LENGTH,
@@ -205,6 +209,10 @@ _rate_lock = threading.Lock()
 # than on every request.
 _islands_cache = {"stamp": 0.0, "value": [], "key": None}
 _islands_lock = threading.Lock()
+# members_only: one cache and one lock per community (an island of A must never be answered from
+# B's posts). Computed lazily on the first request for a community.
+_community_islands = {}
+_community_islands_guard = threading.Lock()
 
 # Lines between people. In a deployment the browser writes reactions and
 # comments straight to Supabase, so the server cannot know when a line changes;
@@ -338,6 +346,8 @@ async def lifespan(_app):
         state["store"].seed_demo_community()
         if os.environ.get("ISLANDS_LOCAL_INVITE_ONLY") == "1":
             state["store"].set_invite_only(True)
+        if os.environ.get("ISLANDS_LOCAL_MEMBERS_ONLY") == "1":
+            state["store"].set_members_only(True)
         # Easy to miss otherwise: the app works perfectly, and then a restart
         # silently erases everyone who signed up.
         rule = "!" * 70
@@ -399,7 +409,14 @@ async def map_runtime_guard(request, call_next):
         if (runtime["maintenance"] and writes) or runtime["active_version"] != state["manifest"]["artifact_version"]:
             return JSONResponse({"detail": "地図を更新しています。しばらくしてから再読み込みしてください。"}, status_code=503,
                                 headers={"Retry-After": "30"})
-    return await call_next(request)
+    response = await call_next(request)
+    # members_only: nothing derived from a community's posts may sit in a shared cache. The routes
+    # that set their own Cache-Control keep it; the rest are told here (the switch's last value).
+    if (state.get("members_only_hint") and path.startswith("/api/")
+            and path not in ("/api/health", "/api/config") and not path.startswith("/api/local/image/")
+            and "cache-control" not in response.headers):
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 # --------------------------------------------------------------------------
@@ -424,6 +441,9 @@ class PostCreate(BaseModel):
 
 class PostPreview(BaseModel):
     body: str = Field(min_length=1)
+    # members_only: the community whose map the text would stand on. Left out, the only
+    # community of the caller is taken; several and none named is a 422.
+    community_id: str | None = None
 
 
 class PostView(BaseModel):
@@ -568,8 +588,128 @@ def communities_on():
     False until supabase/migrations/20261026010000_communities_and_invites.sql has been run
     on the production database; the memory store always can. While it is False the screen
     keeps the old behaviour (one map for everybody, sign-up without an invite) and a
-    community_id sent with a post is ignored."""
+    community_id sent with a post is ignored.
+
+    While members_only is on this is ALWAYS True and the cached table check is never consulted:
+    a transient failure of that check (it answers False at a cold start) must not turn the
+    communities, and with them the membership rule, off."""
+    try:
+        if _members_flag():
+            return True
+    except StoreError:
+        pass
     return bool(getattr(state["store"], "supports_communities", True))
+
+
+# --------------------------------------------------------------------------
+# members only: a post of a community is read by that community's members only
+# --------------------------------------------------------------------------
+#
+# The server uses the service key, so the database's row level security never protects a path
+# that goes through here. Every route that returns anything derived from posts therefore starts
+# from ONE gate, and the gate is switched by app_settings.members_only (read through the store and
+# cached for a few seconds):
+#
+#   members_only_on()        True / False; 503 when the switch cannot be read (never a guess)
+#   require_member(u, cid)   404 unless u belongs to community cid right now (not cached);
+#                            the 404 is the one for a missing post, so nothing is revealed
+#   member_post(u, post_id)  the post, for a MEMBER of its community (an author who has left does
+#                            not count: the author may only read their own row, elsewhere)
+#
+# While the switch is false none of this runs and every route answers as before.
+
+def _members_flag():
+    """The switch as the store last read it. Raises StoreError when it cannot be read."""
+    reader = getattr(state["store"], "members_only", None)
+    value = bool(reader()) if callable(reader) else False
+    state["members_only_hint"] = value   # only for the Cache-Control header in the middleware, never a gate
+    return value
+
+
+def members_only_on():
+    """Whether the members-only rules apply. A database that cannot be asked is a 503: guessing
+    "off" would open every community, guessing "on" would lock out a working map."""
+    try:
+        return _members_flag()
+    except StoreError:
+        raise HTTPException(status_code=503, detail=MEMBERS_ONLY_UNAVAILABLE)
+
+
+def members_only_quiet():
+    """members_only for code that must not raise (what to hide in a public answer): unknown
+    counts as ON, the closed side."""
+    try:
+        return _members_flag()
+    except StoreError:
+        return True
+
+
+def _norm_uuid(value):
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def viewer_communities(user_id):
+    """The communities a person belongs to right now (read fresh: never cached, so a person who
+    just claimed an invite sees the community on the next request)."""
+    try:
+        return {str(cid) for cid in state["store"].viewer_communities(user_id)}
+    except StoreError:
+        raise HTTPException(status_code=503, detail=MEMBERS_ONLY_UNAVAILABLE)
+
+
+def require_member(user_id, community_id):
+    """The community id (normalised) when `user_id` belongs to it, else the 404 of a missing post."""
+    cid = _norm_uuid(community_id) if community_id else None
+    if not cid or cid not in viewer_communities(user_id):
+        raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+    return cid
+
+
+def community_param(user_id, community):
+    """A required ?community= for a read: 422 when absent, 404 unless the caller is a member."""
+    if not community:
+        raise HTTPException(status_code=422, detail=MEMBERS_ONLY_COMMUNITY_REQUIRED)
+    return require_member(user_id, community)
+
+
+def member_post(user_id, post_id):
+    """A live post that `user_id` may read as a member of its community; else the 404 of a
+    missing post (a post of another community, one with no community and a bad id look alike)."""
+    pid = _norm_uuid(post_id)
+    if not pid:
+        raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+    try:
+        post = state["store"].get_post(pid)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    if not post:
+        raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+    require_member(user_id, post.get("community_id"))
+    return post
+
+
+def only_community_of(user_id, named=None):
+    """The community a write goes to: the one named (the caller must belong), else their only one.
+    422 when they belong to several and named none, 403 (the old words) when to none."""
+    comms = viewer_communities(user_id)
+    if named:
+        cid = _norm_uuid(named)
+        if not cid or cid not in comms:
+            raise HTTPException(status_code=403, detail=COMMUNITY_ERROR_POST)
+        return cid
+    if len(comms) == 1:
+        return next(iter(comms))
+    if not comms:
+        raise HTTPException(status_code=403, detail=COMMUNITY_ERROR_POST)
+    raise HTTPException(status_code=422, detail=MEMBERS_ONLY_COMMUNITY_REQUIRED)
+
+
+def scoped(community):
+    """store keyword arguments for a read of one community ({} for the old all-posts read)."""
+    return {} if community is None else {"community": community}
 
 
 def invite_only_on():
@@ -671,15 +811,26 @@ def map_input(vector):
 
 
 _reach_cache = {"stamp": 0.0, "value": 1.0}
+_community_reach = {}   # community id -> {"stamp", "value"}
 
 
-def current_reach_factor():
+def current_reach_factor(community=None):
     """core.energy.reach_factor for the posts on the map now, recounted at most
-    once a minute: the browser and the server's island grouping use it alike."""
+    once a minute: the browser and the server's island grouping use it alike.
+    With `community` it is that community's own map (members_only)."""
     now = time.time()
+    if community:
+        held = _community_reach.get(community)
+        if held is None or now - held["stamp"] >= ISLAND_CACHE_SECONDS:
+            try:
+                value = reach_factor(state["store"].count_posts(community=community))
+            except StoreError:
+                value = held["value"] if held else 1.0   # keep the last one
+            held = _community_reach[community] = {"stamp": now, "value": value}
+        return held["value"]
     if now - _reach_cache["stamp"] >= ISLAND_CACHE_SECONDS:
         try:
-            _reach_cache["value"] = reach_factor(state["store"].count_posts())
+            _reach_cache["value"] = reach_factor(state["store"].count_posts(everything=True))
         except StoreError:
             pass  # keep the last one
         _reach_cache["stamp"] = now
@@ -691,7 +842,19 @@ def as_pgvector(values):
     return "[" + ",".join(f"{float(value):.6f}" for value in values) + "]"
 
 
-def live_islands(force=False):
+def _island_holder(community):
+    """(cache dict, lock) of the all-posts islands, or of one community's."""
+    if community is None:
+        return _islands_cache, _islands_lock
+    with _community_islands_guard:
+        holder = _community_islands.get(community)
+        if holder is None:
+            holder = _community_islands[community] = {
+                "stamp": 0.0, "value": [], "key": None, "lock": threading.Lock()}
+    return holder, holder["lock"]
+
+
+def live_islands(force=False, community=None):
     """Landmasses, named by the people standing on them.
 
     islands decided a post's genre by matching its text against a table of
@@ -702,18 +865,19 @@ def live_islands(force=False):
     gets no name and is not drawn with one: the map starts as open water and
     grows names as people arrive.
     """
+    cache, lock = _island_holder(community)
     now = time.time()
-    with _islands_lock:
-        fresh = now - _islands_cache["stamp"] < ISLAND_CACHE_SECONDS
-        if fresh and not force and _islands_cache["key"] is not None:
-            return _islands_cache["value"]
+    with lock:
+        fresh = now - cache["stamp"] < ISLAND_CACHE_SECONDS
+        if fresh and not force and cache["key"] is not None:
+            return cache["value"]
 
     try:
-        posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+        posts = state["store"].list_terms(limit=NAMING_POST_LIMIT, **scoped(community))
     except StoreError:
         # Keep whatever was last computed rather than blanking every label.
-        with _islands_lock:
-            return _islands_cache["value"]
+        with lock:
+            return cache["value"]
 
     if len(posts) >= NAMING_POST_LIMIT:
         _logger.warning("island naming capped at %d posts; some posts will have no island membership", NAMING_POST_LIMIT)
@@ -723,7 +887,9 @@ def live_islands(force=False):
     named = name_by_genre(named, {post["id"]: post for post in posts})
     try:
         # Islands that already have an AI name keep showing it (no network).
-        named = island_namer.overlay(named, state["store"].island_states())
+        saved = (state["store"].island_states(communities={community}) if community
+                 else state["store"].island_states())
+        named = island_namer.overlay(named, saved)
     except StoreError:
         pass
     # Explicit membership replaces the client's former centre-distance guess.
@@ -733,8 +899,8 @@ def live_islands(force=False):
         for post_id in island["post_ids"]:
             membership[post_id] = index
 
-    with _islands_lock:
-        _islands_cache.update({"stamp": now, "value": payload, "key": membership})
+    with lock:
+        cache.update({"stamp": now, "value": payload, "key": membership})
     return payload
 
 
@@ -749,19 +915,37 @@ def public_island(island):
     return row
 
 
-def island_of(post_id):
-    """The landmass a post is standing on, as it is named right now."""
-    live_islands()
-    with _islands_lock:
-        membership = _islands_cache["key"] or {}
-        islands = _islands_cache["value"]
+def island_of(post_id, community=None):
+    """The landmass a post is standing on, as it is named right now (among its community's posts
+    when `community` is given: members_only)."""
+    live_islands(**({} if community is None else {"community": community}))
+    cache, lock = _island_holder(community)
+    with lock:
+        membership = cache["key"] or {}
+        islands = cache["value"]
     index = membership.get(post_id)
     return public_island(islands[index]) if index is not None and index < len(islands) else None
+
+
+def island_for_viewer(post, user_id):
+    """The island a post stands on, for the person who wrote it. With members_only on, a person who
+    has left the community gets none: islands are for members."""
+    if not members_only_quiet():
+        return island_of(post["id"])
+    community = post.get("community_id")
+    if not community or str(community) not in viewer_communities(user_id):
+        return None
+    return island_of(post["id"], str(community))
 
 
 def invalidate_islands():
     with _islands_lock:
         _islands_cache["stamp"] = 0.0
+    with _community_islands_guard:
+        holders = list(_community_islands.values())
+    for holder in holders:
+        with holder["lock"]:
+            holder["stamp"] = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -795,12 +979,33 @@ def dense_mean():
     return (state.get("cosine_centroid") or {}).get("dense_mean")
 
 
-def people_index():
-    """Everybody's profile fields, hidden vectors and post centroid, by id."""
+def people_index(communities=None):
+    """Everybody's profile fields, hidden vectors and post centroid, by id.
+
+    With `communities` (members_only): only the people who belong to one of them, and each
+    centroid is the mean of their posts IN those communities (account_post_centroids per
+    community, merged by post count), never of posts elsewhere."""
     store = state["store"]
-    centroids = store.post_centroids()
+    if communities is None:
+        centroids = store.post_centroids()
+        allowed = None
+    else:
+        allowed, sums = set(), {}
+        for community in sorted(communities):
+            allowed |= set(store.community_member_ids(community))
+            for author, found in store.post_centroids(community=community).items():
+                count = int(found.get("post_count") or 0)
+                if not count or found.get("centroid") is None:
+                    continue
+                total, seen = sums.get(author, (None, 0))
+                weighted = np.asarray(found["centroid"], dtype=float) * count
+                sums[author] = (weighted if total is None else total + weighted, seen + count)
+        centroids = {author: {"centroid": [float(v) for v in total / seen], "post_count": seen}
+                     for author, (total, seen) in sums.items()}
     index = {}
     for row in store.profile_vectors():
+        if allowed is not None and row["id"] not in allowed:
+            continue
         row["centroid"] = (centroids.get(row["id"]) or {}).get("centroid")
         index[row["id"]] = row
     return index
@@ -864,13 +1069,20 @@ def home_posts(posts=None):
     return where, best
 
 
-def islands_by_author(posts=None):
-    """author -> labels of the islands their posts stand on, most posts first."""
+def islands_by_author(posts=None, communities=None):
+    """author -> labels of the islands their posts stand on, most posts first.
+    With `communities` (members_only): the islands of those communities only."""
     if posts is None:
-        posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+        if communities is None:
+            posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+        else:
+            posts = [post for community in sorted(communities)
+                     for post in state["store"].list_terms(limit=NAMING_POST_LIMIT, community=community)]
     author_of = {post["id"]: post.get("author_id") for post in posts}
     counts = defaultdict(Counter)
-    for island in live_islands():
+    islands = (live_islands() if communities is None else
+               [island for community in sorted(communities) for island in live_islands(community=community)])
+    for island in islands:
         for post_id in island.get("post_ids") or []:
             author = author_of.get(post_id)
             if author:
@@ -933,11 +1145,12 @@ def connection_lines(force=False, community=None):
     # A line ends on the post the last interaction landed on and on the other
     # person's post standing closest to it; somebody with no post that has a
     # place is drawn from their most energetic one.
-    posts = state["store"].list_terms(limit=NAMING_POST_LIMIT)
+    posts = store.list_terms(limit=NAMING_POST_LIMIT, **scoped(community or None))
     if community:
-        of_community = store.post_communities()
-        posts = [post for post in posts if of_community.get(post["id"]) == community]
-        events = [event for event in events if of_community.get(event.get("post_id")) == community]
+        # The community's posts come straight from the store (community_id is a term column), so
+        # an event counts only when it landed on one of them.
+        in_community = {post["id"] for post in posts}
+        events = [event for event in events if event.get("post_id") in in_community]
     where, best = home_posts(posts)
     by_author = defaultdict(list)
     for post in posts:
@@ -965,6 +1178,15 @@ def connection_lines(force=False, community=None):
         else:
             _connections_cache.update({"stamp": now, "value": value})
     return value
+
+
+def lines_of_communities(communities, force=False):
+    """The lines of each of several communities, one after the other (members_only: a viewer sees
+    the maps of the communities they belong to, and a line never joins two of them)."""
+    rows = []
+    for community in sorted(communities):
+        rows.extend(connection_lines(force=force, community=community))
+    return rows
 
 
 def invalidate_connections():
@@ -1164,10 +1386,16 @@ def name_by_genre(islands, posts_by_id):
 ISLAND_NOTIFY_KINDS = ("birth", "merge", "split", "rename", "tier", "landmark")
 
 
-def notify_islands(events, states, now):
-    """One 'island' notification per person per island per day at most."""
+def notify_islands(events, states, now, community=None):
+    """One 'island' notification per person per island per day at most.
+    With `community` (members_only): only people who belong to it now are told, and the row
+    says which community it is about."""
     store = state["store"]
     authors = {row["id"]: row.get("author_ids") or [] for row in states if row.get("active", True)}
+    if community:
+        members = set(store.community_member_ids(community))
+        authors = {island: [person for person in people_ if person in members]
+                   for island, people_ in authors.items()}
     sent = Counter(
         (row["recipient_id"], row.get("island_id"))
         for row in store.recent_notifications("island", now - timedelta(days=1))
@@ -1186,6 +1414,7 @@ def notify_islands(events, states, now):
                 "recipient_id": person, "actor_id": None, "type": "island",
                 "island_id": event["island_id"], "event_id": event["id"],
                 "payload": {"kind": event["kind"], "cause": event["cause"], "name": name},
+                **({"community_id": community} if community else {}),
             })
     store.insert_notifications(rows)
     return rows
@@ -1233,19 +1462,35 @@ def name_islands_with_ai(named, previous, posts_by_id, now=None):
         return 0
 
 
-def track_islands(now=None):
+def track_islands(now=None, community=None):
     """One tracking step: match the live islands to the stored ones, save, notify.
 
     The first step ever records every island as born but tells nobody: those
     islands were there before anybody was watching.
+
+    With members_only on, the step runs once PER COMMUNITY: the islands are made from that
+    community's posts, matched only against that community's saved islands (so an island of A can
+    never inherit the id or name of one of B), saved and notified with its community_id. The
+    result is the sum of the steps.
     """
     store = state["store"]
     now = now or datetime.now(timezone.utc)
+    if community is None and _members_flag():
+        total = {"states": [], "events": [], "notifications": [], "ids": {}}
+        for each in store.community_ids():
+            step = track_islands(now=now, community=each)
+            for key in ("states", "events", "notifications"):
+                total[key].extend(step[key])
+        return total
     # Work on a copy: the cached islands are read by requests while this runs.
-    named = copy.deepcopy(live_islands(force=True))
-    posts_by_id = {post["id"]: post for post in store.list_terms(limit=NAMING_POST_LIMIT)}
+    named = copy.deepcopy(live_islands(force=True, **scoped(community)))
+    posts_by_id = {post["id"]: post for post in store.list_terms(limit=NAMING_POST_LIMIT, **scoped(community))}
     events = store.interaction_events(since=None)
-    previous = store.island_states()
+    if community:
+        events = [event for event in events if event.get("post_id") in posts_by_id]
+        previous = store.island_states(communities={community})
+    else:
+        previous = store.island_states()
     island_namer.overlay(named, previous)  # idempotent; live_islands already did it
     name_islands_with_ai(named, previous, posts_by_id, now=now)
     try:
@@ -1254,9 +1499,14 @@ def track_islands(now=None):
         _logger.exception("landmark ranking failed")
         ranker = None
     result = island_tracking.update(previous, named, posts_by_id, events, now=now, rank_landmarks=ranker)
+    if community:
+        for row in result["states"] + result["events"]:
+            row["community_id"] = community
     store.save_island_states(result["states"])
     store.add_island_events(result["events"])
-    result["notifications"] = notify_islands(result["events"], result["states"], now) if previous else []
+    result["notifications"] = (notify_islands(result["events"], result["states"], now,
+                                              **({"community": community} if community else {}))
+                               if previous else [])
     # No cache swap here: the next live_islands() lays the saved names over its own
     # (fresh) islands, and swapping in this older copy could overwrite a newer cache.
     return result
@@ -1290,16 +1540,31 @@ def maybe_track_islands():
     return True
 
 
-def notify_quiet_posts(now=None):
+def notify_quiet_posts(now=None, community=None):
     """Q34: show posts nobody has answered to a few people nearby, in the app only.
 
     Runs with the island step, so at most every ISLAND_RUN_MIN_SECONDS.
+
+    With members_only on it runs once per community: the quiet post, the islands that decide who
+    is near and the people told all come from that one community, only people who still belong
+    to it are told, and the row says which community it is about.
     """
     store = state["store"]
     now = now or datetime.now(timezone.utc)
+    if community is None and _members_flag():
+        rows = []
+        for each in store.community_ids():
+            rows.extend(notify_quiet_posts(now=now, community=each))
+        return rows
     earlier = store.recent_notifications("quiet_post", now - timedelta(days=QUIET_POST_MAX_DAYS + 1))
-    found = quiet.candidates(store.list_terms(limit=NAMING_POST_LIMIT), live_islands(), now,
+    found = quiet.candidates(store.list_terms(limit=NAMING_POST_LIMIT, **scoped(community)),
+                             live_islands(**scoped(community)), now,
                              already={row.get("post_id") for row in earlier})
+    if community:
+        members = set(store.community_member_ids(community))
+        found = [dict(item, people=[person for person in item["people"] if person in members])
+                 for item in found]
+        found = [item for item in found if item["people"]]
     if not found:
         return []
     everyone = {person for item in found for person in item["people"]}
@@ -1307,6 +1572,8 @@ def notify_quiet_posts(now=None):
     day_ago = now - timedelta(days=1)
     told = [row["recipient_id"] for row in earlier if notices.parse_time(row["created_at"]) >= day_ago]
     rows = quiet.choose(found, visitors, told)
+    if community:
+        rows = [dict(row, community_id=community) for row in rows]
     store.insert_notifications(rows)
     return rows
 
@@ -1373,8 +1640,11 @@ def push_subject():
     return "https://localhost"
 
 
-def push_message(entry):
-    """One notification_feed() entry as the text a lock screen shows."""
+def push_message(entry, hashed_tag=False):
+    """One notification_feed() entry as the text a lock screen shows.
+
+    hashed_tag (members_only): the tag that groups reactions to one post is a hash, so the id of a
+    post is not handed to the device's notification layer."""
     payload = entry.get("payload") or {}
     if entry["type"] == "island":
         title = f"島「{payload['name']}」" if payload.get("name") else "島"
@@ -1397,10 +1667,47 @@ def push_message(entry):
     # device instead of stacking. Everything else stands alone.
     if entry["category"] == "reaction" and entry.get("post_id"):
         tag = f"reaction-{entry['post_id']}"
+        if hashed_tag:
+            tag = webpush.topic_for(tag)
     else:
         tag = f"{entry['type']}-{entry['id']}"
     return {"title": title, "body": body, "tag": tag, "url": PUSH_URL,
             "kind": entry["category"], "at": entry["created_at"]}
+
+
+# Notifications that are about one community even when they name no post.
+_COMMUNITY_NOTICE_TYPES = ("island", "quiet_post", "similar")
+
+
+def pushes_still_readable(rows):
+    """members_only: keep only the rows whose recipient still belongs to the community the row is
+    about, checked NOW (the row may have been written before they left). A row about a post takes
+    the community of that post; an island / quiet_post / similar row must carry its own community
+    (one without is dropped); a talk or DM row names no community and stays."""
+    store = state["store"]
+    memberships, posts, kept = {}, {}, []
+    for row in rows:
+        recipient = row["recipient_id"]
+        if recipient not in memberships:
+            memberships[recipient] = {str(c) for c in store.viewer_communities(recipient)}
+        community = row.get("community_id")
+        if row.get("post_id"):
+            if row["post_id"] not in posts:
+                posts[row["post_id"]] = store.get_post(row["post_id"])
+            post = posts[row["post_id"]]
+            if not post:
+                continue
+            if community and str(community) != str(post.get("community_id")):
+                continue
+            community = post.get("community_id")
+            if not community:
+                continue
+        elif row["type"] in _COMMUNITY_NOTICE_TYPES and not community:
+            continue
+        if community and str(community) not in memberships[recipient]:
+            continue
+        kept.append(row)
+    return kept
 
 
 def dispatch_pushes(now=None, client=None):
@@ -1417,6 +1724,11 @@ def dispatch_pushes(now=None, client=None):
     rows = [row for row in store.claim_pending_pushes()
             if row["type"] not in NEVER_PUSHED and notices.parse_time(row["created_at"]) >= fresh]
     tally = Counter()
+    members = members_only_quiet()
+    if rows and members:
+        before = len(rows)
+        rows = pushes_still_readable(rows)
+        tally["dropped_not_member"] += before - len(rows)
     if not rows:
         return tally
     recipients = {row["recipient_id"] for row in rows}
@@ -1445,7 +1757,8 @@ def dispatch_pushes(now=None, client=None):
             # The feed is grouped the way the app lists it, so the push says
             # what the list will say when it is opened.
             feed = notices.group_feed(store.list_notifications(recipient, limit=100), limit=100)
-            messages = [push_message(entry) for entry in reversed(feed) if ids.intersection(entry["ids"])]
+            messages = [push_message(entry, hashed_tag=members)
+                        for entry in reversed(feed) if ids.intersection(entry["ids"])]
             for subscription in targets[recipient]:
                 for message in messages:
                     outcome = webpush.send(
@@ -1490,10 +1803,12 @@ def poke_push_dispatch():
     return True
 
 
-def with_tracked_state(payload):
-    """Live islands with the id, tier and landmarks of the island they continue."""
+def with_tracked_state(payload, community=None):
+    """Live islands with the id, tier and landmarks of the island they continue.
+    With `community`, only that community's saved islands can be continued."""
     try:
-        states = state["store"].island_states()
+        states = (state["store"].island_states(communities={community}) if community
+                  else state["store"].island_states())
     except StoreError:
         return [public_island(island) for island in payload]
     _links, identity = island_tracking.match(states, payload)
@@ -1534,7 +1849,10 @@ def neighbors_for(post_id, terms, limit, community=None):
     34% of true neighbours survive the projection.
     """
     try:
-        if community:
+        if community and members_only_quiet():
+            # members_only: the database function itself only looks inside the community.
+            ranked = state["store"].nearest_posts(post_id, limit, community=community)
+        elif community:
             # Only people on the same community's map. The index knows nothing of communities, so
             # ask for more and keep the ones that belong.
             of_community = state["store"].post_communities()
@@ -1542,13 +1860,14 @@ def neighbors_for(post_id, terms, limit, community=None):
                       if of_community.get(pair[0]) == community][:limit]
         else:
             ranked = state["store"].nearest_posts(post_id, limit)
-    except StoreError:
+    except (StoreError, ValueError):
         return []
-    return neighbor_rows(ranked, terms)
+    return neighbor_rows(ranked, terms, community=community if members_only_quiet() else None)
 
 
-def neighbor_rows(ranked, terms):
-    """[(post_id, cosine)] -> the rows the reveal and the orbit print."""
+def neighbor_rows(ranked, terms, community=None):
+    """[(post_id, cosine)] -> the rows the reveal and the orbit print.
+    With `community` (members_only), a post of any other community is dropped as well."""
     store = state["store"]
     out = []
     for other_id, cosine in ranked:
@@ -1557,6 +1876,8 @@ def neighbor_rows(ranked, terms):
         except StoreError:
             continue
         if not other:
+            continue
+        if community and other.get("community_id") != community:
             continue
         try:
             account = store.get_account(other["author_id"]) or {}
@@ -1614,7 +1935,10 @@ def config():
             ) if flag
         ],
         "world": {"min": MAP_MIN, "max": MAP_MAX, "seed_bounds": state["seed_bounds"]},
-        "energy": {**energy_constants(), "radius_factor": current_reach_factor()},
+        # members_only: the reach factor follows the number of posts on the whole service, so a
+        # signed-out caller gets a constant (a community's own factor comes, member-gated, with /api/islands).
+        "energy": {**energy_constants(), "radius_factor": (
+            1.0 if members_only_quiet() else current_reach_factor())},
         "tags": list(TAGS),
         # Q45: the tag that says "話しかけていいよ". Named so the browser can
         # give it its own switch instead of finding it by its wording.
@@ -1623,11 +1947,14 @@ def config():
         # 2026-10-20: prompts that go away for a person once they posted with them
         # (the browser decides from the `prompt` of that person's posts).
         "extra_prompts": [dict(item) for item in EXTRA_PROMPTS],
+        "post_starters": [dict(item) for item in POST_STARTERS],
         "example_posts": list(EXAMPLE_POSTS),
         # post_extras: the database can keep the prompt / sign-up deadline / capacity.
         # False on a production database the 2026-10-20 SQL has not reached yet.
+        # members_only: whether community posts are readable by their members only (the screens then
+        # send the session on every read and show a notice instead of a map to anybody outside).
         "features": {"post_extras": post_extras_on(), "talk": talk_on(),
-                     "communities": communities_on()},
+                     "communities": communities_on(), "members_only": members_only_quiet()},
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
@@ -1671,7 +1998,7 @@ def health():
     # deployment awake with one request. A store that is down must not take
     # health down with it - the answer is still useful without the count.
     try:
-        posts = state["store"].count_posts()
+        posts = state["store"].count_posts(everything=True)
         store_ok = True
     except StoreError:
         posts = None
@@ -1720,7 +2047,9 @@ def health():
         "regions": len(state["islands"]),
         "store": state["store"].backend,
         "store_ok": store_ok,
-        "posts": posts,
+        # members_only: how many posts the service holds is not for visitors (nor is it a number the
+        # health check needs: store_ok already says the database answered).
+        "posts": None if members_only_quiet() else posts,
         "model_version": state["seed_map"]["meta"]["model_version"],
         "embedding": state["manifest"]["embedding"],
         "artifact_version": state["manifest"]["artifact_version"],
@@ -1737,7 +2066,18 @@ def health():
 
 
 @app.get("/api/islands")
-def islands(response: Response):
+def islands(response: Response, request: Request, community: str = ""):
+    if members_only_on():
+        # Islands are made from, and shown to, the members of ONE community.
+        user_id = current_user(request)
+        cid = community_param(user_id, community)
+        maybe_track_islands()
+        try:
+            payload = with_tracked_state(live_islands(community=cid), community=cid)
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+        response.headers["Cache-Control"] = "private, no-store"
+        return {"islands": payload, "radius_factor": current_reach_factor(cid)}
     maybe_track_islands()
     payload = with_tracked_state(live_islands())
     # Everyone looking at the map wants the same answer, and it changes on a
@@ -1749,13 +2089,29 @@ def islands(response: Response):
 
 
 @app.get("/api/connections")
-def connections(response: Response, person: str = "", fresh: str = "", community: str = ""):
+def connections(response: Response, request: Request, person: str = "", fresh: str = "",
+                community: str = ""):
     """Lines between people. Public: a line is visible to everybody, not just the two.
 
     `fresh` comes from somebody who just reacted or wrote. In production that
     write goes to the database directly, so this server's cache cannot know of
     it: recount now (at most once every few seconds, whoever asks).
+
+    members_only: login required. `community` must be one the caller belongs to; without it, the
+    lines of ALL the caller's communities (there is no all-posts variant any more), and with
+    `person` only the lines that run on those maps.
     """
+    if members_only_on():
+        user_id = current_user(request)
+        scope = {community_param(user_id, community)} if community else viewer_communities(user_id)
+        try:
+            rows = lines_of_communities(scope, force=bool(fresh) and fresh_lines_due())
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+        if person:
+            rows = [row for row in rows if person in (row["a"], row["b"])]
+        response.headers["Cache-Control"] = "private, no-store"
+        return {"connections": rows, "since": CONNECTIONS_SINCE}
     scope = None
     if community and communities_on():
         try:
@@ -1775,16 +2131,32 @@ def connections(response: Response, person: str = "", fresh: str = "", community
 
 @app.get("/api/similar-people")
 def similar_people_route(request: Request, account: str = ""):
-    """The people most like `account` (or the signed-in person), best first."""
-    account = account or current_user(request)
+    """The people most like `account` (or the signed-in person), best first.
+
+    members_only: login required; you can ask about yourself only (`account` is ignored), and the
+    candidates, their centroids and the places they stand on come from the communities you are in."""
+    scope = None
+    if members_only_on():
+        account = current_user(request)
+        scope = viewer_communities(account)
+        if not scope:
+            return {"people": []}
+    else:
+        account = account or current_user(request)
     store = state["store"]
     try:
-        index = people_index()
+        index = people_index(scope)
         ranked = similar_people(account, index=index)
         # Where each of them stands on the map: the dotted line goes there.
-        posts = store.list_terms(limit=NAMING_POST_LIMIT) if ranked else []
+        if not ranked:
+            posts = []
+        elif scope is None:
+            posts = store.list_terms(limit=NAMING_POST_LIMIT)
+        else:
+            posts = [post for community in sorted(scope)
+                     for post in store.list_terms(limit=NAMING_POST_LIMIT, community=community)]
         _, best = home_posts(posts)
-        places = islands_by_author(posts) if ranked else {}
+        places = islands_by_author(posts, communities=scope) if ranked else {}
         accounts = {row["id"]: row for row in store.list_accounts([row["id"] for row in ranked])}
         out = []
         for row in ranked:
@@ -1817,21 +2189,36 @@ def person_card(person_id: str, request: Request, viewer: str = ""):
     or `viewer`, the same public question /api/similar-people answers) - what
     the two have in common and a first line to say.
     """
-    viewer = optional_user(request) or viewer or None
+    scope = None
+    if members_only_on():
+        # Login required, and `?viewer=` is ignored: the viewer is whoever the token says. What the
+        # card shows of the person's posts, island and lines comes only from the communities the
+        # VIEWER is in (their own card: all their own posts). A person who shares none with the
+        # viewer is shown as a profile alone, with no posts.
+        viewer = current_user(request)
+        scope = viewer_communities(viewer)
+    else:
+        viewer = optional_user(request) or viewer or None
     store = state["store"]
     try:
         person = store.get_account(person_id)
         if not person:
             raise HTTPException(status_code=404, detail="見つかりませんでした。")
         own = store.posts_by_author(person_id)
-        places = islands_by_author()
-        rows = [row for row in connection_lines() if person_id in (row["a"], row["b"])]
+        if scope is not None and person_id != viewer:
+            own = [post for post in own if str(post.get("community_id") or "") in scope]
+        if scope is None:
+            places = islands_by_author()
+            rows = [row for row in connection_lines() if person_id in (row["a"], row["b"])]
+        else:
+            places = islands_by_author(communities=scope)
+            rows = [row for row in lines_of_communities(scope) if person_id in (row["a"], row["b"])]
         partner_ids = [row["b"] if row["a"] == person_id else row["a"] for row in rows]
         shown = partner_ids[:PERSON_CARD_CONNECTIONS]
         partners = {row["id"]: row for row in store.list_accounts(shown)}
         intro = None
         if viewer and viewer != person_id:
-            intro = introduce(viewer, person_id, people_index(), places)
+            intro = introduce(viewer, person_id, people_index(scope), places)
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
 
@@ -1867,12 +2254,19 @@ def _parse_since(value):
 
 
 @app.get("/api/changes")
-def changes(since: str = "", limit: int = 50):
-    """What happened to the islands: place, cause and the counts before and after."""
+def changes(request: Request, since: str = "", limit: int = 50, community: str = ""):
+    """What happened to the islands: place, cause and the counts before and after.
+    members_only: login required, and only the events of the caller's communities."""
+    scope = None
+    if members_only_on():
+        user_id = current_user(request)
+        scope = {community_param(user_id, community)} if community else viewer_communities(user_id)
     maybe_track_islands()
     limit = max(1, min(int(limit), 200))
     try:
-        rows = state["store"].list_island_events(since=_parse_since(since), limit=limit)
+        rows = state["store"].list_island_events(
+            since=_parse_since(since), limit=limit,
+            **({} if scope is None else {"communities": scope}))
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     return {"changes": rows}
@@ -1886,16 +2280,28 @@ def changes_digest(request: Request):
     """
     user_id = current_user(request)
     store = state["store"]
+    scope = viewer_communities(user_id) if members_only_on() else None
     maybe_track_islands()
     try:
         previous = store.touch_last_seen(user_id)
         start = previous or (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        rows = store.list_island_events(since=start, limit=500)
-        islands_by_id = {row["id"]: row for row in store.island_states(active_only=False)}
-        friends = lines.partners(connection_lines(), user_id)
         # What led up to the changes: interactions from a while before them.
         lead_in = (notices.parse_time(start) - timedelta(days=14)).isoformat()
-        events = store.interaction_events(since=lead_in)
+        if scope is None:
+            rows = store.list_island_events(since=start, limit=500)
+            islands_by_id = {row["id"]: row for row in store.island_states(active_only=False)}
+            friends = lines.partners(connection_lines(), user_id)
+            events = store.interaction_events(since=lead_in)
+        else:
+            # members_only: only the communities the caller is in, in every one of the four reads.
+            rows = store.list_island_events(since=start, limit=500, communities=scope)
+            islands_by_id = {row["id"]: row for row in store.island_states(
+                active_only=False, communities=scope)}
+            friends = lines.partners(lines_of_communities(scope), user_id)
+            visible = {post["id"] for community in scope
+                       for post in store.list_terms(limit=NAMING_POST_LIMIT, community=community)}
+            events = [event for event in store.interaction_events(since=lead_in)
+                      if event.get("post_id") in visible]
     except StoreError:
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
 
@@ -2036,15 +2442,18 @@ def push_dispatch():
 
 
 @app.get("/api/map/bounds")
-def map_bounds():
+def map_bounds(request: Request, community: str = ""):
     from core.energy import post_radius
+    cid = None
+    if members_only_on():
+        cid = community_param(current_user(request), community)
     try:
-        posts = state["store"].terrain_posts()
+        posts = state["store"].terrain_posts(**scoped(cid))
     except StoreError as exc:
         raise HTTPException(503, "地図の範囲を読み込めませんでした。") from exc
     if not posts:
         return {"bounds": None, "count": 0}
-    factor = current_reach_factor()
+    factor = current_reach_factor(cid)
     return {"bounds": [min(p["x"] - post_radius(p, factor) for p in posts),
                        min(p["y"] - post_radius(p, factor) for p in posts),
                        max(p["x"] + post_radius(p, factor) for p in posts),
@@ -2052,9 +2461,12 @@ def map_bounds():
 
 
 @app.get("/api/terrain")
-def terrain(min_x: float, min_y: float, max_x: float, max_y: float,
-            query: str = "", tags: str = ""):
+def terrain(request: Request, min_x: float, min_y: float, max_x: float, max_y: float,
+            query: str = "", tags: str = "", community: str = ""):
     from core.terrain import energy_grid
+    cid = None
+    if members_only_on():
+        cid = community_param(current_user(request), community)
     bounds = [min_x, min_y, max_x, max_y]
     if not all(np.isfinite(bounds)) or not (min_x < max_x and min_y < max_y):
         raise HTTPException(422, "地図の範囲が不正です。")
@@ -2064,14 +2476,14 @@ def terrain(min_x: float, min_y: float, max_x: float, max_y: float,
     if any(tag not in TAGS for tag in selected):
         raise HTTPException(422, "タグが不正です。")
     try:
-        posts = state["store"].terrain_posts()
+        posts = state["store"].terrain_posts(**scoped(cid))
     except StoreError:
         raise HTTPException(503, "地形を読み込めませんでした。")
     needle = query.lower()
     posts = [p for p in posts if
              (not needle or needle in (p.get('body', '') + ' ' + p.get('display_name', '')).lower())
              and (not selected or any(tag in p.get('tags', []) for tag in selected))]
-    return energy_grid(posts, bounds, factor=current_reach_factor())
+    return energy_grid(posts, bounds, factor=current_reach_factor(cid))
 
 
 @app.post("/api/posts")
@@ -2084,6 +2496,7 @@ def create_post(payload: PostCreate, request: Request):
     would be false.
     """
     user_id = current_user(request)
+    members = members_only_on()
     body = clean_body(payload.body)
     request_key = request.headers.get("Idempotency-Key")
     stable_id = None
@@ -2105,7 +2518,7 @@ def create_post(payload: PostCreate, request: Request):
         except StoreError:
             raise HTTPException(503, "投稿の保存状況を確認できませんでした。")
         if existing:
-            return {**existing, "island": island_of(existing["id"]), "neighbors": []}
+            return {**existing, "island": island_for_viewer(existing, user_id), "neighbors": []}
     if not check_rate_limit(user_id):
         raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
 
@@ -2121,7 +2534,13 @@ def create_post(payload: PostCreate, request: Request):
     extras = extras_for_new_post(payload, tags) if post_extras_on() else {}
     # The community: only members post to it (checked here, because the server is the only
     # writer of posts). Not sent, or communities not switched on yet: a post with none, as before.
-    if communities_on() and payload.community_id:
+    community_id = None
+    if members:
+        # members_only: every post belongs to a community the author is in (the only one when
+        # there is just one; a 422 when there are several and none was named; 403 when none).
+        community_id = only_community_of(user_id, payload.community_id)
+        extras = {**extras, "community_id": community_id}
+    elif communities_on() and payload.community_id:
         try:
             community_id = str(uuid.UUID(payload.community_id))
         except ValueError:
@@ -2169,17 +2588,24 @@ def create_post(payload: PostCreate, request: Request):
         "display_name": account.get("display_name", ""),
         "icon_id": account.get("icon_id", "0"),
         "avatar_path": account.get("avatar_path"),
-        "island": island_of(row["id"]),
-        "neighbors": neighbors_for(row["id"], terms, NEIGHBOR_COUNT),
+        "island": island_of(row["id"], community_id) if members else island_of(row["id"]),
+        "neighbors": (neighbors_for(row["id"], terms, NEIGHBOR_COUNT, community=community_id)
+                      if members else neighbors_for(row["id"], terms, NEIGHBOR_COUNT)),
     }
 
 
-def preview_island(x, y):
+def preview_island(x, y, community=None):
     """The named landmass a point would stand on: that of the nearest saved
-    post, if it is close enough to share its ground. Otherwise open water."""
+    post, if it is close enough to share its ground. Otherwise open water.
+    With `community` (members_only) only that community's posts count."""
     radius = PREVIEW_ISLAND_RADIUS
     try:
-        nearby = state["store"].map_posts(x - radius, y - radius, x + radius, y + radius, 200)
+        if community:
+            # The member-filtered map_posts has no viewer under the server's key: its own function.
+            nearby = state["store"].map_posts_for_community(
+                community, x - radius, y - radius, x + radius, y + radius, 200)
+        else:
+            nearby = state["store"].map_posts(x - radius, y - radius, x + radius, y + radius, 200)
     except StoreError:
         return None
     best, best_d = None, radius
@@ -2187,7 +2613,9 @@ def preview_island(x, y):
         d = math.hypot(float(row["x"]) - x, float(row["y"]) - y)
         if d <= best_d:
             best, best_d = row, d
-    return island_of(best["id"]) if best else None
+    if not best:
+        return None
+    return island_of(best["id"], community) if community else island_of(best["id"])
 
 
 @app.post("/api/posts/preview")
@@ -2199,12 +2627,18 @@ def preview_post(payload: PostPreview, request: Request):
     island and who is near, and keeps nothing.
     """
     user_id = current_user(request)
+    community_id = None
+    if members_only_on():
+        # members_only: a text is tried out among the posts of ONE community the caller is in.
+        community_id = (require_member(user_id, payload.community_id) if payload.community_id
+                        else only_community_of(user_id))
     body = clean_body(payload.body)
     if not check_rate_limit(f"preview:{user_id}"):
         raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
     x, y, cluster_id, terms, _vector, centred = project(body)
     try:
-        ranked = state["store"].nearest_to_vector([float(v) for v in centred], PREVIEW_NEIGHBORS)
+        ranked = state["store"].nearest_to_vector([float(v) for v in centred], PREVIEW_NEIGHBORS,
+                                                  **scoped(community_id))
     except StoreError:
         ranked = []
     return {
@@ -2213,8 +2647,8 @@ def preview_post(payload: PostPreview, request: Request):
         "y": y,
         "cluster_id": cluster_id,
         "terms": terms,
-        "island": preview_island(x, y),
-        "neighbors": neighbor_rows(ranked, terms),
+        "island": preview_island(x, y, community_id),
+        "neighbors": neighbor_rows(ranked, terms, community=community_id),
         "saved": False,
     }
 
@@ -2234,7 +2668,14 @@ def record_view(post_id: str, payload: PostView, request: Request):
         uuid.UUID(post_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="見つかりませんでした。")
-    viewer = optional_user(request)
+    if members_only_on():
+        # members_only: only a signed-in member of the post's community leaves a footprint (the
+        # random key of a signed-out browser no longer counts), and anybody else is told the post
+        # is not there.
+        viewer = current_user(request)
+        member_post(viewer, post_id)
+    else:
+        viewer = optional_user(request)
     if not viewer:
         viewer = (payload.viewer or "").strip().lower()
         if not _ANON_VIEWER.match(viewer):
@@ -2269,6 +2710,13 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
     """
     user_id = current_user(request)
     store = state["store"]
+    members = members_only_on()
+
+    def not_yours(old_detail):
+        # members_only: somebody else's post and a post that is not there answer alike (404).
+        if members:
+            return HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+        return HTTPException(status_code=403, detail=old_detail)
 
     fields = {}
     terms = None
@@ -2285,7 +2733,7 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
         if not existing:
             raise HTTPException(status_code=404, detail="見つかりませんでした。")
         if existing["author_id"] != user_id:
-            raise HTTPException(status_code=403, detail="自分の投稿だけ編集できます。")
+            raise not_yours("自分の投稿だけ編集できます。")
     if payload.body is not None:
         body = clean_body(payload.body)
         if body != existing["body"]:
@@ -2334,8 +2782,8 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
         except StoreError:
             raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
         if not row or row["author_id"] != user_id:
-            raise HTTPException(status_code=403, detail="編集できませんでした。")
-        return {**row, "island": island_of(row["id"])}
+            raise not_yours("編集できませんでした。")
+        return {**row, "island": island_for_viewer(row, user_id)}
     if not fields:
         raise HTTPException(status_code=422, detail="変更点がありません。")
 
@@ -2344,10 +2792,10 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
     except StoreError:
         raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
     if not row:
-        raise HTTPException(status_code=403, detail="編集できませんでした。")
+        raise not_yours("編集できませんでした。")
     if terms is not None:
         invalidate_islands()
-    return {**row, "island": island_of(row["id"])}
+    return {**row, "island": island_for_viewer(row, user_id)}
 
 
 @app.delete("/api/posts/{post_id}")
@@ -2393,13 +2841,28 @@ def delete_comment(comment_id: str, request: Request):
 
 
 @app.get("/api/neighbors")
-def neighbors(post: str = "", limit: int = ORBIT_NEIGHBOR_COUNT):
+def neighbors(request: Request, post: str = "", limit: int = ORBIT_NEIGHBOR_COUNT):
     """Who is near this post, measured before the squash.
 
     This is what the orbit view places people by, and what the profile sheet
     prints. Never the map distance: ranking by map distance put a different
     topic at the top for 3 of 12 measured people; ranking by cosine got 12 of 12.
     """
+    members = members_only_on()
+    if members:
+        # members_only: a post's neighbours are for the members of its community. An author who
+        # has left cannot seed this with an old post: membership, not authorship.
+        user_id = current_user(request)
+        if not post:
+            raise HTTPException(status_code=422, detail="投稿が指定されていません。")
+        origin = member_post(user_id, post)
+        community = str(origin["community_id"])
+        limit = max(1, min(int(limit), 100))
+        return {
+            "post": post,
+            "island": island_of(post, community),
+            "neighbors": neighbors_for(post, origin.get("terms") or [], limit, community=community),
+        }
     if not post:
         raise HTTPException(status_code=422, detail="投稿が指定されていません。")
     store = state["store"]
@@ -2420,11 +2883,18 @@ def neighbors(post: str = "", limit: int = ORBIT_NEIGHBOR_COUNT):
 
 
 @app.get("/api/pair")
-def pair(a: str = "", b: str = ""):
+def pair(request: Request, a: str = "", b: str = ""):
     """似てる度 and shared words for two posts. What the sheet shows."""
+    members = members_only_on()
+    user_id = current_user(request) if members else None
     if not a or not b or a == b:
         raise HTTPException(status_code=422, detail="2つの投稿を指定してください。")
     store = state["store"]
+    if members:
+        # members_only: both posts are ones the caller reads as a member, and of ONE community.
+        first, second = member_post(user_id, a), member_post(user_id, b)
+        if first.get("community_id") != second.get("community_id"):
+            raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
     try:
         left, right = store.get_post(a), store.get_post(b)
         cosine = store.pair_similarity(a, b) if left and right else None
@@ -2459,6 +2929,15 @@ def local_mode_allowed():
 def require_local():
     if not state.get("local_mode") or not local_mode_allowed():
         raise HTTPException(status_code=404, detail="not found")
+
+
+def local_viewer(request):
+    """Who a /api/local read is for. With members_only on, PostgREST would answer a signed-out
+    caller with nothing; here that is a 401, and a signed-in one is the viewer the store's
+    row-level rules are applied for. With it off, the viewer is ignored (reads were open)."""
+    if _members_flag():
+        return current_user(request)
+    return optional_user(request)
 
 
 class OtpRequest(BaseModel):
@@ -2551,26 +3030,28 @@ def local_put_account(payload: AccountPatch, request: Request):
 
 
 @app.get("/api/local/map")
-def local_map(min_x: float = MAP_MIN, min_y: float = MAP_MIN,
+def local_map(request: Request, min_x: float = MAP_MIN, min_y: float = MAP_MIN,
               max_x: float = MAP_MAX, max_y: float = MAP_MAX,
               limit: int = MAP_POST_LIMIT):
     require_local()
+    viewer = local_viewer(request)
     limit = max(1, min(int(limit), 2000))
-    return {"posts": state["store"].map_posts(min_x, min_y, max_x, max_y, limit)}
+    return {"posts": state["store"].map_posts(min_x, min_y, max_x, max_y, limit, viewer=viewer)}
 
 
 @app.get("/api/local/cells")
-def local_cells(min_x: float = MAP_MIN, min_y: float = MAP_MIN,
+def local_cells(request: Request, min_x: float = MAP_MIN, min_y: float = MAP_MIN,
                 max_x: float = MAP_MAX, max_y: float = MAP_MAX):
     require_local()
-    return {"cells": state["store"].map_cells(min_x, min_y, max_x, max_y)}
+    viewer = local_viewer(request)
+    return {"cells": state["store"].map_cells(min_x, min_y, max_x, max_y, viewer=viewer)}
 
 
 @app.get("/api/local/post/{post_id}")
-def local_get_post(post_id: str):
+def local_get_post(post_id: str, request: Request):
     require_local()
     store = state["store"]
-    post = store.get_post(post_id)
+    post = store.get_post(post_id, viewer=local_viewer(request))
     if not post:
         raise HTTPException(status_code=404, detail="見つかりませんでした。")
     account = store.get_account(post["author_id"]) or {}
@@ -2583,17 +3064,18 @@ def local_get_post(post_id: str):
 
 
 @app.get("/api/local/posts")
-def local_posts_by_author(author: str = ""):
+def local_posts_by_author(request: Request, author: str = ""):
     require_local()
+    viewer = local_viewer(request)
     if not author:
         raise HTTPException(status_code=422, detail="author を指定してください。")
-    return {"posts": state["store"].posts_by_author(author)}
+    return {"posts": state["store"].posts_by_author(author, viewer=viewer)}
 
 
 @app.get("/api/local/comments")
-def local_comments(post: str = ""):
+def local_comments(request: Request, post: str = ""):
     require_local()
-    return {"comments": state["store"].list_comments(post)}
+    return {"comments": state["store"].list_comments(post, viewer=local_viewer(request))}
 
 
 @app.post("/api/local/comments")
@@ -2655,18 +3137,19 @@ def local_my_reactions(request: Request):
 
 
 @app.get("/api/local/posts/{post_id}/joiners")
-def local_joiners(post_id: str):
+def local_joiners(post_id: str, request: Request):
     """Who joined a post: the local stand-in for reading the reactions table."""
     require_local()
-    return {"joiners": state["store"].joiners_of(post_id)}
+    return {"joiners": state["store"].joiners_of(post_id, viewer=local_viewer(request))}
 
 
 @app.get("/api/local/posts/{post_id}/reactors")
-def local_reactors(post_id: str, kind: str = "like"):
+def local_reactors(post_id: str, request: Request, kind: str = "like"):
     """Who pressed いいね / 手伝えるかも / 参加 on a post, with their names and icons."""
     require_local()
+    viewer = local_viewer(request)
     try:
-        reactors = state["store"].reactors_of(post_id, kind)
+        reactors = state["store"].reactors_of(post_id, kind, viewer=viewer)
     except StoreError:
         raise HTTPException(status_code=422, detail="kind は like / help / join のどれかです。")
     return {"reactors": reactors}
@@ -2676,7 +3159,7 @@ def local_reactors(post_id: str, kind: str = "like"):
 def local_notifications(request: Request):
     require_local()
     user_id = current_user(request)
-    return {"notifications": state["store"].list_notifications(user_id)}
+    return {"notifications": state["store"].list_notifications(user_id, viewer=user_id)}
 
 
 @app.get("/api/local/notifications/feed")
@@ -2690,7 +3173,8 @@ def local_notification_feed(request: Request, limit: int = 50):
     user_id = current_user(request)
     store = state["store"]
     settings = notices.merge_settings(store.get_notification_settings(user_id))
-    feed = notices.group_feed(store.list_notifications(user_id, limit=500), max(1, min(int(limit), 100)))
+    feed = notices.group_feed(store.list_notifications(user_id, limit=500, viewer=user_id),
+                              max(1, min(int(limit), 100)))
     for entry in feed:
         entry["interrupts"] = notices.allows(settings, entry["type"], "in_app")
     unread = sum(1 for entry in feed if entry["unread"] and entry["interrupts"])
@@ -2717,7 +3201,11 @@ def local_mark_read(payload: ReadRequest, request: Request):
 def local_report(payload: ReportCreate, request: Request):
     require_local()
     user_id = current_user(request)
-    state["store"].add_report(user_id, payload.post_id, payload.comment_id, payload.reason)
+    try:
+        state["store"].add_report(user_id, payload.post_id, payload.comment_id, payload.reason)
+    except StoreError:
+        # members_only: a post / comment the reporter is not a member of fails like a missing one.
+        raise HTTPException(status_code=404, detail="見つかりませんでした。")
     return {"ok": True}
 
 
@@ -2928,23 +3416,35 @@ def local_rename_community(community_id: str, payload: CommunityRename, request:
 
 
 @app.get("/api/local/communities/{community_id}")
-def local_community_info(community_id: str):
-    """{id, name} of one community (production: a read of the communities table)."""
+def local_community_info(community_id: str, request: Request):
+    """{id, name} of one community (production: a read of the communities table; with members_only
+    on, communities_read shows a community to its members only)."""
     require_local()
-    info = state["store"].community_info(community_id)
+    info = state["store"].community_info(community_id, viewer=local_viewer(request))
     if not info:
         raise HTTPException(status_code=404, detail="not found")
     return info
 
 
 @app.get("/api/local/communities/{community_id}/map")
-def local_community_map(community_id: str, min_x: float = MAP_MIN, min_y: float = MAP_MIN,
-                        max_x: float = MAP_MAX, max_y: float = MAP_MAX,
+def local_community_map(community_id: str, request: Request, min_x: float = MAP_MIN,
+                        min_y: float = MAP_MIN, max_x: float = MAP_MAX, max_y: float = MAP_MAX,
                         limit: int = MAP_POST_LIMIT):
-    """community_map_posts: the same rows as /api/local/map, for one community only."""
+    """community_map_posts: the same rows as /api/local/map, for one community only
+    (members_only: members of that community only)."""
     require_local()
+    viewer = local_viewer(request)
     limit = max(1, min(int(limit), 2000))
-    return {"posts": state["store"].community_map_posts(community_id, min_x, min_y, max_x, max_y, limit)}
+    return {"posts": state["store"].community_map_posts(
+        community_id, min_x, min_y, max_x, max_y, limit, viewer=viewer)}
+
+
+@app.post("/api/local/communities/{community_id}/leave")
+def local_leave_community(community_id: str, request: Request):
+    """Deleting your own community_members row (production: the browser does it, under the
+    can_leave_community rule). {"left": false} for a last admin or somebody who was not in."""
+    require_local()
+    return {"left": state["store"].leave_community(current_user(request), community_id)}
 
 
 @app.post("/api/local/communities")
@@ -2974,6 +3474,26 @@ def local_set_invite_only(payload: InviteOnlySwitch):
     return {"invite_only": state["store"].invite_only()}
 
 
+class MembersOnlySwitch(BaseModel):
+    value: bool
+
+
+@app.get("/api/local/settings/members-only")
+def local_get_members_only():
+    require_local()
+    return {"members_only": state["store"].members_only()}
+
+
+@app.post("/api/local/settings/members-only")
+def local_set_members_only(payload: MembersOnlySwitch):
+    """Dev helper: flip app_settings.members_only (production: the lockdown / rollback SQL does it)."""
+    require_local()
+    state["store"].set_members_only(payload.value)
+    invalidate_islands()
+    invalidate_connections()
+    return {"members_only": state["store"].members_only()}
+
+
 @app.post("/api/local/invites/{invite_id}/expire")
 def local_expire_invite(invite_id: str):
     """Dev helper: make an invite already past its expiry (for an 'expired link' test)."""
@@ -2997,6 +3517,20 @@ async def local_upload(request: Request):
     path = f"{user_id}/{uuid.uuid4().hex}"
     state["images"][path] = (kind, raw)
     return {"path": path, "url": f"/api/local/image/{path}"}
+
+
+@app.get("/api/local/storage/list")
+def local_storage_list(request: Request, folder: str = ""):
+    """The storage listing of the post-images bucket. Phase 1 of members-only images: a person lists
+    their OWN folder only (the policy compares the first path segment with their id); everybody else's
+    folder, and the bucket root, answer nothing. Opening a file by its exact URL still works for
+    anyone who has it (the bucket stays public until the private-bucket change)."""
+    require_local()
+    viewer = local_viewer(request)
+    if _members_flag() and (not viewer or folder.strip("/") != viewer):
+        return {"objects": []}
+    prefix = folder.strip("/") + "/"
+    return {"objects": sorted(path[len(prefix):] for path in state["images"] if path.startswith(prefix))}
 
 
 @app.get("/api/local/image/{account_id}/{name}")
@@ -3120,6 +3654,11 @@ def docs_page():
 @app.get("/privacy")
 def privacy():
     return FileResponse(WEB / "privacy.html", headers=NO_CACHE)
+
+
+@app.get("/terms")
+def terms():
+    return FileResponse(WEB / "terms.html", headers=NO_CACHE)
 
 
 @app.get("/sw.js")

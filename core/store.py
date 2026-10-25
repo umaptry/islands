@@ -58,11 +58,12 @@ from core.config import (
     LOCAL_DEMO_COMMUNITY_NAME,
     LOCAL_DEMO_COMMUNITY_SLUG,
     LOCAL_DEMO_INVITE_CODE,
+    MEMBERS_ONLY_CACHE_SECONDS,
     RECRUIT_TAG,
     TALK_ERROR_LOGIN,
     TALK_ERROR_NOT_PEER,
     TALK_ERROR_SELF,
-    TALK_WISH_DAYS,
+    TALK_NOTICE_DAYS,
 )
 from core.energy import computed_energy, total_energy
 from core.post_extras import (
@@ -114,8 +115,10 @@ ACCOUNT_COLUMNS = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path
 PROFILE_VECTOR_COLUMNS = ("vec_topics", "vec_goal", "vec_seeking", "vec_offering")
 # Naming a landmass needs the words and the position, not the essays.
 # author_id and created_at are what island growth and tracking count.
+# community_id rides along (2026-10-27): the per-community islands, lines and quiet-post notices
+# need to know which community a post belongs to without a second full scan.
 TERM_COLUMNS = ("id,author_id,cluster_id,x,y,terms,motivation,like_count,help_count,"
-                "join_count,comment_count,energy,created_at")
+                "join_count,comment_count,energy,created_at,community_id")
 NOTIFICATION_COLUMNS = ("id,recipient_id,actor_id,post_id,comment_id,type,created_at,read_at,"
                         "island_id,event_id,payload")
 # The columns the 2026-10-12 migration added. A database that has not had it yet
@@ -148,6 +151,17 @@ PUSH_SUBSCRIPTION_COLUMNS = "id,account_id,endpoint,p256dh,auth,user_agent,creat
 PRESENCE_MAX_SECONDS = 120
 # ids per in.(...) filter: keeps each request line well under proxy limits.
 IN_BATCH = 150
+
+# Members-only posts (2026-10-27, supabase/migrations/20261027000000_members_only_prep.sql and
+# ...010000_members_only_lockdown.sql). app_settings.members_only is the switch the lockdown SQL
+# sets in the same transaction as the new row-level rules; while it is false every rule below is
+# skipped and the server behaves as before.
+UNSCOPED_NOTIFICATION_TYPES = ("island", "quiet_post", "similar")   # never written without a community while members_only is on
+MEMBERS_ONLY_KEY = "members_only"
+# `viewer=SERVICE` (the default) means "the server's own key": no row-level rule applies, exactly
+# like the service role in a deployment. A local-mode route passes the signed-in person (or None
+# for nobody) and MemoryStore then applies the same rules the SQL policies apply.
+SERVICE = object()
 
 
 def _now():
@@ -271,7 +285,7 @@ class MemoryStore:
         self._members = {}          # (community_id, account_id) -> {role, joined_at}
         self._invites = {}          # id -> {id, community_id, code, created_by, created_at, expires_at, revoked_at, uses}
         self._invite_claims = {}    # account_id -> {invite_id, claimed_at}: "may make an account"
-        self._app_settings = {"invite_only": False}   # starts false, like the migration
+        self._app_settings = {"invite_only": False, "members_only": False}   # both start false, like the migrations
         self._talk_wish_notices = {}  # (from_id, to_id) -> iso time a talk_wish notice was written
         self._push_config = {"vapid_public": None, "vapid_private": None, "dispatch_url": None}
         self._push_subscriptions = {}  # endpoint -> row
@@ -327,8 +341,87 @@ class MemoryStore:
 
     # -- posts -------------------------------------------------------------
 
+    # -- members-only rules (the SQL policies, in Python) ------------------------
+
+    def members_only(self):
+        """app_settings.members_only. False until the lockdown SQL (or a test) sets it."""
+        with self._lock:
+            return bool(self._app_settings.get(MEMBERS_ONLY_KEY))
+
+    def set_members_only(self, value):
+        """The one-line switch (lockdown SQL / rollback SQL in production; tests flip it here)."""
+        with self._lock:
+            self._app_settings[MEMBERS_ONLY_KEY] = bool(value)
+
+    def _require_scope(self, community):
+        """Post-derived data is never asked for "all communities" while members_only is on."""
+        if community is None and self._app_settings.get(MEMBERS_ONLY_KEY):
+            raise ValueError("community is required while members_only is on")
+
+    def _filtering(self, viewer):
+        """True when a row-level rule applies to this read: a viewer was named and the switch is on."""
+        return viewer is not SERVICE and bool(self._app_settings.get(MEMBERS_ONLY_KEY))
+
+    def viewer_communities(self, me):
+        """The community ids a person belongs to RIGHT NOW (never cached)."""
+        if not me:
+            return set()
+        with self._lock:
+            return {cid for (cid, account) in self._members if account == me}
+
+    def community_member_ids(self, community_id):
+        with self._lock:
+            return {account for (cid, account) in self._members if cid == community_id}
+
+    def community_ids(self):
+        with self._lock:
+            return sorted(self._communities)
+
+    def _in_community(self, account_id, community_id):
+        return bool(account_id) and bool(community_id) and (community_id, account_id) in self._members
+
+    def _is_member_of_post(self, post_id, viewer):
+        """is_member_of_post(): the post is live and its community is one the viewer is in.
+        NO author clause, and a post with no community belongs to nobody."""
+        row = self._posts.get(post_id)
+        return bool(row) and not row.get("deleted_at") and self._in_community(viewer, row.get("community_id"))
+
+    def _is_member_of_post_any(self, post_id, viewer):
+        """is_member_of_post_any(): like _is_member_of_post, but a soft-deleted post counts (it keeps
+        the notification rows about it readable)."""
+        row = self._posts.get(post_id)
+        return bool(row) and self._in_community(viewer, row.get("community_id"))
+
+    def _can_read_post_row(self, row, viewer):
+        """The posts_read policy: live, and (in one of the viewer's communities OR written by the
+        viewer). A post with no community is read by its author only."""
+        if not row or row.get("deleted_at"):
+            return False
+        return self._in_community(viewer, row.get("community_id")) or (
+            bool(viewer) and row["author_id"] == viewer)
+
+    def leave_community(self, me, community_id):
+        """What deleting your own community_members row does (can_leave_community). The last
+        admin may not leave. Nothing else is deleted: the person's notifications of that community are only
+        hidden by the read rule (as in SQL), so they come back if the person rejoins."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            member = self._members.get((community_id, me))
+            if not member:
+                return False
+            if member["role"] == "admin" and not any(
+                    m["role"] == "admin" and account != me
+                    for (cid, account), m in self._members.items() if cid == community_id):
+                return False
+            del self._members[(community_id, me)]
+            return True
+
     def insert_post(self, record):
         row = dict(record)
+        if self._app_settings.get(MEMBERS_ONLY_KEY) and not row.get("community_id"):
+            # Phase B makes posts.community_id NOT NULL; until then the server refuses it here.
+            raise StoreError("community_id")
         row.setdefault("id", str(uuid.uuid4()))
         row.setdefault("created_at", _now())
         row["updated_at"] = row["created_at"]
@@ -343,10 +436,12 @@ class MemoryStore:
             self._posts[row["id"]] = row
         return self._public_post(row)
 
-    def get_post(self, post_id, with_vec=False):
+    def get_post(self, post_id, with_vec=False, viewer=SERVICE):
         with self._lock:
             row = self._posts.get(post_id)
             if not row or row.get("deleted_at"):
+                return None
+            if self._filtering(viewer) and not self._can_read_post_row(row, viewer):
                 return None
             return self._public_post(row, with_vec=with_vec)
 
@@ -368,32 +463,54 @@ class MemoryStore:
             row["deleted_at"] = _now()
             return True
 
-    def posts_by_author(self, author_id):
+    def posts_by_author(self, author_id, viewer=SERVICE):
+        """A person's live posts, newest first. With a viewer named and members_only on: all of
+        them for the person themselves, and for anybody else only the posts whose community the
+        viewer is in."""
         with self._lock:
             rows = [
                 row for row in self._posts.values()
                 if row["author_id"] == author_id and not row.get("deleted_at")
+                and (not self._filtering(viewer) or viewer == author_id
+                     or self._in_community(viewer, row.get("community_id")))
             ]
         rows.sort(key=lambda row: row["created_at"], reverse=True)
         return [self._joined(row) for row in rows]
 
-    def count_posts(self):
+    def count_posts(self, community=None, everything=False):
+        """Live posts, of one community or (everything=True, or members_only off) of all."""
+        if not everything:
+            self._require_scope(community)
         with self._lock:
-            return sum(1 for row in self._posts.values() if not row.get("deleted_at"))
+            return sum(1 for row in self._posts.values()
+                       if not row.get("deleted_at")
+                       and (community is None or row.get("community_id") == community))
 
     def _live(self):
         return [row for row in self._posts.values() if not row.get("deleted_at")]
 
-    def map_posts(self, min_x, min_y, max_x, max_y, limit):
+    def map_posts(self, min_x, min_y, max_x, max_y, limit, viewer=SERVICE):
         with self._lock:
             rows = [
                 row for row in self._live()
                 if min_x <= row["x"] <= max_x and min_y <= row["y"] <= max_y
+                and (not self._filtering(viewer) or self._in_community(viewer, row.get("community_id")))
             ]
         rows.sort(key=lambda row: (total_energy(row), row["created_at"]), reverse=True)
         return [self._joined(row) for row in rows[:limit]]
 
-    def map_cells(self, min_x, min_y, max_x, max_y):
+    def map_posts_for_community(self, community, min_x, min_y, max_x, max_y, limit):
+        """map_posts for the server's own key: the posts of ONE community (the member-filtered
+        map_posts has no viewer under the service role). A missing community is an error."""
+        if not community:
+            raise ValueError("community is required")
+        return self.community_map_posts(community, min_x, min_y, max_x, max_y, limit)
+
+    def map_cells(self, min_x, min_y, max_x, max_y, viewer=SERVICE):
+        if self._app_settings.get(MEMBERS_ONLY_KEY):
+            # Lockdown: the cells are made from every community's posts, so they answer nothing
+            # (same signature and grants, zero rows). Per-community cells come in Phase B.
+            return []
         cells = {}
         with self._lock:
             rows = list(self._live())
@@ -413,16 +530,20 @@ class MemoryStore:
             if low_x <= cx <= high_x and low_y <= cy <= high_y
         ]
 
-    def list_terms(self, limit=5000):
+    def list_terms(self, limit=5000, community=None):
+        self._require_scope(community)
         with self._lock:
-            rows = sorted(self._live(), key=lambda row: -total_energy(row))[:limit]
+            live = [row for row in self._live() if community is None or row.get("community_id") == community]
+            rows = sorted(live, key=lambda row: -total_energy(row))[:limit]
         keys = TERM_COLUMNS.split(",")
         return [{key: (computed_energy(row) if key == "energy" else row.get(key))
                  for key in keys} for row in rows]
 
-    def terrain_posts(self):
+    def terrain_posts(self, community=None):
+        self._require_scope(community)
         with self._lock:
-            return [self._joined(row) for row in self._live()]
+            return [self._joined(row) for row in self._live()
+                    if community is None or row.get("community_id") == community]
 
     def post_bodies(self, ids):
         """{post_id: body} for live posts among ids (island naming reads this)."""
@@ -430,25 +551,32 @@ class MemoryStore:
             return {i: self._posts[i]["body"] for i in ids
                     if i in self._posts and not self._posts[i].get("deleted_at")}
 
-    def nearest_posts(self, post_id, k):
+    def nearest_posts(self, post_id, k, community=None):
+        """The posts nearest to a saved post. `community` limits the answer to that community's
+        posts; while members_only is on a missing community is a ValueError (nothing is returned)."""
+        self._require_scope(community)
         with self._lock:
             origin = self._posts.get(post_id)
             if not origin or origin.get("deleted_at"):
                 return []
+            if community is not None and origin.get("community_id") != community:
+                return []   # the SQL function: origin.community_id = p_community, else nothing
             mine = origin.get("vec_c")
         if mine is None:
             return []
-        return self._nearest(mine, k, skip=post_id)
+        return self._nearest(mine, k, skip=post_id, community=community)
 
-    def nearest_to_vector(self, vector, k):
+    def nearest_to_vector(self, vector, k, community=None):
         """Neighbours of a text that was never saved (the first-post tryout)."""
-        return self._nearest(vector, k)
+        self._require_scope(community)
+        return self._nearest(vector, k, community=community)
 
-    def _nearest(self, origin, k, skip=None):
+    def _nearest(self, origin, k, skip=None, community=None):
         import numpy as np
 
         with self._lock:
-            rows = [row for row in self._live() if row["id"] != skip]
+            rows = [row for row in self._live() if row["id"] != skip
+                    and (community is None or row.get("community_id") == community)]
         mine = np.asarray(origin, dtype=float)
         scored = []
         for row in rows:
@@ -466,7 +594,13 @@ class MemoryStore:
         return scored[:k]
 
     def pair_similarity(self, a, b):
-        for post_id, cosine in self.nearest_posts(a, 10_000):
+        # Service-only in a deployment; the caller has already seen that both posts are in one
+        # community. Scoped to a's community so it cannot reach into another one.
+        with self._lock:
+            community = (self._posts.get(a) or {}).get("community_id")
+            if self._app_settings.get(MEMBERS_ONLY_KEY) and not community:
+                return None
+        for post_id, cosine in self.nearest_posts(a, 10_000, community=community):
             if post_id == b:
                 return cosine
         return None
@@ -501,6 +635,10 @@ class MemoryStore:
         with self._lock:
             post = self._posts.get(post_id)
             if not post or post.get("deleted_at"):
+                return False
+            if self._app_settings.get(MEMBERS_ONLY_KEY) and not self._is_member_of_post(post_id, actor_id):
+                # reactions_insert needs is_member_of_post, and the recruit guard checks that BEFORE
+                # it says closed/full: a non-member learns nothing about the post (same as missing).
                 return False
             key = (post_id, actor_id, kind)
             if key in self._reactions:
@@ -541,7 +679,14 @@ class MemoryStore:
                 del self._notifications[nid]
         return True
 
-    def joiners_of(self, post_id):
+    def _reaction_visible(self, post_id, actor, viewer):
+        """reactions_read: a member of the post's community reads every reaction on it, anybody
+        else only the rows they pressed themselves. Lock held by the caller."""
+        if not self._filtering(viewer):
+            return True
+        return actor == viewer or self._is_member_of_post(post_id, viewer)
+
+    def joiners_of(self, post_id, viewer=SERVICE):
         """Account ids that pressed 参加 on a post (local mode only).
 
         With a database the reactions are public and the browser reads them
@@ -549,9 +694,9 @@ class MemoryStore:
         """
         with self._lock:
             return [actor for (pid, actor, kind) in self._reactions
-                    if pid == post_id and kind == "join"]
+                    if pid == post_id and kind == "join" and self._reaction_visible(pid, actor, viewer)]
 
-    def reactors_of(self, post_id, kind):
+    def reactors_of(self, post_id, kind, viewer=SERVICE):
         """The people who pressed one reaction on a post, newest first (local mode only).
 
         The stand-in for reading reactions with their accounts embedded, which is
@@ -566,7 +711,7 @@ class MemoryStore:
             rows = sorted(
                 ((created, order, actor)
                  for order, ((pid, actor, k), created) in enumerate(self._reactions.items())
-                 if pid == post_id and k == kind),
+                 if pid == post_id and k == kind and self._reaction_visible(pid, actor, viewer)),
                 reverse=True,
             )
             people = []
@@ -597,6 +742,8 @@ class MemoryStore:
             post = self._posts.get(post_id)
             if not post or post.get("deleted_at"):
                 raise StoreError("post")
+            if self._app_settings.get(MEMBERS_ONLY_KEY) and not self._is_member_of_post(post_id, author_id):
+                raise StoreError("post")   # comments_insert: members only; same words as a missing post
             parent_author = None
             if reply_to is not None:
                 parent = self._comments.get(reply_to)
@@ -627,8 +774,10 @@ class MemoryStore:
                 self._notify_new_connection(author_id, owner)
             return self._with_author(row)
 
-    def list_comments(self, post_id):
+    def list_comments(self, post_id, viewer=SERVICE):
         with self._lock:
+            if self._filtering(viewer) and not self._is_member_of_post(post_id, viewer):
+                return []
             rows = [
                 row for row in self._comments.values()
                 if row["post_id"] == post_id and not row["deleted_at"]
@@ -658,8 +807,11 @@ class MemoryStore:
     # -- notifications -----------------------------------------------------
 
     def _notify(self, recipient_id, actor_id, post_id, comment_id, kind,
-                island_id=None, event_id=None, payload=None):
+                island_id=None, event_id=None, payload=None, community_id=None):
+        if community_id is None and post_id:
+            community_id = (self._posts.get(post_id) or {}).get("community_id")
         row = {
+            "community_id": community_id,
             "id": str(uuid.uuid4()),
             "recipient_id": recipient_id,
             "actor_id": actor_id,
@@ -706,10 +858,14 @@ class MemoryStore:
 
     def insert_notifications(self, rows):
         """Server-written notifications (similar, island)."""
+        if self._app_settings.get(MEMBERS_ONLY_KEY):
+            rows = [row for row in rows
+                    if row.get("community_id") or row["type"] not in UNSCOPED_NOTIFICATION_TYPES]
         with self._lock:
             return [dict(self._notify(
                 row["recipient_id"], row.get("actor_id"), row.get("post_id"), None, row["type"],
                 row.get("island_id"), row.get("event_id"), row.get("payload"),
+                community_id=row.get("community_id"),
             )) for row in rows]
 
     def recent_notifications(self, kind, since, recipient_id=None):
@@ -722,11 +878,20 @@ class MemoryStore:
                 and (recipient_id is None or row["recipient_id"] == recipient_id)
             ]
 
-    def list_notifications(self, recipient_id, limit=100):
+    def _notification_visible(self, row, viewer):
+        """notifications_read: the recipient's own rows, minus those about a post they are not a
+        member of, and minus those of a community they are not in. Lock held."""
+        if row["post_id"] and not self._is_member_of_post_any(row["post_id"], viewer):
+            return False
+        community = row.get("community_id")
+        return community is None or self._in_community(viewer, community)
+
+    def list_notifications(self, recipient_id, limit=100, viewer=SERVICE):
         with self._lock:
             rows = [
                 dict(row) for row in self._notifications.values()
                 if row["recipient_id"] == recipient_id
+                and (not self._filtering(viewer) or self._notification_visible(row, viewer))
             ]
         rows.sort(key=lambda row: row["created_at"], reverse=True)
         rows = rows[:limit]
@@ -783,8 +948,12 @@ class MemoryStore:
 
     def _talk_shared_event(self, a, b):
         """The newest meeting both are in (its author or a joiner), or None. Lock held."""
+        strict = self._app_settings.get(MEMBERS_ONLY_KEY)
         meetings = [post for post in self._posts.values()
-                    if self._is_meeting(post) and self._is_member(post, a) and self._is_member(post, b)]
+                    if self._is_meeting(post) and self._is_member(post, a) and self._is_member(post, b)
+                    # members_only: BOTH people must be in the community the meeting was posted to.
+                    and (not strict or (self._in_community(a, post.get("community_id"))
+                                        and self._in_community(b, post.get("community_id"))))]
         if not meetings:
             return None
         return max(meetings, key=lambda post: (_stamp(post["created_at"]), post["id"]))["id"]
@@ -808,22 +977,26 @@ class MemoryStore:
         """Everybody in a meeting I am in, except me and anyone blocked either way."""
         with self._lock:
             peers = set()
+            strict = self._app_settings.get(MEMBERS_ONLY_KEY)
             for post in self._posts.values():
                 if not self._is_meeting(post) or not self._is_member(post, me):
                     continue
-                peers.add(post["author_id"])
-                peers.update(actor for (pid, actor, kind) in self._reactions
+                if strict and not self._in_community(me, post.get("community_id")):
+                    continue
+                found = {post["author_id"]}
+                found.update(actor for (pid, actor, kind) in self._reactions
                              if pid == post["id"] and kind == "join")
+                if strict:   # both CTEs of talk_peers(): the other person must be in the community too
+                    found = {person for person in found if self._in_community(person, post.get("community_id"))}
+                peers.update(found)
             peers.discard(me)
             return sorted(person for person in peers if not self._talk_blocked(me, person))
 
     def talk_state(self, me):
         """[{target, state: pressed|matched, room_id}]. Never says who pressed me."""
-        horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
         with self._lock:
             out = [{"target": to_id, "state": "pressed", "room_id": None}
-                   for (from_id, to_id), wish in self._talk_wishes.items()
-                   if from_id == me and _stamp(wish["created_at"]) > horizon]
+                   for (from_id, to_id) in self._talk_wishes if from_id == me]
             out += [{"target": room["user_b"] if room["user_a"] == me else room["user_a"],
                      "state": "matched", "room_id": room["id"]}
                     for room in self._dm_rooms.values() if me in (room["user_a"], room["user_b"])]
@@ -841,10 +1014,9 @@ class MemoryStore:
             shared = self._talk_shared_event(me, target)
             if shared is None or self._talk_blocked(me, target):
                 raise TalkRefused(TALK_ERROR_NOT_PEER)
-            horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
-            for key in [key for key, wish in self._talk_wishes.items()
-                        if _stamp(wish["created_at"]) < horizon]:
-                del self._talk_wishes[key]
+            # A press (talk_wishes) is kept until it is withdrawn or matched. Only the
+            # record of the anonymous notice has a limit.
+            horizon = datetime.now(timezone.utc) - timedelta(days=TALK_NOTICE_DAYS)
             for key in [key for key, at in self._talk_wish_notices.items() if _stamp(at) < horizon]:
                 del self._talk_wish_notices[key]
             room = self._room_between(me, target)
@@ -902,6 +1074,9 @@ class MemoryStore:
                 account = self._accounts.get(other) or {}
                 post = self._posts.get(room["event_post_id"]) if room["event_post_id"] else None
                 live = post if post and not post.get("deleted_at") else None
+                if live and self._app_settings.get(MEMBERS_ONLY_KEY) and not self._in_community(
+                        me, live.get("community_id")):
+                    live = None   # the excerpt of a meeting is for members of its community only
                 last = next((m for m in reversed(self._dm_messages) if m["room_id"] == room["id"]), None)
                 rows.append({
                     "room_id": room["id"], "other_id": other,
@@ -1024,10 +1199,13 @@ class MemoryStore:
         member = self._members.get((community_id, account_id))
         return bool(member) and member["role"] == "admin"
 
-    def community_info(self, community_id):
-        """{id, name} of a community, or None (a community's name is public)."""
+    def community_info(self, community_id, viewer=SERVICE):
+        """{id, name} of a community, or None (a community's name is public; with members_only on
+        and a viewer named, communities_read shows a community to its members only)."""
         with self._lock:
             community = self._communities.get(community_id)
+            if self._filtering(viewer) and not self._in_community(viewer, community_id):
+                return None
             return {"id": community["id"], "name": community["name"]} if community else None
 
     def my_communities(self, me):
@@ -1035,7 +1213,7 @@ class MemoryStore:
             rows = [(m["joined_at"], cid, self._communities[cid], m["role"])
                     for (cid, account), m in self._members.items()
                     if account == me and cid in self._communities]
-            rows.sort(key=lambda item: (_stamp(item[0]), item[1]))
+            rows.sort(key=lambda item: _stamp(item[0]))  # stable: equal clock ticks keep the order they joined in
             return [{"community_id": cid, "slug": c["slug"], "name": c["name"], "role": role}
                     for _, cid, c, role in rows]
 
@@ -1118,7 +1296,7 @@ class MemoryStore:
         with self._lock:
             if not community_id or not self._is_admin(community_id, me):
                 raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY_LIST, status=403)
-            rows = [i for i in self._invites.values() if i["community_id"] == community_id]
+            rows = [i for i in reversed(list(self._invites.values())) if i["community_id"] == community_id]  # newest first even when the clock ticks coarsely
             rows.sort(key=lambda i: _stamp(i["created_at"]), reverse=True)
             return [{key: i[key] for key in ("id", "code", "expires_at", "revoked_at", "uses", "created_at")}
                     for i in rows[:100]]
@@ -1161,9 +1339,12 @@ class MemoryStore:
         with self._lock:
             return {row["id"]: row["community_id"] for row in self._live() if row.get("community_id")}
 
-    def community_map_posts(self, community_id, min_x, min_y, max_x, max_y, limit):
-        """map_posts, but only the posts of this community (a post with none shows nowhere)."""
+    def community_map_posts(self, community_id, min_x, min_y, max_x, max_y, limit, viewer=SERVICE):
+        """map_posts, but only the posts of this community (a post with none shows nowhere).
+        With members_only on and a viewer named: nothing unless the viewer is in that community."""
         with self._lock:
+            if self._filtering(viewer) and not self._in_community(viewer, community_id):
+                return []
             rows = [
                 row for row in self._live()
                 if row.get("community_id") == community_id
@@ -1287,12 +1468,15 @@ class MemoryStore:
                 })
             return out
 
-    def post_centroids(self):
-        """{author_id: {"centroid": [...], "post_count": n}} from live vec_c."""
+    def post_centroids(self, community=None):
+        """{author_id: {"centroid": [...], "post_count": n}} from live vec_c (of one community)."""
+        self._require_scope(community)
         groups = {}
         with self._lock:
             for row in self._live():
                 if row.get("vec_c") is None:
+                    continue
+                if community is not None and row.get("community_id") != community:
                     continue
                 groups.setdefault(row["author_id"], []).append(np.asarray(row["vec_c"], dtype=float))
         return {
@@ -1341,10 +1525,13 @@ class MemoryStore:
 
     # -- islands -------------------------------------------------------------
 
-    def island_states(self, active_only=True):
+    def island_states(self, active_only=True, communities=None):
+        """Saved islands. `communities` (a set of ids) keeps only the islands of those communities;
+        an island saved with no community belongs to none of them."""
         with self._lock:
             return [dict(row) for row in self._islands.values()
-                    if row.get("active", True) or not active_only]
+                    if (row.get("active", True) or not active_only)
+                    and (communities is None or row.get("community_id") in communities)]
 
     supports_island_names = True
     supports_post_extras = True
@@ -1374,12 +1561,13 @@ class MemoryStore:
                 self._island_events[saved["id"]] = saved
         return len(rows)
 
-    def list_island_events(self, since=None, limit=50, island_ids=None):
+    def list_island_events(self, since=None, limit=50, island_ids=None, communities=None):
         start = _stamp(_since(since))
         with self._lock:
             rows = [dict(row) for row in self._island_events.values()
                     if _stamp(row["created_at"]) >= start
-                    and (island_ids is None or row["island_id"] in island_ids)]
+                    and (island_ids is None or row["island_id"] in island_ids)
+                    and (communities is None or row.get("community_id") in communities)]
         rows.sort(key=lambda row: row["created_at"], reverse=True)
         return rows[:limit]
 
@@ -1400,6 +1588,17 @@ class MemoryStore:
             "comment_id": comment_id, "reason": reason, "created_at": _now(),
         }
         with self._lock:
+            if self._app_settings.get(MEMBERS_ONLY_KEY):
+                # reports_insert: the post, and the post of the comment, must be ones the reporter
+                # is a member of. A foreign comment fails the same way as one that does not exist.
+                if post_id and not self._is_member_of_post(post_id, reporter_id):
+                    raise StoreError("post")
+                if comment_id:
+                    comment = self._comments.get(comment_id)
+                    # comments_read hides deleted rows, so a deleted comment is "missing" for reports_insert
+                    if (not comment or comment.get("deleted_at")
+                            or not self._is_member_of_post(comment["post_id"], reporter_id)):
+                        raise StoreError("comment")
             self._reports[row["id"]] = row
         return dict(row)
 
@@ -1470,6 +1669,8 @@ class SupabaseStore:
         self._communities_checked_at = None
         self._invite_only = False          # app_settings.invite_only, cached
         self._invite_only_checked_at = None
+        self._members_only_value = None    # app_settings.members_only: the last answer (None = never read)
+        self._members_only_checked_at = None
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1767,6 +1968,74 @@ class SupabaseStore:
         self._invite_only_checked_at = now
         return self._invite_only
 
+    # -- members-only posts (2026-10-27) --------------------------------------------
+
+    @staticmethod
+    def _missing_app_settings(response):
+        if response.status_code not in (400, 404):
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42P01", "PGRST205") or APP_SETTINGS in text
+
+    def members_only(self):
+        """app_settings.members_only, read through the server's key and cached for
+        MEMBERS_ONLY_CACHE_SECONDS. False while the table has no such row (every release before the
+        lockdown SQL). Raises StoreError when the database cannot be asked: the caller answers 503
+        and never guesses (a guess of "off" would open every community)."""
+        now = time.monotonic()
+        if (self._members_only_checked_at is not None
+                and now - self._members_only_checked_at < MEMBERS_ONLY_CACHE_SECONDS):
+            return self._members_only_value
+        response = self._send("GET", APP_SETTINGS, label="公開範囲の設定の確認", allow_statuses=(400, 404),
+                              params={"select": "value", "key": f"eq.{MEMBERS_ONLY_KEY}", "limit": "1"})
+        if response.status_code < 300:
+            rows = response.json()
+            value = bool(rows) and rows[0].get("value") is True
+        elif self._missing_app_settings(response):
+            value = False
+        else:
+            raise StoreError("公開範囲の設定の確認")
+        if value != self._members_only_value:
+            print(f"[store] members_only is now {'ON' if value else 'off'}", flush=True)
+        self._members_only_value = value
+        self._members_only_checked_at = now
+        return value
+
+    def _require_scope(self, community):
+        """Post-derived data is never asked for "all communities" while members_only is on (as
+        last read by members_only(); the routes read it first)."""
+        if community is None and self._members_only_value is True:
+            raise ValueError("community is required while members_only is on")
+
+    def viewer_communities(self, me):
+        """The community ids a person belongs to RIGHT NOW. Never cached: a person who just
+        claimed an invite must see the community on the very next request."""
+        if not me:
+            return set()
+        rows = self._get(COMMUNITY_MEMBERS, {"select": "community_id", "account_id": f"eq.{me}"},
+                         label="コミュニティの確認")
+        return {row["community_id"] for row in rows}
+
+    def community_member_ids(self, community_id):
+        out, last = set(), None
+        while True:
+            params = {"select": "account_id", "community_id": f"eq.{community_id}",
+                      "order": "account_id", "limit": "1000"}
+            if last:
+                params["account_id"] = f"gt.{last}"
+            rows = self._get(COMMUNITY_MEMBERS, params, label="コミュニティの確認")
+            out.update(row["account_id"] for row in rows)
+            if len(rows) < 1000:
+                return out
+            last = rows[-1]["account_id"]
+
+    def community_ids(self):
+        return sorted(row["id"] for row in self._get(COMMUNITIES, {"select": "id"}, label="コミュニティの読み込み"))
+
     def post_communities(self):
         """{post id: community id} for live posts that belong to a community ({} before the
         migration). The connection lines and the neighbours of one community's map need it."""
@@ -1848,11 +2117,16 @@ class SupabaseStore:
         })
         return [shape(_flatten(row)) for row in rows]
 
-    def count_posts(self):
+    def count_posts(self, community=None, everything=False):
+        if not everything:
+            self._require_scope(community)
+        params = {"select": "id", "deleted_at": "is.null"}
+        if community is not None:
+            params["community_id"] = f"eq.{community}"
         response = self._send(
             "GET", POSTS, label="件数の取得",
             headers={"Prefer": "count=exact", "Range": "0-0"},
-            params={"select": "id", "deleted_at": "is.null"},
+            params=params,
         )
         # Content-Range looks like "0-0/42"
         return int(response.headers.get("content-range", "*/0").split("/")[-1])
@@ -1865,18 +2139,34 @@ class SupabaseStore:
         # Before the 2026-10-20 SQL the answer has no extras; shape() fills them in.
         return [shape(row) for row in rows]
 
+    def map_posts_for_community(self, community, min_x, min_y, max_x, max_y, limit):
+        """The posts of ONE community for the server's own key (map_posts filters by the caller's
+        membership, which the service role does not have). service_role only."""
+        if not community:
+            raise ValueError("community is required")
+        rows = self._rpc("map_posts_for_community", {
+            "p_community": community, "min_x": min_x, "min_y": min_y, "max_x": max_x,
+            "max_y": max_y, "limit_n": limit,
+        }, label="地図の読み込み")
+        return [shape(row) for row in rows]
+
     def map_cells(self, min_x, min_y, max_x, max_y):
         return self._rpc("map_cells", {
             "min_x": min_x, "min_y": min_y, "max_x": max_x, "max_y": max_y,
         }, label="地図の読み込み")
 
-    def list_terms(self, limit=5000):
-        return self._get(POSTS, {
-            "select": TERM_COLUMNS,
+    def list_terms(self, limit=5000, community=None):
+        self._require_scope(community)
+        columns = TERM_COLUMNS if self.supports_communities else TERM_COLUMNS.replace(",community_id", "")
+        params = {
+            "select": columns,
             "deleted_at": "is.null",
             "order": "energy.desc",
             "limit": str(limit),
-        }, label="領域名の読み込み")
+        }
+        if community is not None:
+            params["community_id"] = f"eq.{community}"
+        return self._get(POSTS, params, label="領域名の読み込み")
 
     def post_bodies(self, ids):
         """{post_id: body} for live posts among ids (island naming reads this)."""
@@ -1889,12 +2179,15 @@ class SupabaseStore:
                 out[row["id"]] = row["body"]
         return out
 
-    def terrain_posts(self):
+    def terrain_posts(self, community=None):
+        self._require_scope(community)
         rows = []
         last = None
         while True:
             params = {"select": f"id,x,y,energy,body,tags,{POST_AUTHOR}(display_name)",
                       "deleted_at": "is.null", "order": "id", "limit": "1000"}
+            if community is not None:
+                params["community_id"] = f"eq.{community}"
             if last:
                 params["id"] = f"gt.{last}"
             batch = self._get(POSTS, params, label="地形の読み込み")
@@ -1903,18 +2196,25 @@ class SupabaseStore:
                 return rows
             last = batch[-1]["id"]
 
-    def nearest_posts(self, post_id, k):
-        rows = self._rpc("nearest_posts", {"from_post": post_id, "k": k},
-                         label="近い人の検索")
+    def nearest_posts(self, post_id, k, community=None):
+        self._require_scope(community)
+        payload = {"from_post": post_id, "k": k}
+        if community is not None:
+            payload["p_community"] = community
+        rows = self._rpc("nearest_posts", payload, label="近い人の検索")
         return [(row["id"], float(row["cosine"])) for row in rows]
 
     def pair_similarity(self, a, b):
         value = self._rpc("pair_similarity", {"a": a, "b": b}, label="似てる度の計算")
         return float(value) if isinstance(value, (int, float)) else None
 
-    def nearest_to_vector(self, vector, k):
+    def nearest_to_vector(self, vector, k, community=None):
+        self._require_scope(community)
         text = "[" + ",".join(f"{float(value):.6f}" for value in vector) + "]"
-        rows = self._rpc("nearest_to_vector", {"origin": text, "k": k}, label="近い人の検索")
+        payload = {"origin": text, "k": k}
+        if community is not None:
+            payload["p_community"] = community
+        rows = self._rpc("nearest_to_vector", payload, label="近い人の検索")
         return [(row["id"], float(row["cosine"])) for row in rows]
 
     # -- footprints (Q35) -----------------------------------------------------
@@ -2010,9 +2310,14 @@ class SupabaseStore:
         )
         return bool(response.json())
 
+    def _notification_columns(self):
+        # notifications.community_id exists after the members-only prep SQL: named only while
+        # members_only is on, so the code also runs before that SQL.
+        return NOTIFICATION_COLUMNS + ",community_id" if self._members_only_value is True else NOTIFICATION_COLUMNS
+
     def list_notifications(self, recipient_id, limit=100):
         rows = self._get(NOTIFICATIONS, {
-            "select": f"{NOTIFICATION_COLUMNS},"
+            "select": f"{self._notification_columns()},"
                       f"{ACCOUNTS}!notifications_actor_id_fkey(id,display_name,icon_id,avatar_path)",
             "recipient_id": f"eq.{recipient_id}",
             "order": "created_at.desc",
@@ -2027,17 +2332,22 @@ class SupabaseStore:
     def insert_notifications(self, rows):
         if not rows:
             return []
-        keys = ("recipient_id", "actor_id", "post_id", "type", "island_id", "event_id", "payload")
+        keys = ["recipient_id", "actor_id", "post_id", "type", "island_id", "event_id", "payload"]
+        if self._members_only_value is True:
+            keys.append("community_id")
+            rows = [row for row in rows if row.get("community_id") or row["type"] not in UNSCOPED_NOTIFICATION_TYPES]
+            if not rows:
+                return []
         response = self._send(
             "POST", NOTIFICATIONS, label="通知の保存",
             headers={"Prefer": "return=representation"},
-            params={"select": NOTIFICATION_COLUMNS},
+            params={"select": self._notification_columns()},
             json=[{key: row.get(key) for key in keys} for row in rows],
         )
         return response.json()
 
     def recent_notifications(self, kind, since, recipient_id=None):
-        params = {"select": NOTIFICATION_COLUMNS, "type": f"eq.{kind}",
+        params = {"select": self._notification_columns(), "type": f"eq.{kind}",
                   "created_at": f"gte.{_since(since)}", "order": "created_at.desc",
                   "limit": "1000"}
         if recipient_id is not None:
@@ -2105,7 +2415,7 @@ class SupabaseStore:
         response = self._send(
             "PATCH", NOTIFICATIONS, label="送る通知の取り出し",
             headers={"Prefer": "return=representation"},
-            params={"pushed_at": "is.null", "select": NOTIFICATION_COLUMNS},
+            params={"pushed_at": "is.null", "select": self._notification_columns()},
             json={"pushed_at": _now()},
         )
         rows = response.json()
@@ -2181,8 +2491,11 @@ class SupabaseStore:
                 row[key] = _parse_vector(row.get(key))
         return rows
 
-    def post_centroids(self):
-        rows = self._rpc("account_post_centroids", {}, label="投稿の平均の読み込み")
+    def post_centroids(self, community=None):
+        self._require_scope(community)
+        rows = self._rpc("account_post_centroids",
+                         {} if community is None else {"p_community": community},
+                         label="投稿の平均の読み込み")
         return {
             row["author_id"]: {"centroid": _parse_vector(row["centroid"]),
                                "post_count": int(row["post_count"])}
@@ -2226,9 +2539,12 @@ class SupabaseStore:
         return code in ("42703", "PGRST204") and any(name in text for name in ISLAND_NAME_COLUMNS)
 
     def _island_columns(self):
-        return ISLAND_STATE_COLUMNS if self._has_name_columns else ISLAND_STATE_BASE_COLUMNS
+        columns = ISLAND_STATE_COLUMNS if self._has_name_columns else ISLAND_STATE_BASE_COLUMNS
+        # community_id exists after supabase/migrations/20261027000000_members_only_prep.sql; it is
+        # only named while members_only is on, so the code also runs before that SQL.
+        return columns + ",community_id" if self._members_only_value is True else columns
 
-    def island_states(self, active_only=True):
+    def island_states(self, active_only=True, communities=None):
         # An instance that decided "no columns" tries the full read again once the
         # check interval has passed (the SQL may have been run since), without a restart.
         if (not self._has_name_columns and self._names_checked_at is not None
@@ -2239,6 +2555,10 @@ class SupabaseStore:
             params = {"select": self._island_columns(), "order": "created_at.asc"}
             if active_only:
                 params["active"] = "is.true"
+            if communities is not None:
+                if not communities:
+                    return []
+                params["community_id"] = f"in.({','.join(sorted(communities))})"
             response = self._send("GET", ISLANDS_STATE, label="島の読み込み", params=params,
                                   allow_statuses=(400,))
             if response.status_code < 300:
@@ -2303,14 +2623,21 @@ class SupabaseStore:
     def add_island_events(self, rows):
         if rows:
             keys = ISLAND_EVENT_COLUMNS.split(",")
+            if self._members_only_value is True:
+                keys.append("community_id")
             self._send("POST", ISLAND_EVENTS, label="島の変化の保存",
                        headers={"Prefer": "return=minimal"},
                        json=[{key: row[key] for key in keys if key in row} for row in rows])
         return len(rows)
 
-    def list_island_events(self, since=None, limit=50, island_ids=None):
-        params = {"select": ISLAND_EVENT_COLUMNS, "created_at": f"gte.{_since(since)}",
+    def list_island_events(self, since=None, limit=50, island_ids=None, communities=None):
+        columns = ISLAND_EVENT_COLUMNS + (",community_id" if communities is not None else "")
+        params = {"select": columns, "created_at": f"gte.{_since(since)}",
                   "order": "created_at.desc", "limit": str(limit)}
+        if communities is not None:
+            if not communities:
+                return []
+            params["community_id"] = f"in.({','.join(sorted(communities))})"
         if island_ids is not None:
             if not island_ids:
                 return []

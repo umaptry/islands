@@ -308,6 +308,8 @@ function invitePanel(entry) {
         typeof navigator.share === 'function'
           ? actionButton('share', 'シェア', 'invite-share', () => shareLink(row)) : null,
         actionButton('download', '保存', 'invite-save', () => saveImage(row))),
+      // The terms (article 4-4): an invite goes to the people it is meant for, not out in the open.
+      el('p', { className: 'invite-note invite-caution', text: '渡したい相手にだけ送ってください。SNS など、だれでも見られる場所には載せないでください。' }),
       el('div', { className: 'invite-manage' },
         el('button', {
           className: 'btn btn-small btn-quiet invite-renew', attrs: { type: 'button' }, text: '更新', disabled: busy,

@@ -124,6 +124,28 @@ function talkError(error, context = 'talk') {
 // grant check in tests/frontend/net-grants.test.mjs sees every column it uses.
 const DM_EPOCH = '1970-01-01T00:00:00Z';
 
+/**
+ * notification_feed() does not say which community a row belongs to; the notifications table does (a row
+ * of my own, read under the same rules). Asked once for the whole list, and a failure only means the
+ * names are not shown: the list itself is never held back by it.
+ */
+async function withCommunities(rows) {
+  if (!communitiesOn(config()) || !rows.length) return rows;
+  const ids = [...new Set(rows.flatMap((row) => (Array.isArray(row.ids) && row.ids.length ? row.ids : [row.id])))];
+  try {
+    const found = await restCall('notifications', {
+      params: { select: 'id,community_id', id: `in.(${ids.join(',')})` },
+    });
+    const byId = new Map((found || []).map((row) => [row.id, row.community_id]));
+    return rows.map((row) => {
+      const own = (Array.isArray(row.ids) && row.ids.length ? row.ids : [row.id]).map((id) => byId.get(id)).find(Boolean);
+      return own && !row.community_id ? { ...row, community_id: own } : row;
+    });
+  } catch {
+    return rows;
+  }
+}
+
 /** PostgREST nests an embedded table; every screen wants it flat. */
 function flatten(row, into) {
   if (!row) return row;
@@ -354,7 +376,7 @@ const supabaseBackend = {
         params: { select: 'id,display_name,icon_id,avatar_path', id: `in.(${actorIds.join(',')})` },
       })
       : [];
-    return attachActors(rows, accounts);
+    return attachActors(await withCommunities(rows), accounts);
   },
   /** The app is on screen for `seconds` (0: it is not), so nothing is pushed meanwhile. */
   async markActive(seconds, { keepalive = false } = {}) {
@@ -422,7 +444,7 @@ const localBackend = {
   },
   myCommunities: async () => (await api.get('/api/local/communities/mine')).communities || [],
   // Not part of the agreed routes: a development server may or may not have it.
-  communityInfo: (id) => api.get(`/api/local/communities/${encodeURIComponent(id)}`, { auth: false })
+  communityInfo: (id) => api.get(`/api/local/communities/${encodeURIComponent(id)}`)
     .catch(() => null),
   checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`, { auth: false }),
   claimInvite: (code) => api.post('/api/local/invites/claim', { code }),
@@ -456,7 +478,8 @@ const localBackend = {
   myReactions: async () => (await api.get('/api/local/reactions/mine')).reactions,
   reactorsOf: async (postId, kind) => {
     const params = new URLSearchParams({ kind });
-    return (await api.get(`/api/local/posts/${encodeURIComponent(postId)}/reactors?${params}`, { auth: false })).reactors;
+    // The session goes along: with members_only on, who reacted is for the members of the post's community.
+    return (await api.get(`/api/local/posts/${encodeURIComponent(postId)}/reactors?${params}`)).reactors;
   },
   addReaction: async (postId, kind) => {
     try {

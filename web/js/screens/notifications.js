@@ -14,6 +14,9 @@
 import { api, data } from '../net.js';
 import { activeScreen, navigate, screen } from '../router.js';
 import { state } from '../state.js';
+import { membersOnly } from '../config.js';
+import { communityIdOfPost, communityNameFor } from '../communities.js';
+import { communityNameIn } from '../community-rules.js';
 import { openOnMap } from './map.js';
 import {
   openDmForNotification, recomputeDmUnread, refreshDmRooms, refreshTalk, talkAvailable, talkLabel,
@@ -23,7 +26,7 @@ import { moment } from '../feedback.js';
 import { $, clear, clip, el, timeAgo } from '../ui.js';
 import {
   arrivals, bodyText, defaultSettings, dmMessageRows, headline, knownIds, listable, matchSignature, mergeSettings,
-  rowIds, unreadCount,
+  communityIdOf, isTalkType, rowIds, unreadCount,
 } from '../notify-rules.js';
 
 const ARRIVAL_MS = 5000;
@@ -220,6 +223,38 @@ function postsKnownEmpty() {
   return Boolean(state.account) && postsCheckedFor === state.account.id && !state.myPosts?.length;
 }
 
+/**
+ * Under a row: which community it is about, small. The row's own community when it says one, else the community
+ * of its post. A 「話してみたい」 row is anonymous on purpose and never says (nor do the DM rows: they belong to
+ * two people, not to a community). Quiet when unknown: a name is only a label.
+ */
+function communityLine(entry) {
+  if (!membersOnly() || isTalkType(entry.type)) return null;
+  const node = el('span', { className: 'notif-community', hidden: true });
+  const set = (name) => {
+    if (!name || !node.isConnected) return false;
+    node.textContent = name;
+    node.hidden = false;
+    return true;
+  };
+  const known = {};
+  const onScreen = state.postsById.get(entry.post_id) || state.myPosts.find((post) => post.id === entry.post_id);
+  if (entry.post_id && onScreen && onScreen.community_id) known[entry.post_id] = onScreen.community_id;
+  const id = communityIdOf(entry, known);
+  const name = communityNameIn(state.communities, id);
+  if (name) {
+    node.textContent = name;
+    node.hidden = false;
+    return node;
+  }
+  if (!id && !entry.post_id) return node;
+  (async () => {
+    const found = id || await communityIdOfPost(entry.post_id);
+    set(await communityNameFor(found));
+  })();
+  return node;
+}
+
 function paintList() {
   const entries = state.notifications;
   painted = signature(entries);
@@ -259,6 +294,7 @@ function paintList() {
           el('span', { className: 'notif-time', text: timeAgo(entry.created_at) }),
         ),
         el('span', { className: 'notif-text', text: bodyText(entry, talkLabel()) }),
+        communityLine(entry),
       ),
       entry.unread ? el('i', { className: 'notif-dot' }) : null,
     );

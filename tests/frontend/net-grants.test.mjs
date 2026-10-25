@@ -121,7 +121,9 @@ function grantsOf(sqlFiles) {
     const text = sql.replace(/--.*$/gm, '');
     for (const statement of text.split(';')) {
       const s = statement.replace(/\s+/g, ' ').trim();
-      let m = s.match(/^revoke (?:all|select)(?: privileges)?(?:, \w+)* on (?:table )?(public\.[\w., ]+?) from /i);
+      let m = s.match(/^revoke (?:all|select)(?: privileges)?(?:, \w+)* on (?:table )?(public\.[\w., ]+?) from ([\w., ]+)$/i);
+      // Members-only (2026-10-27): a revoke from anon alone leaves the signed-in grant in place.
+      if (m && !/\b(authenticated|public)\b/i.test(m[2])) continue;
       if (m && !/^revoke select \(/i.test(s)) {
         for (const table of names(m[1])) grants.delete(table);
         continue;
@@ -253,10 +255,12 @@ test('the parser sees the community reads in net.js', () => {
   assert.ok(has('posts', 'community_id', 'posts select'), 'a post says which community it is in');
 });
 
-test('anybody may read the name of a community and the community of a post', () => {
+test('signed-in people may read the name of a community and the community of a post', () => {
   assert.ok(fromMigrations.get('communities') === 'all' || fromMigrations.get('communities')?.has('name'));
   assert.ok(fromMigrations.get('posts').has('community_id'));
   assert.match(allSql, /grant select on public\.communities to anon/i);
+  // Members-only (2026-10-27): anon lost it again; RLS shows a member only their own communities.
+  assert.match(allSql, /revoke select on public.communities from anon/i);
 });
 
 test('the community functions net.js calls are defined; only check_invite and the map are open to anon', () => {

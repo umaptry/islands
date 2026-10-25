@@ -5,20 +5,20 @@
 // full height where the message thread appears with the input pinned to the
 // bottom. The half state is what lets you read a card without losing the map.
 
-import { config, isLocal, islandColor, radiusOf, setReachFactor } from '../config.js';
+import { config, isLocal, islandColor, membersOnly, radiusOf, setReachFactor } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import {
   hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, subscribe, upsertPost, notify,
 } from '../state.js';
 import {
-  $, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
+  $, avatar, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
   sheetOpen, toast, desktopSheet, setupSheetAccessibility,
 } from '../ui.js';
 import { postCard } from '../components/postcard.js';
 import { openReactors } from '../components/reactors.js';
 import { chatInput, postChat } from '../components/chat.js';
-import { loadDigest, paintMarks, setupMeet } from './meet.js';
+import { clearDigest, loadDigest, paintMarks, setupMeet } from './meet.js';
 import { refreshExtras, hideTrialHint, setupMapExtras, showTrialHint } from './map-extras.js';
 import { searchClosesOnTouch, trialView } from './map-extras-logic.js';
 import {
@@ -32,12 +32,13 @@ import { SWITCH_FX_MS } from '../feedback-rules.js';
 import { currentTone, pageSeaFor } from '../screen-tone.js';
 import { playSe, setAmbient } from '../audio.js';
 import { browserStorage, refreshTalk } from '../talk.js';
-import { savePendingPost, validPostId } from '../return-post.js';
+import { mapLinkFor, savePendingPost, validPostId } from '../return-post.js';
 import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
 import {
-  canPostFromMap, canSwitch, headerTitle, islandsInScope, mapNotice, postsExtent,
+  canPostFromMap, canSwitch, headerTitle, islandsInScope, linkIsClosed, mapNotice, postsExtent,
 } from '../community-rules.js';
 import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
+import { nearestPosts } from '../nearby-rules.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -69,12 +70,14 @@ let rawIslands = [];        // /api/islands as the server sent it, before the co
 const scopeKey = () => (scope.mode === 'community' || scope.mode === 'viewing' ? `${scope.mode}:${scope.id}` : scope.mode);
 const scoped = () => scope.mode === 'community' || scope.mode === 'viewing';
 
-/** Decide what the map shows. `linked`: the community of the post a link opened. */
-function applyScope(linked = null) {
-  scope = currentScope(linked);
+/** Decide what the map shows. `linked`: the community of the post a link opened. `closed` (members only):
+ * the link led to something this person cannot read. */
+function applyScope(linked = null, closed = false) {
+  scope = currentScope(linked, closed);
   // A community of mine that a link led to becomes the current one.
   if (scope.mode === 'community' && scope.id !== state.communityId) chooseCurrent(scope.id);
   if (scope.mode === 'viewing') state.viewCommunity = { id: scope.id, name: scope.name };
+  paintMarks();   // the away digest follows the community shown
   paintCommunity();
 }
 
@@ -99,6 +102,7 @@ function paintCommunity() {
   $('mapPost').hidden = !canPostFromMap({ signedIn: Boolean(state.account), scope });
   const notice = mapNotice(scope, {
     signedIn: Boolean(state.account), known: state.communitiesLoaded, inviteOnly: config().invite_only === true,
+    membersOnly: membersOnly(),
   });
   $('mapNotice').hidden = !notice;
   if (notice) {
@@ -106,6 +110,7 @@ function paintCommunity() {
     $('mapNoticeTitle').textContent = notice.title;
     $('mapNoticeSub').textContent = notice.sub;
     $('mapNoticeLogin').hidden = !notice.login;
+    $('mapNoticeHome').hidden = !notice.home;
   }
 }
 
@@ -248,14 +253,75 @@ export async function showTrial() {
 /** `thenOpen`: a post to open once the landing show of a brand-new post is over
  * (a new person who came through a link: first their own island, then the 会 they
  * were invited to). */
-export async function openOnMap(postId, { thenOpen = null } = {}) {
-  if (!await navigate('#/map')) return;
+export async function openOnMap(postId, { thenOpen = null, afterLand = null } = {}) {
   const fresh = justPosted(postId);
+  // Any other post (a notification, somebody's page): go through the link, which also turns the map to the
+  // post's own community and, if the viewer cannot read it, says so calmly.
+  if (!fresh && communitiesActive() && validPostId(thenOpen || postId)) {
+    await navigate(mapLinkFor(thenOpen || postId));
+    return;
+  }
+  if (!await navigate('#/map')) return;
   if (fresh) {
-    playNewPost(fresh, thenOpen);
+    playNewPost(fresh, thenOpen, afterLand);
     return;
   }
   await openLinkedPost(thenOpen || postId);
+}
+
+// ---------------------------------------------------------------- nearby posts (after the first post)
+
+const NEARBY_WAIT_MS = 900;   // let the new island settle before the card comes up
+
+/** The posts of the map that is open, the whole of it (the viewport holds only the part in view). */
+async function nearbyCandidates() {
+  if (scope.mode === 'none') return [];
+  const world = config().world;
+  const span = (world.max - world.min) * 2;
+  try {
+    return await readPosts({ minX: world.min - span, minY: world.min - span,
+      maxX: world.max + span, maxY: world.max + span }, config().limits.map_post_limit);
+  } catch {
+    return state.posts;   // the ones already on screen are better than none
+  }
+}
+
+/** 「あなたの近くの投稿」: right after a first post, up to three people who stand nearest to it. `thenOpen`
+ * (the post an invite link led to) opens once the card is closed. */
+export async function showNearbyPosts(post, { thenOpen = null } = {}) {
+  await new Promise((resolve) => setTimeout(resolve, NEARBY_WAIT_MS));
+  const near = nearestPosts(await nearbyCandidates(), post, { meId: state.account?.id, gone: state.removed });
+  if (activeScreen() !== 'map') return;
+  let picked = false;
+  const body = openSheet({
+    fit: true,
+    onClose: () => {
+      state.selected = null;
+      // Another card taken up in the meantime (a tap on the map) means the person has moved on.
+      if (!picked && thenOpen) setTimeout(() => { if (!sheetOpen()) openLinkedPost(thenOpen); }, 0);
+    },
+  });
+  clear($('sheetFoot'));
+  const rows = near.map((entry) => el('li', {},
+    el('button', {
+      className: 'stack-row nearby-row', attrs: { type: 'button', 'data-post-id': entry.id },
+      on: { click: () => { picked = true; closeSheet(); openLinkedPost(entry.id); } },
+    },
+    avatar(entry, 32),
+    el('span', { className: 'nearby-who', text: entry.display_name || '' }),
+    el('span', { className: 'stack-text nearby-text', text: clip(entry.body, 40) }),
+    el('span', { className: 'stack-go', text: '›', attrs: { 'aria-hidden': 'true' } }))));
+  clear(body).append(
+    el('h3', { className: 'stack-title', text: 'あなたの近くの投稿' }),
+    el('p', { className: 'nearby-lede', text: '近くにいる人ほど、似た話をしています' }),
+    rows.length
+      ? el('ul', { className: 'stack-list nearby-list', attrs: { id: 'nearbyList' } }, rows)
+      : el('p', { className: 'nearby-empty', attrs: { id: 'nearbyEmpty' }, text: 'まだ近くに投稿がありません。仲間が投稿すると、ここに並びます。' }),
+    el('button', {
+      className: 'btn btn-block nearby-close', attrs: { type: 'button', id: 'nearbyClose' }, text: '地図を見る',
+      on: { click: () => closeSheet() },
+    }),
+  );
 }
 
 /** Open a post wherever it is on the map and bring the camera to it. */
@@ -288,7 +354,7 @@ function justPosted(postId) {
   return Number.isFinite(age) && age > -60000 && age < JUST_POSTED_MS ? post : null;
 }
 
-function playNewPost(post, thenOpen = null) {
+function playNewPost(post, thenOpen = null, afterLand = null) {
   introduced.add(post.id);
   if (sheetOpen()) closeSheet();
   setParticipantView(null);
@@ -300,7 +366,10 @@ function playNewPost(post, thenOpen = null) {
   playReveal(post, {
     then: async () => {
       landing = null;
-      await openLinkedPost(thenOpen || post.id);
+      // afterLand takes the place of opening the card (the first post: the nearby posts come instead,
+      // and it opens `thenOpen` itself once it is closed).
+      if (afterLand) await afterLand();
+      else await openLinkedPost(thenOpen || post.id);
     },
   });
 }
@@ -348,7 +417,7 @@ export async function refreshMap({ fitFirst = false } = {}) {
         state.worldSaturated = all.length >= config().limits.map_post_limit;
         fitCamera([], postsExtent(all, radiusOf), { reset: true });
       } else {
-        const result = await api.get('/api/map/bounds', { auth: false });
+        const result = await api.get('/api/map/bounds');
         if (generation !== mapRequest) return false;
         worldCount = Number.isFinite(result.count) ? result.count : null;
         fitCamera([], result.bounds);
@@ -375,7 +444,10 @@ export async function refreshMap({ fitFirst = false } = {}) {
         // Never filtered: the islands are drawn as they are while searching.
         const params = new URLSearchParams({ min_x: bounds.minX, min_y: bounds.minY,
           max_x: bounds.maxX, max_y: bounds.maxY });
-        const grid = await api.get(`/api/terrain?${params}`, { auth: false });
+        // The ground is made from one community's posts (members only: required, and for its members).
+        // While the switch is off the server ignores it, and the address stays the one it always was.
+        if (scoped() && membersOnly()) params.set('community', scope.id);
+        const grid = await api.get(`/api/terrain?${params}`);
         if (generation !== mapRequest) return false;
         state.terrainGrid = grid;
       } catch {
@@ -397,7 +469,13 @@ export async function refreshMap({ fitFirst = false } = {}) {
 
 export async function refreshIslands() {
   try {
-    const result = await api.get('/api/islands', { auth: false });
+    // Islands are made from, and shown to, one community's members: say which one.
+    const asked = scopeKey();
+    // (While the switch is off the address stays the one it always was: the server ignores the community there.)
+    const result = await api.get(scoped() && membersOnly()
+      ? `/api/islands?${new URLSearchParams({ community: scope.id })}` : '/api/islands');
+    // The map was switched while this was on its way: these islands belong to the other one.
+    if (asked !== scopeKey()) return;
     rawIslands = result.islands || [];
     applyIslands();
     setReachFactor(result.radius_factor);
@@ -419,7 +497,10 @@ export async function refreshNeighbors({ force = false } = {}) {
   const now = Date.now();
   // The dotted lines run between posts on this map: on a community's map, my posts of that
   // community only (the server keeps their neighbours inside it).
-  const here = scoped() ? state.myPosts.filter((post) => post.community_id === scope.id) : state.myPosts;
+  // Members only and no community map shown (signed out of all, or left): my posts there are not ours to
+  // search around, and the server answers such a question with 404.
+  const here = scoped() ? state.myPosts.filter((post) => post.community_id === scope.id)
+    : (membersOnly() ? [] : state.myPosts);
   const keep = new Set(here.map((post) => post.id));
   [...state.neighbors.keys()].forEach((id) => { if (!keep.has(id)) state.neighbors.delete(id); });
   await Promise.all(here.map(async (post) => {
@@ -427,7 +508,7 @@ export async function refreshNeighbors({ force = false } = {}) {
     if (!force && held && now - held.at < NEIGHBORS_STALE_MS) return;
     try {
       const result = await api.get(
-        `/api/neighbors?post=${encodeURIComponent(post.id)}&limit=${NEIGHBORS_FOR_KIN}`, { auth: false });
+        `/api/neighbors?post=${encodeURIComponent(post.id)}&limit=${NEIGHBORS_FOR_KIN}`);
       // Signed out (or somebody else signed in) while it was on its way.
       if (state.account?.id !== owner) return;
       state.neighbors.set(post.id, { at: now, rows: result.neighbors || [] });
@@ -450,7 +531,7 @@ export async function refreshConnections({ fresh = false } = {}) {
     const asked = scopeKey();
     const queryText = query.toString();
     const result = await api.get(`/api/connections${queryText ? `?${queryText}` : ''}`,
-      { auth: false, ...(fresh ? { cache: 'no-store' } : {}) });
+      fresh ? { cache: 'no-store' } : {});
     // The map was switched while this was on its way: these lines belong to the other one.
     if (asked !== scopeKey()) return;
     state.connections = result.connections || [];
@@ -496,6 +577,8 @@ export async function refreshMyViews({ force = false } = {}) {
 /** One footprint, once per post per visit, never on my own post. */
 function recordView(post) {
   if (viewed.has(post.id) || post.author_id === state.account?.id) return;
+  // Members only: no footprint from somebody who is not signed in (they cannot read the post at all).
+  if (membersOnly() && !state.account) return;
   viewed.add(post.id);
   api.post(`/api/posts/${post.id}/view`, { viewer: state.account ? null : viewerKey() })
     .catch(() => viewed.delete(post.id));
@@ -533,6 +616,23 @@ function markPostSeen(post) {
   if (!state.account || !post || post.author_id === state.account.id) return;
   markSeen(browserStorage(), state.account.id, post.id);
   paintFresh();
+}
+
+/** Signing out (or the session ending): nothing of what the last person could read stays in memory or in
+ * the card that is closed but still in the page. */
+export function forgetMapData() {
+  mapRequest += 1;
+  try { closeSheet(); } catch { /* nothing open */ }
+  clear($('sheetBody'));
+  clear($('sheetFoot'));
+  setPosts([], { saturated: false, bounds: null });
+  rawIslands = [];
+  state.islands = [];
+  state.connections = [];
+  state.terrainGrid = null;
+  state.changeMarks = [];
+  loadedKey = null;
+  clearDigest();
 }
 
 // ---------------------------------------------------------------- chrome
@@ -653,6 +753,7 @@ function setupChrome() {
     openCommunitySheet();
   });
   $('mapNoticeLogin').addEventListener('click', () => navigate('#/auth?intent=login'));
+  $('mapNoticeHome').addEventListener('click', () => navigate('#/map'));
   $('mapNoticeRetry').addEventListener('click', async () => {
     const button = $('mapNoticeRetry');
     button.disabled = true;
@@ -671,6 +772,7 @@ function setupChrome() {
   });
   // Signing out: nothing glows for a visitor.
   window.addEventListener('islands:signout', paintFresh);
+  window.addEventListener('islands:signout', forgetMapData);
   $('trialClose').addEventListener('click', () => {
     state.trialPost = null;
     paintTrial();
@@ -987,7 +1089,7 @@ function setupSheetGesture() {
 async function joinersOf(post) {
   const ids = new Set();
   if (isLocal()) {
-    const result = await api.get(`/api/local/posts/${encodeURIComponent(post.id)}/joiners`, { auth: false });
+    const result = await api.get(`/api/local/posts/${encodeURIComponent(post.id)}/joiners`);
     (result.joiners || []).forEach((id) => ids.add(id));
     return ids;
   }
@@ -1060,13 +1162,34 @@ async function decideScope(query) {
   // so a member is not told they are in none.
   if (communitiesActive() && state.account && !state.communitiesLoaded) await refreshCommunities();
   let linked = null;
+  let closed = false;
   const linkedId = query ? query.get('post') : null;
   if (currentScope().mode !== 'legacy' && validPostId(linkedId)) {
-    try {
-      linked = await communityOfPost(await data.getPost(linkedId));
-    } catch { /* the post itself will say it cannot be read */ }
+    if (membersOnly() && !state.account) {
+      // Signed out: there is nothing to look up (it would be refused). The link waits for the sign-in.
+      closed = true;
+    } else {
+      let status = null;
+      let post = null;
+      try {
+        post = await data.getPost(linkedId);
+      } catch (error) {
+        // A bad connection is not "closed": the post itself will say it cannot be read.
+        status = Number.isFinite(error?.status) ? error.status : 0;
+      }
+      linked = await communityOfPost(post);
+      if (membersOnly()) {
+        const listKnown = state.communitiesLoaded;
+        closed = linkIsClosed({
+          signedIn: true, found: Boolean(linked), status, listKnown,
+          mine: Boolean(post && state.account && post.author_id === state.account.id),
+        });
+        // I cannot tell whether I am a member (my list did not load): do not judge the link either way.
+        if (!listKnown) linked = null;
+      }
+    }
   }
-  applyScope(linked);
+  applyScope(linked, closed);
 }
 
 export function setupMapScreen() {
@@ -1138,7 +1261,8 @@ export function setupMapScreen() {
       if (validPostId(linked) && activeScreen() === 'map') {
         restorePost = null;
         if (!state.account) savePendingPost(browserStorage(), linked);
-        await openLinkedPost(linked);
+        // A link that cannot be read is a notice where the map would be, and nothing opens.
+        if (!(scope.mode === 'none' && scope.reason === 'closed')) await openLinkedPost(linked);
       } else if (restorePost && activeScreen() === 'map') {
         const postId = restorePost;
         restorePost = null;

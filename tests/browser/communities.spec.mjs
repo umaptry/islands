@@ -93,13 +93,14 @@ test('管理者が招待リンクを作り、新しい人がそのリンクか�
   await expect(guest.page.locator('#guidance')).toHaveClass(/active/);
   await guest.page.locator('#guidanceSkip').click();
   await expect(guest.page.locator('#compose')).toHaveClass(/active/);
-  await guest.page.locator('#composeOwnBtn').click();
   await guest.page.locator('#composeBody').fill('最近はコーヒーを自分で焙煎しています');
   await guest.page.locator('#composeMotivation').evaluate((node) => { node.value = '55'; node.dispatchEvent(new Event('input', { bubbles: true })); });
   await guest.page.locator('#composeSubmit').click();
 
   // 終わったら、そのコミュニティの地図で、会の投稿が開く。
   await expect(guest.page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
+  // 最初の投稿のあとは「あなたの近くの投稿」のカードが先に出る。閉じると、招待で一緒に開く投稿が開く。
+  await guest.page.locator('#nearbyClose').click({ timeout: 30000 });
   await guest.page.locator('#sheet.on .post-card').waitFor({ timeout: 30000 });
   await expect(guest.page.locator('#sheet.on .post-card')).toContainText('BAR でゆるく飲む会');
   await expect(guest.page.locator('#mapCommunity')).toContainText(bar.name);

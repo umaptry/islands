@@ -10,6 +10,11 @@ import { data, api } from '../net.js';
 import { session } from '../session.js';
 import { activeScreen, navigate, screen } from '../router.js';
 import { state, removePost } from '../state.js';
+import { membersOnly } from '../config.js';
+import { communitiesActive, refreshCommunities } from '../communities.js';
+import {
+  MEMBERS_ONLY_SUB_SIGNED_OUT, MEMBERS_ONLY_TITLE, communityNameIn, profileNote, visiblePostsOf,
+} from '../community-rules.js';
 import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
 import { react, openOnMap as openMapPost, refreshMyViews } from './map.js';
 import { postCard } from '../components/postcard.js';
@@ -110,11 +115,17 @@ function countsFor(posts, links) {
 /** The lines this person is on. A failed read is null (shown as "could not load"), not zero. */
 async function linksOf(accountId) {
   try {
-    const result = await api.get(`/api/connections?person=${encodeURIComponent(accountId)}`, { auth: false });
+    const result = await api.get(`/api/connections?person=${encodeURIComponent(accountId)}`);
     return (result.connections || []).filter((row) => row.a === accountId || row.b === accountId);
   } catch {
     return null;
   }
+}
+
+/** The community name said small on a post of a page (members only: a person may be in several). */
+function communityLabel(post) {
+  if (!membersOnly()) return '';
+  return communityNameIn(state.communities, post.community_id);
 }
 
 function postList(posts, { own, onOpen }) {
@@ -135,6 +146,7 @@ function postList(posts, { own, onOpen }) {
   posts.forEach((post) => {
     box.append(postCard(post, {
       compact: false,
+      communityName: communityLabel(post),
       onComments: () => onOpen(post),
       onOpenAuthor: (id) => navigate(state.account?.id === id ? '#/me' : `#/u/${id}`),
       onReact: (kind) => react(post.id, kind),
@@ -162,6 +174,12 @@ async function remove(post) {
 }
 
 function openOnMap(post) {
+  // My own post of a community I have left: the row is mine to see, but its map is not (members only).
+  if (membersOnly() && post.community_id && state.communitiesLoaded
+    && !state.communities.some((entry) => entry.id === post.community_id)) {
+    toast('このコミュニティを抜けているため、地図では開けません。');
+    return undefined;
+  }
   return openMapPost(post.id);
 }
 
@@ -180,6 +198,8 @@ async function renderMe() {
     on: { click: () => { markGuidanceReview(); navigate('#/guidance?review=1'); } },
   }));
   refreshMyViews();
+  // The names of my communities label each post (read once if they have not come yet).
+  if (membersOnly() && communitiesActive() && !state.communitiesLoaded) await refreshCommunities();
 
   let posts = state.myPosts;
   const [fetched, links] = await Promise.all([
@@ -504,7 +524,14 @@ function enterNotifyFields({ scroll }) {
 
 async function renderUser(accountId) {
   const body = clear($('userBody'));
+  // Members only: a page of a person is for people who share a community with them, so signed out there is
+  // nothing to show but the way in.
+  if (membersOnly() && !state.account) {
+    body.append(closedNotice());
+    return;
+  }
   body.append(el('p', { className: 'sheet-loading', text: '読み込み中…' }));
+  if (membersOnly() && communitiesActive() && !state.communitiesLoaded) await refreshCommunities();
 
   let account = null;
   let posts = [];
@@ -524,14 +551,30 @@ async function renderUser(accountId) {
     return;
   }
 
+  // Only the posts of communities we share (the server leaves the rest out; this keeps the page right whatever it is handed).
+  posts = visiblePostsOf(posts, { own: false, communities: state.communities, membersOnly: membersOnly() });
   // 「もっと話してみたい」 is about a person, so it lives only here, never on a post card.
   const talk = talkOptionsForPerson(accountId, account.display_name);
   clear(body).append(header(account, { own: false, talk }));
   if (talk) refreshTalk({ maxAge: 20000 });
+  const note = profileNote({ own: false, membersOnly: membersOnly() });
+  if (note) body.append(el('p', { className: 'profile-shared-note', text: note }));
   const counts = countsFor(posts, links);
   const panel = el('div', { className: 'profile-panel' });
   body.append(tabs(counts, (tab) => paintTab(panel, tab, posts, false, links, accountId)), panel);
   paintTab(panel, 'posts', posts, false, links, accountId);
+}
+
+/** The calm notice for somebody who cannot read what they asked for (members only). */
+function closedNotice() {
+  const box = el('div', { className: 'empty-panel members-only-notice' },
+    el('p', { className: 'members-only-title', text: MEMBERS_ONLY_TITLE }),
+    el('p', { className: 'empty-sub', text: MEMBERS_ONLY_SUB_SIGNED_OUT }),
+    el('div', { className: 'empty-actions' }, el('button', {
+      className: 'btn btn-small', attrs: { type: 'button', id: 'userNoticeLogin' },
+      text: 'ログイン', on: { click: () => navigate('#/auth?intent=login') },
+    })));
+  return box;
 }
 
 // ---------------------------------------------------------------- wiring

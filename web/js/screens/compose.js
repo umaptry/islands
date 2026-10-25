@@ -20,7 +20,7 @@
 // ever moves, and nobody looking at a card in a bottom sheet needs 4032 pixels.
 
 import { RECRUIT_TAG } from '../map/reads.js';
-import { config, islandColor } from '../config.js';
+import { config, islandColor, membersOnly } from '../config.js';
 import { POST_IMAGE, prepareImage } from '../image.js';
 import { api, data } from '../net.js';
 import { navigate, screen, show } from '../router.js';
@@ -31,7 +31,7 @@ import { buzz, moment } from '../feedback.js';
 import { heatObject } from '../components/heatobject.js';
 import { ripple } from '../map/index.js';
 import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
-import { openOnMap, showTrial } from './map.js';
+import { openOnMap, showNearbyPosts, showTrial } from './map.js';
 import { browserStorage } from '../talk.js';
 import { takePendingPost } from '../return-post.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
@@ -89,7 +89,8 @@ function paintCounter() {
   $('composeHint').hidden = Boolean(editing) || touched || length < min || length < 1 || length > max;
 }
 
-/** First post: show only the examples until "自分の言葉で書く" is tapped. */
+/** The box of the first post used to stay shut behind the examples until "自分の言葉で書く" was
+ * tapped; it is now open from the start (see enter). */
 function setOwnOpen(open) {
   $('compose').classList.toggle('own-closed', firstPost && !open);
 }
@@ -146,7 +147,8 @@ function paintPrompt(weeklyShown, extrasShown) {
 /** The three standing prompts, minus the ones this person has already posted with. */
 function paintExtraPrompts(show) {
   const items = show ? availablePrompts(config().extra_prompts, promptPosts, extrasOn()) : [];
-  if (selectedPrompt && selectedPrompt !== 'weekly' && !items.some((item) => item.key === selectedPrompt)) selectedPrompt = null;
+  const kept = [...items, ...starters()];
+  if (selectedPrompt && selectedPrompt !== 'weekly' && !kept.some((item) => item.key === selectedPrompt)) selectedPrompt = null;
   // A weekly prompt kept in a draft is dropped where the weekly prompt is not
   // shown (the first post), or it would be sent without being seen.
   if (selectedPrompt === 'weekly' && $('composePrompt').hidden) selectedPrompt = null;
@@ -165,6 +167,41 @@ function paintExtraPrompts(show) {
   syncPrompt();
 }
 
+/** The opening words offered over the box of a first post. They stand in for the extra prompts there
+ * and are recorded the same way (as the post's `prompt`, by the same key). */
+function starters() {
+  return firstPost && !editing ? (config().post_starters || []) : [];
+}
+
+function paintStarters() {
+  const items = starters();
+  $('composeStarters').hidden = !items.length;
+  const list = clear($('composeStarterList'));
+  items.forEach((item) => {
+    const chip = el('button', { className: 'extra-chip', text: item.text, attrs: { type: 'button' } });
+    chip.dataset.key = item.key;
+    chip.addEventListener('click', () => useStarter(item));
+    list.append(chip);
+  });
+  syncPrompt();
+}
+
+/** Put the opening words in the box, cursor at the end. An empty box, or one that holds only another
+ * opening, takes the new words in their place; words the person wrote themselves are never replaced
+ * (the chip then only records its prompt). */
+function useStarter(item) {
+  const body = $('composeBody');
+  const text = body.value.trim();
+  const mine = text && !starters().some((entry) => entry.text === text);
+  selectedPrompt = item.key;
+  if (!mine) body.value = item.text;
+  syncPrompt();
+  buzz('tap');
+  body.focus();
+  body.setSelectionRange(body.value.length, body.value.length);
+  paintCounter();
+}
+
 /** Show which prompt is chosen, and let it speak in the body's placeholder:
  * an example sentence for an extra prompt, the weekly prompt's own words. */
 function syncPrompt() {
@@ -172,7 +209,7 @@ function syncPrompt() {
   $('composePrompt').classList.toggle('used', weekly);
   $('composePromptUse').textContent = weekly ? 'お題を外す' : 'このお題で書く';
   $('composePromptUse').setAttribute('aria-pressed', String(weekly));
-  $$('#composeExtraPromptList .extra-chip').forEach((chip) => {
+  $$('#composeExtraPromptList .extra-chip, #composeStarterList .extra-chip').forEach((chip) => {
     chip.setAttribute('aria-pressed', String(chip.dataset.key === selectedPrompt));
   });
   $('composeBody').placeholder = promptPlaceholder({
@@ -197,6 +234,8 @@ function paintRecruit() {
   }
 }
 
+/** The example sentences (try-out) are no longer offered on the first post; they go with the rest of
+ * the trial (tryExample, reveal) after 10/30. */
 function paintExamples(show) {
   $('composeExamples').hidden = !show;
   const list = clear($('composeExampleList'));
@@ -319,7 +358,7 @@ export function setupCompose() {
       $('composeSubmit').textContent = editing ? '保存' : '投稿する';
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
-        ? 'ためしに１つ\n投稿してみましょう。'
+        ? 'ひとこと書いて、あなたの島を作りましょう。'
         : `取り組みや活動内容を${config().limits.body_max}文字までで書いてください。`;
 
       body.value = draft?.body ?? (editing ? editing.body : '');
@@ -330,9 +369,10 @@ export function setupCompose() {
       touched = Boolean(editing);
       paintTags(editing ? (editing.tags || []) : []);
       promptPosts = state.myPosts;
-      paintPrompt(!editing && !firstPost, !editing);
+      paintPrompt(!editing && !firstPost, !editing && !firstPost);
+      paintStarters();
       refreshPromptPosts(editing);
-      paintExamples(firstPost && !editing);
+      paintExamples(false);
       imagePath = editing ? (editing.image_path || null) : null;
       paintImage(imagePath ? data.imageUrl(imagePath) : null);
       if (draft) {
@@ -340,7 +380,8 @@ export function setupCompose() {
         touched = Boolean(draft.touched);
         paintTags(draft.tags);
         selectedPrompt = draft.prompt || null;
-        paintExtraPrompts(!editing);
+        paintExtraPrompts(!editing && !firstPost);
+        paintStarters();
         imagePath = draft.imagePath;
         imageBlob = draft.imageBlob;
         paintImage(imageBlob ? URL.createObjectURL(imageBlob) : imagePath ? data.imageUrl(imagePath) : null);
@@ -361,7 +402,7 @@ export function setupCompose() {
         }
       }
       $('composeError').textContent = '';
-      setOwnOpen(Boolean(draft && (draft.body?.trim() || draft.prompt)));
+      setOwnOpen(true);
       paintCounter();
       paintMotivation();
     },
@@ -376,7 +417,7 @@ function refreshPromptPosts(post) {
   data.postsByAuthor(accountId).then((rows) => {
     if (state.account?.id !== accountId || !Array.isArray(rows)) return;
     promptPosts = rows;
-    if ($('compose').classList.contains('active')) paintExtraPrompts(true);
+    if ($('compose').classList.contains('active')) paintExtraPrompts(!firstPost);
   }).catch(() => {});
 }
 
@@ -477,18 +518,22 @@ async function submit() {
 
 /** Open the new post on the map, with a ripple where it landed. */
 async function landOnMap(result, thenOpen = null) {
-  await openOnMap(result.id, { thenOpen });
+  // The first post is followed by the posts nearest to it (which opens `thenOpen`, if any, after it).
+  await openOnMap(result.id, { thenOpen,
+    afterLand: firstPost ? () => showNearbyPosts(result, { thenOpen }) : null });
   ripple(result.x, result.y, { big: true });
 }
 
-/** Q40: an example sentence, placed for a look and not kept. */
-async function tryExample(text) {
+/** Q40: an example sentence, placed for a look and not kept.
+ * Nothing on the first post calls this any more. 10/30 のあとに片づける (with showTrialReveal, the reveal
+ * screen, the trial banner and /api/posts/preview). */
+export async function tryExample(text) {
   if (submitting) return;
   submitting = true;
   $('composeError').textContent = '';
   buzz('tap');
   try {
-    const result = await runPlacement({ body: text }, { tryout: true });
+    const result = await runPlacement({ body: text, ...tryoutCommunity() }, { tryout: true });
     state.trialPost = {
       x: result.x, y: result.y, body: text,
       icon_id: state.account?.icon_id, avatar_path: state.account?.avatar_path,
@@ -504,6 +549,13 @@ async function tryExample(text) {
     submitting = false;
     paintCounter();
   }
+}
+
+/** The community a tried-out sentence would stand in (members only: the server wants to know which). */
+function tryoutCommunity() {
+  if (!membersOnly()) return {};   // while the switch is off the server does not ask, and the body stays as it was
+  const scope = currentScope();
+  return scope.mode === 'community' ? { community_id: scope.id } : {};
 }
 
 /** The placing animation, and the request it is covering. */
@@ -569,7 +621,9 @@ function showTrialReveal(result) {
   paintNearIslands(bodyBox, result, state.islands);
   // The island list comes with the map; on a first visit it may not be here yet.
   if (!state.islands?.length) {
-    api.get('/api/islands', { auth: false }).then((list) => {
+    const scope = membersOnly() ? currentScope() : { mode: 'legacy' };
+    const path = scope.mode === 'community' ? `/api/islands?${new URLSearchParams({ community: scope.id })}` : '/api/islands';
+    api.get(path).then((list) => {
       if (mine === trialToken) paintNearIslands(bodyBox, result, list?.islands);
     }).catch(() => {});
   }

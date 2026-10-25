@@ -188,7 +188,7 @@ def test_one_person_cannot_keep_notifying_the_same_person(cast):
         guest.client.post("/api/local/talk/withdraw", json={"target": host.id}, headers=guest.headers)
         press(guest, host)
     assert len(host.inbox({"talk_wish"})) == 1, "press, withdraw, press: once per 14 days"
-    # after 14 days the record is gone and the same person can notify again
+    # after 14 days the notice record is swept and the same person can notify again
     store._talk_wish_notices[(guest.id, host.id)] = (
         datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
     read_all(host, {"talk_wish"})
@@ -248,17 +248,22 @@ def test_a_press_is_withdrawn_and_the_notice_stays(cast):
     assert press(host, guest).json() == {"matched": False, "room_id": None}
 
 
-def test_presses_older_than_two_weeks_are_swept(cast, loaded):
+def test_a_press_stays_until_withdrawn_or_matched(cast, loaded):
     host, guest, guest2, *_ = cast
     store = application.state["store"]
     press(guest, host)
     old = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
     store._talk_wishes[(guest.id, host.id)]["created_at"] = old
-    assert get(guest, "/api/local/talk/state").json()["state"] == []
-    # the sweep happens on the next press by anybody; the old wish can no longer match
+    # 15 days later it still shows as pressed, and a press by anybody does not sweep it
+    assert get(guest, "/api/local/talk/state").json()["state"] == [
+        {"target": host.id, "state": "pressed", "room_id": None}]
     assert press(guest2, host).json() == {"matched": False, "room_id": None}
+    assert (guest.id, host.id) in store._talk_wishes
+    # pressing back 15 days later matches
+    answer = press(host, guest).json()
+    assert answer["matched"] is True and answer["room_id"]
     assert (guest.id, host.id) not in store._talk_wishes
-    assert press(host, guest).json() == {"matched": False, "room_id": None}
+    assert (host.id, guest.id) not in store._talk_wishes
 
 
 # --------------------------------------------------------------------------
