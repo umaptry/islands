@@ -408,9 +408,13 @@ test('after the first post a card lists up to three nearby posts, one per person
   await expect(page.locator('#sheet .stack-title')).toHaveText('あなたの近くの投稿');
   await expect(page.locator('#sheet .nearby-lede')).toHaveText('近くにいる人ほど、似た話をしています');
   await expect(list.locator('.nearby-row')).toHaveCount(3);
-  const names = await list.locator('.nearby-who').allInnerTexts();
-  expect(new Set(names).size).toBe(3);
-  expect(names).not.toContain(me);
+  // One per person: three different accounts (names may repeat - other tests make people with fixed names),
+  // and none of them is me.
+  const authors = await list.locator('.nearby-row').evaluateAll((rows) => rows.map((row) => row.dataset.authorId));
+  expect(new Set(authors).size).toBe(3);
+  const myId = await page.evaluate(async () => (await import('/static/js/state.js')).state.account.id);
+  expect(authors).not.toContain(myId);
+  expect(await list.locator('.nearby-who').allInnerTexts()).not.toContain(me);
   await expect(list.locator('.nearby-row .avatar').first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   // タップすると、その投稿が地図の上で開く
