@@ -304,7 +304,7 @@ export async function showNearbyPosts(post, { thenOpen = null } = {}) {
   clear($('sheetFoot'));
   const rows = near.map((entry) => el('li', {},
     el('button', {
-      className: 'stack-row nearby-row', attrs: { type: 'button', 'data-post-id': entry.id },
+      className: 'stack-row nearby-row', attrs: { type: 'button', 'data-post-id': entry.id, 'data-author-id': entry.author_id },
       on: { click: () => { picked = true; closeSheet(); openLinkedPost(entry.id); } },
     },
     avatar(entry, 32),
