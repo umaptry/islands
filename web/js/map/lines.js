@@ -33,7 +33,7 @@
 import { REDUCED_MOTION, hashId } from './decor.js';
 import { drawBoat, drawCar, drawPlane } from './vehicles.js';
 import { config, energyOf } from '../config.js';
-import { blockedBy, mixAt, runsOf, sampleLand } from './land.js';
+import { blockedBy, isLandAt, mixAt, runsOf, sampleLand } from './land.js';
 
 const ROUTE = '#ffffff';
 const PATH = '#f1deb3';
@@ -263,14 +263,35 @@ export function crossesLand(posts, from, to, cells = []) {
   return blockedBy(sampleLand(posts, from, to, cells));
 }
 
-// The answers are kept per line until the ground changes, so no frame computes
-// them. The ground is the list of posts (a new array when the map fetches or the
-// ground is rebuilt), the coarse cells, the islands and the reach factor; a post
-// whose energy changed in place (a like) shows in the fingerprint, which is one
-// cheap pass over the posts. The line's key holds both ends and where they
-// stand: a moved post is a new question.
-let blockedCache = { posts: null, cells: null, islands: null, factor: null, print: null, answers: new Map() };
+// Open water this long (world units) on the straight line between two posts
+// means they are not on one piece of land, whatever the island list says.
+const GAP_WORLD = 20;
 
+/** Is there open water on the straight line, in a stretch at least GAP_WORLD
+ * long? `land` is sampleLand's answer for a line `length` long. */
+export function hasWaterGap(land, length) {
+  return runsOf(land).some((run) => !run.land && (run.to - run.from) * length >= GAP_WORLD);
+}
+
+/** Is there open water between two world points, over the given ground? (The guard against a
+ * nearest-island fallback calling two far islands one; see layout and kin.js.) */
+export function waterBetween(posts, cells, from, to) {
+  return hasWaterGap(sampleLand(posts, from, to, cells), Math.hypot(from[0] - to[0], from[1] - to[1]));
+}
+
+// What a line IS (a road on one island, a sea route, an arch) is decided once per pair from data that
+// does not depend on the view: the islands of the whole map (not the ones in view), the ground of every
+// post the client holds, and the land test in world units at one fixed step (land.js STEP). Drawing then
+// only scales the geometry, so the same two posts are joined by the same kind of line at every zoom
+// (2026-10-25, the user: road when near, road + sea when closer, an air route closest). The answers are
+// kept until the ground changes: the list of posts (a new array when the map fetches or the ground is
+// rebuilt), the coarse cells, the islands, the reach factor, and a fingerprint of the posts, which is
+// one cheap pass (a post whose energy changed in place, a like, shows in it). The key holds both ends
+// and where they stand: a moved post is a new question.
+let decided = { posts: null, cells: null, islands: null, landOf: null, factor: null, print: null, answers: new Map() };
+// The last answer for each pair, kept across a change of ground: while an end's own land is not loaded
+// (a post off the area fetched so far) the pair keeps what it was instead of flickering on a guess.
+const lastDecided = new Map();
 
 function fingerprint(posts) {
   let sum = 0;
@@ -280,28 +301,82 @@ function fingerprint(posts) {
 
 const NO_CELLS = [];
 
-function blockedOf(view, row, print) {
-  const factor = config().energy.radius_factor ?? 1;
-  const cells = view.cells || NO_CELLS;
-  if (blockedCache.posts !== view.posts || blockedCache.cells !== cells || blockedCache.islands !== view.islands
-    || blockedCache.factor !== factor || blockedCache.print !== print) {
-    blockedCache = { posts: view.posts, cells, islands: view.islands, factor, print, answers: new Map() };
-  }
-  const key = `${row.a_post}|${row.b_post}|${row.a_at}|${row.b_at}`;
-  const { answers } = blockedCache;
-  if (!answers.has(key)) {
+/** The kind of one line, from the world and nothing about the view.
+ * `world` is { islands, posts, cells, landOf, print }; `islandOf` is islandFinder(world.islands).
+ * Returns { sameIsland, hasRoute, kind, runs, final } where `final` is false while an end's land is unknown. */
+export function decideLink(world, row, islandOf = islandFinder(world.islands)) {
+  const { posts, cells = NO_CELLS, landOf } = world;
+  const a = islandOf(row.a_post, row.a_at);
+  const b = islandOf(row.b_post, row.b_at);
+  const hasRoute = Boolean(a) && Boolean(b) && a !== b;
+  // One named island can be several pieces of land; a road stays on one.
+  const landA = landOf ? landOf(row.a_post) : null;
+  const landB = landOf ? landOf(row.b_post) : null;
+  let sameIsland = Boolean(a) && a === b && (!landA || !landB || landA === landB);
+  // The island list can give a post the nearest island's name, so two islands far apart might read as
+  // one; when a post's piece of land is not known, the ground decides: open water between the two ends
+  // is not an island's road.
+  const unsure = sameIsland && (!landA || !landB) && Boolean(posts);
+  const flip = String(row.a) > String(row.b);
+  const from = flip ? row.b_at : row.a_at;
+  const to = flip ? row.a_at : row.b_at;
+  let ground = null;
+  if (unsure || (!sameIsland && hasRoute && posts)) {
     // Blocked or not is asked of the straight line (an arch is judged the same
     // way). The stretches - a sea route's two ends (its own shores) are roads for
     // cars, the water between is for boats - are found along the bowed curve the
     // route is drawn on, in the drawn direction (the end with the smaller id first).
-    const blocked = blockedBy(sampleLand(view.posts, row.a_at, row.b_at, cells));
-    const flip = String(row.a) > String(row.b);
-    const from = flip ? row.b_at : row.a_at;
-    const to = flip ? row.a_at : row.b_at;
+    const straight = sampleLand(posts, row.a_at, row.b_at, cells);
     const bow = bowOf(from, to, hashId(`${row.a}|${row.b}`), SEA_BEND);
-    answers.set(key, { blocked, runs: runsOf(sampleLand(view.posts, from, to, cells, bow)) });
+    ground = {
+      blocked: blockedBy(straight),
+      gap: hasWaterGap(straight, Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1])),
+      runs: runsOf(sampleLand(posts, from, to, cells, bow)),
+    };
+    if (unsure) {
+      if (ground.gap) sameIsland = false;
+      else ground = null;
+    }
+  }
+  const sea = Boolean(ground) && !ground.blocked && !sameIsland;
+  // Known only when both ends stand on loaded land (a post is land at its own spot).
+  const final = !ground || (isLandAt(posts, cells, row.a_at[0], row.a_at[1]) && isLandAt(posts, cells, row.b_at[0], row.b_at[1]));
+  return {
+    sameIsland, hasRoute,
+    kind: sameIsland ? 'road' : sea ? 'sea' : 'arch',
+    runs: sea ? ground.runs : null,
+    final,
+  };
+}
+
+function decisionOf(world, row, islandOf) {
+  const factor = config().energy.radius_factor ?? 1;
+  const cells = world.cells || NO_CELLS;
+  const { posts, islands, landOf, print } = world;
+  if (decided.posts !== posts || decided.cells !== cells || decided.islands !== islands || decided.landOf !== landOf
+    || decided.factor !== factor || decided.print !== print) {
+    decided = { posts, cells, islands, landOf, factor, print, answers: new Map() };
+  }
+  const key = `${row.a_post}|${row.b_post}|${row.a_at}|${row.b_at}`;
+  const { answers } = decided;
+  if (!answers.has(key)) {
+    let answer = decideLink({ ...world, cells }, row, islandOf);
+    if (!answer.final) {
+      // An end is not loaded yet: keep the last real answer for this pair, and ask again next frame.
+      const before = lastDecided.get(key);
+      return before || answer;
+    }
+    lastDecided.set(key, answer);
+    answers.set(key, answer);
   }
   return answers.get(key);
+}
+
+/** The kind of every pair ('road' | 'sea' | 'arch') for a world, for tests and checks. */
+export function linkKinds(world, rows) {
+  const islandOf = islandFinder(world.islands);
+  const print = world.posts ? fingerprint(world.posts) : null;
+  return rows.map((row) => decisionOf({ ...world, print }, row, islandOf).kind);
 }
 
 // ---------------------------------------------------------------- new lines
@@ -368,16 +443,24 @@ export function crossingSeconds(world, span) {
 // keeps the same posts.
 const landKey = (mass) => `${mass.cx.toFixed(1)},${mass.cy.toFixed(1)}`;
 
-/** Every pair, with its shape on screen and the route it belongs to. */
+/** Every pair, with its shape on screen and the route it belongs to. The KIND of each line comes from
+ * decisionOf (the whole map, kept per pair); only the geometry is made from the view. */
 function layout(view) {
-  const { rows, islands, toScreen, landOf } = view;
+  const { rows, toScreen, landOf } = view;
+  // `world` overrides the view-sized data: the islands of the whole map and the ground of every post held.
+  const world = view.world || {};
+  const islands = world.islands || view.islands;
+  const posts = world.posts || view.posts;
+  const cells = world.cells || view.cells || NO_CELLS;
+  const worldLand = world.landOf || landOf;
   const islandOf = islandFinder(islands);
   const routes = buildRoutes(rows, islandOf);
   const routeOf = new Map();
   routes.forEach((route) => route.rows.forEach((row) => routeOf.set(row, route)));
 
   // Once per frame, not per line.
-  const print = view.posts ? fingerprint(view.posts) : null;
+  const print = posts ? fingerprint(posts) : null;
+  const ctx = { islands, posts, cells, landOf: worldLand, print };
   const lines = [];
   rows.forEach((row) => {
     if (!row.a_at || !row.b_at) return;
@@ -385,12 +468,10 @@ function layout(view) {
     const flip = String(row.a) > String(row.b);
     const from = flip ? row.b_at : row.a_at;
     const to = flip ? row.a_at : row.b_at;
-    const a = islandOf(row.a_post, row.a_at);
-    const b = islandOf(row.b_post, row.b_at);
-    // One named island can be several pieces of land; a road stays on one.
-    const landA = landOf ? landOf(row.a_post) : null;
-    const landB = landOf ? landOf(row.b_post) : null;
-    const sameIsland = Boolean(a) && a === b && (!landA || !landB || landA === landB);
+    const decision = decisionOf(ctx, row, islandOf);
+    const { sameIsland, kind, runs } = decision;
+    const landA = worldLand ? worldLand(row.a_post) : null;
+    const landB = worldLand ? worldLand(row.b_post) : null;
     const p = toScreen(from[0], from[1]);
     const q = toScreen(to[0], to[1]);
     const route = routeOf.get(row) || null;
@@ -398,14 +479,12 @@ function layout(view) {
     // an arch between two pieces of land of one island, the pair of pieces.
     let group = route ? route.key : linkKey(row);
     if (!route && !sameIsland && landA && landB) group = [landKey(landA), landKey(landB)].sort().join('|');
-    // Over water with posts to check: a sea route unless land is in the way.
-    const ground = !sameIsland && Boolean(route) && Boolean(view.posts) ? blockedOf(view, row, print) : null;
-    const sea = Boolean(ground) && !ground.blocked;
+    const sea = kind === 'sea';
     lines.push({
       row, sameIsland, route, group,
       // The stretches of a sea route, along the way it is drawn (from -> to).
-      runs: sea ? ground.runs : null,
-      kind: sameIsland ? 'road' : sea ? 'sea' : 'arch',
+      runs: sea ? runs : null,
+      kind,
       world: Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]),
       arc: sameIsland
         ? arc(p, q, 0, 0)

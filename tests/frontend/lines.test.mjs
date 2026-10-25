@@ -428,3 +428,80 @@ test('an arch is a dotted line, not a solid one', () => {
   assert.equal(dashes.length, 1);
   assert.ok(dashes[0][0] < 1 && dashes[0][1] > 2, 'round dots with gaps');
 });
+
+test('zoomed in, with only one island on the list, the sea between two islands stays a sea route (not a road)', () => {
+  lines.resetLinks();
+  const open = [post('w', 100, 100), post('e', 800, 100)];
+  // The island list holds only what is in view: "east" is missing, so its post
+  // falls back to the nearest listed island, "west", and both ends read as one.
+  const listed = [seaIslands[0]];
+  const view = seaView(open, [seaRow()], { islands: listed });
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), ['sea']);
+  // The same with land in the way: an arch, never a road.
+  const blocked = open.concat(post('m', 450, 110));
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, seaView(blocked, [seaRow()], { islands: listed }))), ['arch']);
+  // Two ends that really are on one stretch of land stay a road.
+  const joined = [post('w', 100, 100), post('e', 800, 100)].concat([200, 300, 400, 500, 600, 700].map((x) => post(`j${x}`, x, 100)));
+  assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, seaView(joined, [seaRow()], { islands: listed }))), ['road']);
+});
+
+test('open water of a stretch long enough is a gap; a short bay is not', () => {
+  const land = (flags) => flags.map(Boolean);
+  assert.equal(lines.hasWaterGap(land([1, 1, 0, 0, 0, 0, 1, 1]), 800), true);
+  assert.equal(lines.hasWaterGap(land([1, 1, 0, 1, 1, 1, 1, 1]), 100), false);
+  assert.equal(lines.hasWaterGap(land([1, 1, 1, 1]), 800), false);
+});
+
+test('the kind of a line between two posts is the same at every zoom, whatever part of the map is in view', () => {
+  // West and east joined by land through a chain; south-west and south-east over open sea;
+  // north and the far north-east with an island between them (an arch).
+  const everyone = [
+    post('w', 100, 100), post('e', 800, 100),
+    ...[200, 300, 400, 500, 600, 700].map((x) => post(`j${x}`, x, 100)),
+    post('sw', 100, 900), post('se', 800, 900),
+    post('n', 100, 1500), post('ne', 800, 1500), post('nm', 450, 1510),
+  ];
+  const worldIslands = [
+    { island_id: 'main', cx: 450, cy: 100, post_ids: ['w', 'e', ...[200, 300, 400, 500, 600, 700].map((x) => `j${x}`)] },
+    { island_id: 'sw', cx: 100, cy: 900, post_ids: ['sw'] },
+    { island_id: 'se', cx: 800, cy: 900, post_ids: ['se'] },
+    { island_id: 'n', cx: 100, cy: 1500, post_ids: ['n'] },
+    { island_id: 'ne', cx: 800, cy: 1500, post_ids: ['ne'] },
+    { island_id: 'nm', cx: 450, cy: 1510, post_ids: ['nm'] },
+  ];
+  const pair = (a, b, pa, pb, at, bt) => row(a, b, pa, pb, { a_at: at, b_at: bt, tier: 1 });
+  const rows = [
+    pair('u1', 'u2', 'w', 'e', [100, 100], [800, 100]),
+    pair('u3', 'u4', 'sw', 'se', [100, 900], [800, 900]),
+    pair('u5', 'u6', 'n', 'ne', [100, 1500], [800, 1500]),
+  ];
+  const expected = ['road', 'sea', 'arch'];
+  const index = new Map(everyone.map((p) => [p.id, p]));
+  // 14 steps from the overview to the closest zoom; the camera sits on each pair in turn, so the view
+  // holds a different slice of posts and islands every time (what the old code made its decision from).
+  for (let step = 0; step <= 14; step += 1) {
+    const scale = 0.2 * Math.pow(40, step / 14);
+    [[450, 100], [450, 900], [450, 1500], [100, 100], [800, 1500]].forEach(([cx, cy]) => {
+      const toScreen = (x, y) => ({ x: 300 + (x - cx) * scale, y: 300 + (y - cy) * scale });
+      const inView = (x, y) => Math.abs(x - cx) * scale < 360 && Math.abs(y - cy) * scale < 360;
+      const seen = everyone.filter((p) => inView(p.x, p.y));
+      const listed = worldIslands.filter((island) => island.post_ids.some((id) => inView(index.get(id).x, index.get(id).y)));
+      const view = {
+        rows, islands: listed, posts: seen, toScreen, width: 600, height: 600, level: 'near', far: false,
+        landOf: null, span: 1000, phone: false,
+        world: { islands: worldIslands, posts: everyone, cells: [], landOf: null },
+      };
+      assert.deepEqual(kindsOf(lines.drawLinks(fakeCanvas().ctx, view)), expected, `zoom ${scale.toFixed(2)} at ${cx},${cy}`);
+    });
+  }
+  // The pure answer, with no view in it at all.
+  assert.deepEqual(lines.linkKinds({ islands: worldIslands, posts: everyone, cells: [], landOf: null }, rows), expected);
+});
+
+test('a line whose end is not loaded yet keeps its last answer instead of guessing', () => {
+  const full = [post('w', 100, 100), post('e', 800, 100), post('m', 450, 600)];
+  const world = (posts) => ({ islands: seaIslands, posts, cells: [], landOf: null });
+  assert.deepEqual(lines.linkKinds(world(full), [seaRow()]), ['sea']);
+  // A new array of posts without the east end (panned away): still a sea route, not a flip to a road/arch.
+  assert.deepEqual(lines.linkKinds(world([post('w', 100, 100), post('m', 450, 600)]), [seaRow()]), ['sea']);
+});

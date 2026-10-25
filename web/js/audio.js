@@ -8,10 +8,13 @@
 
 import { audioContext, feedbackSettings, onFeedbackChange } from './feedback.js';
 import { ambientShouldPlay, audioShouldRun, maySe } from './feedback-rules.js';
+import { createWaves, gullsAllowed } from './ambience.js';
+import { currentTone } from './screen-tone.js';
 
 const MASTER = 0.35; // overall level, kept below the mock so it stays gentle
 const BGM_LEVEL = 0.55; // music sits under everything else
 const ENV_LEVEL = 0.3;
+const WAVE_LEVEL = 0.4; // the waves inside the ambience bus
 const BEAT = 60 / 90; // 90 BPM
 const LOOP_SECONDS = 16 * BEAT;
 
@@ -23,7 +26,7 @@ let envBus = null;
 let bgmTimer = null;
 let nextLoopAt = 0;
 let ambientWanted = false;
-let ambient = null; // { nodes, timer } while sounding
+let ambient = null; // { waves, tick, timer } while sounding
 const lastSe = {};
 
 const hasWindow = typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -155,29 +158,14 @@ function stopBgmTimer() {
 
 // --- ambience ---
 
+// The waves are laid down a few seconds ahead on the audio clock (like the BGM), so a suspended
+// context stands still and nothing piles up. See ambience.js for how a swell is shaped.
 function startAmbient() {
   if (ambient || !ctx) return;
-  const size = ctx.sampleRate * 2;
-  const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-  const noise = ctx.createBufferSource();
-  noise.buffer = buffer;
-  noise.loop = true;
-  const filter = ctx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = 600;
-  const gain = ctx.createGain();
-  gain.gain.value = 0.2;
-  noise.connect(filter).connect(gain).connect(envBus);
-  noise.start();
-  const lfo = ctx.createOscillator(); // the slow swell of the waves
-  lfo.frequency.value = 0.08;
-  const lfoGain = ctx.createGain();
-  lfoGain.gain.value = 0.15;
-  lfo.connect(lfoGain).connect(gain.gain);
-  lfo.start();
-  ambient = { noise, lfo, nodes: [filter, gain, lfoGain], timer: null };
+  const waves = createWaves(ctx, envBus, { level: WAVE_LEVEL });
+  const tick = () => waves.scheduleUntil(ctx.currentTime + 4, ctx.currentTime);
+  tick();
+  ambient = { waves, tick: setInterval(tick, 1000), timer: null };
   scheduleGull();
 }
 
@@ -186,15 +174,8 @@ function stopAmbient() {
   const a = ambient;
   ambient = null;
   if (a.timer !== null) clearTimeout(a.timer);
-  for (const source of [a.noise, a.lfo]) {
-    try {
-      source.stop();
-    } catch {
-      // Already stopped.
-    }
-    source.disconnect();
-  }
-  a.nodes.forEach((n) => n.disconnect());
+  clearInterval(a.tick);
+  a.waves.stop();
 }
 
 function scheduleGull() {
@@ -208,6 +189,8 @@ function scheduleGull() {
 
 function gull() {
   if (!ctx || ctx.state !== 'running') return;
+  // Morning, day and evening only; the hour is read at every call, so it follows the clock while the map is open.
+  if (!gullsAllowed(currentTone())) return;
   const now = ctx.currentTime;
   let out = envBus;
   if (ctx.createStereoPanner) {
@@ -279,7 +262,7 @@ export function setAmbient(on) {
   apply();
 }
 
-/** One-shot effect: 'success' | 'click' | 'hardClick' | 'pop' | 'fanfare'. */
+/** One-shot effect: 'success' | 'click' | 'hardClick' | 'pop' | 'fanfare' | 'switch'. */
 export function playSe(name) {
   if (!started || !ctx || ctx.state !== 'running') return;
   const now = Date.now();
@@ -324,6 +307,28 @@ export function playSe(name) {
     osc.connect(gain).connect(master);
     osc.start(t);
     osc.stop(t + 0.2);
+  } else if (name === 'switch') {
+    // A soft swoosh of sea that rises, then two bright notes settling in: "the water changed".
+    const length = Math.floor(ctx.sampleRate * 0.5);
+    const noise = ctx.createBuffer(1, length, ctx.sampleRate);
+    const samples = noise.getChannelData(0);
+    for (let i = 0; i < length; i++) samples[i] = Math.random() * 2 - 1;
+    const source = ctx.createBufferSource();
+    source.buffer = noise;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 1.1;
+    band.frequency.setValueAtTime(350, t);
+    band.frequency.exponentialRampToValueAtTime(1800, t + 0.3);
+    const wash = ctx.createGain();
+    wash.gain.setValueAtTime(0, t);
+    wash.gain.linearRampToValueAtTime(0.22, t + 0.2);
+    wash.gain.exponentialRampToValueAtTime(0.001, t + 0.48);
+    source.connect(band).connect(wash).connect(master);
+    source.start(t);
+    source.stop(t + 0.5);
+    tone('sine', 587.33, t + 0.14, 0.22, 0.22, master);
+    tone('sine', 880, t + 0.26, 0.4, 0.22, master);
   } else if (name === 'fanfare') {
     const note = (freq, start, dur, vol, vibrato) => {
       const gain = ctx.createGain();

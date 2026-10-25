@@ -54,7 +54,7 @@ export const KIND_TEXT = Object.freeze({
 
 /** The small line under a 「話してみたい」 / DM row. */
 export const TALK_HINT = Object.freeze({
-  talk_wish: '地図で参加者の投稿を見てみよう',
+  talk_wish: '参加者のプロフィールから押せます',
   talk_match: 'DMを開く',
   dm: 'DMを開く',
 });
@@ -194,9 +194,15 @@ export function knownIds(entries) {
   return new Set((entries || []).flatMap(rowIds));
 }
 
-/** What the badge counts: unread, and allowed to interrupt. */
+/** DM messages live in the DM tab (its own badge). The 通知 list and its badge leave them out; the
+ * 「お互いに」 row (talk_match) and 「誰かが…」 (talk_wish) stay. A push to the phone is not affected. */
+export const isDmMessage = (entry) => Boolean(entry) && entry.type === 'dm';
+export const listable = (entries) => (entries || []).filter((entry) => !isDmMessage(entry));
+export const dmMessageRows = (entries) => (entries || []).filter(isDmMessage);
+
+/** What the badge counts: unread, allowed to interrupt, and not a DM message. */
 export function unreadCount(entries, settings) {
-  return (entries || []).filter((entry) => entry.unread && interrupts(entry, settings)).length;
+  return listable(entries).filter((entry) => entry.unread && interrupts(entry, settings)).length;
 }
 
 /**

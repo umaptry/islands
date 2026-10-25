@@ -2912,6 +2912,21 @@ def local_revoke_invite(invite_id: str, request: Request):
     return {"ok": True}
 
 
+class CommunityRename(BaseModel):
+    name: str
+
+
+@app.post("/api/local/communities/{community_id}/rename")
+def local_rename_community(community_id: str, payload: CommunityRename, request: Request):
+    """rename_community: an admin of that community changes its name. {"name"} is the new one."""
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"name": state["store"].rename_community(user_id, community_id, payload.name)}
+    except Refused as error:
+        raise _refusal(error)
+
+
 @app.get("/api/local/communities/{community_id}")
 def local_community_info(community_id: str):
     """{id, name} of one community (production: a read of the communities table)."""

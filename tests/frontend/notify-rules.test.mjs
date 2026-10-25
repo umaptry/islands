@@ -304,7 +304,7 @@ test('talk_wish says only 誰かが…, whoever the row names', () => {
   assert.equal(entry.actor_id, null);
   assert.equal(rules.headline(entry, LABEL), `誰かが、あなたと${LABEL}と言っています`);
   assert.equal(rules.headline(entry, LABEL), '誰かが、あなたともっと話してみたいと言っています');
-  assert.equal(rules.bodyText(entry, LABEL), '地図で参加者の投稿を見てみよう');
+  assert.equal(rules.bodyText(entry, LABEL), '参加者のプロフィールから押せます');
   // Even a row that already carries actors, with a name and "ほか N人", reveals nothing and counts nothing.
   const loud = { ...talkRow('talk_wish'), actors: [{ display_name: 'あき' }], others: 3 };
   const line = `${rules.headline(loud, LABEL)}${rules.bodyText(loud, LABEL)}`;
@@ -395,4 +395,20 @@ test('matchSignature changes only when a new 「お互いに」 row appears', ()
   assert.equal(rules.matchSignature(one), rules.matchSignature(same), 'a DM message does not re-read the buttons');
   assert.notEqual(rules.matchSignature(one), rules.matchSignature(more));
   assert.equal(rules.matchSignature([]), '');
+});
+
+test('DM messages are not in the 通知 list or its badge; the 「お互いに」 row and 「誰かが…」 stay', () => {
+  const entries = [
+    talkRow('dm', { id: 'd1' }), talkRow('dm', { id: 'd2' }),
+    talkRow('talk_match', { id: 'm1' }), talkRow('talk_wish', { id: 'w1', actor_id: null }),
+    talkRow('like', { id: 'l1' }),
+  ];
+  const settings = rules.defaultSettings();
+  assert.deepEqual(rules.listable(entries).map((entry) => entry.id), ['m1', 'w1', 'l1']);
+  assert.deepEqual(rules.dmMessageRows(entries).map((entry) => entry.id), ['d1', 'd2']);
+  assert.equal(rules.unreadCount(entries, settings), 3, 'only the three that stay are counted');
+  assert.equal(rules.unreadCount([talkRow('dm', { id: 'd1' })], settings), 0);
+  assert.deepEqual(rules.listable(null), []);
+  // ...but a new DM message is still an arrival (the in-app band), as before.
+  assert.equal(rules.arrivals([talkRow('dm', { id: 'd9' })], new Set(), settings).length, 1);
 });

@@ -88,10 +88,10 @@ test('nothing in the index says whether somebody pressed ME', () => {
   assert.deepEqual(Object.keys(index.byTarget.get(AKI)).sort(), ['room_id', 'state']);
 });
 
-test('the words on the button, per state: the small line is there before the first press', () => {
+test('the words on the button, per state: the small line before the first press names nobody', () => {
   assert.deepEqual(rules.talkButtonText('none', LABEL, NAME), {
     word: 'もっと話してみたい',
-    note: 'あきさんへ。押したことは相手には見えず、お互いに押すと DM が開きます',
+    note: '押したことは相手には見えず、お互いに押すと DM が開きます',
   });
   assert.deepEqual(rules.talkButtonText('pressed', LABEL, NAME), {
     word: 'もっと話してみたい（押しました）',
@@ -109,7 +109,8 @@ test('without a name the line still reads as aimed at a person', () => {
   assert.equal(rules.personCall(null), 'この人');
   assert.equal(rules.personCall(' ベン '), 'ベンさん');
   assert.equal(rules.personCall('たなかさん'), 'たなかさん');
-  assert.ok(rules.talkButtonText('none', LABEL).note.startsWith('この人へ。'));
+  assert.equal(rules.talkButtonText('none', LABEL).note, rules.talkButtonText('none', LABEL, NAME).note, 'before the first press the line names nobody');
+  assert.ok(rules.talkButtonText('pressed', LABEL).note.startsWith('この人も'));
   assert.ok(rules.talkButtonText('matched', LABEL).note.startsWith('この人と、'));
 });
 
@@ -296,4 +297,85 @@ test('the explanation is shown once per browser, and only once per page without 
   assert.equal(rules.introSeen(null), false);
   assert.doesNotThrow(() => rules.markIntroSeen(null));
   rules.resetIntroMemory();
+});
+
+// ---------------------------------------------------------------- DM: what is unread
+
+const dmStorage = ({ failRead = false, failWrite = false } = {}) => {
+  const map = new Map();
+  return {
+    getItem: (key) => { if (failRead) throw new Error('blocked'); return map.has(key) ? map.get(key) : null; },
+    setItem: (key, value) => { if (failWrite) throw new Error('blocked'); map.set(key, String(value)); },
+    map,
+  };
+};
+
+const dmRoom = (id, other, lastAt, extra = {}) => ({ room_id: id, other_id: other, last_at: lastAt, created_at: '2026-10-01T00:00:00Z', ...extra });
+const T1 = '2026-10-24T10:00:00.000000+00:00';
+const T2 = '2026-10-24T11:00:00.000000+00:00';
+const T3 = '2026-10-24T12:00:00.000000+00:00';
+
+test.beforeEach(() => rules.resetDmSeenMemory());
+
+test('a room is unread when its newest message is later than the time I last saw it', () => {
+  const rooms = [dmRoom('r1', AKI, T2), dmRoom('r2', BEN, T2), dmRoom('r3', CHI, T1)];
+  const seen = { r1: T1, r2: T2, r3: T3 };
+  assert.deepEqual(rules.unreadRooms(rooms, seen).map((entry) => entry.room_id), ['r1']);
+});
+
+test('a room with no message yet, or one I blocked, is never unread', () => {
+  const rooms = [dmRoom('r1', AKI, null), dmRoom('r2', BEN, T2, { blocked_by_me: true })];
+  assert.deepEqual(rules.unreadRooms(rooms, { r2: T1 }), []);
+  assert.deepEqual(rules.unreadRooms(rooms, {}, { unreadFrom: new Set([AKI, BEN]) }), []);
+});
+
+test('a room with no last-seen time (a new browser) is unread only while the server still holds an unread notice', () => {
+  const rooms = [dmRoom('r1', AKI, T2), dmRoom('r2', BEN, T2)];
+  assert.deepEqual(rules.unreadRooms(rooms, {}).map((entry) => entry.room_id), []);
+  assert.deepEqual(rules.unreadRooms(rooms, {}, { unreadFrom: new Set([BEN]) }).map((entry) => entry.room_id), ['r2']);
+  // once there is a last-seen time, the time decides and the notice no longer matters
+  assert.deepEqual(rules.unreadRooms(rooms, { r2: T2 }, { unreadFrom: new Set([BEN]) }), []);
+});
+
+test('bad input reads as nothing unread', () => {
+  assert.deepEqual(rules.unreadRooms(null, null), []);
+  assert.deepEqual(rules.unreadRooms([null, {}, { room_id: 'x' }], {}), []);
+  assert.deepEqual(rules.unreadRooms([dmRoom('r1', AKI, 'not a time')], { r1: T1 }), []);
+});
+
+test('the last-seen time is kept per account, only moves forward, and survives a reload', () => {
+  const storage = dmStorage();
+  rules.markDmSeen(storage, ME, 'r1', T2);
+  rules.markDmSeen(storage, ME, 'r1', T1);
+  assert.equal(rules.readDmSeen(storage, ME).r1, T2, 'an older time does not move it back');
+  rules.markDmSeen(storage, ME, 'r1', T3);
+  assert.equal(rules.readDmSeen(storage, ME).r1, T3);
+  assert.deepEqual(rules.readDmSeen(storage, AKI), {}, 'somebody else on this browser has their own');
+  rules.resetDmSeenMemory();
+  assert.equal(rules.readDmSeen(storage, ME).r1, T3, 'read back from the browser');
+  assert.deepEqual(rules.readDmSeen(storage, null), {});
+});
+
+test('without usable storage the last-seen time lives in memory for this page load', () => {
+  for (const storage of [null, dmStorage({ failRead: true, failWrite: true }), dmStorage({ failWrite: true })]) {
+    rules.resetDmSeenMemory();
+    assert.doesNotThrow(() => rules.markDmSeen(storage, ME, 'r1', T2));
+    assert.equal(rules.readDmSeen(storage, ME).r1, T2);
+  }
+});
+
+test('garbage in storage is ignored, and only the newest rooms are kept', () => {
+  const storage = dmStorage();
+  storage.map.set(rules.DM_SEEN_PREFIX + ME, 'not json');
+  assert.deepEqual(rules.readDmSeen(storage, ME), {});
+  storage.map.set(rules.DM_SEEN_PREFIX + ME, JSON.stringify([1, 2]));
+  assert.deepEqual(rules.readDmSeen(storage, ME), {});
+  for (let i = 0; i < rules.DM_SEEN_MAX + 5; i += 1) {
+    const stamp = new Date(Date.UTC(2026, 9, 1) + i * 60000).toISOString();
+    rules.markDmSeen(storage, ME, `room-${i}`, stamp);
+  }
+  const kept = rules.readDmSeen(storage, ME);
+  assert.equal(Object.keys(kept).length, rules.DM_SEEN_MAX);
+  assert.ok(kept[`room-${rules.DM_SEEN_MAX + 4}`], 'the newest stays');
+  assert.equal(kept['room-0'], undefined, 'the oldest goes');
 });

@@ -503,6 +503,10 @@ INVITE_ERROR_ADMIN_ONLY_LIST = "このコミュニティの招待リンクは、
 INVITE_ERROR_ADMIN_ONLY_REVOKE = "この招待リンクは、管理者だけが止められます。"
 INVITE_ERROR_MINUTES = "有効な時間は1分から30日の間で指定してください。"
 COMMUNITY_ERROR_POST = "このコミュニティに投稿できません。"
+# rename_community (supabase/migrations/20261026020000_rename_community.sql): 1..COMMUNITY_NAME_MAX characters after trimming.
+COMMUNITY_ERROR_RENAME_ADMIN_ONLY = "このコミュニティの名前は、管理者だけが変えられます。"
+COMMUNITY_ERROR_NAME = "コミュニティの名前は1〜40文字で入力してください。"
+COMMUNITY_NAME_MAX = 40
 # create_invite: minutes is 1..INVITE_MINUTES_MAX; until_end_of_day ends at 23:59 Japan time
 # (and moves to the next day when less than INVITE_END_OF_DAY_MIN_MINUTES would be left).
 INVITE_MINUTES_MAX = 43200

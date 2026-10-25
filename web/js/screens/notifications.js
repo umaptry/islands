@@ -15,12 +15,15 @@ import { api, data } from '../net.js';
 import { activeScreen, navigate, screen } from '../router.js';
 import { state } from '../state.js';
 import { openOnMap } from './map.js';
-import { openDmForNotification, refreshTalk, talkAvailable, talkLabel } from '../talk.js';
+import {
+  openDmForNotification, recomputeDmUnread, refreshDmRooms, refreshTalk, talkAvailable, talkLabel,
+} from '../talk.js';
 import { icon } from '../icons.js';
 import { moment } from '../feedback.js';
 import { $, clear, clip, el, timeAgo } from '../ui.js';
 import {
-  arrivals, bodyText, defaultSettings, headline, knownIds, matchSignature, mergeSettings, rowIds, unreadCount,
+  arrivals, bodyText, defaultSettings, dmMessageRows, headline, knownIds, listable, matchSignature, mergeSettings,
+  rowIds, unreadCount,
 } from '../notify-rules.js';
 
 const ARRIVAL_MS = 5000;
@@ -32,6 +35,8 @@ let painted = '';          // what the list last showed, to repaint only on a ch
 let arrivalTimer = 0;
 let loading = null;        // the refresh in flight
 let again = false;         // asked for once more while it was in flight
+let arrivalTarget = '#/notifications';   // where the band goes when tapped
+let dmNoticeSeen = '';     // the DM-message rows known, so a new one re-reads the rooms at once
 
 const TONES = { like: 'like', help: 'help', join: 'join', comment: 'comment', reply: 'comment',
   connection: 'join', similar: 'help', island: 'join', quiet_post: 'help',
@@ -97,6 +102,7 @@ async function load() {
   const account = state.account;
   if (!account) {
     state.notifications = [];
+    state.dmNotices = [];
     state.unread = 0;
     paintBadge();
     return;
@@ -109,11 +115,13 @@ async function load() {
     return;
   }
   if (state.account?.id !== account.id) return;   // signed out or switched meanwhile
-  state.notifications = entries;
-  state.unread = unreadCount(entries, settings);
+  // DM messages live in the DM tab: the list and its badge leave them out (a push is not affected).
+  state.dmNotices = dmMessageRows(entries);
+  state.notifications = listable(entries);
+  state.unread = unreadCount(state.notifications, settings);
   paintBadge();
   followTalk(entries);
-  if (activeScreen() === 'notifications' && signature(entries) !== painted) paintList();
+  if (activeScreen() === 'notifications' && signature(state.notifications) !== painted) paintList();
   announce(entries, settings, account.id);
 }
 
@@ -126,6 +134,12 @@ function followTalk(entries) {
     matchSeen = matches;
     refreshTalk();
   }
+  // The DM tab's badge: a new message notice means a room has something new, so read the rooms now.
+  const notices = dmMessageRows(entries).flatMap(rowIds).sort().join(',');
+  const changed = notices !== dmNoticeSeen;
+  dmNoticeSeen = notices;
+  recomputeDmUnread();
+  refreshDmRooms({ maxAge: changed ? 0 : 20000 });
   if (['dmList', 'dmRoom'].includes(activeScreen())) document.dispatchEvent(new CustomEvent('dm:maybe-new'));
 }
 
@@ -150,6 +164,7 @@ function announce(entries, settings, accountId) {
   const shown = ['dmList', 'dmRoom'].includes(activeScreen()) ? fresh.filter((row) => row.type !== 'dm') : fresh;
   if (!shown.length) return;
   const entry = shown[0];
+  arrivalTarget = entry.type === 'dm' ? '#/dm' : '#/notifications';
   $('arrivalIcon').textContent = BAND_ICONS[entry.type] || '🔔';
   const text = $('arrivalText');
   text.textContent = clip(`${headline(entry, talkLabel())}　${bodyText(entry, talkLabel())}`, 38);
@@ -278,12 +293,13 @@ async function open(entry) {
 
 /** Opening a room reads that person's DM rows: the dot and the badge go with it. */
 export function markDmNotificationsRead(otherId) {
-  const rows = state.notifications.filter((entry) => entry.unread && entry.actor_id === otherId
-    && (entry.type === 'dm' || entry.type === 'talk_match'));
+  const rows = [...state.notifications, ...state.dmNotices].filter((entry) => entry.unread
+    && entry.actor_id === otherId && (entry.type === 'dm' || entry.type === 'talk_match'));
   if (!rows.length) return;
   rows.forEach((entry) => { entry.unread = false; });
   state.unread = unreadCount(state.notifications, state.notifySettings);
   paintBadge();
+  recomputeDmUnread();
   data.markNotificationsRead(rows.flatMap(rowIds)).catch(() => {
     // The next refresh corrects a lost read mark.
   });
@@ -292,7 +308,7 @@ export function markDmNotificationsRead(otherId) {
 export function setupNotifications() {
   $('arrival').addEventListener('click', () => {
     hideArrival();
-    navigate('#/notifications');
+    navigate(arrivalTarget);
   });
   $('notifSettings').addEventListener('click', () => navigate('#/me/edit?notify=1'));
   $('notifReadAll').addEventListener('click', async () => {

@@ -13,13 +13,16 @@
 
 import { config, energyOf, interactionsOf, islandColor, radiusOf } from '../config.js';
 import { matchesFilters, state, filtering } from '../state.js';
+import { freshIslandKeys } from '../fresh-rules.js';
 import { clip, desktopSheet, sheetOpen, toast } from '../ui.js';
 import {
   INK, REDUCED_MOTION, drawBirds, drawBoats, drawFog, drawSeaMarks, drawWhales,
   hashId, makeLabelSpace,
 } from './decor.js';
 import { detectLandmasses, membership } from './landmass.js';
-import { drawKin, drawLinks, drawPlanes, islandFinder } from './lines.js';
+import { cameraAt, viewHolding } from './camera-path.js';
+import { clearTownSpot, landmarkSlots } from './spots.js';
+import { drawKin, drawLinks, drawPlanes, islandFinder, waterBetween } from './lines.js';
 import { kinLines } from './kin.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
@@ -75,7 +78,7 @@ function zoomLevel() {
   return { z, level: z >= DEEP_AT ? 'deep' : z >= NEAR_AT ? 'near' : 'far' };
 }
 
-// The canvas runs under the search bar and the bottom controls. `frame` is how
+// The canvas runs under the header bar and the bottom controls. `frame` is how
 // much of it, top and bottom, they cover: the camera centres in what is left and
 // no name is put where it cannot be read.
 let frame = { top: 96, bottom: 120 };
@@ -109,7 +112,7 @@ function chromeBoxes() {
 function measureChrome() {
   if (!canvas) return [];
   const box = canvas.getBoundingClientRect();
-  return [...document.querySelectorAll('#map .search, #map .filter-button, #mapDigest, #trialBanner, #participantStop, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #busyToggle, #islandCard')]
+  return [...document.querySelectorAll('#map .map-header, #mapDigest, #trialBanner, #participantStop, #map .map-controls, #mapStatus, #nearIslands, #miniMap, #islandCard')]
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.height > 0 && rect.width > 0)
     .map((rect) => ({
@@ -215,17 +218,11 @@ export function showAll({ then } = {}) {
   const duration = REDUCED_MOTION ? 0 : 700;
   const began = performance.now();
   const step = (now) => {
-    const t = duration ? Math.min(1, (now - began) / duration) : 1;
+    const t = duration ? Math.max(0, Math.min(1, (now - began) / duration)) : 1;
     const k = 1 - (1 - t) ** 3;
-    const scale = from.scale * (to.scale / from.scale) ** k;
-    // The point under the middle of the screen slides to where the fitted view
-    // has it, so the ground neither lurches nor drifts on the way.
-    state.camera = {
-      scale,
-      fit: to.fit,
-      x: from.x + (to.x - from.x) * k,
-      y: from.y + (to.y - from.y) * k,
-    };
+    // One zoom about a fixed point of the screen (camera-path.js), so the ground
+    // neither lurches nor swings out over the fog on the way.
+    state.camera = { ...cameraAt(from, to, k), fit: to.fit };
     if (t < 1) {
       tween = requestAnimationFrame(step);
       return;
@@ -331,9 +328,11 @@ let tween = 0;
 
 /** Fly the camera to a world point at a new zoom (Q57: tap, and it comes closer).
  *
- * The zoom changes geometrically and the point slides linearly to its spot, so
- * the ground neither lurches nor drifts sideways on the way. Any touch stops it
- * where it is. Reduced motion jumps straight there.
+ * Zoom and slide are one move (camera-path.js): the point grows toward its spot
+ * on the screen in a straight line, rather than the map zooming on its middle
+ * and sliding afterwards (2026-10-25, the user). Any touch stops it where it is.
+ * Reduced motion jumps straight there. (`t` never goes below 0: a frame's clock
+ * can be older than the moment of the call, which used to start with a shrink.)
  */
 export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = null, then } = {}) {
   cancelAnimationFrame(tween);
@@ -344,18 +343,18 @@ export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = 
   // `y`, in canvas px, puts the point exactly there instead of `lift` of the
   // way down the free frame.
   const anchorY = y ?? frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
-  const start = toWorld(anchorX, anchorY);
+  const goal = viewHolding(worldX, worldY, anchorX, anchorY, to);
   const duration = REDUCED_MOTION ? 0 : 480;
   const began = performance.now();
   const step = (now) => {
-    const t = duration ? Math.min(1, (now - began) / duration) : 1;
+    const t = duration ? Math.max(0, Math.min(1, (now - began) / duration)) : 1;
     const k = 1 - (1 - t) ** 3;
-    const scale = from.scale * (to / from.scale) ** k;
-    const wx = start.x + (worldX - start.x) * k;
-    const wy = start.y + (worldY - start.y) * k;
-    state.camera.scale = scale;
-    state.camera.x = anchorX - wx * scale;
-    state.camera.y = anchorY - wy * scale;
+    // Zoom and slide as one move (camera-path.js): the post grows toward its
+    // spot in a straight line instead of the map zooming on its middle first.
+    const view = cameraAt(from, goal, k);
+    state.camera.scale = view.scale;
+    state.camera.x = view.x;
+    state.camera.y = view.y;
     if (t < 1) {
       tween = requestAnimationFrame(step);
       return;
@@ -738,7 +737,7 @@ function render() {
   ctx.fillStyle = config().energy.biome_colors.sea;
   ctx.fillRect(0, 0, width, height);
   refreshClock();
-  refreshActivity();
+  refreshFresh();
   renderMap(time);
   notifyCamera();
 }
@@ -853,71 +852,45 @@ function paintSun() {
   ctx.restore();
 }
 
-// ---------------------------------------------------------------- this week
+// ---------------------------------------------------------------- new islands
 
-// The week's activity switch: with it on, only the posts that saw something in
-// the last seven days are drawn as usual; the rest step back like posts a
-// filter left out.
-const WEEK_MS = 7 * 24 * 3600 * 1000;
-const WHOLE_MAP_Z = 1.2;   // zoomed out this far, the loaded posts are all of them
-let busyOn = false;
-let busyIds = new Set();
-let busyIslands = new Set();   // islandKey of the islands holding one of them
-let busyTotal = 0;
-let busyWhole = null;   // the count last made with the whole map in view
-let activitySeen = { posts: null, connections: null, islands: null, revision: -1, minute: -1 };
+// Zoomed out, an island glows while it holds a post that is new to me: written in the last seven days,
+// not mine, not opened yet. Which posts those are is decided by the screen (screens/map.js with
+// fresh-rules.js) and handed in here as a set of ids; this module only draws the glow.
+let freshIds = new Set();
+let freshIslands = new Set();   // islandKey of the islands holding one of them
+let freshSeen = { ids: null, islands: null, revision: -1 };
 
-export function setBusyMode(on) { busyOn = Boolean(on); }
-export function busyMode() { return busyOn; }
-/** How many posts saw something in the last seven days. Counted over what is
- * loaded; the map holds only the posts near the screen when zoomed in, so the
- * number last made with (nearly) the whole map in view is kept and returned while
- * zoomed in, rather than a count that shrinks as you come closer. */
-export function busyCount() {
-  refreshActivity();
-  return busyWhole === null ? busyTotal : busyWhole;
+export function setFreshPosts(ids) {
+  freshIds = ids instanceof Set ? ids : new Set(ids || []);
+  freshSeen = { ids: null, islands: null, revision: -1 };
 }
 
-/** Counted again only when the posts, lines or islands changed (or a minute
- * went by), never every frame. */
-function refreshActivity() {
-  const minute = Math.floor(Date.now() / CLOCK_MS);
-  const was = activitySeen;
-  if (was.posts === state.posts && was.connections === state.connections
-      && was.islands === state.islands && was.revision === state.revision
-      && was.minute === minute) return;
-  activitySeen = {
-    posts: state.posts, connections: state.connections, islands: state.islands,
-    revision: state.revision, minute,
-  };
-  const since = Date.now() - WEEK_MS;
-  const recent = (stamp) => { const at = Date.parse(stamp); return Number.isFinite(at) && at >= since; };
-  const ids = new Set();
-  state.posts.forEach((post) => { if (recent(post.created_at)) ids.add(post.id); });
-  (state.connections || []).forEach((row) => {
-    if (!recent(row.last_at)) return;
-    ids.add(row.a_post);
-    ids.add(row.b_post);
-  });
-  busyIds = ids;
-  busyTotal = [...ids].filter((id) => state.postsById.has(id)).length;
-  if (zoomLevel().z <= WHOLE_MAP_Z) busyWhole = busyTotal;
-  busyIslands = new Set(state.islands
-    .filter((island) => (island.post_ids || []).some((id) => ids.has(id))).map(islandKey));
+/** The islands that glow, counted again only when the ids, the islands or the posts changed. */
+function refreshFresh() {
+  const was = freshSeen;
+  if (was.ids === freshIds && was.islands === state.islands && was.revision === state.revision) return;
+  freshSeen = { ids: freshIds, islands: state.islands, revision: state.revision };
+  freshIslands = freshIslandKeys(state.islands, freshIds, islandKey);
 }
 
-/** Whether a post is drawn faint and cannot be tapped: left out by the filter,
- * or quiet this week while the week switch is on. */
+/** For tests and checks: the keys of the islands that glow right now. */
+export function freshIslandSet() {
+  refreshFresh();
+  return new Set(freshIslands);
+}
+
+/** Whether a post is drawn faint and cannot be tapped: left out by the filter. */
 function steppedBack(post, sifting) {
-  return (sifting && !matchesFilters(post)) || (busyOn && !busyIds.has(post.id));
+  return sifting && !matchesFilters(post);
 }
 
-/** Zoomed out: a soft warm light breathing on each island with something going on. */
-function drawBusyGlow(places, motion) {
+/** Zoomed out: a soft warm light breathing on each island with something new. */
+function drawFreshGlow(places, motion) {
   const breath = motion === null ? 0.5 : (Math.sin(motion * 1.8) + 1) / 2;
   ctx.save();
   places.forEach((place) => {
-    if (!busyIslands.has(islandKey(place.island))) return;
+    if (!freshIslands.has(islandKey(place.island))) return;
     const spot = toScreen(place.island.cx, place.island.cy);
     const radius = 46 + breath * 14;
     const gradient = ctx.createRadialGradient(spot.x, spot.y, 0, spot.x, spot.y, radius);
@@ -1032,9 +1005,40 @@ function connectionsInFilter() {
   });
 }
 
+// For tests and checks: the kind of every line in the last frame, [[pair, 'road' | 'sea' | 'arch']], or null far out.
+let lastLineKinds = null;
+export const lineKindsNow = () => lastLineKinds;
+
+// The world the lines are decided from: every post the client holds (and, on a community map, every
+// post of the community, read once when it opened), merged by id, and the landmasses made of them.
+// Rebuilt only when the ground changes, never by the camera.
+let worldKept = { ground: null, worldPosts: null, posts: [], landOf: () => null, water: new Map() };
+function worldLines(ground) {
+  if (worldKept.ground !== ground || worldKept.worldPosts !== state.worldPosts) {
+    let posts = ground;
+    if (state.worldPosts && state.worldPosts.length) {
+      const byId = new Map(state.worldPosts.map((post) => [post.id, post]));
+      ground.forEach((post) => byId.set(post.id, post));
+      state.removed.forEach((id) => byId.delete(id));
+      posts = [...byId.values()];
+    }
+    const index = membership(detectLandmasses(posts));
+    worldKept = { ground, worldPosts: state.worldPosts, posts, landOf: (id) => index.get(id) || null, water: new Map() };
+  }
+  return worldKept;
+}
+
+/** Is there open water between two points, over the world's ground? Kept per pair until the ground changes. */
+function cachedWater(posts, from, to) {
+  const key = `${from}|${to}`;
+  const { water } = worldKept;
+  if (!water.has(key)) water.set(key, waterBetween(posts, NO_CELLS, from, to));
+  return water.get(key);
+}
+
 /** The dotted lines to people like you (kin.js), for this frame. While
  * searching or filtering, only those whose both ends match, like the roads. */
-function kinPlan(meId, sifting) {
+function kinPlan(meId, sifting, world) {
   if (!meId || !state.myPosts.length || !state.neighbors.size) return [];
   const linked = new Set();
   state.connections.forEach((row) => {
@@ -1042,8 +1046,15 @@ function kinPlan(meId, sifting) {
     else if (row.b === meId) linked.add(row.a);
   });
   const neighbors = new Map([...state.neighbors].map(([id, held]) => [id, held.rows]));
+  // Listed on an island: trusted as it is. Only a post the island list lacks (zoomed in, only the islands
+  // in view are listed) is on the nearest island's word, and then the ground decides.
+  // Same world as the roads (worldLines), so a dotted line is straight or an arch at every zoom.
+  const islands = state.worldIslands || state.islands;
+  const listed = new Set(islands.flatMap((island) => island.post_ids || []));
+  const waterGap = world.posts ? (post, row) => !(listed.has(post.id) && listed.has(row.id))
+    && cachedWater(world.posts, [post.x, post.y], [row.x, row.y]) : null;
   const lines = kinLines({
-    mine: state.myPosts, neighbors, islandOf: islandFinder(state.islands), linked, me: meId,
+    mine: state.myPosts, neighbors, islandOf: islandFinder(islands), linked, me: meId, waterGap,
   });
   if (!sifting) return lines;
   const mineById = new Map(state.myPosts.map((post) => [post.id, post]));
@@ -1204,22 +1215,25 @@ function renderMap(time) {
 
   // Lines between people run over the ground and under the towns and faces;
   // the planes that fly them go over the towns.
+  const world = worldLines(ground);
   const lineView = {
     rows: sifting ? connectionsInFilter() : state.connections, islands: state.islands,
+    // What a line is (road, sea route, arch) is decided from the whole map, not the part in view.
+    world: { islands: state.worldIslands || state.islands, posts: world.posts, cells: NO_CELLS, landOf: world.landOf },
     // The same posts and coarse layer the ground is drawn from, so whether a route crosses
     // land does not change with the latest viewport fetch.
     posts: ground, cells: state.saturated ? state.cells : NO_CELLS, toScreen, width, height, far, level,
-    landOf: (postId) => landIndex().get(postId) || null,
     span: config().world.max - config().world.min, phone: width < 700,
     // Vehicles shrink with the map: their size is by scale / maxScale.
     scale, maxScale: clampScale(Infinity),
   };
   const linePlan = drawLinks(ctx, lineView);
+  lastLineKinds = linePlan ? linePlan.lines.map((line) => [`${line.row.a_post}|${line.row.b_post}`, line.kind]) : null;
   // Dotted lines to people like you: yours alone, only close up (DETAIL_AT),
   // and not while the map is showing who joined a post.
-  if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting));
+  if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
 
-  if (far && busyOn) drawBusyGlow(places, motion);
+  if (far && freshIslands.size) drawFreshGlow(places, motion);
 
   // Settlements and their landmarks, back to front.
   places.sort((a, b) => a.foot - b.foot).forEach((place) => {
@@ -1658,11 +1672,15 @@ function townHome(island, members, span, grown) {
   const near = posts.slice()
     .sort((a, b) => Math.hypot(a.x - island.cx, a.y - island.cy) - Math.hypot(b.x - island.cx, b.y - island.cy))
     .slice(0, 40);
-  let best = null;      // best point where the town fits
-  let bestScore = -1;
+  // First choice: a spot the town fits that no pin covers (the pins are screen
+  // px, so the clearance is a safe few world units), with its landmarks clear too.
+  // Only an island with no such spot falls back to the old choice below.
+  const clearSpot = clearTownSpot(posts, island, { ring, span, grown, land, stands: standsOnLand });
+  let best = clearSpot ? { x: clearSpot.x, y: clearSpot.y } : null;      // best point where the town fits
+  let bestScore = clearSpot ? 8 : -1;
   let spare = null;     // best land point at all, for a grown island
   let spareScore = -1;
-  [{ x: island.cx, y: island.cy }, ...near].some((c) => {
+  if (!clearSpot) [{ x: island.cx, y: island.cy }, ...near].some((c) => {
     if (!land(c.x, c.y)) return false;
     let score = 0;
     for (let k = 0; k < 8; k += 1) {
@@ -1678,13 +1696,9 @@ function townHome(island, members, span, grown) {
   if (!best && grown) best = spare;
   let home = null;
   if (best) {
-    // Landmarks stand round the town in town-sized steps.
-    const slots = LANDMARK_SPOTS.map(([dx, dy]) => {
-      const x = best.x + dx * worldSize(TIER_SIZES[2]);
-      const y = best.y + dy * worldSize(TIER_SIZES[2]);
-      return { x, y, land: land(x, y) };
-    });
-    home = { x: best.x, y: best.y, slots };
+    // Landmarks stand round the town in town-sized steps, on land and, where
+    // there is room, clear of every pin.
+    home = { x: best.x, y: best.y, slots: landmarkSlots(best, span, posts, land, { unit: worldSize(TIER_SIZES[2]), markMin: worldSize(36), spots: LANDMARK_SPOTS }) };
   }
   homeCache.set(key, { sig, home });
   return home;
@@ -2534,13 +2548,3 @@ function postsRegion() {
   return { minX, minY, maxX, maxY };
 }
 
-// Per frame the lines only ask which land a post is on, so the answer is kept
-// until the posts in view are replaced (an energy change in place can leave it
-// a little stale, which at worst picks a boat for a walker).
-let landCache = { posts: null, index: new Map() };
-function landIndex() {
-  if (landCache.posts !== state.posts) {
-    landCache = { posts: state.posts, index: membership(detectLandmasses(state.posts)) };
-  }
-  return landCache.index;
-}

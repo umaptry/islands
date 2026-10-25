@@ -15,6 +15,9 @@ export const state = {
   revision: 0,
   saturated: false,
   islands: [],            // named landmasses from /api/islands
+  worldIslands: null,     // the islands of this whole map, however much is in view (the lines' kinds are decided from these)
+  worldSaturated: false,  // that read hit its limit
+  worldPosts: null,       // every post of a community map, read once when it opens (the lines' ground); null when not read
   reactions: new Set(),   // "postId:kind" for everything I have reacted to
   notifications: [],      // the grouped feed, newest first (段6)
   unread: 0,              // unread entries whose kind may interrupt
@@ -34,6 +37,9 @@ export const state = {
   removed: new Set(),     // ids deleted this session: the map's ground forgets them
   fetched: null,          // { minX, minY, maxX, maxY } fetched in full by the last refresh
   talk: { peers: new Set(), byTarget: new Map(), at: 0 },   // 「話してみたい」: who shares a 会 with me, and what I pressed
+  dmRooms: [],            // dm_room_list as last read: the DM tab's badge counts the rooms with something new
+  dmNotices: [],          // the DM-message rows of the notification feed (kept out of the 通知 list)
+  dmUnread: 0,            // how many rooms have something new
   communities: [],        // the communities I am in: { id, slug, name, role } (features.communities)
   communitiesLoaded: false,
   communityId: null,      // the one whose map I am looking at
