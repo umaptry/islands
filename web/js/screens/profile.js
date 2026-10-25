@@ -54,7 +54,7 @@ function header(account, { own, talk } = {}) {
       el('span', { text: account.display_name || '' }),
     ),
     // Right under the name: the first thing after who this person is. Hidden (null) for yourself,
-    // signed out, the feature off, or somebody you share no 会 with.
+    // signed out, the feature off, or somebody you share no community with.
     talk ? el('div', { className: 'profile-talk' }, talkButton(talk)) : null,
     account.bio ? el('p', { className: 'profile-bio', text: account.bio }) : null,
     link

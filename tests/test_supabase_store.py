@@ -648,7 +648,7 @@ def test_the_two_backends_agree(store):
         "list_notifications", "mark_notifications_read", "unread_count",
         "add_report",
         # people layer, islands and notification settings (social foundation)
-        "insert_notifications", "recent_notifications",
+        "insert_notifications", "recent_notifications", "blocked_with",
         "get_notification_settings", "put_notification_settings",
         "profile_vectors", "post_centroids", "interaction_events", "touch_last_seen",
         "island_states", "save_island_states", "add_island_events", "list_island_events",
@@ -1166,3 +1166,37 @@ def test_any_other_bad_request_on_an_account_save_is_still_a_plain_store_error(s
     with pytest.raises(StoreError) as caught:
         store.upsert_account(str(uuid.uuid4()), {"display_name": "x"})
     assert type(caught.value) is StoreError
+
+
+# -- 2026-10-26: the 'moved in' notice reads only the people it may tell, and the blocks ------------
+
+def test_recent_notifications_for_named_recipients_asks_a_few_dozen_ids_at_a_time(monkeypatch):
+    remote = SupabaseStore("https://example.supabase.co", SERVICE_KEY)
+    calls = []
+
+    def fake_get(path, params, label=""):
+        calls.append((path, dict(params)))
+        return [{"recipient_id": "someone"}]
+
+    monkeypatch.setattr(remote, "_get", fake_get)
+    ids = [f"00000000-0000-4000-8000-{i:012d}" for i in range(45)]
+    rows = remote.recent_notifications("island", "2026-10-26T00:00:00+00:00", recipient_ids=ids)
+    assert len(calls) == 2 and len(rows) == 2
+    assert all(path == "notifications" and params["recipient_id"].startswith("in.(")
+               and params["type"] == "eq.island" for path, params in calls)
+    asked = [part for _, params in calls for part in params["recipient_id"][4:-1].split(",")]
+    assert sorted(asked) == sorted(ids)
+
+
+def test_blocked_with_reads_both_directions(monkeypatch):
+    remote = SupabaseStore("https://example.supabase.co", SERVICE_KEY)
+    seen = {}
+
+    def fake_get(path, params, label=""):
+        seen.update(path=path, params=dict(params))
+        return [{"blocker_id": "me", "blocked_id": "b"}, {"blocker_id": "c", "blocked_id": "me"}]
+
+    monkeypatch.setattr(remote, "_get", fake_get)
+    assert remote.blocked_with("me") == {"b", "c"}
+    assert seen["path"] == "dm_blocks"
+    assert seen["params"]["or"] == "(blocker_id.eq.me,blocked_id.eq.me)"

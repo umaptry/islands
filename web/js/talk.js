@@ -49,7 +49,7 @@ export const talkLabel = () => {
 let loading = null;
 
 /**
- * Read who shares a 会 with me and what I pressed. Asked at sign-in, when I join
+ * Read who I can press (the same community) and what I pressed. Asked at sign-in, when I join
  * or leave, when a notification arrives and when a card opens. `maxAge` skips the
  * read when the last one is recent enough.
  */

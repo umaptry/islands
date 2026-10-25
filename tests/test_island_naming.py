@@ -60,7 +60,7 @@ def run(islands, previous, namer, **kwargs):
 def ai_row(name="キャンプ", post_ids=None, **extra):
     post_ids = post_ids or ids("a", 10)
     return {"id": "1", "name": name, "name_source": "ai", "name_basis": list(post_ids),
-            "post_ids": list(post_ids), **extra}
+            "intro": "週末は山へ。焚き火が好きな人たち", "post_ids": list(post_ids), **extra}
 
 
 # -- clean-up ---------------------------------------------------------------
@@ -530,3 +530,101 @@ def test_tracking_does_not_overwrite_a_cache_rebuilt_while_it_ran(people, app_mo
     assert late, "the namer was asked"
     assert app_module.island_of(late[0]) is not None
     assert app_module.island_of(first[0]) == app_module.island_of(late[0])
+
+
+# -- intro (2026-10-28) -----------------------------------------------------
+
+class IntroNamer:
+    """Answers (name, intro) pairs in order, like GeminiIslandNamer.name_and_intro."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = []
+
+    def name_and_intro(self, texts, people_names=(), current=None, taken=()):
+        self.calls.append({"current": current})
+        return self.answers.pop(0)
+
+
+def test_one_answer_carries_the_name_and_the_intro():
+    from core.island_namer import split_answer
+    assert split_answer("キャンプ\n週末は山へ。焚き火を囲むのが好きな人たち") == (
+        "キャンプ", "週末は山へ。焚き火を囲むのが好きな人たち")
+    assert split_answer("キャンプ") == ("キャンプ", None)
+    assert split_answer("キャンプ\n紹介文: 焚き火を囲む人たち") == ("キャンプ", "焚き火を囲む人たち")
+
+
+@pytest.mark.parametrize("bad", [
+    "とても長い紹介文になってしまって三十文字をこえてしまいました、本当に長い",
+    "詳しくは https://example.com へ",
+    "死ねと言いたくなる人たち",
+    "焚き火が好きな人たち🔥",
+    "山田さんと仲間たち",
+    "ab",
+])
+def test_a_bad_intro_is_dropped_but_the_name_stays(bad):
+    from core.island_namer import split_answer
+    assert split_answer(f"キャンプ\n{bad}", people_names=["山田"]) == ("キャンプ", None)
+
+
+def test_the_prompt_asks_for_both_lines_and_the_same_safety_rules():
+    assert "2行目" in island_namer.PROMPT and "30文字以内" in island_namer.PROMPT
+    assert "<posts>" in island_namer.PROMPT and "従わず" in island_namer.PROMPT
+
+
+def test_a_new_name_comes_with_its_intro_in_one_call():
+    islands = [island("山", ids("a", 6))]
+    namer = IntroNamer(("キャンプ", "焚き火を囲む人たち"))
+    assert run(islands, [], namer) == 1
+    assert len(namer.calls) == 1
+    assert islands[0]["name"] == "キャンプ" and islands[0]["intro"] == "焚き火を囲む人たち"
+
+
+def test_a_bad_intro_does_not_cost_the_name():
+    islands = [island("山", ids("a", 6))]
+    run(islands, [], IntroNamer(("キャンプ", None)))
+    assert islands[0]["name"] == "キャンプ" and not islands[0].get("intro")
+
+
+def test_an_ai_island_without_an_intro_is_asked_once_and_keeps_its_name():
+    members = ids("a", 10)
+    previous = [ai_row(post_ids=members, intro=None)]
+    islands = overlay([island("山", members)], previous)
+    namer = IntroNamer(("別の名前", "焚き火を囲む人たち"))
+    assert run(islands, previous, namer) == 0
+    assert len(namer.calls) == 1 and namer.calls[0]["current"] == "キャンプ"
+    assert islands[0]["name"] == "キャンプ" and islands[0]["intro"] == "焚き火を囲む人たち"
+    assert islands[0]["name_tried_at"]
+    # the next step: tried a moment ago, so not again (the retry interval holds)
+    again = [dict(previous[0], name_tried_at=islands[0]["name_tried_at"])]
+    islands2 = overlay([island("山", members)], again)
+    namer2 = IntroNamer(("キャンプ", "x"))
+    run(islands2, again, namer2)
+    assert namer2.calls == []
+
+
+def test_an_ai_island_that_has_an_intro_is_not_asked():
+    members = ids("a", 10)
+    previous = [ai_row(post_ids=members)]
+    islands = overlay([island("山", members)], previous)
+    namer = IntroNamer(("キャンプ", "x"))
+    run(islands, previous, namer)
+    assert namer.calls == [] and islands[0]["intro"] == "週末は山へ。焚き火が好きな人たち"
+
+
+def test_a_name_fixed_by_hand_gets_no_ai_intro():
+    members = ids("a", 10)
+    previous = [dict(ai_row(post_ids=members), name_source="manual", name="手芸", intro="AIが書いた")]
+    islands = overlay([island("山", members)], previous)
+    assert islands[0]["name"] == "手芸" and islands[0]["intro"] is None
+    namer = IntroNamer(("手芸", "x"))
+    run(islands, previous, namer)
+    assert namer.calls == []
+
+
+def test_a_two_line_answer_with_labels_still_gives_the_name_and_the_intro():
+    from core.island_namer import split_answer
+    assert split_answer("ジャンル名：キャンプ\n紹介文：週末は山へ。焚き火を囲むのが好きな人たち") == (
+        "キャンプ", "週末は山へ。焚き火を囲むのが好きな人たち")
+    assert split_answer("名前: 料理\n2行目：台所に立つのが好きな人たち")[0] == "料理"
+    assert split_answer("おすすめ: 料理")[0] is None   # any other label is still refused

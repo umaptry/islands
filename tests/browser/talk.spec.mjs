@@ -152,7 +152,7 @@ test('片思いの通知には名前も人数も出ず、押した人は取り�
   expect(text).not.toContain('参加のべん');
   expect(text).not.toContain('ほか');
   // 行き先の案内は、プロフィールを指す
-  await expect(notice).toContainText('参加者のプロフィールから押せます');
+  await expect(notice).toContainText('同じコミュニティの人のプロフィールから押せます');
   expect(text).not.toContain('地図で');
 
   // もう一度押すと取り消しの確認。やめる → 押したまま。取り消す → 元に戻る。
@@ -322,4 +322,37 @@ test('#/map?post=<id> で投稿が開く（未ログインでも、ログイン�
   await context.close();
   await host.context.close();
   await guest.context.close();
+});
+
+// 2026-10-26: 押せる相手は「同じコミュニティのメンバー」。会（参加者募集中）に一緒に参加していなくても押せる。
+// コミュニティの外の人には、ボタンが出ない。
+test('同じコミュニティなら、会に参加していなくても押せる。外の人には出ない', async ({ browser }, testInfo) => {
+  const owner = await newPerson(browser, testInfo, '世話役のさき');
+  const member = await newPerson(browser, testInfo, '仲間のたく');
+  const outsider = await newPerson(browser, testInfo, '外のゆい');
+  const cid = await owner.page.evaluate(async () => {
+    const { api } = await import('/static/js/net.js');
+    const made = await api.post('/api/local/communities', { name: '読書会', slug: `t-${Math.random().toString(36).slice(2, 9)}` },
+      { headers: { 'Idempotency-Key': crypto.randomUUID() } });
+    return made.community_id;
+  });
+  const invite = await owner.page.evaluate(async (id) => (await import('/static/js/net.js')).api.post('/api/local/invites',
+    { community_id: id, minutes: 120, until_end_of_day: false }), cid);
+  await member.page.evaluate(async (code) => (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code }), invite.code);
+  const ownerId = await myId(owner);
+
+  const button = await openProfile(member, ownerId);
+  await expect(button).toBeVisible({ timeout: 15000 });
+  await button.click();
+  await expect(member.page.locator('.modal')).toContainText('お互いに押したときだけ DM が開通します');
+  await member.page.locator('.modal .btn:not(.btn-quiet)').click();
+  await expect(button).toHaveAttribute('data-state', 'pressed');
+
+  // 外の人のプロフィールでは、ボタンは隠れたまま（押せる相手の一覧が読めてからも出てこない）。
+  const outside = await openProfile(outsider, ownerId);
+  await outsider.page.waitForFunction(async () => Boolean((await import('/static/js/state.js')).state.talk.at), null, { timeout: 15000 });
+  await expect(outside).toBeHidden();
+  await owner.context.close();
+  await member.context.close();
+  await outsider.context.close();
 });

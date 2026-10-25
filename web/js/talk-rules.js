@@ -163,7 +163,7 @@ export function dmPreview(room) {
 
 /** The first thing at the top of a room. */
 export function dmIntro(room, label, clip = (text) => text) {
-  const where = room && room.event_excerpt ? `「${clip(String(room.event_excerpt).trim())}」` : '同じ会';
+  const where = room && room.event_excerpt ? `「${clip(String(room.event_excerpt).trim())}」` : '同じコミュニティ';
   return `${where}で、お互いに『${label}』を押しました。この DM は2人だけが見られます`;
 }
 

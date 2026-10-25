@@ -670,7 +670,8 @@ select lives_ok($$select public.press_talk('d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d303
 reset role;
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d306","role":"authenticated"}';
-select is((select count(*)::int from public.talk_peers()), 0, 'member_B has no peers in a meeting of A');
+-- 2026-10-26: peers are everyone in a shared community (20261028010000), not only the people of a shared meeting.
+select is((select count(*)::int from public.talk_peers()), 1, 'member_B: member_AB only (they share B; nobody of A)');
 reset role;
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d305","role":"authenticated"}';
@@ -678,7 +679,7 @@ select is((select count(*)::int from public.talk_peers()), 0, 'ex has no peers e
 reset role;
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d303","role":"authenticated"}';
-select is((select count(*)::int from public.talk_peers()), 1, 'member_AB has admin');
+select is((select count(*)::int from public.talk_peers()), 2, 'member_AB has admin (A) and member_B (B)');
 select is((select event_excerpt from public.dm_room_list() where other_name = 'member_A'), '集まる会',
           'member_AB: the room with member_A shows the meeting (member_AB is in A)');
 reset role;

@@ -1392,6 +1392,11 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .island-card-topics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
 .island-card-label { font-size: 11.5px; font-weight: 800; color: var(--ui); margin-right: 2px; }
 .island-topic { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: #e5f2fb; color: #14618f; }
+.island-card-intro { margin: 0 0 10px; font-size: 13.5px; line-height: 1.5; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.island-card-residents { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.island-card-residents .face-stack .avatar { box-shadow: 0 0 0 2px #fff; }
+.island-card-more { font-size: 12.5px; font-weight: 800; color: var(--ink-2); }
 .island-card-posts { display: flex; flex-direction: column; margin-bottom: 12px; border-top: 1px solid var(--line); }
 .island-post {
   display: flex; gap: 8px; align-items: baseline; text-align: left; width: 100%;
@@ -1862,3 +1867,43 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   45% { opacity: 0; transform: translateY(-7px) scale(.96); }
   100% { opacity: 1; transform: none; }
 }
+
+/* ---------------------------------------------------------------- 新しい住人のキャッチアップ */
+
+.notif.resident .notif-icon { background: none; width: 36px; height: 36px; }
+.catchup {
+  position: absolute; z-index: 7; left: 12px; right: 12px; margin: 0 auto; max-width: 440px;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px);
+  background: #fff; color: var(--ink); border-radius: 18px;
+  box-shadow: 0 2px 4px rgba(16, 42, 71, .10), 0 14px 36px rgba(16, 42, 71, .22);
+  padding: 10px 14px 14px;
+}
+.catchup-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.catchup-step { font-size: 12.5px; font-weight: 800; color: var(--ui); }
+.catchup-dots { flex: 1; display: flex; gap: 5px; }
+.catchup-dots i { width: 6px; height: 6px; border-radius: 999px; background: var(--line); }
+.catchup-dots i.on { background: var(--ui); }
+.catchup-close {
+  width: 32px; height: 32px; border-radius: 999px; flex: none;
+  display: flex; align-items: center; justify-content: center; color: var(--ink-3);
+}
+.catchup-close:hover { background: var(--surface-2); }
+.catchup-view { position: relative; overflow: hidden; touch-action: none; user-select: none; }
+.catchup-slide { transition: transform .22s ease, opacity .22s ease; }
+.catchup-slide.entering { transform: translateX(60%); opacity: 0; }
+.catchup-slide.leaving { position: absolute; inset: 0 0 auto 0; transform: translateX(-60%); opacity: 0; }
+.catchup-title { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.catchup-title p { margin: 0; font-size: 15px; font-weight: 800; line-height: 1.4; }
+.catchup .post-card { margin: 0; box-shadow: none; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--ink); }
+.catchup .post-body {
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.catchup-image { display: block; width: 100%; max-height: 120px; object-fit: cover; border-radius: 12px; margin-top: 8px; }
+.catchup-foot { display: flex; gap: 8px; margin-top: 10px; }
+.catchup-foot .btn { min-height: 44px; font-weight: 800; }
+.catchup-open-post { flex: 1; background: #fff; color: var(--ui); border: 1.5px solid var(--ui); }
+.catchup-prev { background: var(--surface-2); color: var(--ink-2); }
+.catchup-next { flex: 1; background: var(--ui); color: #fff; }
+.catchup-open .map-controls, .catchup-open .fab { visibility: hidden; }
+@media (prefers-reduced-motion: reduce) { .catchup-slide { transition: none; } }
+html.reduce-motion .catchup-slide { transition: none; }

@@ -66,7 +66,7 @@ test('quiet_post follows the island switch, and a saved similar-off row holds it
   assert.equal(rules.interrupts(quiet, rules.mergeSettings({ island: { in_app: true }, similar: { push: true, in_app: false } })), false);
   assert.equal(rules.interrupts(quiet, rules.mergeSettings({ island: { in_app: true }, similar: { push: false, in_app: true } })), true);
   assert.equal(rules.interrupts(quiet, {}), true);
-  assert.match(rules.CATEGORIES.find((c) => c.id === 'island').note, /近くの投稿/);
+  assert.match(rules.CATEGORIES.find((c) => c.id === 'island').note, /新しい住人/);
 });
 
 test('the server verdict quiet_post:false holds nearby posts back, in the real API shape', () => {
@@ -304,7 +304,7 @@ test('talk_wish says only 誰かが…, whoever the row names', () => {
   assert.equal(entry.actor_id, null);
   assert.equal(rules.headline(entry, LABEL), `誰かが、あなたと${LABEL}と言っています`);
   assert.equal(rules.headline(entry, LABEL), '誰かが、あなたともっと話してみたいと言っています');
-  assert.equal(rules.bodyText(entry, LABEL), '参加者のプロフィールから押せます');
+  assert.equal(rules.bodyText(entry, LABEL), '同じコミュニティの人のプロフィールから押せます');
   // Even a row that already carries actors, with a name and "ほか N人", reveals nothing and counts nothing.
   const loud = { ...talkRow('talk_wish'), actors: [{ display_name: 'あき' }], others: 3 };
   const line = `${rules.headline(loud, LABEL)}${rules.bodyText(loud, LABEL)}`;
@@ -411,4 +411,16 @@ test('DM messages are not in the 通知 list or its badge; the 「お互いに�
   assert.deepEqual(rules.listable(null), []);
   // ...but a new DM message is still an arrival (the in-app band), as before.
   assert.equal(rules.arrivals([talkRow('dm', { id: 'd9' })], new Set(), settings).length, 1);
+});
+
+test('a new-resident row says who moved onto which island, like its push', () => {
+  const row = {
+    type: 'island', payload: { kind: 'resident', name: 'キャンプ島', cause: 'はなさんが引っ越してきました' },
+    actors: [{ display_name: 'はな' }],
+  };
+  assert.equal(rules.isResident(row), true);
+  assert.equal(rules.headline(row), '新しい住人');
+  assert.equal(rules.bodyText(row), 'キャンプ島にはなさんが引っ越してきました');
+  assert.equal(rules.isResident({ type: 'island', payload: { cause: 'x' } }), false);
+  assert.equal(rules.headline({ type: 'island', payload: { name: 'A島' } }), '島「A島」');
 });
