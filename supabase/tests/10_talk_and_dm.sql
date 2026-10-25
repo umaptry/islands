@@ -315,18 +315,33 @@ select lives_ok(
   'and sending works again');
 
 -- -----------------------------------------------------------------------
--- 8. 2週間より古い片思いは、次に誰かが押したときに消える
+-- 8. 押した記録は消えない（15日前の片思いでも、押し返せば両思いになる）
 -- -----------------------------------------------------------------------
 reset role;
 insert into public.talk_wishes(from_id, to_id, created_at)
 values ('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4', 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2', now() - interval '15 days');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4","role":"authenticated"}';
-select is((select count(*)::int from public.my_talk_state()), 0, 'an old press no longer shows');
-select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a1')$$, 'a press sweeps the old rows');
+select ok(exists (select 1 from public.my_talk_state()
+                   where target = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2' and state = 'pressed'),
+          'an old press (15 days) still shows as pressed');
+select lives_ok($$select public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2')$$, 'a press by the same person again is harmless (the press cleanup no longer touches old rows)');
 reset role;
 select is((select count(*)::int from public.talk_wishes
-            where created_at < now() - interval '14 days'), 0, 'nothing older than two weeks is kept');
+            where from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4'
+              and to_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2'), 1, 'the 15-day-old press is kept');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2","role":"authenticated"}';
+select is((public.press_talk('b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4') ->> 'matched')::boolean, true,
+          'pressing back after 15 days matches');
+reset role;
+select is((select count(*)::int from public.dm_rooms
+            where least(user_a, user_b) = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2'
+              and greatest(user_a, user_b) = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4'), 1, 'and the room exists');
+select is((select count(*)::int from public.talk_wishes
+            where (from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4' and to_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2')
+               or (from_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a2' and to_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1a4')), 0,
+          'a match removes both rows as before');
 
 -- -----------------------------------------------------------------------
 -- 9. 古いコードの書き方でも動く

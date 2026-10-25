@@ -481,8 +481,9 @@ RECRUIT_TAG = "参加者募集中"
 # in the 〜たい / 〜したい form (話してみたい, 挨拶したい ...). A noun or 「気になる」 breaks the sentence.
 # After renaming: run the node tests (PUSH_TEXT vs screen texts) and retake the screenshots.
 TALK_LABEL = "もっと話してみたい"
-# Wishes older than this are swept by press_talk (and hidden by my_talk_state).
-TALK_WISH_DAYS = 14
+# A press stays until it is withdrawn or matched. Only the anonymous talk_wish notice is
+# limited: once per this many days from the same person to the same person.
+TALK_NOTICE_DAYS = 14
 DM_BODY_MAX = 1000
 DM_ROOM_EXCERPT = 30
 # The words press_talk raises (PostgREST {"message"}; local mode 4xx {"detail"}).

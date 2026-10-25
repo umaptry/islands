@@ -63,7 +63,7 @@ from core.config import (
     TALK_ERROR_LOGIN,
     TALK_ERROR_NOT_PEER,
     TALK_ERROR_SELF,
-    TALK_WISH_DAYS,
+    TALK_NOTICE_DAYS,
 )
 from core.energy import computed_energy, total_energy
 from core.post_extras import (
@@ -994,11 +994,9 @@ class MemoryStore:
 
     def talk_state(self, me):
         """[{target, state: pressed|matched, room_id}]. Never says who pressed me."""
-        horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
         with self._lock:
             out = [{"target": to_id, "state": "pressed", "room_id": None}
-                   for (from_id, to_id), wish in self._talk_wishes.items()
-                   if from_id == me and _stamp(wish["created_at"]) > horizon]
+                   for (from_id, to_id) in self._talk_wishes if from_id == me]
             out += [{"target": room["user_b"] if room["user_a"] == me else room["user_a"],
                      "state": "matched", "room_id": room["id"]}
                     for room in self._dm_rooms.values() if me in (room["user_a"], room["user_b"])]
@@ -1016,10 +1014,9 @@ class MemoryStore:
             shared = self._talk_shared_event(me, target)
             if shared is None or self._talk_blocked(me, target):
                 raise TalkRefused(TALK_ERROR_NOT_PEER)
-            horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
-            for key in [key for key, wish in self._talk_wishes.items()
-                        if _stamp(wish["created_at"]) < horizon]:
-                del self._talk_wishes[key]
+            # A press (talk_wishes) is kept until it is withdrawn or matched. Only the
+            # record of the anonymous notice has a limit.
+            horizon = datetime.now(timezone.utc) - timedelta(days=TALK_NOTICE_DAYS)
             for key in [key for key, at in self._talk_wish_notices.items() if _stamp(at) < horizon]:
                 del self._talk_wish_notices[key]
             room = self._room_between(me, target)
