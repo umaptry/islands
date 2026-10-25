@@ -3654,6 +3654,11 @@ def privacy():
     return FileResponse(WEB / "privacy.html", headers=NO_CACHE)
 
 
+@app.get("/terms")
+def terms():
+    return FileResponse(WEB / "terms.html", headers=NO_CACHE)
+
+
 @app.get("/sw.js")
 def service_worker():
     # Served from the root so its scope is the whole app.
