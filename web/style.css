@@ -616,6 +616,11 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 }
 .sheet.on { transform: none; visibility: visible; pointer-events: auto; }
 .sheet.full { height: calc(var(--viewport-height, 100dvh) * .9); }
+/* A short card (the nearby posts after a first post): as tall as its contents. The side panel of wider
+   screens is already as tall as its contents. */
+@media not all and (min-width: 768px) and (min-height: 500px) {
+  .sheet.fit:not(.full) { height: auto; max-height: calc(var(--viewport-height, 100dvh) * .9); }
+}
 
 .sheet-grip {
   height: 22px; flex: none; display: flex; align-items: center; justify-content: center;
@@ -1612,7 +1617,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .nearby-row .avatar { flex: none; }
 .nearby-who { flex: none; width: 5.5em; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .nearby-empty { margin: 10px 2px 4px; font-size: 13.5px; color: var(--ink-2); line-height: 1.7; word-break: auto-phrase; }
-.nearby-close { margin-top: 14px; min-height: 48px; }
+.nearby-close { margin-top: 14px; min-height: 48px; background: var(--ui); color: #fff; box-shadow: none; }
 
 /* A person in no community gets words where the map would be. */
 .map-notice {

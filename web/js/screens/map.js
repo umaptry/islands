@@ -294,6 +294,7 @@ export async function showNearbyPosts(post, { thenOpen = null } = {}) {
   if (activeScreen() !== 'map') return;
   let picked = false;
   const body = openSheet({
+    fit: true,
     onClose: () => {
       state.selected = null;
       // Another card taken up in the meantime (a tap on the map) means the person has moved on.
