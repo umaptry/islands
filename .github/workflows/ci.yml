@@ -127,9 +127,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # The CLI's default, public.ecr.aws, refuses anonymous pulls from shared runner
-      # IPs ("toomanyrequests: Data limit exceeded"). ghcr.io and docker.io carry the
-      # same images with the same digests.
+      # The CLI's default, public.ecr.aws, refuses anonymous pulls from the shared runner IPs
+      # (toomanyrequests: Data limit exceeded, every run since 2026-10-23). Supabase publishes the
+      # same images on ghcr.io; the CLI reads this variable (internal/utils/docker.go, GetRegistry).
       SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -137,21 +137,7 @@ jobs:
         with:
           node-version: '22'
           check-latest: true
-      - name: Start Supabase (ghcr.io, falling back to docker.io)
-        run: |
-          for reg in ghcr.io docker.io; do
-            export SUPABASE_INTERNAL_IMAGE_REGISTRY="$reg"
-            # Pull test db's pg_prove (tag from CLI 2.39.2) from the same place now;
-            # the CLI skips the pull when the image is already local.
-            if [ "$reg" = docker.io ]; then prove=supabase/pg_prove:3.36; else prove="$reg/supabase/pg_prove:3.36"; fi
-            if npx --yes supabase@2.39.2 start && docker pull "$prove"; then
-              echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=$reg" >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo "::warning::Supabase did not start from $reg; trying the next registry"
-            npx --yes supabase@2.39.2 stop --no-backup || true
-          done
-          exit 1
+      - run: npx --yes supabase@2.39.2 start
       - run: npx --yes supabase@2.39.2 test db
       - if: always()
         run: npx --yes supabase@2.39.2 stop --no-backup

@@ -37,6 +37,30 @@ import httpx
 import numpy as np
 
 from core.config import ENERGY_CELL_SIZE
+from core.config import (
+    DM_BODY_MAX,
+    DM_ERROR_SEND,
+    DM_ROOM_EXCERPT,
+    INVITE_END_OF_DAY_MIN_MINUTES,
+    INVITE_ERROR_ADMIN_ONLY,
+    INVITE_ERROR_ADMIN_ONLY_LIST,
+    INVITE_ERROR_ADMIN_ONLY_REVOKE,
+    INVITE_ERROR_EXPIRED,
+    INVITE_ERROR_MINUTES,
+    INVITE_ERROR_REQUIRED,
+    INVITE_ERROR_REVOKED,
+    INVITE_ERROR_UNKNOWN,
+    INVITE_MINUTES_MAX,
+    INVITE_ONLY_CACHE_SECONDS,
+    LOCAL_DEMO_COMMUNITY_NAME,
+    LOCAL_DEMO_COMMUNITY_SLUG,
+    LOCAL_DEMO_INVITE_CODE,
+    RECRUIT_TAG,
+    TALK_ERROR_LOGIN,
+    TALK_ERROR_NOT_PEER,
+    TALK_ERROR_SELF,
+    TALK_WISH_DAYS,
+)
 from core.energy import computed_energy, total_energy
 from core.post_extras import (
     CLOSED_DEADLINE, CLOSED_FULL, ERROR_CLOSED, ERROR_FULL, EXTRA_COLUMNS, closed_state, shape,
@@ -102,6 +126,17 @@ ISLAND_STATE_COLUMNS = ISLAND_STATE_BASE_COLUMNS + "," + ",".join(ISLAND_NAME_CO
 # How long a "columns are there" / "columns are missing" check is trusted.
 NAME_COLUMNS_CHECK_SECONDS = 60
 POST_EXTRAS_CHECK_SECONDS = 60
+# The table the 2026-10-26 migration ends up with; the server asks for it (service key)
+# to learn whether 「話してみたい」/ DM can be switched on.
+TALK_STATS = "talk_stats"
+TALK_CHECK_SECONDS = 60
+# The 2026-10-26 (second) migration: communities and invite links. The server asks for
+# `communities` (service key) to learn whether features.communities can be switched on,
+# and reads app_settings.invite_only (cached).
+COMMUNITIES = "communities"
+COMMUNITY_MEMBERS = "community_members"
+APP_SETTINGS = "app_settings"
+COMMUNITIES_CHECK_SECONDS = 60
 ISLAND_EVENT_COLUMNS = "id,island_id,kind,cause,place,before,after,created_at"
 PUSH_CONFIG_COLUMNS = "vapid_public,vapid_private,dispatch_url"
 PUSH_SUBSCRIPTION_COLUMNS = "id,account_id,endpoint,p256dh,auth,user_agent,created_at"
@@ -170,6 +205,30 @@ class StoreError(RuntimeError):
     pass
 
 
+class Refused(StoreError):
+    """A rule said no. str(error) is the Japanese sentence the database function
+    raises; `status` is the local-mode HTTP code."""
+
+    def __init__(self, message, status=422):
+        super().__init__(message)
+        self.status = status
+
+
+class TalkRefused(Refused):
+    """A 「話してみたい」/ DM rule said no."""
+
+
+class CommunityRefused(Refused):
+    """An invite / community rule said no (a bad or stopped invite, not an admin, ...)."""
+
+
+class InviteRequired(CommunityRefused):
+    """invite_only is on and this new account has no invite. 403, like the database trigger."""
+
+    def __init__(self, message=INVITE_ERROR_REQUIRED, status=403):
+        super().__init__(message, status)
+
+
 # ---------------------------------------------------------------------------
 # memory
 # ---------------------------------------------------------------------------
@@ -200,6 +259,17 @@ class MemoryStore:
         self._island_run_at = None
         self._views = set()         # (post_id, viewer)
         self._push_pending = []     # notification ids not yet taken by the dispatcher
+        self._talk_wishes = {}      # (from_id, to_id) -> {event_post_id, created_at}
+        self._dm_rooms = {}         # room id -> {id, user_a, user_b, event_post_id, created_at}
+        self._dm_messages = []      # oldest first
+        self._dm_blocks = set()     # (blocker_id, blocked_id)
+        self._talk_stats = {}       # JST day -> {pressed, matched}: counts only
+        self._communities = {}      # id -> {id, slug, name, created_by, created_at}
+        self._members = {}          # (community_id, account_id) -> {role, joined_at}
+        self._invites = {}          # id -> {id, community_id, code, created_by, created_at, expires_at, revoked_at, uses}
+        self._invite_claims = {}    # account_id -> {invite_id, claimed_at}: "may make an account"
+        self._app_settings = {"invite_only": False}   # starts false, like the migration
+        self._talk_wish_notices = {}  # (from_id, to_id) -> iso time a talk_wish notice was written
         self._push_config = {"vapid_public": None, "vapid_private": None, "dispatch_url": None}
         self._push_subscriptions = {}  # endpoint -> row
         self._presence = {}         # account_id -> datetime the app is on screen until
@@ -221,6 +291,11 @@ class MemoryStore:
 
     def upsert_account(self, account_id, fields):
         with self._lock:
+            # The accounts BEFORE INSERT trigger: a NEW account needs an invite while
+            # invite_only is on. An account that already has a row always passes.
+            if (self._app_settings.get("invite_only") and account_id not in self._accounts
+                    and account_id not in self._invite_claims):
+                raise InviteRequired()
             row = self._accounts.get(account_id) or {
                 "id": account_id,
                 "display_name": "",
@@ -255,6 +330,7 @@ class MemoryStore:
         row.setdefault("created_at", _now())
         row["updated_at"] = row["created_at"]
         row.setdefault("deleted_at", None)
+        row.setdefault("community_id", None)
         for column in ("like_count", "help_count", "join_count", "comment_count"):
             row.setdefault(column, 0)
         row["energy"] = computed_energy(row)
@@ -684,6 +760,400 @@ class MemoryStore:
                 if row["recipient_id"] == recipient_id and not row["read_at"]
             )
 
+    # -- 「話してみたい」and DM (2026-10-26) -------------------------------------
+    #
+    # The same rules as supabase/migrations/20261026000000_talk_and_dm.sql, in the
+    # same order, so local mode refuses what the database refuses. In a deployment
+    # the browser calls those functions itself (with the person's JWT, which a
+    # service key cannot stand in for), so SupabaseStore only has talk_ready().
+
+    supports_talk = True
+
+    def talk_ready(self):
+        return True
+
+    def _is_meeting(self, post):
+        return bool(post) and not post.get("deleted_at") and RECRUIT_TAG in (post.get("tags") or [])
+
+    def _is_member(self, post, account_id):
+        return post["author_id"] == account_id or (post["id"], account_id, "join") in self._reactions
+
+    def _talk_shared_event(self, a, b):
+        """The newest meeting both are in (its author or a joiner), or None. Lock held."""
+        meetings = [post for post in self._posts.values()
+                    if self._is_meeting(post) and self._is_member(post, a) and self._is_member(post, b)]
+        if not meetings:
+            return None
+        return max(meetings, key=lambda post: (_stamp(post["created_at"]), post["id"]))["id"]
+
+    def _talk_blocked(self, a, b):
+        return (a, b) in self._dm_blocks or (b, a) in self._dm_blocks
+
+    def _room_between(self, a, b):
+        low, high = sorted((a, b))
+        for room in self._dm_rooms.values():
+            if room["user_a"] == low and room["user_b"] == high:
+                return room
+        return None
+
+    def _talk_stat(self, column):
+        day = (datetime.now(timezone.utc) + timedelta(hours=9)).date().isoformat()
+        row = self._talk_stats.setdefault(day, {"pressed": 0, "matched": 0})
+        row[column] += 1
+
+    def talk_peers(self, me):
+        """Everybody in a meeting I am in, except me and anyone blocked either way."""
+        with self._lock:
+            peers = set()
+            for post in self._posts.values():
+                if not self._is_meeting(post) or not self._is_member(post, me):
+                    continue
+                peers.add(post["author_id"])
+                peers.update(actor for (pid, actor, kind) in self._reactions
+                             if pid == post["id"] and kind == "join")
+            peers.discard(me)
+            return sorted(person for person in peers if not self._talk_blocked(me, person))
+
+    def talk_state(self, me):
+        """[{target, state: pressed|matched, room_id}]. Never says who pressed me."""
+        horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
+        with self._lock:
+            out = [{"target": to_id, "state": "pressed", "room_id": None}
+                   for (from_id, to_id), wish in self._talk_wishes.items()
+                   if from_id == me and _stamp(wish["created_at"]) > horizon]
+            out += [{"target": room["user_b"] if room["user_a"] == me else room["user_a"],
+                     "state": "matched", "room_id": room["id"]}
+                    for room in self._dm_rooms.values() if me in (room["user_a"], room["user_b"])]
+        return out
+
+    def press_talk(self, me, target):
+        """{"matched": bool, "room_id": str|None}. Raises TalkRefused (Japanese words).
+
+        A one-sided press and a repeated press answer the same and look the same."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN)
+        if not target or target == me:
+            raise TalkRefused(TALK_ERROR_SELF)
+        with self._lock:
+            shared = self._talk_shared_event(me, target)
+            if shared is None or self._talk_blocked(me, target):
+                raise TalkRefused(TALK_ERROR_NOT_PEER)
+            horizon = datetime.now(timezone.utc) - timedelta(days=TALK_WISH_DAYS)
+            for key in [key for key, wish in self._talk_wishes.items()
+                        if _stamp(wish["created_at"]) < horizon]:
+                del self._talk_wishes[key]
+            for key in [key for key, at in self._talk_wish_notices.items() if _stamp(at) < horizon]:
+                del self._talk_wish_notices[key]
+            room = self._room_between(me, target)
+            if room:
+                return {"matched": True, "room_id": room["id"]}
+            if (target, me) in self._talk_wishes:
+                low, high = sorted((me, target))
+                room = {"id": str(uuid.uuid4()), "user_a": low, "user_b": high,
+                        "event_post_id": shared, "created_at": _now()}
+                self._dm_rooms[room["id"]] = room
+                self._talk_wishes.pop((me, target), None)
+                self._talk_wishes.pop((target, me), None)
+                # Both are told, by name (the other person is the actor).
+                self._notify(me, target, None, None, "talk_match")
+                self._notify(target, me, None, None, "talk_match")
+                self._talk_stat("matched")
+                return {"matched": True, "room_id": room["id"]}
+            if (me, target) not in self._talk_wishes:
+                self._talk_wishes[(me, target)] = {"event_post_id": shared, "created_at": _now()}
+                # Nameless and meeting-less. Not added while the person pressed already has an
+                # UNREAD talk_wish (any number of people, one line), and not more than once per
+                # 14 days from the same person to the same person (press-withdraw-press cannot
+                # be used to keep sending anonymous notices). The record is kept only when a
+                # notice was really written.
+                unread = any(row["recipient_id"] == target and row["type"] == "talk_wish"
+                             and row["read_at"] is None for row in self._notifications.values())
+                last = self._talk_wish_notices.get((me, target))
+                recent = last is not None and _stamp(last) > horizon
+                if not unread and not recent:
+                    self._notify(target, None, None, None, "talk_wish")
+                    self._talk_wish_notices[(me, target)] = _now()
+                self._talk_stat("pressed")
+            return {"matched": False, "room_id": None}
+
+    def withdraw_talk(self, me, target):
+        """Take back a one-sided press. After a match there is nothing left to take back."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN)
+        with self._lock:
+            self._talk_wishes.pop((me, target), None)
+
+    def _room_of(self, me, room_id):
+        room = self._dm_rooms.get(room_id)
+        if not room or me not in (room["user_a"], room["user_b"]):
+            return None
+        return room
+
+    def dm_room_list(self, me):
+        with self._lock:
+            rows = []
+            for room in self._dm_rooms.values():
+                if me not in (room["user_a"], room["user_b"]):
+                    continue
+                other = room["user_b"] if room["user_a"] == me else room["user_a"]
+                account = self._accounts.get(other) or {}
+                post = self._posts.get(room["event_post_id"]) if room["event_post_id"] else None
+                live = post if post and not post.get("deleted_at") else None
+                last = next((m for m in reversed(self._dm_messages) if m["room_id"] == room["id"]), None)
+                rows.append({
+                    "room_id": room["id"], "other_id": other,
+                    "other_name": account.get("display_name", ""),
+                    "other_icon_id": account.get("icon_id", "0"),
+                    "other_avatar_path": account.get("avatar_path"),
+                    "event_post_id": live["id"] if live else None,
+                    "event_excerpt": live["body"][:DM_ROOM_EXCERPT] if live else None,
+                    "last_body": last["body"][:60] if last else None,
+                    "last_at": last["created_at"] if last else None,
+                    "blocked_by_me": (me, other) in self._dm_blocks,
+                    "created_at": room["created_at"],
+                })
+        rows.sort(key=lambda row: _stamp(row["last_at"] or row["created_at"]), reverse=True)
+        return rows
+
+    def dm_messages(self, me, room_id, after=None):
+        """The room's messages, oldest first (after: only newer than that time)."""
+        with self._lock:
+            if not self._room_of(me, room_id):
+                raise TalkRefused(DM_ERROR_SEND, status=404)
+            since = _stamp(after) if after else None
+            return [dict(m) for m in self._dm_messages
+                    if m["room_id"] == room_id and (since is None or _stamp(m["created_at"]) > since)]
+
+    def send_dm(self, me, room_id, body):
+        text = (body or "").strip(" \t\r\n　")
+        if not 1 <= len(text) <= DM_BODY_MAX or len(body) > 4000:
+            raise StoreError("body")
+        with self._lock:
+            room = self._room_of(me, room_id)
+            other = None
+            if room:
+                other = room["user_b"] if room["user_a"] == me else room["user_a"]
+            # The words match the database's: not being in the room and being blocked
+            # (by either side) are not told apart.
+            if not room or self._talk_blocked(me, other):
+                raise TalkRefused(DM_ERROR_SEND, status=403)
+            stamp = _stamp(_now())
+            if self._dm_messages and stamp <= _stamp(self._dm_messages[-1]["created_at"]):
+                # The clock can repeat itself (Windows); polling with `created_at > T`
+                # would miss the second message. The database's microseconds rarely tie.
+                stamp = _stamp(self._dm_messages[-1]["created_at"]) + timedelta(microseconds=1)
+            message = {"id": str(uuid.uuid4()), "room_id": room_id, "sender_id": me,
+                       "body": body, "created_at": stamp.isoformat()}
+            self._dm_messages.append(message)
+            # One unread notice per sender within 10 minutes is enough; the text is never in it.
+            # (Opening a room directly does not mark it read, so it must not mute for ever.)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+            if not any(row["recipient_id"] == other and row["actor_id"] == me and row["type"] == "dm"
+                       and row["read_at"] is None and _stamp(row["created_at"]) > cutoff
+                       for row in self._notifications.values()):
+                self._notify(other, me, None, None, "dm")
+            return dict(message)
+
+    def block_dm(self, me, blocked_id):
+        if not blocked_id or blocked_id == me or blocked_id not in self._accounts:
+            raise StoreError("blocked_id")
+        with self._lock:
+            self._dm_blocks.add((me, blocked_id))
+
+    def unblock_dm(self, me, blocked_id):
+        with self._lock:
+            self._dm_blocks.discard((me, blocked_id))
+
+    # -- communities and invite links (2026-10-26) --------------------------------
+    # Mirrors supabase/migrations/20261026010000_communities_and_invites.sql: the same
+    # rules, the same Japanese words. Local mode only; production runs the SQL functions.
+
+    def communities_ready(self):
+        return True
+
+    supports_communities = True
+
+    def invite_only(self):
+        with self._lock:
+            return bool(self._app_settings.get("invite_only"))
+
+    def set_invite_only(self, value):
+        """The one-line switch an operator flips in production (tests flip it here)."""
+        with self._lock:
+            self._app_settings["invite_only"] = bool(value)
+
+    def create_community(self, name, slug, admin_id):
+        """What public.create_community does (the operator's one line). Returns the id."""
+        name = (name or "").strip()
+        if not 1 <= len(name) <= 40:
+            raise StoreError("name")
+        with self._lock:
+            if slug and any(c["slug"] == slug for c in self._communities.values()):
+                raise StoreError("slug")
+            community = {"id": str(uuid.uuid4()), "slug": slug or None, "name": name,
+                         "created_by": admin_id, "created_at": _now()}
+            self._communities[community["id"]] = community
+            self._members[(community["id"], admin_id)] = {"role": "admin", "joined_at": _now()}
+            return community["id"]
+
+    def seed_demo_community(self):
+        """The 「デモ」 community and its fixed invite code, made once at local start-up.
+        Nobody is in it yet (no admin); a person who claims the code becomes a member."""
+        with self._lock:
+            for community in self._communities.values():
+                if community["slug"] == LOCAL_DEMO_COMMUNITY_SLUG:
+                    return community["id"]
+            community = {"id": str(uuid.uuid4()), "slug": LOCAL_DEMO_COMMUNITY_SLUG,
+                         "name": LOCAL_DEMO_COMMUNITY_NAME, "created_by": None, "created_at": _now()}
+            self._communities[community["id"]] = community
+            invite = {"id": str(uuid.uuid4()), "community_id": community["id"],
+                      "code": LOCAL_DEMO_INVITE_CODE, "created_by": None, "created_at": _now(),
+                      "expires_at": (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat(),
+                      "revoked_at": None, "uses": 0}
+            self._invites[invite["id"]] = invite
+            return community["id"]
+
+    def is_community_member(self, community_id, account_id):
+        with self._lock:
+            return (community_id, account_id) in self._members
+
+    def _is_admin(self, community_id, account_id):
+        member = self._members.get((community_id, account_id))
+        return bool(member) and member["role"] == "admin"
+
+    def community_info(self, community_id):
+        """{id, name} of a community, or None (a community's name is public)."""
+        with self._lock:
+            community = self._communities.get(community_id)
+            return {"id": community["id"], "name": community["name"]} if community else None
+
+    def my_communities(self, me):
+        with self._lock:
+            rows = [(m["joined_at"], cid, self._communities[cid], m["role"])
+                    for (cid, account), m in self._members.items()
+                    if account == me and cid in self._communities]
+            rows.sort(key=lambda item: (_stamp(item[0]), item[1]))
+            return [{"community_id": cid, "slug": c["slug"], "name": c["name"], "role": role}
+                    for _, cid, c, role in rows]
+
+    def _invite_by_code(self, code):
+        for invite in self._invites.values():
+            if invite["code"] == code:
+                return invite
+        return None
+
+    def check_invite(self, code):
+        """{"valid", "community_name", "reason"} and nothing else (no ids, no counts)."""
+        with self._lock:
+            invite = self._invite_by_code(code or "")
+            if not invite:
+                return {"valid": False, "community_name": None, "reason": "unknown"}
+            name = self._communities[invite["community_id"]]["name"]
+            if invite["revoked_at"]:
+                return {"valid": False, "community_name": name, "reason": "revoked"}
+            if _stamp(invite["expires_at"]) <= datetime.now(timezone.utc):
+                return {"valid": False, "community_name": name, "reason": "expired"}
+            return {"valid": True, "community_name": name, "reason": None}
+
+    def claim_invite(self, me, code):
+        """Join the community of a valid invite and record the claim (which is what lets a
+        NEW account be made while invite_only is on). Raises CommunityRefused."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            invite = self._invite_by_code(code or "")
+            if not invite:
+                raise CommunityRefused(INVITE_ERROR_UNKNOWN)
+            if invite["revoked_at"]:
+                raise CommunityRefused(INVITE_ERROR_REVOKED)
+            if _stamp(invite["expires_at"]) <= datetime.now(timezone.utc):
+                raise CommunityRefused(INVITE_ERROR_EXPIRED)
+            community = self._communities[invite["community_id"]]
+            key = (community["id"], me)
+            if key not in self._members:
+                self._members[key] = {"role": "member", "joined_at": _now()}
+                invite["uses"] += 1
+            self._invite_claims.setdefault(me, {"invite_id": invite["id"], "claimed_at": _now()})
+            return {"community_id": community["id"], "community_name": community["name"]}
+
+    @staticmethod
+    def _end_of_day_jst(now=None):
+        """23:59 today in Japan time (no daylight saving: +9 hours), as an aware UTC time."""
+        now = now or datetime.now(timezone.utc)
+        jst_day = (now + timedelta(hours=9)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return jst_day + timedelta(days=1) - timedelta(minutes=1) - timedelta(hours=9)
+
+    def create_invite(self, me, community_id, minutes, until_end_of_day=False):
+        """{"code", "expires_at", "id"}. Admins of that community only."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            if not community_id or not self._is_admin(community_id, me):
+                raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY, status=403)
+            now = datetime.now(timezone.utc)
+            if until_end_of_day:
+                expires = self._end_of_day_jst(now)
+                if expires < now + timedelta(minutes=INVITE_END_OF_DAY_MIN_MINUTES):
+                    expires += timedelta(days=1)
+            else:
+                if isinstance(minutes, bool) or not isinstance(minutes, int) \
+                        or not 1 <= minutes <= INVITE_MINUTES_MAX:
+                    raise CommunityRefused(INVITE_ERROR_MINUTES)
+                expires = now + timedelta(minutes=minutes)
+            code = uuid.uuid4().hex[:12] + uuid.uuid4().hex[:12]
+            invite = {"id": str(uuid.uuid4()), "community_id": community_id,
+                      "code": code, "created_by": me,
+                      "created_at": now.isoformat(), "expires_at": expires.isoformat(),
+                      "revoked_at": None, "uses": 0}
+            self._invites[invite["id"]] = invite
+            return {"code": invite["code"], "expires_at": invite["expires_at"], "id": invite["id"]}
+
+    def list_invites(self, me, community_id):
+        """Newest first, at most 100. Admins of that community only."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            if not community_id or not self._is_admin(community_id, me):
+                raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY_LIST, status=403)
+            rows = [i for i in self._invites.values() if i["community_id"] == community_id]
+            rows.sort(key=lambda i: _stamp(i["created_at"]), reverse=True)
+            return [{key: i[key] for key in ("id", "code", "expires_at", "revoked_at", "uses", "created_at")}
+                    for i in rows[:100]]
+
+    def revoke_invite(self, me, invite_id):
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            invite = self._invites.get(invite_id)
+            if not invite or not self._is_admin(invite["community_id"], me):
+                raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY_REVOKE, status=403)
+            invite["revoked_at"] = invite["revoked_at"] or _now()
+
+    def expire_invite(self, invite_id):
+        """Local-mode dev helper (an expired link for a test or a screenshot)."""
+        with self._lock:
+            invite = self._invites.get(invite_id)
+            if not invite:
+                return False
+            invite["expires_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            return True
+
+    def post_communities(self):
+        """{post id: community id} for live posts that belong to a community."""
+        with self._lock:
+            return {row["id"]: row["community_id"] for row in self._live() if row.get("community_id")}
+
+    def community_map_posts(self, community_id, min_x, min_y, max_x, max_y, limit):
+        """map_posts, but only the posts of this community (a post with none shows nowhere)."""
+        with self._lock:
+            rows = [
+                row for row in self._live()
+                if row.get("community_id") == community_id
+                and min_x <= row["x"] <= max_x and min_y <= row["y"] <= max_y
+            ]
+        rows.sort(key=lambda row: (total_energy(row), row["created_at"]), reverse=True)
+        return [self._joined(row) for row in rows[:limit]]
+
     # -- notification settings ---------------------------------------------
 
     def get_notification_settings(self, account_id):
@@ -920,6 +1390,7 @@ class MemoryStore:
     def _public_post(self, row, with_vec=False):
         keys = POST_COLUMNS.split(",")
         out = {key: row.get(key) for key in keys}
+        out["community_id"] = row.get("community_id")
         out["energy"] = computed_energy(row)
         out = shape(out)
         if with_vec:
@@ -975,6 +1446,12 @@ class SupabaseStore:
         self._names_checked_at = None
         self._has_post_extras = False      # until the database shows the 2026-10-20 columns
         self._extras_checked_at = None
+        self._has_talk = False             # until the database shows the 2026-10-26 tables
+        self._talk_checked_at = None
+        self._has_communities = False      # until the database shows the communities table
+        self._communities_checked_at = None
+        self._invite_only = False          # app_settings.invite_only, cached
+        self._invite_only_checked_at = None
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1065,8 +1542,19 @@ class SupabaseStore:
             headers={"Prefer": "return=representation,resolution=merge-duplicates"},
             # select keeps the hidden vectors out of the answer.
             params={"on_conflict": "id", "select": ACCOUNT_COLUMNS},
-            json=record,
+            json=record, allow_statuses=(400,),
         )
+        if response.status_code == 400:
+            # The accounts BEFORE INSERT trigger (invite_only on, no invite): a Japanese
+            # message with hint 'invite_required'. Any other 400 is the failure it always was.
+            try:
+                refusal = response.json() or {}
+            except Exception:
+                refusal = {}
+            if refusal.get("hint") == "invite_required":
+                raise InviteRequired()
+            print(f"[store] プロフィールの保存 failed: HTTP 400: {(response.text or '')[:200]}", flush=True)
+            raise StoreError("プロフィールの保存")
         body = response.json()
         return body[0] if body else self.get_account(account_id)
 
@@ -1075,7 +1563,8 @@ class SupabaseStore:
     # -- the 2026-10-20 columns (prompt / recruit_deadline / recruit_capacity) ---
 
     def _post_columns(self):
-        return POST_COLUMNS if self.supports_post_extras else POST_COLUMNS_BASE
+        columns = POST_COLUMNS if self.supports_post_extras else POST_COLUMNS_BASE
+        return columns + ",community_id" if self.supports_communities else columns
 
     @staticmethod
     def _missing_post_extras(response):
@@ -1128,10 +1617,168 @@ class SupabaseStore:
         except StoreError:
             return self._has_post_extras
 
+    # -- 「話してみたい」/ DM (2026-10-26) ----------------------------------------
+    # The browser calls press_talk, talk_peers, ... itself with the person's JWT (they
+    # run as that person, which a service key cannot), so this class only has to know
+    # whether the migration has been run: features.talk follows it.
+
+    @staticmethod
+    def _missing_talk_table(response):
+        if response.status_code not in (400, 404):
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42P01", "PGRST205", "PGRST200") or TALK_STATS in text
+
+    def talk_ready(self):
+        """True when talk_stats exists (cached for a minute). Raises StoreError when
+        the database cannot be asked."""
+        now = time.monotonic()
+        if self._talk_checked_at is not None and now - self._talk_checked_at < TALK_CHECK_SECONDS:
+            return self._has_talk
+        try:
+            response = self._send("GET", TALK_STATS, label="話してみたいの表の確認",
+                                  allow_statuses=(400, 404),
+                                  params={"select": "day", "limit": "1"})
+        except StoreError:
+            self._talk_checked_at = now - TALK_CHECK_SECONDS + 10
+            raise
+        if response.status_code < 300:
+            ready = True
+        elif self._missing_talk_table(response):
+            ready = False
+        else:
+            self._talk_checked_at = now - TALK_CHECK_SECONDS + 10
+            raise StoreError("話してみたいの表の確認")
+        if ready != self._has_talk or self._talk_checked_at is None:
+            print("[store] talk tables " + ("found; 話してみたい / DM are on" if ready else
+                  "missing; 話してみたい / DM are off until "
+                  "supabase/migrations/20261026000000_talk_and_dm.sql is run"), flush=True)
+        self._has_talk = ready
+        self._talk_checked_at = now
+        return ready
+
+    @property
+    def supports_talk(self):
+        try:
+            return self.talk_ready()
+        except StoreError:
+            return self._has_talk
+
+    # -- communities and invite links (2026-10-26) --------------------------------
+    # The browser calls check_invite, claim_invite, create_invite, ... itself with the
+    # person's JWT. This class only has to know (1) whether the migration has been run
+    # (features.communities follows it), (2) whether invite_only is on (/api/config), and
+    # (3) whether a person belongs to a community (POST /api/posts checks it).
+
+    @staticmethod
+    def _missing_communities_table(response):
+        if response.status_code not in (400, 404):
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42P01", "PGRST205", "PGRST200") or COMMUNITIES in text
+
+    def communities_ready(self):
+        """True when communities exists AND has at least one row (cached for a minute).
+        Raises StoreError when the database cannot be asked.
+
+        The row count matters for the order of a release: until the operator has made the
+        first community (and moved the people and posts into it, in one block), the new code
+        behaves exactly like the old one instead of showing everybody "you are in no
+        community"."""
+        now = time.monotonic()
+        if (self._communities_checked_at is not None
+                and now - self._communities_checked_at < COMMUNITIES_CHECK_SECONDS):
+            return self._has_communities
+        try:
+            response = self._send("GET", COMMUNITIES, label="コミュニティの表の確認",
+                                  allow_statuses=(400, 404),
+                                  params={"select": "id", "limit": "1"})
+        except StoreError:
+            self._communities_checked_at = now - COMMUNITIES_CHECK_SECONDS + 10
+            raise
+        if response.status_code < 300:
+            try:
+                ready = bool(response.json())
+            except ValueError:
+                ready = False
+        elif self._missing_communities_table(response):
+            ready = False
+        else:
+            self._communities_checked_at = now - COMMUNITIES_CHECK_SECONDS + 10
+            raise StoreError("コミュニティの表の確認")
+        if ready != self._has_communities or self._communities_checked_at is None:
+            print("[store] communities: " + ("found a community; communities and invite links are on" if ready else
+                  "missing or empty; communities are off until "
+                  "supabase/migrations/20261026010000_communities_and_invites.sql is run "
+                  "and the first community is made"), flush=True)
+        self._has_communities = ready
+        self._communities_checked_at = now
+        return ready
+
+    @property
+    def supports_communities(self):
+        try:
+            return self.communities_ready()
+        except StoreError:
+            return self._has_communities
+
+    def invite_only(self):
+        """app_settings.invite_only (cached for a minute). False before the migration, and
+        when the database cannot be asked (the last answer is kept)."""
+        if not self.supports_communities:
+            return False
+        now = time.monotonic()
+        if (self._invite_only_checked_at is not None
+                and now - self._invite_only_checked_at < INVITE_ONLY_CACHE_SECONDS):
+            return self._invite_only
+        try:
+            rows = self._get(APP_SETTINGS, {"select": "value", "key": "eq.invite_only", "limit": "1"},
+                             label="招待制の設定の確認")
+        except StoreError:
+            self._invite_only_checked_at = now - INVITE_ONLY_CACHE_SECONDS + 10
+            return self._invite_only
+        self._invite_only = bool(rows) and rows[0].get("value") is True
+        self._invite_only_checked_at = now
+        return self._invite_only
+
+    def post_communities(self):
+        """{post id: community id} for live posts that belong to a community ({} before the
+        migration). The connection lines and the neighbours of one community's map need it."""
+        if not self.supports_communities:
+            return {}
+        out, last = {}, None
+        while True:
+            params = {"select": "id,community_id", "community_id": "not.is.null",
+                      "deleted_at": "is.null", "order": "id", "limit": "1000"}
+            if last:
+                params["id"] = f"gt.{last}"
+            rows = self._get(POSTS, params, label="コミュニティの投稿の読み込み")
+            for row in rows:
+                out[row["id"]] = row["community_id"]
+            if len(rows) < 1000:
+                return out
+            last = rows[-1]["id"]
+
+    def is_community_member(self, community_id, account_id):
+        rows = self._get(COMMUNITY_MEMBERS, {
+            "select": "account_id", "community_id": f"eq.{community_id}",
+            "account_id": f"eq.{account_id}", "limit": "1"}, label="コミュニティの確認")
+        return bool(rows)
+
     def _without_extras(self, data):
-        if self.supports_post_extras:
-            return data
-        return {key: value for key, value in data.items() if key not in EXTRA_COLUMNS}
+        if not self.supports_post_extras:
+            data = {key: value for key, value in data.items() if key not in EXTRA_COLUMNS}
+        if not self.supports_communities:
+            data = {key: value for key, value in data.items() if key != "community_id"}
+        return data
 
     def insert_post(self, record):
         response = self._send(
@@ -1142,7 +1789,7 @@ class SupabaseStore:
         )
         rows = response.json()
         if rows:
-            return shape(rows[0])
+            return {"community_id": None, **shape(rows[0])}
         existing = self.get_post(record["id"])
         if not existing:
             raise StoreError("投稿を保存できませんでした。")
@@ -1153,7 +1800,7 @@ class SupabaseStore:
         rows = self._get(POSTS, {
             "select": select, "id": f"eq.{post_id}", "deleted_at": "is.null", "limit": "1",
         })
-        return shape(rows[0]) if rows else None
+        return {"community_id": None, **shape(rows[0])} if rows else None
 
     def update_post(self, post_id, author_id, fields):
         fields = self._without_extras(fields)

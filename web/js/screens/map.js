@@ -5,11 +5,11 @@
 // full height where the message thread appears with the input pinned to the
 // bottom. The half state is what lets you read a card without losing the map.
 
-import { config, isLocal, islandColor, setReachFactor } from '../config.js';
+import { config, isLocal, islandColor, radiusOf, setReachFactor } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import {
-  hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, upsertPost, notify,
+  hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, subscribe, upsertPost, notify,
 } from '../state.js';
 import {
   $, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
@@ -29,6 +29,12 @@ import { noteLinks } from '../map/lines.js';
 import { isRecruiting, markRead } from '../map/reads.js';
 import { buzz, viewerKey } from '../feedback.js';
 import { playSe, setAmbient } from '../audio.js';
+import { browserStorage, refreshTalk, talkOptionsFor } from '../talk.js';
+import { savePendingPost, validPostId } from '../return-post.js';
+import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
+import {
+  canSwitch, communityButtonText, islandsInScope, mapNotice, postsExtent,
+} from '../community-rules.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -46,11 +52,114 @@ let mapError = false;
 let worldCount = null;   // how many posts the whole world has (null: not asked yet)
 let myLinks = { owner: null, count: 0 };   // how many roads are mine, for the success sound
 
+// ---------------------------------------------------------------- community scope
+//
+// With features.communities on, the map is one community's: the posts come from
+// community_map_posts, a visitor who followed a link sees the community of that
+// post, and a person who is in none sees a notice instead of a map. With it off,
+// scope.mode is 'legacy' and every line below this heading does nothing.
+
+let scope = { mode: 'legacy' };
+let loadedKey = null;       // the scope the posts on screen were read for
+let rawIslands = [];        // /api/islands as the server sent it, before the community filter
+
+const scopeKey = () => (scope.mode === 'community' || scope.mode === 'viewing' ? `${scope.mode}:${scope.id}` : scope.mode);
+const scoped = () => scope.mode === 'community' || scope.mode === 'viewing';
+
+/** Decide what the map shows. `linked`: the community of the post a link opened. */
+function applyScope(linked = null) {
+  scope = currentScope(linked);
+  // A community of mine that a link led to becomes the current one.
+  if (scope.mode === 'community' && scope.id !== state.communityId) chooseCurrent(scope.id);
+  if (scope.mode === 'viewing') state.viewCommunity = { id: scope.id, name: scope.name };
+  paintCommunity();
+}
+
+function paintCommunity() {
+  const pill = $('mapCommunity');
+  const text = communityButtonText(scope, state.communities.length);
+  pill.hidden = !text;
+  $('map').classList.toggle('no-community', scope.mode === 'none');
+  pill.textContent = text;
+  const switchable = canSwitch(scope, state.communities.length);
+  pill.classList.toggle('static', !switchable);
+  pill.setAttribute('aria-haspopup', switchable ? 'dialog' : 'false');
+  pill.setAttribute('aria-label', switchable ? `${scope.name}。コミュニティを切り替える` : (text || 'コミュニティ'));
+  const notice = mapNotice(scope, {
+    signedIn: Boolean(state.account), known: state.communitiesLoaded, inviteOnly: config().invite_only === true,
+  });
+  $('mapNotice').hidden = !notice;
+  if (notice) {
+    $('mapNoticeRetry').hidden = !notice.retry;
+    $('mapNoticeTitle').textContent = notice.title;
+    $('mapNoticeSub').textContent = notice.sub;
+    $('mapNoticeLogin').hidden = !notice.login;
+  }
+}
+
+/** The posts of the current map for a box of the world. */
+async function readPosts(bounds, limit) {
+  if (scoped()) return data.communityMapPosts(scope.id, { ...bounds, limit });
+  return data.mapPosts({ ...bounds, limit });
+}
+
+/** /api/islands names islands from every community; keep the ones on this map. */
+function applyIslands() {
+  if (scope.mode === 'none') state.islands = [];
+  else if (scoped()) state.islands = islandsInScope(rawIslands, new Set(state.posts.map((post) => post.id)), state.saturated);
+  else state.islands = rawIslands;
+}
+
+/** The sheet that lists my communities. */
+function openCommunitySheet() {
+  if (!canSwitch(scope, state.communities.length)) return;
+  const body = openSheet({ onClose: () => { state.selected = null; } });
+  clear($('sheetFoot'));
+  clear(body).append(
+    el('h3', { className: 'stack-title', text: 'コミュニティを切り替える' }),
+    el('ul', { className: 'stack-list community-list', attrs: { id: 'communityList' } },
+      state.communities.map((entry) => el('li', {},
+        el('button', {
+          className: `stack-row community-row${entry.id === scope.id ? ' on' : ''}`,
+          attrs: { type: 'button', 'aria-current': String(entry.id === scope.id), 'data-community-id': entry.id },
+          on: { click: () => switchCommunity(entry.id) },
+        },
+        el('span', { className: 'stack-who', text: entry.name }),
+        el('span', { className: 'stack-text', text: entry.role === 'admin' ? '管理者' : '' }),
+        el('span', { className: 'stack-go', text: entry.id === scope.id ? '✓' : '›', attrs: { 'aria-hidden': 'true' } }))))),
+    el('p', { className: 'community-hint', text: '新しいコミュニティには、招待リンクを開くと入れます。' }),
+  );
+}
+
+async function switchCommunity(id) {
+  closeSheet();
+  if (id === scope.id) return;
+  if (!chooseCurrent(id)) return;
+  applyScope(null);
+  await loadScope();
+  refreshNeighbors();
+  toast(`${scope.name} の地図にしました`);
+}
+
+/** Replace what is on screen with the current scope's map (a switch, a sign-in). */
+async function loadScope() {
+  setPosts([], { saturated: false, bounds: null });
+  state.selected = null;
+  rawIslands = [];
+  state.islands = [];
+  state.connections = [];
+  state.terrainGrid = null;
+  closeSheet();
+  await refreshMap({ fitFirst: true });
+  if (scope.mode !== 'none') await Promise.all([refreshIslands(), refreshConnections()]);
+  paintChrome();
+}
+
 function paintMapStatus() {
   const status = $('mapStatus');
   const filtering = state.filters.query || state.filters.tags.length;
   const terrainNote = state.saturated && state.terrainGrid ? '・地形は表示範囲のみ' : '';
-  status.hidden = !mapError && !filtering && state.posts.length > 0 && !terrainNote;
+  status.hidden = scope.mode === 'none' || (!mapError && !filtering && state.posts.length > 0 && !terrainNote);
   $('mapRetry').hidden = !mapError;
   $('mapStatusText').textContent = mapError ? '地図を更新できませんでした。接続を確認してください。'
     : filtering ? `${state.posts.filter(matchesFilters).length}件が該当・検索対象は読み込み済みの範囲です${terrainNote}`
@@ -84,15 +193,33 @@ export async function showTrial() {
   }
 }
 
-export async function openOnMap(postId) {
+/** `thenOpen`: a post to open once the landing show of a brand-new post is over
+ * (a new person who came through a link: first their own island, then the 会 they
+ * were invited to). */
+export async function openOnMap(postId, { thenOpen = null } = {}) {
   if (!await navigate('#/map')) return;
   const fresh = justPosted(postId);
   if (fresh) {
-    playNewPost(fresh);
+    playNewPost(fresh, thenOpen);
     return;
   }
+  await openLinkedPost(thenOpen || postId);
+}
+
+/** Open a post wherever it is on the map and bring the camera to it. */
+export async function openLinkedPost(postId) {
   await openPost(postId);
   if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+}
+
+/** 「誰かが、あなたと…と言っています」 leads here: the 会 with its participants
+ * shown, so the card of the person you might talk to is one tap away. */
+export async function openParticipantsOf(postId) {
+  if (!await navigate('#/map')) return;
+  let post = state.postsById.get(postId) || null;
+  if (!post && postId) post = await data.getPost(postId).catch(() => null);
+  if (post && isRecruiting(post)) await showParticipants(post);
+  else if (post) await openLinkedPost(post.id);
 }
 
 // A post you wrote a moment ago is introduced once, with the full show; any
@@ -109,7 +236,7 @@ function justPosted(postId) {
   return Number.isFinite(age) && age > -60000 && age < JUST_POSTED_MS ? post : null;
 }
 
-function playNewPost(post) {
+function playNewPost(post, thenOpen = null) {
   introduced.add(post.id);
   if (sheetOpen()) closeSheet();
   setParticipantView(null);
@@ -121,8 +248,7 @@ function playNewPost(post) {
   playReveal(post, {
     then: async () => {
       landing = null;
-      await openPost(post.id);
-      if (state.selected?.id === post.id) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+      await openLinkedPost(thenOpen || post.id);
     },
   });
 }
@@ -147,22 +273,43 @@ function closeInFlat() {
 
 export async function refreshMap({ fitFirst = false } = {}) {
   const generation = ++mapRequest;
+  if (scope.mode === 'none') {
+    // Nothing to read: a notice stands where the map would be.
+    if (state.posts.length) setPosts([], { saturated: false, bounds: null });
+    loadedKey = scopeKey();
+    mapError = false;
+    paintMapStatus();
+    return true;
+  }
   if (fitFirst) {
+    loadedKey = scopeKey();
     try {
-      const result = await api.get('/api/map/bounds', { auth: false });
-      if (generation !== mapRequest) return false;
-      worldCount = Number.isFinite(result.count) ? result.count : null;
-      fitCamera([], result.bounds);
+      if (scoped()) {
+        // /api/map/bounds frames every community. Frame this one's own posts.
+        const world = config().world;
+        const span = (world.max - world.min) * 2;
+        const all = await readPosts({ minX: world.min - span, minY: world.min - span,
+          maxX: world.max + span, maxY: world.max + span }, config().limits.map_post_limit);
+        if (generation !== mapRequest) return false;
+        worldCount = all.length;
+        fitCamera([], postsExtent(all, radiusOf), { reset: true });
+      } else {
+        const result = await api.get('/api/map/bounds', { auth: false });
+        if (generation !== mapRequest) return false;
+        worldCount = Number.isFinite(result.count) ? result.count : null;
+        fitCamera([], result.bounds);
+      }
     } catch { fitCamera(); }
   }
   const bounds = viewport();
   const limit = config().limits.map_post_limit;
   try {
-    const posts = await data.mapPosts({ ...bounds, limit });
+    const posts = await readPosts(bounds, limit);
     if (generation !== mapRequest) return false;
     mapError = false;
     const saturated = posts.length >= limit;
     setPosts(posts, { saturated, bounds });
+    if (scoped()) applyIslands();
     // A refresh that was asked for before the post existed must not take it
     // away while it is being introduced.
     if (landing && !state.postsById.has(landing.id)) upsertPost(landing);
@@ -197,7 +344,8 @@ export async function refreshMap({ fitFirst = false } = {}) {
 export async function refreshIslands() {
   try {
     const result = await api.get('/api/islands', { auth: false });
-    state.islands = result.islands || [];
+    rawIslands = result.islands || [];
+    applyIslands();
     setReachFactor(result.radius_factor);
     paintChrome();
   } catch {
@@ -215,9 +363,12 @@ export async function refreshNeighbors({ force = false } = {}) {
   if (!state.account) return;
   const owner = state.account.id;
   const now = Date.now();
-  const keep = new Set(state.myPosts.map((post) => post.id));
+  // The dotted lines run between posts on this map: on a community's map, my posts of that
+  // community only (the server keeps their neighbours inside it).
+  const here = scoped() ? state.myPosts.filter((post) => post.community_id === scope.id) : state.myPosts;
+  const keep = new Set(here.map((post) => post.id));
   [...state.neighbors.keys()].forEach((id) => { if (!keep.has(id)) state.neighbors.delete(id); });
-  await Promise.all(state.myPosts.map(async (post) => {
+  await Promise.all(here.map(async (post) => {
     const held = state.neighbors.get(post.id);
     if (!force && held && now - held.at < NEIGHBORS_STALE_MS) return;
     try {
@@ -238,8 +389,16 @@ export async function refreshNeighbors({ force = false } = {}) {
  * poll - it used to take 25-45 s, and longer in production. */
 export async function refreshConnections({ fresh = false } = {}) {
   try {
-    const result = await api.get(fresh ? '/api/connections?fresh=1' : '/api/connections',
+    // On a community's map only that community's lines (the server scopes them).
+    const query = new URLSearchParams();
+    if (fresh) query.set('fresh', '1');
+    if (scoped()) query.set('community', scope.id);
+    const asked = scopeKey();
+    const queryText = query.toString();
+    const result = await api.get(`/api/connections${queryText ? `?${queryText}` : ''}`,
       { auth: false, ...(fresh ? { cache: 'no-store' } : {}) });
+    // The map was switched while this was on its way: these lines belong to the other one.
+    if (asked !== scopeKey()) return;
     state.connections = result.connections || [];
     // A road that was not there a moment ago grows, and says so.
     // A sound only for a road that is mine; other people's roads grow silently.
@@ -380,6 +539,26 @@ function setupChrome() {
     }
   });
   $('trialWrite').addEventListener('click', () => navigate('#/post'));
+  $('mapCommunity').addEventListener('click', () => {
+    playSe('hardClick');
+    openCommunitySheet();
+  });
+  $('mapNoticeLogin').addEventListener('click', () => navigate('#/auth?intent=login'));
+  $('mapNoticeRetry').addEventListener('click', async () => {
+    const button = $('mapNoticeRetry');
+    button.disabled = true;
+    try {
+      await refreshCommunities();
+      applyScope(null);
+      if (scopeKey() !== loadedKey) await loadScope();
+    } finally {
+      button.disabled = false;
+    }
+  });
+  // Another tab or a claim changed which communities I am in.
+  subscribe((reason) => {
+    if (reason === 'community') paintCommunity();
+  });
   $('trialClose').addEventListener('click', () => {
     state.trialPost = null;
     paintTrial();
@@ -466,6 +645,8 @@ export async function openPost(postId, { expand = false, back = null } = {}) {
   // when the sheet is only a way to read the writer's words.
   if (!participantView()) markRead(post.id);
   await renderSheet(post, generation, back);
+  // Somebody may have joined the same 会 since the last read; the button follows.
+  refreshTalk({ maxAge: 20000 });
 }
 
 async function renderSheet(post, generation, back = null) {
@@ -503,6 +684,7 @@ async function renderSheet(post, generation, back = null) {
     onDelete: () => removeOwnPost(post),
     onReport: mine ? null : () => report(post),
     onSeeParticipants: isRecruiting(post) ? () => showParticipants(post) : null,
+    talk: talkOptionsFor(post),
     onSeeReactors: mine ? (kind) => openReactors({
       post, kind,
       onOpenProfile: (id) => {
@@ -603,7 +785,11 @@ export async function react(postId, kind) {
     }
     // Only 参加 (and messages) draw a route since 2026-10-22: いいね and
     // 手伝えるかも have nothing new to fetch.
-    if (kind === 'join') refreshConnections({ fresh: true });
+    if (kind === 'join') {
+      refreshConnections({ fresh: true });
+      // Joining or leaving a 会 changes who I may press 「話してみたい」 for.
+      refreshTalk();
+    }
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));
     else state.reactions.delete(reactionKey(postId, kind));
@@ -743,9 +929,10 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     // A backgrounded tab should not keep polling; it catches up on visibility.
     if (document.hidden || document.querySelector('.screen.active').id !== 'map') return;
+    if (scope.mode === 'none') return;
     // Lines alongside the map, not after it: a slow map refresh held them up.
     await Promise.all([refreshMap(), refreshConnections()]);
-    await Promise.all([refreshIslands(), refreshMyReactions()]);
+    await Promise.all([refreshIslands(), refreshMyReactions(), refreshTalk({ maxAge: 60000 })]);
   }, POLL_MS);
 
   document.addEventListener('visibilitychange', async () => {
@@ -756,6 +943,21 @@ function startPolling() {
 }
 
 // ---------------------------------------------------------------- screen
+
+/** Work out the scope on every entry; a linked post's community comes first. */
+async function decideScope(query) {
+  // My communities could not be read earlier (a weak connection): ask again before deciding,
+  // so a member is not told they are in none.
+  if (communitiesActive() && state.account && !state.communitiesLoaded) await refreshCommunities();
+  let linked = null;
+  const linkedId = query ? query.get('post') : null;
+  if (currentScope().mode !== 'legacy' && validPostId(linkedId)) {
+    try {
+      linked = await communityOfPost(await data.getPost(linkedId));
+    } catch { /* the post itself will say it cannot be read */ }
+  }
+  applyScope(linked);
+}
 
 export function setupMapScreen() {
   setupChrome();
@@ -777,9 +979,11 @@ export function setupMapScreen() {
         paintParticipantBar();
       }
     },
-    async enter() {
+    async enter(_params, query) {
       setAmbient(true);
       startMap();   // no-op the first time: initMap starts the loop itself
+      // Which community's map is this? A link to a post says so by the post itself.
+      await decideScope(query);
       if (!booted) {
         booted = true;
         initMap($('stage'), {
@@ -793,16 +997,22 @@ export function setupMapScreen() {
         const ok = await refreshMap({ fitFirst: true });
         if (!ok) toast('地図を読み込めませんでした。再試行しています…');
         await Promise.all([
-          refreshIslands(), refreshMyPosts(), refreshMyReactions(), refreshConnections(),
+          scope.mode === 'none' ? null : refreshIslands(), refreshMyPosts(), refreshMyReactions(),
+          scope.mode === 'none' ? null : refreshConnections(),
         ]);
         refreshNeighbors();
         startPolling();
         closeInFlat();
       } else {
         resize();
-        await refreshMap();
-        refreshIslands();
-        refreshConnections();
+        // The community changed since the posts on screen were read (a claim, a
+        // sign-in, a link): read the whole map again rather than patch it.
+        const changed = scopeKey() !== loadedKey;
+        if (changed) await loadScope();
+        else {
+          await refreshMap();
+          if (scope.mode !== 'none') { refreshIslands(); refreshConnections(); }
+        }
         refreshNeighbors();
       }
       paintChrome();
@@ -810,7 +1020,16 @@ export function setupMapScreen() {
       refreshMyViews();
       // Not awaited: the map is already up, and the pill can arrive a moment later.
       loadDigest();
-      if (restorePost && activeScreen() === 'map') {
+      refreshTalk({ maxAge: 20000 });
+      // #/map?post=<id>: a link to one post, which opens for anybody. A visitor
+      // who is not signed in keeps it, so signing in or registering (even through
+      // Google, which leaves the page) brings them back to it.
+      const linked = query ? query.get('post') : null;
+      if (validPostId(linked) && activeScreen() === 'map') {
+        restorePost = null;
+        if (!state.account) savePendingPost(browserStorage(), linked);
+        await openLinkedPost(linked);
+      } else if (restorePost && activeScreen() === 'map') {
         const postId = restorePost;
         restorePost = null;
         await openPost(postId);

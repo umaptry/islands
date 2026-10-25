@@ -59,9 +59,13 @@ const constant = (name) => {
   return [...match[1].matchAll(/'([^']*)'/g)].map((m) => m[1]).join('');
 };
 const EXTRA_COLUMNS = ['prompt', 'recruit_deadline', 'recruit_capacity'];
+// Added by the communities migration; net.js asks for it only when features.communities is on.
+const COMMUNITY_COLUMNS = ['community_id'];
+// Tables that only exist through later migrations (schema.sql is the first snapshot).
+const LATER_TABLES = ['dm_messages', 'dm_rooms', 'dm_blocks', 'communities'];
 const substitutions = {
   // The widest form, as sent when features.post_extras is on.
-  'postColumns()': `${constant('POST_COLUMNS')},${EXTRA_COLUMNS.join(',')}`,
+  'postColumns()': `${constant('POST_COLUMNS')},${EXTRA_COLUMNS.join(',')},${COMMUNITY_COLUMNS.join(',')}`,
   ACCOUNT_EMBED: constant('ACCOUNT_EMBED'),
   POST_AUTHOR_EMBED: constant('POST_AUTHOR_EMBED'),
 };
@@ -152,7 +156,7 @@ function missing(grants, skip = () => false) {
     const granted = grants.get(table);
     if (granted === 'all') continue;
     for (const column of columns) {
-      if (skip(column)) continue;
+      if (skip(column, table)) continue;
       if (column === '*') problems.push(`${where}: * on ${table} needs a table-wide grant`);
       else if (!granted?.has(column)) problems.push(`${where}: ${table}.${column} is not granted`);
     }
@@ -184,10 +188,109 @@ test('every column net.js reads is granted by the migrations (latest state)', ()
 });
 
 test('the same holds for schema.sql, apart from the columns added by later migrations', () => {
-  assert.deepEqual(missing(fromSchema, (column) => EXTRA_COLUMNS.includes(column)), []);
+  assert.deepEqual(
+    missing(fromSchema, (column, table) => EXTRA_COLUMNS.includes(column) || COMMUNITY_COLUMNS.includes(column)
+      || LATER_TABLES.includes(table)), []);
 });
 
 test('net.js never uses deleted_at on posts', () => {
   const bad = usedColumns().filter((u) => u.table === 'posts' && u.columns.includes('deleted_at'));
   assert.deepEqual(bad, []);
+});
+
+// ---- 「話してみたい」 and the DM (2026-10-24) ---------------------------------
+
+const allSql = migrations.join('\n').replace(/--.*$/gm, '');
+
+test('the parser sees the DM message read, with its filters and order', () => {
+  const used = usedColumns();
+  const has = (column, where) =>
+    used.some((u) => u.table === 'dm_messages' && u.columns.includes(column) && u.where === where);
+  for (const column of ['id', 'room_id', 'sender_id', 'body', 'created_at']) {
+    assert.ok(has(column, 'dm_messages select'), `select ${column}`);
+  }
+  assert.ok(has('room_id', 'dm_messages filter'));
+  assert.ok(has('created_at', 'dm_messages filter'), 'the "after" filter is always written out');
+  assert.ok(has('created_at', 'dm_messages order'));
+});
+
+test('every function net.js calls through rpc() is defined by a migration', () => {
+  const names = [...net.matchAll(/\brpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  for (const name of ['map_posts', 'notification_feed', 'talk_peers', 'my_talk_state', 'press_talk',
+    'withdraw_talk', 'dm_room_list']) {
+    assert.ok(names.includes(name), `net.js should call ${name}`);
+  }
+  for (const name of new Set(names)) {
+    assert.match(allSql, new RegExp(String.raw`create (?:or replace )?function (?:public\.)?${name}\s*\(`, 'i'),
+      `${name} is not defined in the migrations`);
+  }
+});
+
+test('the talk functions are open to signed-in people and not to anon', () => {
+  for (const name of ['talk_peers', 'press_talk', 'withdraw_talk', 'my_talk_state', 'dm_room_list']) {
+    assert.match(allSql, new RegExp(String.raw`grant execute on function (?:public\.)?${name}\([^)]*\)\s+to authenticated`, 'i'),
+      `${name} must be executable by authenticated`);
+    assert.doesNotMatch(allSql, new RegExp(String.raw`grant execute on function (?:public\.)?${name}\([^)]*\)[^;]*\banon\b`, 'i'),
+      `${name} must not be granted to anon`);
+  }
+});
+
+test('the DM tables net.js writes exist, and the browser never reaches talk_wishes or dm_rooms', () => {
+  for (const table of ['dm_messages', 'dm_blocks']) {
+    assert.match(allSql, new RegExp(String.raw`create table if not exists public\.${table}\b`, 'i'), table);
+    assert.ok(net.includes(`restCall('${table}'`), `net.js should reach ${table}`);
+  }
+  assert.ok(!/talk_wishes|dm_rooms/.test(net.replace(/\/\/.*$/gm, '')), 'net.js must not name these tables');
+});
+
+// ---- communities and invites (2026-10-24) ------------------------------------
+
+test('the parser sees the community reads in net.js', () => {
+  const used = usedColumns();
+  const has = (table, column, where) =>
+    used.some((u) => u.table === table && u.columns.includes(column) && u.where === where);
+  assert.ok(has('communities', 'name', 'communities select'), 'the name of a community a link led to');
+  assert.ok(has('posts', 'community_id', 'posts select'), 'a post says which community it is in');
+});
+
+test('anybody may read the name of a community and the community of a post', () => {
+  assert.ok(fromMigrations.get('communities') === 'all' || fromMigrations.get('communities')?.has('name'));
+  assert.ok(fromMigrations.get('posts').has('community_id'));
+  assert.match(allSql, /grant select on public\.communities to anon/i);
+});
+
+test('the community functions net.js calls are defined; only check_invite and the map are open to anon', () => {
+  const names = [...net.matchAll(/\brpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  const asked = ['check_invite', 'claim_invite', 'create_invite', 'list_invites', 'revoke_invite',
+    'my_communities', 'community_map_posts'];
+  for (const name of asked) assert.ok(names.includes(name), `net.js should call ${name}`);
+  const grantLines = (name) => allSql.split(';').filter((s) => new RegExp(String.raw`grant execute on function (?:public\.)?${name}\(`, 'i').test(s));
+  for (const name of ['check_invite', 'community_map_posts']) {
+    assert.ok(grantLines(name).some((s) => /\banon\b/i.test(s)), `${name} must be open to anon`);
+  }
+  for (const name of ['claim_invite', 'create_invite', 'list_invites', 'revoke_invite', 'my_communities']) {
+    const lines = grantLines(name);
+    assert.ok(lines.length, `${name} must be granted`);
+    assert.ok(lines.every((s) => !/\banon\b/i.test(s)), `${name} must not be granted to anon`);
+  }
+});
+
+test('net.js passes the argument names the functions declare', () => {
+  const declared = (name) => {
+    const m = allSql.match(new RegExp(String.raw`create or replace function public\.${name}\(([^)]*)\)`, 'i'));
+    assert.ok(m, `${name} is declared`);
+    return [...m[1].matchAll(/(?:^|,)\s*([a-z_]+)\s+(?:uuid|text|integer|boolean|double)/gi)].map((x) => x[1]);
+  };
+  assert.deepEqual(declared('check_invite'), ['code']);
+  assert.deepEqual(declared('claim_invite'), ['code']);
+  assert.deepEqual(declared('create_invite'), ['community', 'minutes', 'until_end_of_day']);
+  assert.deepEqual(declared('list_invites'), ['community']);
+  assert.deepEqual(declared('revoke_invite'), ['invite']);
+  assert.ok(declared('community_map_posts').includes('community'));
+  assert.match(net, /rpc\('create_invite', \{ community, minutes, until_end_of_day: untilEndOfDay \}\)/);
+  assert.match(net, /rpc\('list_invites', \{ community \}\)/);
+  assert.match(net, /rpc\('revoke_invite', \{ invite \}\)/);
+  assert.match(net, /rpc\('check_invite', \{ code \}\)/);
+  assert.match(net, /rpc\('claim_invite', \{ code \}\)/);
+  assert.match(net, /rpc\('community_map_posts', \{\s*community, min_x: minX, min_y: minY, max_x: maxX, max_y: maxY, limit_n: limit,/);
 });
