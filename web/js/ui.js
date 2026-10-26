@@ -199,6 +199,13 @@ export function safeUrl(raw) {
 
 /** A yes/no the app owns, rather than window.confirm's browser chrome. */
 export function confirmAction({ title, body, confirmLabel = 'OK', danger = false }) {
+  return chooseAction({ title, body, choices: [{ value: true, label: confirmLabel, danger }] })
+    .then((answer) => answer === true);
+}
+
+/** The same question with several answers (each { value, label, danger }); resolves to the chosen value, or
+ * false for やめる. More than one answer stacks the buttons, the last one at the bottom. */
+export function chooseAction({ title, body, choices }) {
   return new Promise((resolve) => {
     const previousFocus = document.activeElement;
     const events = new AbortController();
@@ -207,15 +214,15 @@ export function confirmAction({ title, body, confirmLabel = 'OK', danger = false
     const panel = el('div', { className: 'modal', attrs: { role: 'alertdialog', 'aria-modal': 'true', 'aria-label': title } },
       el('h3', { className: 'modal-title', text: title }),
       body ? el('p', { className: 'modal-body', text: body }) : null,
-      el('div', { className: 'modal-actions' },
+      el('div', { className: `modal-actions${choices.length > 1 ? ' stacked' : ''}` },
         el('button', {
           className: 'btn btn-quiet', text: 'やめる',
           on: { click: () => finish(false) },
         }),
-        el('button', {
-          className: `btn ${danger ? 'btn-danger' : ''}`, text: confirmLabel,
-          on: { click: () => finish(true) },
-        }),
+        ...choices.map((choice) => el('button', {
+          className: `btn ${choice.danger ? 'btn-danger' : ''}`, text: choice.label,
+          on: { click: () => finish(choice.value) },
+        })),
       ),
     );
     backdrop.append(panel);

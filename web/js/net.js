@@ -19,7 +19,7 @@ import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
 import { readPress, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
-import { communitiesOn } from './community-rules.js';
+import { communitiesOn, shareOn } from './community-rules.js';
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -107,7 +107,9 @@ const POST_COLUMNS =
 // before that would be a 400 on every post read.
 const postColumns = () =>
   (config().features?.post_extras ? `${POST_COLUMNS},prompt,recruit_deadline,recruit_capacity` : POST_COLUMNS)
-  + (communitiesOn(config()) ? ',community_id' : '');
+  + (communitiesOn(config()) ? ',community_id' : '')
+  // 2026-10-29: the mark of the same post on other communities' maps, and the joins of all of them.
+  + (shareOn(config()) ? ',share_group,group_join_count' : '');
 
 /** A refused join (recruit_closed / recruit_full) said in words for a person. */
 function joinError(error) {

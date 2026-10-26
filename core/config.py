@@ -472,16 +472,17 @@ EXTRA_PROMPTS = (
     {"key": "past", "text": "昔がんばってたこと",
      "example": "高校まで陸上部で長距離を走っていました。久しぶりに大会に出てみたいです"},
     {"key": "now", "text": "最近はまってること",
-     "example": "最近、休日にパン作りをしています。ふっくら焼くコツを知りたいです"},
+     "example": "最近、仕事終わりにレイトショーに行くのにハマってます。洋画をよく見ます。"},
     {"key": "future", "text": "今度やってみたいこと",
      "example": "今度、陶芸教室で器づくりに挑戦してみたいです。一緒に体験しませんか"},
 )
-# The opening words offered on the first post (chips over the box). Each key is one of
+# The prompts offered on the first post (chips over the box). Each key is one of
 # EXTRA_PROMPTS' keys, and a chosen chip is recorded as the post's `prompt` like that prompt.
+# A chip puts nothing in the box: the prompt's example sentence shows as the placeholder.
 POST_STARTERS = (
-    {"key": "past", "text": "昔がんばってたのは、"},
-    {"key": "now", "text": "最近はまってるのは、"},
-    {"key": "future", "text": "今度やってみたいのは、"},
+    {"key": "past", "text": "昔がんばってたこと"},
+    {"key": "now", "text": "最近はまってること"},
+    {"key": "future", "text": "今度やってみたいこと"},
 )
 # What a post's `prompt` may be: the weekly one or an extra one.
 POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
@@ -527,6 +528,13 @@ INVITE_ERROR_ADMIN_ONLY_LIST = "このコミュニティの招待リンクは、
 INVITE_ERROR_ADMIN_ONLY_REVOKE = "この招待リンクは、管理者だけが止められます。"
 INVITE_ERROR_MINUTES = "有効な時間は1分から30日の間で指定してください。"
 COMMUNITY_ERROR_POST = "このコミュニティに投稿できません。"
+# ほかのコミュニティにも出す (2026-10-29, supabase/migrations/20261029000000_share_group.sql).
+SHARE_ERROR_OFF = "ほかのコミュニティに出す機能は、まだ使えません。"
+SHARE_ERROR_NONE = "出すコミュニティを選んでください。"
+SHARE_ERROR_FAILED = "ほかのコミュニティに出せませんでした。もう一度お試しください。"
+SHARE_ERROR_SYNC = "ほかのコミュニティに出している同じ投稿を直せませんでした。もう一度お試しください。"
+SHARE_ERROR_LONG = "60文字を超える投稿は、ほかのコミュニティに出せません。本文を60文字以内に直してから出してください。"
+SHARE_COMMUNITIES_MAX = 20
 # rename_community (supabase/migrations/20261026020000_rename_community.sql): 1..COMMUNITY_NAME_MAX characters after trimming.
 COMMUNITY_ERROR_RENAME_ADMIN_ONLY = "このコミュニティの名前は、管理者だけが変えられます。"
 COMMUNITY_ERROR_NAME = "コミュニティの名前は1〜40文字で入力してください。"

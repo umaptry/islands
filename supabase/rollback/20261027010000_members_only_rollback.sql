@@ -11,6 +11,11 @@
 -- 戻さないもの: FILE 1 が足した関数・列・索引（足しただけで無害）、FILE 2 が消した古い島・通知（作り直される）。
 --
 -- 何度流しても壊れない。流したあと、もう一度締めるには FILE 2 を流し直す（FILE 2 も何度流しても壊れない）。
+--
+-- 2026-10-29 の 20261029000000_share_group.sql（ほかのコミュニティにも出す）のあとでも流せる: 地図の関数は返す列が
+-- 変わったので、消してから作り直す（4.）。そのあとは「出す」機能が止まり（features.share は members_only が true の
+-- ときだけ）、参加者募集中の先着人数は投稿ごとに数える。仲間の印（share_group）は残る。もう一度締めるときは
+-- FILE 2 を流したあと、20261029000000_share_group.sql も流し直す（地図の関数と参加の安全装置が合計の版に戻る）。
 begin;
 -- 長く待たない: 他の処理に鍵を取られていたら、3秒で諦めて何も変えずに終わる（55P03 / 40P01 なら少し待ってもう一度流す）。
 set local lock_timeout = '3s';
@@ -82,8 +87,10 @@ end;
 $$;
 revoke all on function public.reactions_recruit_guard() from public, anon, authenticated;
 
--- 4. 地図の関数
-create or replace function public.community_map_posts(
+-- 4. 地図の関数（20261029 のあとは返す列が1つ多いので、上書きではなく消してから作る。権限も付け直す）
+drop function if exists public.community_map_posts(uuid, double precision, double precision,
+                                                   double precision, double precision, integer);
+create function public.community_map_posts(
   community uuid,
   min_x double precision, min_y double precision,
   max_x double precision, max_y double precision,
@@ -113,8 +120,16 @@ language sql stable security definer set search_path = public as $$
    order by p.energy desc, p.created_at desc
    limit least(greatest(limit_n, 1), 2000);
 $$;
+revoke all on function public.community_map_posts(uuid, double precision, double precision,
+                                                  double precision, double precision, integer)
+  from public;
+grant execute on function public.community_map_posts(uuid, double precision, double precision,
+                                                     double precision, double precision, integer)
+  to anon, authenticated, service_role;
 
-create or replace function public.map_posts(
+drop function if exists public.map_posts(double precision, double precision,
+                                         double precision, double precision, integer);
+create function public.map_posts(
   min_x double precision, min_y double precision,
   max_x double precision, max_y double precision,
   limit_n integer default 800
@@ -142,6 +157,12 @@ language sql stable security definer set search_path = public as $$
    order by p.energy desc, p.created_at desc
    limit least(greatest(limit_n, 1), 2000);
 $$;
+revoke all on function public.map_posts(double precision, double precision,
+                                        double precision, double precision, integer)
+  from public;
+grant execute on function public.map_posts(double precision, double precision,
+                                           double precision, double precision, integer)
+  to anon, authenticated, service_role;
 
 create or replace function public.map_cells(
   min_x double precision, min_y double precision,

@@ -9,7 +9,7 @@ import { config, isLocal, islandColor, membersOnly, radiusOf, setReachFactor } f
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import {
-  hasReacted, matchesFilters, reactionKey, removePost, setPosts, state, subscribe, upsertPost, notify,
+  hasReacted, matchesFilters, reactionKey, setPosts, state, subscribe, upsertPost, notify,
 } from '../state.js';
 import {
   $, avatar, clear, clip, closeSheet, confirmAction, el, expandSheet, motivationColor, openSheet, sheetExpanded,
@@ -39,6 +39,7 @@ import {
 } from '../community-rules.js';
 import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
 import { nearestPosts } from '../nearby-rules.js';
+import { deleteOwnPost } from '../share.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -987,7 +988,12 @@ export async function react(postId, kind) {
   // supplying one. The difference is whether the island grows under your finger
   // or fifteen seconds later.
   if (post) {
-    upsertPost({ id: postId, [column]: Math.max(0, (post[column] || 0) + (on ? -1 : 1)) });
+    const patch = { id: postId, [column]: Math.max(0, (post[column] || 0) + (on ? -1 : 1)) };
+    // A post on several communities: the joins of all copies move too (the server's count follows below).
+    if (kind === 'join' && post.group_join_count != null) {
+      patch.group_join_count = Math.max(0, Number(post.group_join_count) + (on ? -1 : 1));
+    }
+    upsertPost(patch);
   }
   try {
     if (on) await data.removeReaction(postId, kind);
@@ -998,6 +1004,8 @@ export async function react(postId, kind) {
     // Only 参加 (and messages) draw a route since 2026-10-22: いいね and
     // 手伝えるかも have nothing new to fetch.
     if (kind === 'join') {
+      // The guess above cannot know whether I was in already through another copy: read the count back.
+      if (post.group_join_count != null) data.getPost(postId).then(upsertPost).catch(() => {});
       refreshConnections({ fresh: true });
       // Joining or leaving a 会 changes who I may press 「話してみたい」 for (on their profile).
       refreshTalk();
@@ -1005,22 +1013,21 @@ export async function react(postId, kind) {
   } catch (error) {
     if (on) state.reactions.add(reactionKey(postId, kind));
     else state.reactions.delete(reactionKey(postId, kind));
-    if (post) upsertPost({ id: postId, [column]: post[column] || 0 });
+    if (post) {
+      const back = { id: postId, [column]: post[column] || 0 };
+      if (kind === 'join' && post.group_join_count != null) back.group_join_count = post.group_join_count;
+      upsertPost(back);
+      // The guess for a post on several communities may be off either way: read the true count back.
+      if (kind === 'join' && post.group_join_count != null) data.getPost(postId).then(upsertPost).catch(() => {});
+    }
     toast(error.message);
   }
 }
 
 async function removeOwnPost(post) {
-  const ok = await confirmAction({
-    title: 'この投稿を削除しますか？',
-    body: '地図からも消えます。届いたメッセージは残ります。',
-    confirmLabel: '削除する',
-    danger: true,
-  });
-  if (!ok) return;
   try {
-    await api.del(`/api/posts/${post.id}`);
-    removePost(post.id);
+    // A post on several communities' maps asks: this community only, or all of them (share.js).
+    if (!(await deleteOwnPost(post)).length) return;
     closeSheet();
     toast('削除しました。');
     refreshIslands();

@@ -112,6 +112,11 @@ POST_COLUMNS_BASE = (
 # the migration yet answers 400 (42703) when they are named, so SupabaseStore
 # reads and writes without them until it sees them (see supports_post_extras).
 POST_COLUMNS = POST_COLUMNS_BASE + "," + ",".join(EXTRA_COLUMNS)
+# The 2026-10-29 columns (ほかのコミュニティにも出す): the mark that joins the copies of one post
+# in several communities, and the joins counted over all of them. Read and written only once the
+# database has them (see supports_share), like the extras above.
+SHARE_COLUMNS = ("share_group", "group_join_count")
+SHARE_CHECK_SECONDS = 60
 ACCOUNT_COLUMNS = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
                    "updated_at,topics,goal,seeking,offering")
 # The hidden profile vectors. Written by the server only, never selected for a client.
@@ -429,6 +434,12 @@ class MemoryStore:
         if self._app_settings.get(MEMBERS_ONLY_KEY) and not row.get("community_id"):
             # Phase B makes posts.community_id NOT NULL; until then the server refuses it here.
             raise StoreError("community_id")
+        if row.get("share_group") and any(
+                other.get("share_group") == row["share_group"] and not other.get("deleted_at")
+                and other.get("community_id") == row.get("community_id") and other["id"] != row.get("id")
+                for other in self._posts.values()):
+            # posts_share_group_community_uidx: one live copy of a post per community.
+            raise StoreError("share_group")
         row.setdefault("id", str(uuid.uuid4()))
         row.setdefault("created_at", _now())
         row["updated_at"] = row["created_at"]
@@ -469,6 +480,46 @@ class MemoryStore:
                 return False
             row["deleted_at"] = _now()
             return True
+
+    # -- the copies of one post in several communities (2026-10-29) --------------
+
+    supports_share = True
+
+    def share_ready(self):
+        return True
+
+    def _group_joiners(self, group):
+        """post_group_joiners(): the people who joined any live copy of the post, each counted once."""
+        with self._lock:     # an RLock: callers that already hold it may call this
+            live = {pid for pid, row in self._posts.items()
+                    if row.get("share_group") == group and not row.get("deleted_at")}
+            return len({actor for (pid, actor, kind) in self._reactions if kind == "join" and pid in live})
+
+    def posts_in_group(self, group):
+        """The live copies of one post (every community), oldest first. The server's own read."""
+        with self._lock:
+            rows = [row for row in self._posts.values()
+                    if group and row.get("share_group") == group and not row.get("deleted_at")]
+            rows.sort(key=lambda row: row["created_at"])
+            return [self._public_post(row) for row in rows]
+
+    def update_post_group(self, group, author_id, fields, skip_id=None):
+        """The same change on every live copy of the post written by `author_id` (but `skip_id`)."""
+        with self._lock:
+            out = []
+            for row in self._posts.values():
+                if (not group or row.get("share_group") != group or row.get("deleted_at")
+                        or row["author_id"] != author_id or row["id"] == skip_id):
+                    continue
+                row.update(fields)
+                row["energy"] = computed_energy(row)
+                row["updated_at"] = _now()
+                out.append(self._public_post(row))
+            return out
+
+    def soft_delete_post_group(self, group, author_id):
+        """Every live copy of the post written by `author_id` is deleted. Returns how many."""
+        return len(self.update_post_group(group, author_id, {"deleted_at": _now()}))
 
     def posts_by_author(self, author_id, viewer=SERVICE):
         """A person's live posts, newest first. With a viewer named and members_only on: all of
@@ -652,9 +703,18 @@ class MemoryStore:
                 return False
             if kind == "join":
                 # Same rule as the database trigger on reactions: a closed 募集 takes no
-                # new join (withdrawing one is always possible).
-                closed = closed_state(post.get("recruit_deadline"), post.get("recruit_capacity"),
-                                      post.get("join_count"))
+                # new join (withdrawing one is always possible). A post put on several communities
+                # counts its first-come places over all of them, each person once (2026-10-29).
+                capacity, joins = post.get("recruit_capacity"), post.get("join_count")
+                group = post.get("share_group")
+                if group:
+                    joins = self._group_joiners(group)
+                    if any(kind_ == "join" and actor == actor_id
+                           and (self._posts.get(pid) or {}).get("share_group") == group
+                           and not (self._posts.get(pid) or {}).get("deleted_at")
+                           for (pid, actor, kind_) in self._reactions):
+                        capacity = None    # already in through another copy: no new place is taken
+                closed = closed_state(post.get("recruit_deadline"), capacity, joins)
                 if closed == CLOSED_DEADLINE:
                     raise StoreError(ERROR_CLOSED)
                 if closed == CLOSED_FULL:
@@ -1648,6 +1708,10 @@ class MemoryStore:
         out = {key: row.get(key) for key in keys}
         out["community_id"] = row.get("community_id")
         out["energy"] = computed_energy(row)
+        # posts_share_group_sync: a live copy carries the joins of all copies, anything else none.
+        out["share_group"] = row.get("share_group")
+        out["group_join_count"] = (self._group_joiners(row["share_group"])
+                                   if row.get("share_group") and not row.get("deleted_at") else None)
         out = shape(out)
         if with_vec:
             out["vec"] = row.get("vec")
@@ -1712,6 +1776,8 @@ class SupabaseStore:
         self._invite_only_checked_at = None
         self._members_only_value = None    # app_settings.members_only: the last answer (None = never read)
         self._members_only_checked_at = None
+        self._has_share = False            # until the database shows the 2026-10-29 columns
+        self._share_checked_at = None
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1824,7 +1890,9 @@ class SupabaseStore:
 
     def _post_columns(self):
         columns = POST_COLUMNS if self.supports_post_extras else POST_COLUMNS_BASE
-        return columns + ",community_id" if self.supports_communities else columns
+        if self.supports_communities:
+            columns += ",community_id"
+        return columns + "," + ",".join(SHARE_COLUMNS) if self.supports_share else columns
 
     @staticmethod
     def _missing_post_extras(response):
@@ -1876,6 +1944,78 @@ class SupabaseStore:
             return self.post_extras_ready()
         except StoreError:
             return self._has_post_extras
+
+    # -- the copies of one post in several communities (2026-10-29) --------------
+
+    def share_ready(self):
+        """True when posts has share_group / group_join_count (cached for a minute).
+
+        Raises StoreError when the database cannot be asked."""
+        now = time.monotonic()
+        if self._share_checked_at is not None and now - self._share_checked_at < SHARE_CHECK_SECONDS:
+            return self._has_share
+        try:
+            response = self._send("GET", POSTS, label="投稿の列の確認", allow_statuses=(400,),
+                                  params={"select": ",".join(SHARE_COLUMNS), "limit": "1"})
+        except StoreError:
+            self._share_checked_at = now - SHARE_CHECK_SECONDS + 10
+            raise
+        if response.status_code < 300:
+            ready = True
+        else:
+            text = response.text or ""
+            try:
+                code = str((response.json() or {}).get("code", ""))
+            except Exception:
+                code = ""
+            if code in ("42703", "PGRST204") and any(name in text for name in SHARE_COLUMNS):
+                ready = False
+            else:
+                self._share_checked_at = now - SHARE_CHECK_SECONDS + 10
+                raise StoreError("投稿の列の確認")
+        if ready != self._has_share or self._share_checked_at is None:
+            print("[store] posts " + ("has" if ready else "has no")
+                  + " share_group; sharing a post with other communities is " + ("on" if ready else "off until "
+                  "supabase/migrations/20261029000000_share_group.sql is run"), flush=True)
+        self._has_share = ready
+        self._share_checked_at = now
+        return ready
+
+    @property
+    def supports_share(self):
+        try:
+            return self.share_ready()
+        except StoreError:
+            return self._has_share
+
+    def posts_in_group(self, group):
+        """The live copies of one post (every community), oldest first. The server's own read."""
+        if not group or not self.supports_share:
+            return []
+        rows = self._get(POSTS, {
+            "select": self._post_columns(), "share_group": f"eq.{group}",
+            "deleted_at": "is.null", "order": "created_at.asc",
+        })
+        return [{"community_id": None, **shape(row)} for row in rows]
+
+    def update_post_group(self, group, author_id, fields, skip_id=None):
+        """The same change on every live copy of the post written by `author_id` (but `skip_id`)."""
+        fields = self._without_extras(fields)
+        if not group or not fields or not self.supports_share:
+            return []
+        params = {
+            "share_group": f"eq.{group}", "author_id": f"eq.{author_id}",
+            "deleted_at": "is.null", "select": self._post_columns(),
+        }
+        if skip_id:
+            params["id"] = f"neq.{skip_id}"
+        response = self._send("PATCH", POSTS, label="更新", headers={"Prefer": "return=representation"},
+                              params=params, json=fields)
+        return [shape(row) for row in response.json()]
+
+    def soft_delete_post_group(self, group, author_id):
+        """Every live copy of the post written by `author_id` is deleted. Returns how many."""
+        return len(self.update_post_group(group, author_id, {"deleted_at": _now()}))
 
     # -- 「話してみたい」/ DM (2026-10-26) ----------------------------------------
     # The browser calls press_talk, talk_peers, ... itself with the person's JWT (they
@@ -2106,6 +2246,8 @@ class SupabaseStore:
             data = {key: value for key, value in data.items() if key not in EXTRA_COLUMNS}
         if not self.supports_communities:
             data = {key: value for key, value in data.items() if key != "community_id"}
+        if not self.supports_share:
+            data = {key: value for key, value in data.items() if key not in SHARE_COLUMNS}
         return data
 
     def insert_post(self, record):

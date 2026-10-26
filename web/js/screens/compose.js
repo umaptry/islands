@@ -11,9 +11,9 @@
 // (Q40): it stands on the map as a ghost only this browser sees, until the
 // person writes in their own words or closes it.
 //
-// Following the mock (モック②), the post cannot be sent until the heat slider
-// has been moved once, and a HeatObject above the slider shows what the number
-// looks like on the map. The body stays at 60 characters.
+// Following the mock (モック②), the post is not sent until the heat slider has been
+// moved once (pressing 投稿する before that shows the slider), and a HeatObject above
+// the slider shows what the number looks like on the map. The body stays at 60 characters.
 //
 // The image is downscaled and re-encoded in the browser before it is uploaded
 // (see image.js). A 4MB phone photo would be the single biggest thing this app
@@ -29,13 +29,15 @@ import { setOnboardingStep } from '../onboarding.js';
 import { $, $$, clear, el, motivationColor, toast } from '../ui.js';
 import { buzz, moment } from '../feedback.js';
 import { heatObject } from '../components/heatobject.js';
+import { REDUCED_MOTION } from '../map/decor.js';
 import { ripple } from '../map/index.js';
 import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
 import { openOnMap, showNearbyPosts, showTrial } from './map.js';
 import { browserStorage } from '../talk.js';
 import { takePendingPost } from '../return-post.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
-import { postingTarget } from '../community-rules.js';
+import { communityNameIn, postingTarget, shareOn, shareTargets } from '../community-rules.js';
+import { sharePost } from '../share.js';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -52,6 +54,7 @@ let heat = null;         // the HeatObject above the slider
 let selectedPrompt = null;   // "weekly", an extra prompt's key, or null
 let promptPosts = [];        // my posts, to hide the extra prompts already used
 let postBlocked = false;     // communities are on and I am in none: there is no map to post to
+let shareChosen = new Set(); // ほかのコミュニティにも出す: the communities ticked (not those that have the post already)
 
 // The prompts and the recruit fields exist only once the database has the columns.
 const extrasOn = () => Boolean(config().features?.post_extras);
@@ -83,10 +86,33 @@ function paintCounter() {
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
-  $('composeSubmit').disabled = submitting || postBlocked || length < min || length > max || !touched;
-  // Say why the button waits, but only once the words are fine: a missing body
-  // is already told by the counter.
-  $('composeHint').hidden = Boolean(editing) || touched || length < min || length < 1 || length > max;
+  // The button is not held back by the slider: pressing it before the slider has
+  // been moved points at the slider instead (see nudgeSlider).
+  $('composeSubmit').disabled = submitting || postBlocked || length < min || length > max;
+  $('composeHint').hidden = Boolean(editing) || touched;
+  if (touched) $('composeHint').classList.remove('alert');
+}
+
+/** Show the person where the answer is: scroll to the slider, shake it, and say it louder.
+ * `submitted` is true when they pressed 投稿する without having moved it. */
+function nudgeSlider(submitted) {
+  const slider = $('composeSlider');
+  const hint = $('composeHint');
+  if (!touched && !editing) {
+    hint.hidden = false;
+    // Emptied first, so a screen reader says the words again (the live region only speaks a change).
+    hint.textContent = '';
+    requestAnimationFrame(() => { hint.textContent = 'バーを左右に動かして、どれくらい本気か選んでください'; });
+    hint.classList.toggle('alert', submitted);
+    // The bar itself takes the focus: the arrow keys (and a screen reader's swipe) answer from there.
+    if (submitted) $('composeMotivation').focus({ preventScroll: true });
+  }
+  slider.scrollIntoView({ block: 'center', behavior: REDUCED_MOTION ? 'auto' : 'smooth' });
+  if (REDUCED_MOTION) return;
+  slider.classList.remove('shake');
+  void slider.offsetWidth;   // restart the animation
+  slider.classList.add('shake');
+  setTimeout(() => slider.classList.remove('shake'), 700);
 }
 
 /** The box of the first post used to stay shut behind the examples until "自分の言葉で書く" was
@@ -103,8 +129,9 @@ function paintMotivation() {
   $('composeSlider').classList.toggle('untouched', !touched);
   $('composeFill').style.width = `${value}%`;
   $('composeFill').style.background = `linear-gradient(to right, #ffffff, ${color})`;
+  // Before the first answer the handle is a wide pill with arrows (see style.css).
   $('composeHandle').style.left = `calc(${value}% - 2px)`;
-  $('composeHandle').style.backgroundColor = color;
+  $('composeHandle').style.backgroundColor = touched ? color : '';
   heat.set(value, !touched);
 }
 
@@ -186,21 +213,17 @@ function paintStarters() {
   syncPrompt();
 }
 
-/** Put the opening words in the box, cursor at the end. An empty box, or one that holds only another
- * opening, takes the new words in their place; words the person wrote themselves are never replaced
- * (the chip then only records its prompt). */
+/** Choose (or unchoose) the prompt: its example sentence shows as the placeholder and the box is left
+ * as it is, so nothing the person wrote is touched and nothing is put in for them to post as it stands. */
 function useStarter(item) {
-  const body = $('composeBody');
-  const text = body.value.trim();
-  const mine = text && !starters().some((entry) => entry.text === text);
-  selectedPrompt = item.key;
-  if (!mine) body.value = item.text;
+  selectedPrompt = selectedPrompt === item.key ? null : item.key;
   syncPrompt();
   buzz('tap');
-  body.focus();
-  body.setSelectionRange(body.value.length, body.value.length);
-  paintCounter();
+  if (selectedPrompt) $('composeBody').focus();
 }
+
+// The opening words an older version put into the box (and into drafts kept by the browser).
+const OLD_STARTERS = ['昔がんばってたのは、', '最近はまってるのは、', '今度やってみたいのは、'];
 
 /** Show which prompt is chosen, and let it speak in the body's placeholder:
  * an example sentence for an extra prompt, the weekly prompt's own words. */
@@ -213,7 +236,8 @@ function syncPrompt() {
     chip.setAttribute('aria-pressed', String(chip.dataset.key === selectedPrompt));
   });
   $('composeBody').placeholder = promptPlaceholder({
-    selected: selectedPrompt,
+    // The first post always shows an example: 最近はまってること's, until a prompt is chosen.
+    selected: selectedPrompt || (starters().length ? 'now' : null),
     weekly: config().weekly_prompt,
     extraPrompts: config().extra_prompts,
     max: config().limits.body_max,
@@ -226,11 +250,75 @@ function paintRecruit() {
   const available = extrasOn();
   $('composeRecruit').hidden = !available;
   const open = available && selectedTags().includes(RECRUIT_TAG);
+  $('composeShareRecruit').hidden = !open;
   $('composeRecruit').dataset.open = String(open);
   $('composeRecruitBox').inert = !open;
   if (!open) {
     $('composeDeadline').value = '';
     $('composeCapacity').value = '';
+  }
+}
+
+// ---------------------------------------------------------------- ほかのコミュニティにも出す (2026-10-29)
+
+/** The community the post is (or will be) in: the edited post's own, or the map that is open. */
+function shareHere() {
+  if (editing) return editing.community_id || null;
+  const scope = currentScope();
+  return scope.mode === 'community' ? scope.id : null;
+}
+
+/** My copies of the edited post (every community), from my posts. */
+function editedCopies() {
+  if (!editing) return [];
+  const group = editing.share_group || state.myPosts.find((post) => post.id === editing.id)?.share_group;
+  return group ? state.myPosts.filter((post) => post.share_group === group) : [editing];
+}
+
+/** The box under the tags: every other community of mine, ticked where the post is already. Not on the
+ * first post (one thing at a time there), and only where the server offers it (features.share). */
+function paintShare() {
+  const here = shareHere();
+  const targets = shareOn(config()) && !firstPost && !postBlocked && here
+    ? shareTargets({ communities: state.communities, here, copies: editedCopies() })
+    : [];
+  $('composeShare').hidden = !targets.length;
+  const list = clear($('composeShareList'));
+  targets.forEach((target) => {
+    const ticked = target.shared || shareChosen.has(target.id);
+    const node = el('button', {
+      className: `check${ticked ? ' on' : ''}${target.shared ? ' fixed' : ''}`,
+      attrs: { type: 'button', role: 'checkbox', 'aria-checked': String(ticked), 'aria-disabled': String(target.shared) },
+    },
+      el('span', { className: 'check-box', attrs: { 'aria-hidden': 'true' } }),
+      el('span', { className: 'check-label', text: target.name },
+        target.shared ? el('span', { className: 'check-note', text: '出しています' }) : null),
+    );
+    node.dataset.community = target.id;
+    if (!target.shared) {
+      node.addEventListener('click', () => {
+        if (shareChosen.has(target.id)) shareChosen.delete(target.id);
+        else shareChosen.add(target.id);
+        paintShare();
+        buzz('tap');
+      });
+    }
+    list.append(node);
+  });
+}
+
+/** After the post is saved: put it on the ticked communities too. Says what happened; a failure costs
+ * only the copies (the post itself is saved, and the edit screen offers the box again). */
+async function shareAfterSave(postId) {
+  const chosen = [...shareChosen];
+  shareChosen = new Set();
+  if (!chosen.length) return '';
+  try {
+    const result = await sharePost(postId, chosen);
+    const names = (result?.added || []).map((id) => communityNameIn(state.communities, id)).filter(Boolean);
+    return names.length ? `${names.join('・')}にも出しました。` : '';
+  } catch (error) {
+    return `ほかのコミュニティには出せませんでした（${error.message}）。編集画面からもう一度出せます。`;
   }
 }
 
@@ -259,8 +347,46 @@ export function setupCompose() {
     paintMotivation();
     paintCounter();
   };
-  $('composeMotivation').addEventListener('input', moved);
-  $('composeMotivation').addEventListener('change', moved);
+  const slider = $('composeMotivation');
+  slider.addEventListener('input', moved);
+  slider.addEventListener('change', moved);
+  // iPhone moves a range input only by dragging its (here invisible) thumb, so a tap on the bar
+  // did nothing. The bar sets the value from where it is touched and goes on following the finger.
+  let dragging = null;
+  let before = null;       // the answer before this touch, given back if the touch turns into a scroll
+  const setFromPointer = (event) => {
+    const box = slider.getBoundingClientRect();
+    if (!box.width) return;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - box.left) / box.width));
+    slider.value = String(Math.round(ratio * 100));
+    moved();
+  };
+  slider.addEventListener('pointerdown', (event) => {
+    if (event.button > 0) return;
+    dragging = event.pointerId;
+    before = { value: slider.value, touched };
+    try { slider.setPointerCapture(event.pointerId); } catch { /* not capturable: moves still arrive over the bar */ }
+    setFromPointer(event);
+  });
+  slider.addEventListener('pointermove', (event) => {
+    if (dragging === event.pointerId) setFromPointer(event);
+  });
+  // The bar is touch-action: pan-y, so a finger that starts on it and goes up or down scrolls the
+  // page and the browser cancels the pointer: that was a scroll, not an answer.
+  slider.addEventListener('pointercancel', (event) => {
+    if (dragging !== event.pointerId || !before) return;
+    slider.value = before.value;
+    touched = before.touched;
+    paintMotivation();
+    paintCounter();
+  });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((type) => {
+    slider.addEventListener(type, (event) => {
+      if (dragging === event.pointerId) { dragging = null; before = null; }
+    });
+  });
+  // The ball above the slider looks like the thing to tap: answer by showing the bar.
+  $('composeHeat').addEventListener('click', () => nudgeSlider(false));
   $('composeOwnBtn').addEventListener('click', () => {
     setOwnOpen(true);
     body.focus();
@@ -301,7 +427,8 @@ export function setupCompose() {
     leave() {
       if (draftKey) drafts.set(draftKey, { body: body.value, tags: selectedTags(), motivation: $('composeMotivation').value,
         touched, imagePath, imageBlob, requestKey, requestBody,
-        prompt: selectedPrompt, deadline: $('composeDeadline').value, capacity: $('composeCapacity').value });
+        prompt: selectedPrompt, deadline: $('composeDeadline').value, capacity: $('composeCapacity').value,
+        share: [...shareChosen] });
     },
     enter: async (params, query) => {
       const first = query && query.get('first') === '1';
@@ -362,6 +489,8 @@ export function setupCompose() {
         : `取り組みや活動内容を${config().limits.body_max}文字までで書いてください。`;
 
       body.value = draft?.body ?? (editing ? editing.body : '');
+      // A draft that holds only an old opening phrase is an empty box.
+      if (!editing && OLD_STARTERS.includes(body.value.trim())) body.value = '';
       $('composeMotivation').value = editing
         ? editing.motivation
         : config().limits.motivation_default;
@@ -402,11 +531,32 @@ export function setupCompose() {
         }
       }
       $('composeError').textContent = '';
+      $('composeHint').classList.remove('alert');
+      shareChosen = new Set(draft?.share || []);
+      paintShare();
+      refreshShare();
       setOwnOpen(true);
       paintCounter();
       paintMotivation();
     },
   });
+}
+
+/** The box needs my communities and, when editing, my copies of the post: read them if they may be old. */
+function refreshShare() {
+  if (!shareOn(config()) || firstPost || !state.account) return;
+  const accountId = state.account.id;
+  const editedId = editing?.id || null;
+  const still = () => state.account?.id === accountId && (editing?.id || null) === editedId
+    && $('compose').classList.contains('active');
+  if (!state.communitiesLoaded) refreshCommunities().then(() => { if (still()) paintShare(); }).catch(() => {});
+  if (editing) {
+    data.postsByAuthor(accountId).then((rows) => {
+      if (!Array.isArray(rows) || state.account?.id !== accountId) return;
+      state.myPosts = rows;
+      if (still()) paintShare();
+    }).catch(() => {});
+  }
 }
 
 /** My posts may not be loaded yet (they come with the map); read them so a used
@@ -437,6 +587,11 @@ function recruitNote(tags) {
 
 async function submit() {
   if (submitting) return;
+  // The heat has not been answered yet: show the slider instead of sending.
+  if (!editing && !touched) {
+    nudgeSlider(true);
+    return;
+  }
   // A filled but invalid capacity must not quietly become "no limit".
   if (extrasOn() && selectedTags().includes(RECRUIT_TAG)
     && $('composeCapacity').value.trim() !== '' && parseCapacity($('composeCapacity').value) === null) {
@@ -484,7 +639,8 @@ async function submit() {
       upsertPost(updated);
       drafts.delete(draftKey);
       draftKey = '';
-      toast((moved ? '保存しました。地図の位置も更新されました。' : '保存しました。') + recruitNote(payload.tags));
+      const shared = await shareAfterSave(editing.id);
+      toast((moved ? '保存しました。地図の位置も更新されました。' : '保存しました。') + shared + recruitNote(payload.tags));
       navigate('#/me');
       return;
     }
@@ -495,6 +651,8 @@ async function submit() {
     drafts.delete(draftKey);
     draftKey = '';
     moment('post');
+    // The copies go while the post lands (they stand where it stands, on the other maps).
+    const sharing = shareAfterSave(result.id);
     // Straight onto the map, where the new ground rises and the face lands
     // (as in the design mock). The 「あなたの島」 page that used to come first
     // had only the island's name left on it once its list of near people went.
@@ -502,7 +660,8 @@ async function submit() {
     // their own island first, and then the post they were invited to opens.
     await landOnMap(result, firstPost ? takePendingPost(browserStorage()) : null);
     // The star is for other people; say so, or the author sees nothing happen.
-    if (recruitNote(payload.tags)) toast(recruitNote(payload.tags).trim());
+    const said = (await sharing) + recruitNote(payload.tags);
+    if (said.trim()) toast(said.trim());
   } catch (error) {
     $('composeError').textContent = error.message;
     // The server words its 422s for a person (a past deadline, a bad number).

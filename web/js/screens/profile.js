@@ -9,13 +9,13 @@
 import { data, api } from '../net.js';
 import { session } from '../session.js';
 import { activeScreen, navigate, screen } from '../router.js';
-import { state, removePost } from '../state.js';
+import { state } from '../state.js';
 import { membersOnly } from '../config.js';
-import { communitiesActive, refreshCommunities } from '../communities.js';
+import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
 import {
-  MEMBERS_ONLY_SUB_SIGNED_OUT, MEMBERS_ONLY_TITLE, communityNameIn, profileNote, visiblePostsOf,
+  MEMBERS_ONLY_SUB_SIGNED_OUT, MEMBERS_ONLY_TITLE, communityNameIn, groupShared, profileNote, visiblePostsOf,
 } from '../community-rules.js';
-import { $, avatar, clear, el, safeUrl, toast, confirmAction } from '../ui.js';
+import { $, avatar, clear, el, safeUrl, toast } from '../ui.js';
 import { react, openOnMap as openMapPost, refreshMyViews } from './map.js';
 import { postCard } from '../components/postcard.js';
 import { openReactors } from '../components/reactors.js';
@@ -27,6 +27,7 @@ import { disablePush, enablePush, forgetDevice, pushStatus } from '../push.js';
 import { loadNotifySettings, useNotifySettings } from './notifications.js';
 import { refreshTalk, talkOptionsForPerson } from '../talk.js';
 import { talkButton } from '../components/talk-button.js';
+import { deleteOwnPost } from '../share.js';
 
 let editDraft = null;
 
@@ -106,7 +107,8 @@ function tabs(counts, onSelect) {
  */
 function countsFor(posts, links) {
   return {
-    posts: posts.length,
+    // One post on several communities' maps is one post (2026-10-29).
+    posts: groupShared(posts).length,
     messages: posts.reduce((sum, post) => sum + (post.comment_count || 0), 0),
     together: links ? links.length : '–',
   };
@@ -128,6 +130,17 @@ function communityLabel(post) {
   return communityNameIn(state.communities, post.community_id);
 }
 
+/** The posts of a page, one card per post: a post put on several communities shows once, with the names of
+ * all of them (only those the viewer shares: the rows of the others never reach this page). The card is the
+ * copy of the map that is open, when there is one. */
+function cardsOf(posts) {
+  const scope = currentScope();
+  return groupShared(posts, {
+    communities: state.communities,
+    preferred: scope.mode === 'community' ? scope.id : null,
+  });
+}
+
 function postList(posts, { own, onOpen }) {
   const box = el('div', { className: 'profile-posts' });
   if (!posts.length) {
@@ -143,10 +156,10 @@ function postList(posts, { own, onOpen }) {
         : el('p', { text: '投稿はありません' })));
     return box;
   }
-  posts.forEach((post) => {
+  cardsOf(posts).forEach(({ post, names }) => {
     box.append(postCard(post, {
       compact: false,
-      communityName: communityLabel(post),
+      communityName: membersOnly() ? names.join('・') : '',
       onComments: () => onOpen(post),
       onOpenAuthor: (id) => navigate(state.account?.id === id ? '#/me' : `#/u/${id}`),
       onReact: (kind) => react(post.id, kind),
@@ -162,10 +175,9 @@ function postList(posts, { own, onOpen }) {
 }
 
 async function remove(post) {
-  if (!await confirmAction({ title: 'この投稿を削除しますか？', body: '地図からも消えます。', confirmLabel: '削除する', danger: true })) return;
   try {
-    await api.del(`/api/posts/${post.id}`);
-    removePost(post.id);
+    // On several communities' maps: this community only, or all of them (share.js asks).
+    if (!(await deleteOwnPost(post)).length) return;
     toast('削除しました。');
     await navigate('#/me');
   } catch (error) {
@@ -234,7 +246,8 @@ function paintTab(panel, tab, posts, own, links, personId) {
           },
             el('div', { className: 'list-row-body' },
               el('div', { className: 'list-row-title', text: post.body.slice(0, 24) }),
-              el('div', { className: 'list-row-sub', text: `${post.comment_count} 件` }),
+              // Each community keeps its own messages: say whose they are.
+              el('div', { className: 'list-row-sub', text: [`${post.comment_count} 件`, communityLabel(post)].filter(Boolean).join('・') }),
             ),
           )))
       : el('div', { className: 'empty-panel' }, el('p', { text: 'メッセージはありません' })));

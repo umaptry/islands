@@ -80,6 +80,12 @@ from core.config import (
     EXTRA_PROMPTS,
     POST_STARTERS,
     RECRUIT_TAG,
+    SHARE_COMMUNITIES_MAX,
+    SHARE_ERROR_FAILED,
+    SHARE_ERROR_LONG,
+    SHARE_ERROR_NONE,
+    SHARE_ERROR_OFF,
+    SHARE_ERROR_SYNC,
     TALK_LABEL,
     PREVIEW_ISLAND_RADIUS,
     PREVIEW_NEIGHBORS,
@@ -472,6 +478,11 @@ class PostPatch(BaseModel):
     clear_image: bool = False
 
 
+class PostShare(BaseModel):
+    # 2026-10-29: the other communities (of the author's) to put the post on too.
+    community_ids: list[str] = Field(default_factory=list, max_length=SHARE_COMMUNITIES_MAX)
+
+
 class AccountPatch(BaseModel):
     display_name: str | None = None
     affiliation: str | None = None
@@ -577,6 +588,20 @@ def post_extras_on():
     False the fields are ignored (never sent to the database) and the screen is told
     through features.post_extras."""
     return bool(getattr(state["store"], "supports_post_extras", True))
+
+
+def share_on():
+    """Whether a post can be put on the maps of other communities too (2026-10-29).
+
+    Needs the database columns (supabase/migrations/20261029000000_share_group.sql; the memory
+    store always has them) and the members-only rules: a copy per community only means something
+    where every community has a map of its own. Unknown counts as off (nothing is offered)."""
+    try:
+        if not _members_flag():
+            return False
+    except StoreError:
+        return False
+    return bool(getattr(state["store"], "supports_share", True))
 
 
 def talk_on():
@@ -2101,8 +2126,10 @@ def config():
         # False on a production database the 2026-10-20 SQL has not reached yet.
         # members_only: whether community posts are readable by their members only (the screens then
         # send the session on every read and show a notice instead of a map to anybody outside).
+        # share: a post can be put on other communities' maps too (posts.share_group, 2026-10-29).
         "features": {"post_extras": post_extras_on(), "talk": talk_on(),
-                     "communities": communities_on(), "members_only": members_only_quiet()},
+                     "communities": communities_on(), "members_only": members_only_quiet(),
+                     "share": share_on()},
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
@@ -2940,10 +2967,26 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
     if not fields:
         raise HTTPException(status_code=422, detail="変更点がありません。")
 
+    # The same post on other communities' maps (2026-10-29) is the same words: every copy changes, in
+    # one statement (all of them or none, never one map with new words and another with the old).
+    group = None
+    if share_on():
+        if existing is None:
+            try:
+                existing = store.get_post(post_id)
+            except StoreError:
+                raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+        if existing and existing["author_id"] == user_id:
+            group = existing.get("share_group")
     try:
-        row = store.update_post(post_id, user_id, fields)
+        if group:
+            rows = store.update_post_group(group, user_id, fields)
+            row = next((entry for entry in rows if str(entry["id"]) == str(existing["id"])), None)
+        else:
+            row = store.update_post(post_id, user_id, fields)
     except StoreError:
-        raise HTTPException(status_code=503, detail="保存に失敗しました。もう一度お試しください。")
+        raise HTTPException(status_code=503,
+                            detail=SHARE_ERROR_SYNC if group else "保存に失敗しました。もう一度お試しください。")
     if not row:
         raise not_yours("編集できませんでした。")
     if terms is not None:
@@ -2951,12 +2994,116 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
     return {**row, "island": island_for_viewer(row, user_id)}
 
 
-@app.delete("/api/posts/{post_id}")
-def delete_post(post_id: str, request: Request):
-    """Soft delete. The comments other people left are their words, not ours."""
+@app.post("/api/posts/{post_id}/share")
+def share_post(post_id: str, payload: PostShare, request: Request):
+    """Put one of my posts on the maps of other communities I am in too (2026-10-29, B案).
+
+    Each community gets a row of its own (its own likes, messages and joins: the walls between
+    communities stay), and the rows are joined by posts.share_group. A copy stands where the post
+    stands (the same words and vectors, so nothing is projected again), and it is new in that
+    community: written now, and the residents of its island hear of a newcomer the usual way. A
+    community that has the post already is skipped, so pressing twice changes nothing."""
     user_id = current_user(request)
+    if not members_only_on() or not share_on():
+        raise HTTPException(status_code=409, detail=SHARE_ERROR_OFF)
+    store = state["store"]
+    pid = _norm_uuid(post_id)
+    if not pid:
+        raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
     try:
-        removed = state["store"].soft_delete_post(post_id, user_id)
+        original = store.get_post(pid, with_vec=True)
+    except StoreError:
+        raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    if not original or original["author_id"] != user_id:
+        raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+    if len(original.get("body") or "") > MAX_TEXT_LENGTH:
+        # Written before the 60-character limit: the database takes no new post that long.
+        raise HTTPException(status_code=422, detail=SHARE_ERROR_LONG)
+    mine = viewer_communities(user_id)
+    wanted = []
+    for raw in payload.community_ids:
+        cid = _norm_uuid(raw)
+        if not cid or cid not in mine:
+            raise HTTPException(status_code=403, detail=COMMUNITY_ERROR_POST)
+        if cid not in wanted:
+            wanted.append(cid)
+    if not wanted:
+        raise HTTPException(status_code=422, detail=SHARE_ERROR_NONE)
+    if not check_rate_limit(user_id):
+        raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
+
+    group = original.get("share_group") or original["id"]
+    added = []
+    account = {}
+    failed = False
+    rows = []
+    try:
+        account = store.get_account(user_id) or {}
+        if not original.get("share_group"):
+            store.update_post(pid, user_id, {"share_group": group})
+        present = {str(row.get("community_id")) for row in store.posts_in_group(group)}
+        for cid in wanted:
+            if cid in present:
+                continue
+            record = {
+                "id": str(uuid.uuid4()),
+                "author_id": user_id,
+                "community_id": cid,
+                "share_group": group,
+                **{name: original.get(name) for name in (
+                    "body", "tags", "motivation", "image_path", "x", "y", "cluster_id", "terms",
+                    "vec", "vec_c")},
+            }
+            if post_extras_on():
+                record.update({name: original.get(name) for name in (
+                    "prompt", "recruit_deadline", "recruit_capacity")})
+            try:
+                added.append(store.insert_post(record))
+            except StoreError:
+                # Pressed twice at once: the other press made the copy (one live copy per community).
+                if cid not in {str(row.get("community_id")) for row in store.posts_in_group(group)}:
+                    raise
+        rows = store.posts_in_group(group)
+    except StoreError:
+        failed = True
+    # A copy that was made stays made even when a later one failed: its island and its residents
+    # hear of it now (pressing again skips it, so this is the only time they would).
+    if added:
+        invalidate_islands()
+    for row in added:
+        try:
+            notify_resident(row["id"], user_id, account.get("display_name", ""),
+                            community=row["community_id"], post_community=row["community_id"])
+        except Exception:  # a failed notice never costs the copy
+            _logger.exception("resident notice failed")
+    if failed:
+        raise HTTPException(status_code=503, detail=SHARE_ERROR_FAILED)
+    return {
+        "share_group": group,
+        "added": [str(row["community_id"]) for row in added],
+        # Only the copies in communities the author is still in (a left community's copy stays theirs,
+        # but its map is not theirs to open).
+        "posts": [row for row in rows if str(row.get("community_id")) in mine],
+    }
+
+
+@app.delete("/api/posts/{post_id}")
+def delete_post(post_id: str, request: Request, scope: str = "one"):
+    """Soft delete. The comments other people left are their words, not ours.
+
+    A post that is on several communities' maps (2026-10-29): `scope=all` deletes every copy,
+    anything else only this community's (「このコミュニティだけ外す」)."""
+    user_id = current_user(request)
+    store = state["store"]
+    try:
+        if scope == "all":
+            post = store.get_post(post_id) if _norm_uuid(post_id) else None
+            if post and post["author_id"] == user_id and post.get("share_group"):
+                removed = store.soft_delete_post_group(post["share_group"], user_id) > 0
+            else:
+                removed = store.soft_delete_post(post_id, user_id)
+        else:
+            removed = store.soft_delete_post(post_id, user_id)
     except StoreError:
         raise HTTPException(status_code=503, detail="削除に失敗しました。もう一度お試しください。")
     if not removed:

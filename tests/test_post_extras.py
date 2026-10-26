@@ -52,13 +52,18 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
         {"key": "future", "text": "今度やってみたいこと"},
     ]
     assert data["extra_prompts"] == [dict(item) for item in EXTRA_PROMPTS]
-    assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False}
+    assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
+                                "share": False}
 
 
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):
     data = client.get("/api/config").json()
     assert [item["text"] for item in data["post_starters"]] == [
-        "昔がんばってたのは、", "最近はまってるのは、", "今度やってみたいのは、"]
+        "昔がんばってたこと", "最近はまってること", "今度やってみたいこと"]
+    # the chip names the prompt; the box is never filled with it
+    assert [item["text"] for item in data["post_starters"]] == [item["text"] for item in data["extra_prompts"]]
+    assert next(item for item in data["extra_prompts"] if item["key"] == "now")["example"] == (
+        "最近、仕事終わりにレイトショーに行くのにハマってます。洋画をよく見ます。")
     assert [item["key"] for item in data["post_starters"]] == [item["key"] for item in data["extra_prompts"]]
 
 
