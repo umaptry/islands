@@ -18,6 +18,8 @@ def test_the_privacy_policy_is_served(client):
     assert "islands 運営チーム" in text
     assert 'href="mailto:' in text
     assert "制定日：2026年10月20日" in text
+    assert "1日に押した人数" in text
+    assert "1日に押した人数の記録は、2日たつと消します" in text
     # What Google asks the policy to say about the data it hands over.
     assert "Google API Services User Data Policy" in text
     assert "Limited Use" in text

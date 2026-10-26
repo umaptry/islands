@@ -18,7 +18,7 @@ import { config, isLocal } from './config.js';
 import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
-import { readPress, readSent, talkRefusal } from './talk-rules.js';
+import { readPress, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
 import { communitiesOn } from './community-rules.js';
 
 export class ApiError extends Error {
@@ -117,7 +117,7 @@ function joinError(error) {
 
 /** A refused press / send, said in words for a person (same idea as joinError). */
 function talkError(error, context = 'talk') {
-  return new ApiError(talkRefusal(error?.message, context), error?.status ?? 0);
+  return new ApiError(talkRefusal(error?.message, context, talkLabelOf(config())), error?.status ?? 0);
 }
 
 // "From the beginning" for the DM poll. The filter is always written out, so the

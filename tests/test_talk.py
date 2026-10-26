@@ -16,6 +16,8 @@ from core.config import (
     DM_ERROR_SEND,
     NOTIFICATION_CATEGORY_OF,
     RECRUIT_TAG,
+    TALK_DAILY_PRESS_LIMIT,
+    TALK_ERROR_DAILY_LIMIT,
     TALK_ERROR_LOGIN,
     TALK_ERROR_NOT_PEER,
     TALK_ERROR_SELF,
@@ -71,7 +73,7 @@ def test_config_names_the_button_and_turns_the_feature_on(fresh_client):
 
 def test_every_talk_sentence_is_free_of_romance_words():
     sentences = [application.PUSH_TEXT[key] for key in ("talk_wish", "talk_match", "dm")]
-    sentences += [TALK_ERROR_LOGIN, TALK_ERROR_SELF, TALK_ERROR_NOT_PEER, DM_ERROR_SEND]
+    sentences += [TALK_ERROR_LOGIN, TALK_ERROR_SELF, TALK_ERROR_NOT_PEER, TALK_ERROR_DAILY_LIMIT, DM_ERROR_SEND]
     for sentence in sentences:
         assert not any(word in sentence for word in ROMANCE), sentence
 
@@ -461,3 +463,76 @@ def test_health_reports_talk_without_making_the_app_unready(fresh_client):
 def test_features_talk_follows_the_store(fresh_client, monkeypatch):
     monkeypatch.setattr(application.state["store"], "supports_talk", False, raising=False)
     assert fresh_client.get("/api/config").json()["features"]["talk"] is False
+
+
+# --------------------------------------------------------------------------
+# at most TALK_DAILY_PRESS_LIMIT new people per day, per person who presses
+# --------------------------------------------------------------------------
+
+def withdraw(person, target):
+    return person.client.post("/api/local/talk/withdraw", json={"target": target.id}, headers=person.headers)
+
+
+@pytest.fixture
+def crowd(people):
+    """host and 22 guests in one meeting."""
+    host = people("host@example.com", "ホスト")
+    meeting = host.post(CAMPING_A, tags=[RECRUIT_TAG])
+    guests = [people(f"g{i}@example.com", f"ゲスト{i}") for i in range(TALK_DAILY_PRESS_LIMIT + 2)]
+    for guest in guests:
+        assert guest.react(meeting["id"], "join").status_code == 200
+    return host, guests
+
+
+def test_the_limit_is_twenty_and_the_words_name_the_button():
+    assert TALK_DAILY_PRESS_LIMIT == 20
+    assert TALK_ERROR_DAILY_LIMIT == (
+        f"今日はここまでです。「{TALK_LABEL}」を押せるのは1日20人までで、明日（0時すぎ）からまた押せます。")
+
+
+def test_the_21st_new_person_is_refused_and_nothing_is_left(crowd):
+    host, guests = crowd
+    for guest in guests[:20]:
+        assert press(host, guest).status_code == 200
+    # the same person again: not counted, not refused, the same answer
+    assert press(host, guests[0]).json() == {"matched": False, "room_id": None}
+    refused = press(host, guests[20])
+    assert refused.status_code == 422 and refused.json()["detail"] == TALK_ERROR_DAILY_LIMIT
+    store = application.state["store"]
+    assert (host.id, guests[20].id) not in store._talk_wishes
+    # the others are not affected
+    assert press(guests[20], host).status_code == 200
+
+
+def test_taking_a_press_back_does_not_give_the_count_back(crowd):
+    host, guests = crowd
+    for guest in guests[:20]:
+        press(host, guest)
+    assert withdraw(host, guests[0]).status_code == 200
+    again = press(host, guests[0])
+    assert again.status_code == 422 and again.json()["detail"] == TALK_ERROR_DAILY_LIMIT
+
+
+def test_pressing_back_counts_as_one_and_an_existing_room_does_not(crowd):
+    host, guests = crowd
+    assert press(guests[0], host).status_code == 200            # guests[0] pressed the host first
+    for guest in guests[1:20]:
+        assert press(host, guest).status_code == 200            # 19
+    matched = press(host, guests[0])                             # the 20th: pressing back
+    assert matched.json()["matched"] is True
+    again = press(host, guests[0])                               # a room exists: not counted, not refused
+    assert again.status_code == 200 and again.json()["matched"] is True
+    refused = press(host, guests[20])
+    assert refused.status_code == 422 and refused.json()["detail"] == TALK_ERROR_DAILY_LIMIT
+
+
+def test_a_new_day_starts_from_zero_and_old_counts_are_swept(crowd):
+    host, guests = crowd
+    for guest in guests[:20]:
+        press(host, guest)
+    assert press(host, guests[20]).status_code == 422
+    store = application.state["store"]
+    ((account, day),) = store._talk_daily_presses.keys()
+    store._talk_daily_presses[(account, "2000-01-01")] = store._talk_daily_presses.pop((account, day))
+    assert press(host, guests[20]).status_code == 200
+    assert list(store._talk_daily_presses.values()) == [1]       # the old row is gone

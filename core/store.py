@@ -60,6 +60,8 @@ from core.config import (
     LOCAL_DEMO_INVITE_CODE,
     MEMBERS_ONLY_CACHE_SECONDS,
     RECRUIT_TAG,
+    TALK_DAILY_PRESS_LIMIT,
+    TALK_ERROR_DAILY_LIMIT,
     TALK_ERROR_LOGIN,
     TALK_ERROR_NOT_PEER,
     TALK_ERROR_SELF,
@@ -285,6 +287,7 @@ class MemoryStore:
         self._dm_messages = []      # oldest first
         self._dm_blocks = set()     # (blocker_id, blocked_id)
         self._talk_stats = {}       # JST day -> {pressed, matched}: counts only
+        self._talk_daily_presses = {}   # (account_id, JST day) -> people newly pressed that day
         self._communities = {}      # id -> {id, slug, name, created_by, created_at}
         self._members = {}          # (community_id, account_id) -> {role, joined_at}
         self._invites = {}          # id -> {id, community_id, code, created_by, created_at, expires_at, revoked_at, uses}
@@ -989,6 +992,15 @@ class MemoryStore:
         row = self._talk_stats.setdefault(day, {"pressed": 0, "matched": 0})
         row[column] += 1
 
+    def _talk_count_press(self, me):
+        """Count one newly pressed person for today (JST), or refuse the 21st. Lock held.
+        Taking a press back does not give the count back."""
+        today = (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+        key = (me, today.isoformat())
+        if self._talk_daily_presses.get(key, 0) >= TALK_DAILY_PRESS_LIMIT:
+            raise TalkRefused(TALK_ERROR_DAILY_LIMIT)
+        self._talk_daily_presses[key] = self._talk_daily_presses.get(key, 0) + 1
+
     def talk_peers(self, me):
         """Everybody in a community I am in, plus everybody in a meeting I am in (the meeting
         rule only matters while members_only is off), except me and anyone blocked either way."""
@@ -1043,7 +1055,12 @@ class MemoryStore:
             room = self._room_between(me, target)
             if room:
                 return {"matched": True, "room_id": room["id"]}
+            # Older than 2 days: the day counts are swept along the way (like the notice records).
+            keep_from = ((datetime.now(timezone.utc) + timedelta(hours=9)).date() - timedelta(days=1)).isoformat()
+            for key in [key for key in self._talk_daily_presses if key[1] < keep_from]:
+                del self._talk_daily_presses[key]
             if (target, me) in self._talk_wishes:
+                self._talk_count_press(me)   # pressing back is a new press: one person
                 low, high = sorted((me, target))
                 room = {"id": str(uuid.uuid4()), "user_a": low, "user_b": high,
                         "event_post_id": shared, "created_at": _now()}
@@ -1056,6 +1073,7 @@ class MemoryStore:
                 self._talk_stat("matched")
                 return {"matched": True, "room_id": room["id"]}
             if (me, target) not in self._talk_wishes:
+                self._talk_count_press(me)   # a new press: one person (refused past the limit)
                 self._talk_wishes[(me, target)] = {"event_post_id": shared, "created_at": _now()}
                 # Nameless and meeting-less. Not added while the person pressed already has an
                 # UNREAD talk_wish (any number of people, one line), and not more than once per

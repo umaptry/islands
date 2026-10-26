@@ -186,6 +186,19 @@ test('errors: the database\'s Japanese is shown, technical words become a senten
   assert.ok(!rules.talkRefusal('new row violates row-level security policy', 'dm').includes('ブロック'));
 });
 
+test('the daily limit is said with the button name from the config, and only then', () => {
+  const dbWords = '今日はここまでです。「もっと話してみたい」を押せるのは1日20人までで、明日（0時すぎ）からまた押せます。';
+  assert.equal(rules.talkRefusal(dbWords, 'talk', LABEL), dbWords);
+  assert.equal(rules.talkRefusal(dbWords, 'talk', 'ほげ'),
+    '今日はここまでです。「ほげ」を押せるのは1日20人までで、明日（0時すぎ）からまた押せます。');
+  assert.equal(rules.talkRefusal(dbWords), dbWords, 'no label: the database own sentence');
+  assert.equal(rules.dailyLimitText('ほげ', 20), rules.talkRefusal(dbWords, 'talk', 'ほげ'));
+  // Nothing about the limit is on the button or the intro before it is hit.
+  const quiet = [...['none', 'pressed', 'matched'].flatMap((s) => Object.values(rules.talkButtonText(s, LABEL, NAME))),
+    ...Object.values(rules.introPrompt(LABEL)), rules.afterPress({ matched: false, room_id: null }, LABEL).message];
+  quiet.forEach((line) => assert.ok(!/1日|人まで/.test(line), line));
+});
+
 // ---------------------------------------------------------------- rooms
 
 const room = (id, other, last, created = '2026-10-30T10:00:00Z') =>
