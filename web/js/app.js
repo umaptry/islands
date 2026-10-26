@@ -10,6 +10,7 @@ import { session } from './session.js';
 import { state } from './state.js';
 import { onboardingStep } from './onboarding.js';
 import { setupKeyboardGuard } from './keyboard.js';
+import { setupZoomGuard } from './zoom-guard.js';
 import { navigate, refreshNav, route, screen, setGuard, setNavVisible, show, startRouter } from './router.js';
 import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
 import { setupPush, syncPush } from './push.js';
@@ -95,6 +96,7 @@ async function boot() {
   setupIcons();
   watchScreenTone();
   setupKeyboardGuard();
+  setupZoomGuard();
   document.addEventListener('map:version-changed', () => {
     const node = document.getElementById('mapVersionNotice');
     if (node) node.hidden = false;

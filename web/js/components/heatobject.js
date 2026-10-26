@@ -55,8 +55,7 @@ export function heatObject(size = 96) {
   svg.setAttribute('viewBox', '0 0 100 100');
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
-  svg.style.overflow = 'visible';
-  node.append(svg);
+  svg.style.overflow = 'visible';  node.append(svg);
 
   // Built once; every frame only changes attributes.
   const id = `heat-body-${serial}`;

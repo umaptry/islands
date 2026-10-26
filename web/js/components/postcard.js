@@ -19,7 +19,7 @@ import { buzz } from '../feedback.js';
 import { attachLongPress } from '../longpress.js';
 import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
-import { joinTerms, joinWord } from '../recruit-rules.js';
+import { joinTerms, joinWord, joinCount } from '../recruit-rules.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -32,7 +32,10 @@ subscribe(() => {
   document.querySelectorAll('.post-card[data-post-id]').forEach((card) => {
     const post = state.postsById.get(card.dataset.postId) || state.myPosts.find((p) => p.id === card.dataset.postId);
     if (!post) return;
-    card.querySelectorAll('[data-count]').forEach((node) => { node.textContent = post[node.dataset.count] || 0; });
+    // 参加 counts the joins of every copy of a post put on several communities (joinCount).
+    card.querySelectorAll('[data-count]').forEach((node) => {
+      node.textContent = node.dataset.count === 'join_count' ? joinCount(post) : post[node.dataset.count] || 0;
+    });
     card.querySelectorAll('[data-views]').forEach((node) => paintViews(node, post.id));
     card.querySelectorAll('[data-reaction]').forEach((node) => {
       const on = hasReacted(post.id, node.dataset.reaction);
@@ -269,7 +272,8 @@ function footer(post, options) {
         el('span', { className: 'pj-info' },
           el('span', { className: 'pj-terms' }),
           '現在',
-          el('b', { className: 'num', attrs: { 'data-count': reaction.countKey }, text: post[reaction.countKey] || 0 }),
+          // A post on several communities counts its places over all of them: so does this number.
+          el('b', { className: 'num', attrs: { 'data-count': reaction.countKey }, text: joinCount(post) }),
           '人参加'))
       : el('button', {
         className: `post-action reaction ${reaction.tone}`,
@@ -285,7 +289,7 @@ function footer(post, options) {
       button.setAttribute('aria-pressed', String(hasReacted(post.id, reaction.kind)));
       const count = button.querySelector('[data-count]');
       const current = state.postsById.get(post.id) || post;
-      count.textContent = String(current[reaction.countKey] || 0);
+      count.textContent = String(isJoin ? joinCount(current) : current[reaction.countKey] || 0);
       if (reaction.kind === 'join') paintJoin(button, current);
     };
     paint();

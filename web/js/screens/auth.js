@@ -23,7 +23,7 @@ import { onboardingStep, setOnboardingStep } from '../onboarding.js';
 import { navigate, screen } from '../router.js';
 import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
-import { browserStorage, refreshTalk, talkLabel } from '../talk.js';
+import { browserStorage, refreshTalk } from '../talk.js';
 import { mapLinkFor, takePendingPost } from '../return-post.js';
 import { browseView, entryView, readPendingInvite } from '../community-rules.js';
 import { settleSession } from './invite.js';
@@ -454,8 +454,8 @@ export function setupProfileSetup() {
 
 // ---------------------------------------------------------------- guidance
 
-// The picture slides (the 「使い方を見る」 intro that was, and what the lines
-// between people mean), shown once to a new account between the profile and the
+// The picture slides (what islands is, how a one-line post makes an island,
+// how islands connect, and what happens inside one), shown once to a new account between the profile and the
 // first post. Buttons are the only
 // way through: a scroll-snap track let a half swipe settle between two slides
 // with the dots showing one thing and the screen showing another.
@@ -468,19 +468,18 @@ export function setupGuidance() {
   let index = 0;
   let review = false;
   const track = () => $('guidanceTrack');
-  // The slide about the talk button is left out while the feature is off (no label to name).
-  const slides = () => [...track().children].filter((slide) => !slide.hidden);
-  const dots = () => [...$('guidanceDots').children].filter((dot) => !dot.hidden);
+  const slides = () => [...track().children];
+  const dots = () => [...$('guidanceDots').children];
 
   function paint() {
-    const slides = [...track().children].filter((slide) => !slide.hidden);
+    const slides = [...track().children];
     track().style.transform = `translateX(${-index * 100}%)`;
     // The slides beside the one in view are only slid out of sight.
     slides.forEach((slide, i) => { slide.inert = i !== index; });
     dots().forEach((dot, i) => dot.classList.toggle('on', i === index));
     $('guidanceBack').hidden = index === 0;
     const last = index === slides.length - 1;
-    $('guidanceNext').textContent = last ? (review ? '閉じる' : 'ひとこと書いてみる') : '次へ';
+    $('guidanceNext').textContent = last ? (review ? '閉じる' : '投稿してみる') : '次へ';
     if (!review) setOnboardingStep(String(index));
   }
 
@@ -518,13 +517,6 @@ export function setupGuidance() {
       review = Boolean(query && query.get('review') === '1') && !onboardingStep();
       $('guidance').classList.toggle('is-review', review);
       $('guidanceSkip').textContent = review ? '閉じる' : 'スキップ';
-      // The button's name comes from /api/config (talk.label), never from this page.
-      const label = talkLabel();
-      $$('#guidance [data-talk-label]').forEach((node) => { node.textContent = label; });
-      const talkSlide = track().querySelector('[data-talk-slide]');
-      talkSlide.hidden = !label;
-      const talkDot = $('guidanceDots').children[[...track().children].indexOf(talkSlide)];
-      if (talkDot) talkDot.hidden = !label;
       if (review) {
         index = 0;
       } else {

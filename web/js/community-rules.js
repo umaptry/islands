@@ -651,3 +651,68 @@ export function communityNameIn(communities, id) {
   const found = (communities || []).find((entry) => entry.id === id);
   return found ? found.name : '';
 }
+
+// ---------------------------------------------------------------- one post on several communities (2026-10-29)
+
+/** Whether a post may be put on other communities' maps too: the server says so (features.share, which needs
+ * the members-only rules and the posts.share_group column). */
+export const shareOn = (cfg) => membersOnlyOn(cfg) && cfg.features.share === true;
+
+/**
+ * The posts of a page, one entry per post: the copies of a post put on several communities (the same
+ * share_group) become one entry that carries the names of all their communities. The entry shows the copy of
+ * `preferred` (the community whose map is open) when there is one, else the first copy written. Entries keep
+ * the order of the first copy of each post, newest first (sharing an old post does not lift it to the top).
+ */
+export function groupShared(posts, { communities = [], preferred = null } = {}) {
+  const groups = new Map();
+  for (const post of Array.isArray(posts) ? posts : []) {
+    if (!post) continue;
+    const key = post.share_group || post.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(post);
+  }
+  const time = (post) => Date.parse(post.created_at || '') || 0;
+  return [...groups.values()].map((copies) => {
+    const ordered = [...copies].sort((a, b) => time(a) - time(b));
+    const shown = ordered.find((post) => preferred && post.community_id === preferred) || ordered[0];
+    const names = ordered.map((post) => communityNameIn(communities, post.community_id)).filter(Boolean);
+    return { post: shown, copies: ordered, names, since: time(ordered[0]) };
+  }).sort((a, b) => b.since - a.since);
+}
+
+/**
+ * The communities offered under 「ほかのコミュニティにも出す」 on the post screen: every community of mine but
+ * the one the post is (or will be) in. `shared` marks one that already has a copy (shown ticked, not to be
+ * unticked here: a copy is taken out with 削除 → このコミュニティだけ外す). Empty when there is nothing to offer.
+ */
+export function shareTargets({ communities, here, copies = [] }) {
+  const has = new Set((copies || []).map((post) => post && post.community_id).filter(Boolean));
+  return (communities || [])
+    .filter((entry) => entry && entry.id && entry.id !== here)
+    .map((entry) => ({ id: entry.id, name: entry.name, shared: has.has(entry.id) }));
+}
+
+/** The words of the delete question for a post on the maps of the communities `names`; `here` is the name of
+ * the community of the copy being deleted (the one 「…だけ外す」 takes out). `count` is how many copies there
+ * are: a copy in a community whose name I do not know (one I left) still counts, said as 「ほか N か所」. */
+export function deleteQuestion(names, here = '', count = null) {
+  const known = (names || []).filter(Boolean);
+  const total = Math.max(known.length, Number(count) || 0);
+  const unknown = total - known.length;
+  const list = unknown > 0 ? [...known, `ほか${unknown}か所`] : known;
+  if (total < 2) {
+    return {
+      title: 'この投稿を削除しますか？', body: '地図からも消えます。届いたメッセージは残ります。',
+      choices: [{ value: 'one', label: '削除する', danger: true }],
+    };
+  }
+  return {
+    title: 'この投稿を削除しますか？',
+    body: `${list.join('・')}に出しています。いいね・メッセージ・参加は、外したコミュニティの分だけ消えます。`,
+    choices: [
+      { value: 'one', label: here ? `${here}だけ外す` : 'このコミュニティだけ外す', danger: false },
+      { value: 'all', label: 'すべてのコミュニティから消す', danger: true },
+    ],
+  };
+}

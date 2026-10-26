@@ -51,7 +51,7 @@ export function recruitState(post, now = new Date()) {
   const deadline = YMD.test(post.recruit_deadline || '') ? post.recruit_deadline : null;
   if (deadline && now.getTime() >= Date.parse(`${addDays(deadline, 1)}T00:00:00+09:00`)) return 'deadline';
   const capacity = Number(post.recruit_capacity);
-  if (capacity > 0) return Number(post.join_count || 0) >= capacity ? 'full' : null;
+  if (capacity > 0) return joinCount(post) >= capacity ? 'full' : null;
   return post.recruit_closed === 'full' ? 'full' : null;
 }
 
@@ -69,7 +69,11 @@ export function joinTerms(post, now = new Date()) {
   const parts = [];
   const deadline = formatDeadlineShort(post?.recruit_deadline, now);
   if (deadline) parts.push(`申込期限 ${deadline}`);
-  if (Number(post?.recruit_capacity) > 0) parts.push(`先着${Number(post.recruit_capacity)}人`);
+  if (Number(post?.recruit_capacity) > 0) {
+    // Put on several communities: say that the number below counts the others too (only once it does).
+    const others = joinCount(post) > Number(post?.join_count || 0);
+    parts.push(`先着${Number(post.recruit_capacity)}人${others ? '（ほかのコミュニティの参加も含む）' : ''}`);
+  }
   return parts.map((part) => `${part}・`).join('');
 }
 
@@ -133,4 +137,12 @@ export function extrasPayload({ enabled, editing, recruiting, prompt, deadline, 
     if (prompt) out.prompt = prompt;
   }
   return out;
+}
+
+/** The joins a first-come capacity is counted against: on a post put on several communities, everybody who
+ * joined any copy (each person once, the server's group_join_count); otherwise this post's own joins. */
+export function joinCount(post) {
+  const own = Number(post?.join_count || 0);
+  if (Number(post?.recruit_capacity) > 0 && post?.group_join_count != null) return Number(post.group_join_count) || 0;
+  return own;
 }

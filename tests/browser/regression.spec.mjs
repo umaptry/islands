@@ -36,8 +36,8 @@ test('new profile reaches guidance before the first post, including after reload
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   await expect(page.locator('#guidanceTrack > .slide').nth(0)).toBeVisible();
-  await expect(page.locator('#guidanceTrack > .slide')).toHaveCount(6);
-  await expect(page.locator('#guidanceDots .dot')).toHaveCount(6);
+  await expect(page.locator('#guidanceTrack > .slide')).toHaveCount(4);
+  await expect(page.locator('#guidanceDots .dot')).toHaveCount(4);
   await page.locator('#guidanceNext').click();
   await page.goto('/');
   await expect(page.locator('#guidance')).toHaveClass(/active/);
@@ -71,15 +71,17 @@ test('reference registration saves profile and completes the first post', async 
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   await expect(page.locator('#guidance h2').first()).toHaveText('islandsへようこそ');
   const pages = await page.locator('#guidanceTrack > .slide').count();
-  expect(pages).toBe(6);
-  // 6枚目のボタンの名前は画面に書かず、/api/config の talk.label から入る。
-  const talkLabel = await page.evaluate(async () => (await import('/static/js/config.js')).config().talk.label);
-  await expect(page.locator('#guidanceTrack > .slide').nth(5).locator('h2')).toContainText(`『${talkLabel}』`);
-  await expect(page.locator('#guidanceTrack > .slide').nth(5).locator('.guidance-first-only')).toHaveCount(1);
+  expect(pages).toBe(4);
+  await expect(page.locator('#guidanceTrack > .slide').nth(3).locator('h2')).toHaveText('島の中で盛り上がる');
+  await expect(page.locator('#guidanceTrack > .slide').nth(3).locator('.guidance-first-only')).toHaveCount(1);
   for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
   await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
-  // スライダーを一度動かすまで投稿できない。
-  await expect(page.locator('#composeSubmit')).toBeDisabled();
+  // スライダーを一度動かすまでは送られない。押すとスライダーを知らせる。
+  await expect(page.locator('#composeSubmit')).toBeEnabled();
+  await page.locator('#composeSubmit').click();
+  await expect(page.locator('#compose')).toHaveClass(/active/);
+  await expect(page.locator('#composeHint')).toHaveClass(/alert/);
+  await expect(page.locator('#composeHint')).toHaveText('バーを左右に動かして、どれくらい本気か選んでください');
   await page.locator('#composeMotivation').fill('70');
   await expect(page.locator('#composeSubmit')).toBeEnabled();
   await page.locator('#composeSubmit').click();
@@ -260,7 +262,7 @@ test('guidance can be skipped and the last button invites a first post', async (
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   const slides = await page.locator('#guidanceTrack > *').count();
   for (let i = 1; i < slides; i++) await page.locator('#guidanceNext').click();
-  await expect(page.locator('#guidanceNext')).toHaveText('ひとこと書いてみる');
+  await expect(page.locator('#guidanceNext')).toHaveText('投稿してみる');
   await page.locator('#guidanceSkip').click();
   await expect(page.locator('#compose')).toHaveClass(/active/);
 });
@@ -318,28 +320,35 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
     await expect(page.locator(id)).toBeVisible();
   }
   const chips = page.locator('#composeStarterList .extra-chip');
-  await expect(chips).toHaveText(['昔がんばってたのは、', '最近はまってるのは、', '今度やってみたいのは、']);
+  await expect(page.locator('#composeStarters .weekly-label')).toHaveText('お題');
+  await expect(chips).toHaveText(['昔がんばってたこと', '最近はまってること', '今度やってみたいこと']);
+  // nothing chosen: the example of 最近はまってること is the placeholder
+  const example = '例：最近、仕事終わりにレイトショーに行くのにハマってます。洋画をよく見ます。';
+  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', example);
   await chips.nth(1).click();
-  await expect(page.locator('#composeBody')).toHaveValue('最近はまってるのは、');
-  await expect(page.locator('#composeBody')).toBeFocused();
+  // the box stays empty (an example is never an input) and the example shows as the placeholder
+  await expect(page.locator('#composeBody')).toHaveValue('');
+  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', example);
   await expect(chips.nth(1)).toHaveAttribute('aria-pressed', 'true');
-  // the cursor is at the end: what is typed next follows the phrase
-  await page.keyboard.type('ボードゲームです');
-  await expect(page.locator('#composeBody')).toHaveValue('最近はまってるのは、ボードゲームです');
-  // words the person wrote are not replaced by another phrase
+  await page.locator('#composeMotivation').fill('60');
+  await expect(page.locator('#composeSubmit')).toBeDisabled();
+  // words the person wrote are never replaced
+  await page.locator('#composeBody').fill('ボードゲームです');
   await chips.nth(0).click();
-  await expect(page.locator('#composeBody')).toHaveValue('最近はまってるのは、ボードゲームです');
-  // a box holding only a phrase takes the next phrase in its place
-  await page.locator('#composeBody').fill('昔がんばってたのは、');
-  await chips.nth(2).click();
-  await expect(page.locator('#composeBody')).toHaveValue('今度やってみたいのは、');
+  await expect(page.locator('#composeBody')).toHaveValue('ボードゲームです');
+  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', /^例：高校まで陸上部/);
+  // a tap anywhere on the bar sets the heat there
+  const bar = await page.locator('#composeMotivation').boundingBox();
+  await page.mouse.click(bar.x + bar.width * 0.8, bar.y + bar.height / 2);
+  const tapped = Number(await page.locator('#composeMotivation').inputValue());
+  expect(Math.abs(tapped - 80)).toBeLessThanOrEqual(2);
   // later posts keep the old prompts and have no opening phrases
   await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post'));
   await expect(page.locator('#composeStarters')).toBeHidden();
   await expect(page.locator('#composeExamples')).toBeHidden();
 });
 
-test('the chosen opening phrase is recorded as the post prompt', async ({ page }) => {
+test('the chosen prompt is recorded as the post prompt', async ({ page }) => {
   await signInForFirstPost(page, 'starter-prompt');
   await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
   await page.locator('#composeStarterList .extra-chip').nth(0).click();

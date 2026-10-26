@@ -75,8 +75,12 @@ def shape(row, now=None):
         out.setdefault(column, None)
     if out["recruit_deadline"] is not None:
         out["recruit_deadline"] = str(out["recruit_deadline"])[:10]
+    # A post put on several communities counts its places over all of them (2026-10-29).
+    joins = out.get("group_join_count")
+    if joins is None:
+        joins = out.get("join_count")
     out["recruit_closed"] = closed_state(
-        out["recruit_deadline"], out["recruit_capacity"], out.get("join_count"), now)
+        out["recruit_deadline"], out["recruit_capacity"], joins, now)
     return out
 
 
