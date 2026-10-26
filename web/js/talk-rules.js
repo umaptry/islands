@@ -104,6 +104,11 @@ export function withdrawPrompt(label) {
   };
 }
 
+/** The 21st new person of the day. Only shown when the limit is hit; nothing explains it before. */
+export function dailyLimitText(label, count) {
+  return `今日はここまでです。「${label}」を押せるのは1日${count}人までで、明日（0時すぎ）からまた押せます。`;
+}
+
 /** press_talk's answer, whatever shape it came in. */
 export function readPress(result) {
   const matched = Boolean(result && result.matched === true && result.room_id);
@@ -133,11 +138,15 @@ const JAPANESE = /[぀-ヿ一-鿿]/;
  * The database raises its own Japanese sentences; those are shown as they are.
  * Anything technical (a PostgREST code, an English policy message) becomes a
  * plain sentence - the same idea as joinRefusal(), for a different set of words.
- * `context` is 'talk' or 'dm'.
+ * `context` is 'talk' or 'dm'. `label` is the button's name (talk.label): the
+ * "1 day, N people" refusal is said again with it, so a renamed button never
+ * leaves the old name in that sentence.
  */
-export function talkRefusal(message, context = 'talk') {
+export function talkRefusal(message, context = 'talk', label = '') {
   const text = String(message || '').trim();
   if (!text) return GENERIC;
+  const limit = /^今日はここまでです。.*1日(\d+)人まで/.exec(text);
+  if (limit && label) return dailyLimitText(label, limit[1]);
   if (/row-level security|permission denied|42501|violates/i.test(text)) {
     return context === 'dm' ? 'この DM には、いまメッセージを送れません。' : 'いまは押せません。';
   }

@@ -17,6 +17,8 @@ def test_the_terms_are_served(client):
     assert "islands 運営チーム" in text
     assert 'href="mailto:' in text
     assert "制定日：" in text
+    assert "改定日：2026年10月26日" in text
+    assert "押せるのは、1日に20人までです（日本時間の0時に戻ります）" in text
     assert 'href="/privacy"' in text
 
 

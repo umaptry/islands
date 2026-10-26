@@ -500,6 +500,9 @@ TALK_LABEL = "もっと話してみたい"
 # A press stays until it is withdrawn or matched. Only the anonymous talk_wish notice is
 # limited: once per this many days from the same person to the same person.
 TALK_NOTICE_DAYS = 14
+# How many people one person can newly press per day (JST). The SQL in
+# supabase/migrations/20261028020000_talk_daily_limit.sql writes the same number as a literal 20.
+TALK_DAILY_PRESS_LIMIT = 20
 DM_BODY_MAX = 1000
 DM_ROOM_EXCERPT = 30
 # The words press_talk raises (PostgREST {"message"}; local mode 4xx {"detail"}).
@@ -507,6 +510,10 @@ DM_ROOM_EXCERPT = 30
 TALK_ERROR_LOGIN = "ログインしてください。"
 TALK_ERROR_SELF = "自分には押せません。"
 TALK_ERROR_NOT_PEER = "この相手には押せません。"
+TALK_ERROR_DAILY_LIMIT = (
+    f"今日はここまでです。「{TALK_LABEL}」を押せるのは1日{TALK_DAILY_PRESS_LIMIT}人までで、"
+    "明日（0時すぎ）からまた押せます。"
+)
 DM_ERROR_SEND = "このDMには送信できません。"
 
 # Communities and invite links (2026-10-26, supabase/migrations/20261026010000_communities_and_invites.sql).
