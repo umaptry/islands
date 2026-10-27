@@ -43,7 +43,7 @@ import { takePendingPost } from '../return-post.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
 import { communityNameIn, postingTarget, shareOn, shareTargets } from '../community-rules.js';
 import { sharePost } from '../share.js';
-import { bodyLength, splitOverflow, stepBefore } from '../compose-rules.js';
+import { bodyLength, followPromptTag, splitOverflow, stepBefore } from '../compose-rules.js';
 import { primeKeyboard, releaseKeyboard } from '../keyboard.js';
 
 let editing = null;       // the post being edited, or null for a new one
@@ -57,6 +57,7 @@ let requestKey = null;
 let requestBody = null;
 let firstPost = false;
 let touched = false;     // the heat slider has been moved (a new post cannot go without)
+let promptTicked = null; // the tag a chosen prompt ticked at ③, until the person touches it (compose-rules)
 let heat = null;         // the HeatObject above the slider
 let selectedPrompt = null;   // "weekly", an extra prompt's key, or null
 let promptPosts = [];        // my posts, to hide the extra prompts already used
@@ -238,6 +239,7 @@ function paintTags(selected = []) {
     );
     node.dataset.tag = tag;
     node.addEventListener('click', () => {
+      if (tag === promptTicked) promptTicked = null;
       const on = node.classList.toggle('on');
       node.setAttribute('aria-checked', String(on));
       paintRecruit();
@@ -245,6 +247,24 @@ function paintTags(selected = []) {
     });
     box.append(node);
   });
+}
+
+/** Tick or untick one tag at ③ the way a tap does (without making it the person's choice). */
+function setTag(tag, on) {
+  const node = $$('#composeTags .check').find((item) => item.dataset.tag === tag);
+  if (!node) return;
+  node.classList.toggle('on', on);
+  node.setAttribute('aria-checked', String(on));
+}
+
+/** After the chosen prompt changed: the tag it comes with (困ってること → 助けてほしい) follows it. */
+function syncPromptTag() {
+  const want = (config().extra_prompts || []).find((item) => item?.key === selectedPrompt)?.tag || null;
+  const change = followPromptTag({ ticked: promptTicked, want, on: selectedTags() });
+  if (change.untick) setTag(change.untick, false);
+  if (change.tick) setTag(change.tick, true);
+  promptTicked = change.ticked;
+  if (change.untick || change.tick) paintRecruit();
 }
 
 /** The weekly prompt for a new post; the extra ones also on the first post,
@@ -274,6 +294,7 @@ function paintExtraPrompts(show) {
     chip.addEventListener('click', () => {
       selectedPrompt = selectedPrompt === item.key ? null : item.key;
       syncPrompt();
+      syncPromptTag();
       if (selectedPrompt) $('composeBody').focus();
     });
     list.append(chip);
@@ -305,6 +326,7 @@ function paintStarters() {
 function useStarter(item) {
   selectedPrompt = selectedPrompt === item.key ? null : item.key;
   syncPrompt();
+  syncPromptTag();
   buzz('tap');
   if (selectedPrompt) $('composeBody').focus();
 }
@@ -498,6 +520,7 @@ export function setupCompose() {
     if (!config().weekly_prompt?.text) return;
     selectedPrompt = selectedPrompt === 'weekly' ? null : 'weekly';
     syncPrompt();
+    syncPromptTag();
     if (selectedPrompt) body.focus();
   });
 
@@ -618,6 +641,7 @@ export function setupCompose() {
         : config().limits.motivation_default;
       // A post that exists already has an answer; only a new one has to be given one.
       touched = Boolean(editing);
+      promptTicked = null;
       paintTags(editing ? (editing.tags || []) : []);
       promptPosts = state.myPosts;
       // The weekly prompt is put away for now (2026-10-27): ① offers the three standing ones only.

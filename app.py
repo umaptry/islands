@@ -440,7 +440,7 @@ class PostCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     motivation: int = MOTIVATION_DEFAULT
     image_path: str | None = None
-    # 2026-10-20. prompt: "weekly" | "past" | "now" | "future" | null. The recruit_*
+    # 2026-10-20. prompt: "weekly" | "past" | "now" | "future" | "help" (2026-10-28) | null. The recruit_*
     # fields count only for a post tagged 参加者募集中. Checked by core.post_extras
     # (Any, so a wrong type gets the same Japanese message as a wrong value).
     prompt: str | None = None

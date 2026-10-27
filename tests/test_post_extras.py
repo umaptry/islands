@@ -44,12 +44,21 @@ def test_every_extra_prompt_has_its_own_example_sentence():
     assert not set(examples) & set(EXAMPLE_POSTS)
 
 
+def test_a_prompt_that_comes_with_a_tag_names_a_real_one(client):
+    # 困ってること ticks 助けてほしい at step ③ (the screen reads the tag from /api/config).
+    data = client.get("/api/config").json()
+    tagged = {item["key"]: item["tag"] for item in data["extra_prompts"] if item.get("tag")}
+    assert tagged == {"help": "助けてほしい"}
+    assert set(tagged.values()) <= set(data["tags"])
+
+
 def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     data = client.get("/api/config").json()
     assert [{"key": item["key"], "text": item["text"]} for item in data["extra_prompts"]] == [
         {"key": "past", "text": "昔がんばってたこと"},
         {"key": "now", "text": "最近はまってること"},
         {"key": "future", "text": "今度やってみたいこと"},
+        {"key": "help", "text": "困ってること"},
     ]
     assert data["extra_prompts"] == [dict(item) for item in EXTRA_PROMPTS]
     assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
@@ -59,7 +68,7 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):
     data = client.get("/api/config").json()
     assert [item["text"] for item in data["post_starters"]] == [
-        "昔がんばってたこと", "最近はまってること", "今度やってみたいこと"]
+        "昔がんばってたこと", "最近はまってること", "今度やってみたいこと", "困ってること"]
     # the chip names the prompt; the box is never filled with it
     assert [item["text"] for item in data["post_starters"]] == [item["text"] for item in data["extra_prompts"]]
     assert next(item for item in data["extra_prompts"] if item["key"] == "now")["example"] == (
@@ -107,6 +116,7 @@ def test_the_deadline_range_and_the_capacity_range():
     with pytest.raises(ValueError):
         post_extras.clean_prompt("someday")
     assert post_extras.clean_prompt("future") == "future"
+    assert post_extras.clean_prompt("help") == "help"
 
 
 # --------------------------------------------------------------------------

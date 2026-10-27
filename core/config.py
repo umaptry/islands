@@ -471,7 +471,10 @@ EXAMPLE_POSTS = (
 # Rewritten 2026-10-27 (chosen by the founder): what the person does in concrete words (they place the
 # post near the people who write alike), a touch of themselves, and an ending another person can answer
 # (教えてください / 一緒に…). About 45 characters, well under the 60, and in です・ます throughout.
-# Three different kinds of topic, so copying one does not pile everybody onto one island.
+# Different kinds of topic, so copying one does not pile everybody onto one island.
+# 2026-10-28 (chosen by the founder): 困ってること, for asking for a hand. A prompt's `tag` is ticked at
+# step ③ when the prompt is chosen (and unticked when it is unchosen, unless the person has touched the
+# tag since): 困ってること comes with 助けてほしい, so the card says so and 手伝えるかも is the obvious answer.
 EXTRA_PROMPTS = (
     {"key": "past", "text": "昔がんばってたこと",
      "example": "学生時代はずっとバスケ部でした。運動不足なので、またゆるくボールを触れる仲間がほしいです。"},
@@ -479,6 +482,8 @@ EXTRA_PROMPTS = (
      "example": "仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。"},
     {"key": "future", "text": "今度やってみたいこと",
      "example": "陶芸教室で、自分用のお皿を作ってみたいです。一人だと行きづらいので、一緒に体験しませんか。"},
+    {"key": "help", "text": "困ってること", "tag": "助けてほしい",
+     "example": "家庭菜園のミニトマトが、毎年うまく育ちません。くわしい方がいたら、育て方のコツを教えてください。"},
 )
 # The prompts offered on the first post (chips over the box). Each key is one of
 # EXTRA_PROMPTS' keys, and a chosen chip is recorded as the post's `prompt` like that prompt.
@@ -487,9 +492,11 @@ POST_STARTERS = (
     {"key": "past", "text": "昔がんばってたこと"},
     {"key": "now", "text": "最近はまってること"},
     {"key": "future", "text": "今度やってみたいこと"},
+    {"key": "help", "text": "困ってること"},
 )
 # What a post's `prompt` may be: the weekly one or an extra one.
 POST_PROMPT_KEYS = ("weekly",) + tuple(item["key"] for item in EXTRA_PROMPTS)
+assert all(item.get("tag") in (None,) + TAGS for item in EXTRA_PROMPTS), "お題のタグが TAGS にありません"
 
 # 「参加者募集中」 posts may carry a sign-up deadline (a Japan-time date, open until
 # the end of that day) and a first-come capacity.
