@@ -232,7 +232,7 @@ function paintTags(selected = []) {
   config().tags.forEach((tag) => {
     const node = el('button', {
       className: `check${selected.includes(tag) ? ' on' : ''}`,
-      attrs: { type: 'button', role: 'checkbox', 'aria-checked': selected.includes(tag) },
+      attrs: { type: 'button', role: 'checkbox', 'aria-checked': String(selected.includes(tag)) },
     },
       el('span', { className: 'check-box', attrs: { 'aria-hidden': 'true' } }),
       el('span', { className: 'check-label', text: tag }),
@@ -559,7 +559,7 @@ export function setupCompose() {
       $('compose').style.bottom = '';
       if (draftKey) drafts.set(draftKey, { body: body.value, tags: selectedTags(), motivation: $('composeMotivation').value,
         touched, imagePath, imageBlob, requestKey, requestBody,
-        prompt: selectedPrompt, deadline: $('composeDeadline').value, capacity: $('composeCapacity').value,
+        prompt: selectedPrompt, promptTicked, deadline: $('composeDeadline').value, capacity: $('composeCapacity').value,
         share: [...shareChosen] });
     },
     enter: async (params, query) => {
@@ -656,6 +656,7 @@ export function setupCompose() {
         touched = Boolean(draft.touched);
         paintTags(draft.tags);
         selectedPrompt = draft.prompt || null;
+        promptTicked = draft.promptTicked || null;   // a tick the prompt made still goes with it
         paintExtraPrompts(!editing && !firstPost);
         paintStarters();
         imagePath = draft.imagePath;

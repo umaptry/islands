@@ -448,6 +448,22 @@ test('困ってること ticks 助けてほしい at ③, and leaves the tag alo
   expect(saved).toEqual({ prompt: 'help', tags: ['助けてほしい'] });
 });
 
+test('a draft keeps whether 助けてほしい was ticked by 困ってること', async ({ page }) => {
+  await signInForFirstPost(page, 'help-draft');
+  const go = (hash) => page.evaluate(async (h) => (await import('/static/js/router.js')).navigate(h), hash);
+  await go('#/post?first=1');
+  await page.locator('#composeStarterList .extra-chip[data-key="help"]').click();
+  await page.locator('#composeBody').fill('ミニトマトの育て方が分かりません。');
+  await go('#/map');
+  await expect(page.locator('#map')).toHaveClass(/active/);
+  await go('#/post?first=1');
+  const tag = page.locator('#composeTags .check[data-tag="助けてほしい"]');
+  await expect(tag).toHaveAttribute('aria-checked', 'true');
+  // the prompt's tick still goes with the prompt after the draft came back
+  await page.locator('#composeStarterList .extra-chip[data-key="now"]').click();
+  await expect(tag).toHaveAttribute('aria-checked', 'false');
+});
+
 test('first post opens already expanded when a draft with text comes back', async ({ page }) => {
   await signInForFirstPost(page, 'draft-open');
   const go = (hash) => page.evaluate(async (h) => (await import('/static/js/router.js')).navigate(h), hash);
