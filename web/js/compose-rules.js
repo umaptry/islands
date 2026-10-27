@@ -36,3 +36,19 @@ export function splitOverflow(text, max) {
 export function stepBefore(step) {
   return step > 1 ? step - 1 : null;
 }
+
+/**
+ * Some prompts come with a tag at ③ (困ってること → 助けてほしい): choosing the prompt ticks it, and
+ * choosing another prompt or none takes the tick away again. A tag the person ticked or unticked
+ * themselves is theirs and is never changed. Called after the chosen prompt changed:
+ * `ticked` is the tag a prompt ticked and the person has not touched since (or null), `want` the tag
+ * of the prompt chosen now (or null), `on` the tags ticked now. Returns what to untick and to tick,
+ * and the new `ticked`.
+ */
+export function followPromptTag({ ticked, want, on }) {
+  const untick = ticked && ticked !== want && on.includes(ticked) ? ticked : null;
+  if (!want) return { untick, tick: null, ticked: null };
+  if (ticked === want) return { untick: null, tick: null, ticked };
+  if (on.includes(want)) return { untick, tick: null, ticked: null };
+  return { untick, tick: want, ticked: want };
+}

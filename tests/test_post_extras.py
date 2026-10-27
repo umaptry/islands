@@ -44,12 +44,21 @@ def test_every_extra_prompt_has_its_own_example_sentence():
     assert not set(examples) & set(EXAMPLE_POSTS)
 
 
+def test_a_prompt_that_comes_with_a_tag_names_a_real_one(client):
+    # 困ってること ticks 助けてほしい at step ③ (the screen reads the tag from /api/config).
+    data = client.get("/api/config").json()
+    tagged = {item["key"]: item["tag"] for item in data["extra_prompts"] if item.get("tag")}
+    assert tagged == {"help": "助けてほしい"}
+    assert set(tagged.values()) <= set(data["tags"])
+
+
 def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     data = client.get("/api/config").json()
     assert [{"key": item["key"], "text": item["text"]} for item in data["extra_prompts"]] == [
         {"key": "past", "text": "昔がんばってたこと"},
         {"key": "now", "text": "最近はまってること"},
         {"key": "future", "text": "今度やってみたいこと"},
+        {"key": "help", "text": "困ってること"},
     ]
     assert data["extra_prompts"] == [dict(item) for item in EXTRA_PROMPTS]
     assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
@@ -59,7 +68,7 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):
     data = client.get("/api/config").json()
     assert [item["text"] for item in data["post_starters"]] == [
-        "昔がんばってたこと", "最近はまってること", "今度やってみたいこと"]
+        "昔がんばってたこと", "最近はまってること", "今度やってみたいこと", "困ってること"]
     # the chip names the prompt; the box is never filled with it
     assert [item["text"] for item in data["post_starters"]] == [item["text"] for item in data["extra_prompts"]]
     assert next(item for item in data["extra_prompts"] if item["key"] == "now")["example"] == (
@@ -107,6 +116,7 @@ def test_the_deadline_range_and_the_capacity_range():
     with pytest.raises(ValueError):
         post_extras.clean_prompt("someday")
     assert post_extras.clean_prompt("future") == "future"
+    assert post_extras.clean_prompt("help") == "help"
 
 
 # --------------------------------------------------------------------------
@@ -276,6 +286,50 @@ def test_an_old_database_turns_the_features_off_and_never_gets_the_columns():
     assert "prompt" not in sent[-1][2]
     assert saved["prompt"] is None and saved["recruit_closed"] is None
     assert store.update_post("p1", "a", {"prompt": "past"}) is None
+
+
+def database_before_the_help_prompt(sent):
+    """A SupabaseStore whose posts_prompt_check predates 'help' (2026-10-28): its migration has not been run."""
+    store = SupabaseStore("http://127.0.0.1:1", "test-key")
+    rows = {}
+
+    def send(method, path, *, label, headers=None, params=None, json=None, allow_statuses=()):
+        if method in ("POST", "PATCH"):
+            sent.append((method, json))
+            if (json or {}).get("prompt") == "help":
+                refused = FakeResponse(400, {"code": "23514", "message":
+                                             'new row for relation "posts" violates check constraint "posts_prompt_check"'})
+                if 400 in allow_statuses:
+                    return refused
+                raise StoreError(label)
+            if (json or {}).get("body") == "refused":
+                if 400 in allow_statuses:
+                    return FakeResponse(400, {"code": "23514", "message": 'violates check constraint "posts_body_check"'})
+                raise StoreError(label)
+            rows["row"] = {**rows.get("row", {"id": "p1", "join_count": 0}), **json}
+            return FakeResponse(201 if method == "POST" else 200, [rows["row"]])
+        return FakeResponse(200, [rows["row"]] if rows else [])
+
+    store._send = send
+    return store
+
+
+def test_a_prompt_the_database_does_not_know_yet_is_dropped_and_the_post_saved():
+    # Code with 困ってること may reach production before its SQL: the post is saved, only without the prompt.
+    sent = []
+    store = database_before_the_help_prompt(sent)
+    saved = store.insert_post({"id": "p1", "body": "x", "tags": ["助けてほしい"], "prompt": "help"})
+    assert [(method, body.get("prompt")) for method, body in sent] == [("POST", "help"), ("POST", None)]
+    assert saved["prompt"] is None and saved["tags"] == ["助けてほしい"]
+    # an edit carrying it keeps the rest of the edit; an edit of the prompt alone changes nothing
+    changed = store.update_post("p1", "a", {"body": "y", "prompt": "help"})
+    assert changed["body"] == "y" and changed["prompt"] is None
+    assert store.update_post("p1", "a", {"prompt": "help"})["body"] == "y"
+    # any other refusal fails as before
+    with pytest.raises(StoreError):
+        store.insert_post({"id": "p2", "body": "refused", "prompt": "help"})
+    with pytest.raises(StoreError):
+        store.insert_post({"id": "p3", "body": "refused"})
 
 
 def test_the_app_ignores_the_new_fields_while_the_database_is_old(fresh_client, people):

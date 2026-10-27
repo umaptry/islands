@@ -335,7 +335,7 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   }
   const chips = page.locator('#composeStarterList .extra-chip');
   await expect(page.locator('#composeStarters .weekly-label')).toHaveText('お題から選ぶ');
-  await expect(chips).toHaveText(['昔がんばってたこと', '最近はまってること', '今度やってみたいこと']);
+  await expect(chips).toHaveText(['昔がんばってたこと', '最近はまってること', '今度やってみたいこと', '困ってること']);
   // nothing chosen: the example of 最近はまってること is the placeholder
   const example = '例：仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。';
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', example);
@@ -406,6 +406,62 @@ test('the chosen prompt is recorded as the post prompt', async ({ page }) => {
   await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
   const prompt = await page.evaluate(async () => (await import('/static/js/state.js')).state.myPosts.at(-1)?.prompt);
   expect(prompt).toBe('past');
+});
+
+test('困ってること ticks 助けてほしい at ③, and leaves the tag alone once the person has touched it', async ({ page }) => {
+  await signInForFirstPost(page, 'help-prompt');
+  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
+  const help = page.locator('#composeStarterList .extra-chip[data-key="help"]');
+  const tag = page.locator('#composeTags .check[data-tag="助けてほしい"]');
+  await expect(help).toHaveText('困ってること');
+  await help.click();
+  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', /^例：家庭菜園のミニトマト/);
+  await expect(tag).toHaveAttribute('aria-checked', 'true');
+  // another prompt: the tick goes with 困ってること
+  await page.locator('#composeStarterList .extra-chip[data-key="now"]').click();
+  await expect(tag).toHaveAttribute('aria-checked', 'false');
+  // back to 困ってること, then the person unticks it at ③: it stays unticked
+  await help.click();
+  await page.locator('#composeBody').fill('ミニトマトがうまく育ちません。コツを教えてください。');
+  await page.locator('#composeNext').click();
+  await page.locator('#composeMotivation').fill('50');
+  await page.locator('#composeNext2').click();
+  await expect(tag).toHaveAttribute('aria-checked', 'true');
+  await tag.click();
+  await expect(tag).toHaveAttribute('aria-checked', 'false');
+  // ... and unchoosing 困ってること (back at ①) leaves the person's choice alone
+  await page.locator('#composeBack').click();
+  await page.locator('#composeBack').click();
+  await help.click();
+  await expect(tag).toHaveAttribute('aria-checked', 'false');
+  // choosing it again ticks it again
+  await help.click();
+  await expect(tag).toHaveAttribute('aria-checked', 'true');
+  await page.locator('#composeNext').click();
+  await page.locator('#composeNext2').click();
+  await page.locator('#composeSubmit').click();
+  await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
+  const saved = await page.evaluate(async () => {
+    const post = (await import('/static/js/state.js')).state.myPosts.at(-1);
+    return { prompt: post?.prompt, tags: post?.tags };
+  });
+  expect(saved).toEqual({ prompt: 'help', tags: ['助けてほしい'] });
+});
+
+test('a draft keeps whether 助けてほしい was ticked by 困ってること', async ({ page }) => {
+  await signInForFirstPost(page, 'help-draft');
+  const go = (hash) => page.evaluate(async (h) => (await import('/static/js/router.js')).navigate(h), hash);
+  await go('#/post?first=1');
+  await page.locator('#composeStarterList .extra-chip[data-key="help"]').click();
+  await page.locator('#composeBody').fill('ミニトマトの育て方が分かりません。');
+  await go('#/map');
+  await expect(page.locator('#map')).toHaveClass(/active/);
+  await go('#/post?first=1');
+  const tag = page.locator('#composeTags .check[data-tag="助けてほしい"]');
+  await expect(tag).toHaveAttribute('aria-checked', 'true');
+  // the prompt's tick still goes with the prompt after the draft came back
+  await page.locator('#composeStarterList .extra-chip[data-key="now"]').click();
+  await expect(tag).toHaveAttribute('aria-checked', 'false');
 });
 
 test('first post opens already expanded when a draft with text comes back', async ({ page }) => {
