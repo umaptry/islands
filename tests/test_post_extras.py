@@ -63,7 +63,7 @@ def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(cli
     # the chip names the prompt; the box is never filled with it
     assert [item["text"] for item in data["post_starters"]] == [item["text"] for item in data["extra_prompts"]]
     assert next(item for item in data["extra_prompts"] if item["key"] == "now")["example"] == (
-        "最近、仕事終わりにレイトショーに行くのにハマってます。洋画をよく見ます。")
+        "仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。")
     assert [item["key"] for item in data["post_starters"]] == [item["key"] for item in data["extra_prompts"]]
 
 

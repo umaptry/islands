@@ -94,7 +94,9 @@ test('管理者が招待リンクを作り、新しい人がそのリンクか�
   await guest.page.locator('#guidanceSkip').click();
   await expect(guest.page.locator('#compose')).toHaveClass(/active/);
   await guest.page.locator('#composeBody').fill('最近はコーヒーを自分で焙煎しています');
+  await guest.page.locator('#composeNext').click();
   await guest.page.locator('#composeMotivation').evaluate((node) => { node.value = '55'; node.dispatchEvent(new Event('input', { bubbles: true })); });
+  await guest.page.locator('#composeNext2').click();
   await guest.page.locator('#composeSubmit').click();
 
   // 終わったら、そのコミュニティの地図で、会の投稿が開く。
@@ -288,6 +290,7 @@ test('コミュニティの一覧を読めなかったとき、会員は「入�
   await expect(admin.page.locator('#compose')).toHaveClass(/active/);
   await expect(admin.page.locator('#composeCommunity')).toContainText('読み込めませんでした');
   await expect(admin.page.locator('#composeSubmit')).toBeDisabled();
+  await expect(admin.page.locator('#composeNext')).toBeHidden();
   await admin.page.unroute('**/api/local/communities/mine');
 
   // どこにも入っていない人: 地図の案内と、入力欄のない投稿画面。

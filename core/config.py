@@ -468,13 +468,17 @@ EXAMPLE_POSTS = (
 # weekly prompt is not one of these and keeps coming back every week.
 # `example` is what the body's placeholder says while the prompt is chosen
 # ("例：…"), on topics none of EXAMPLE_POSTS uses. 2026-10-20; examples 2026-10-21.
+# Rewritten 2026-10-27 (chosen by the founder): what the person does in concrete words (they place the
+# post near the people who write alike), a touch of themselves, and an ending another person can answer
+# (教えてください / 一緒に…). About 45 characters, well under the 60, and in です・ます throughout.
+# Three different kinds of topic, so copying one does not pile everybody onto one island.
 EXTRA_PROMPTS = (
     {"key": "past", "text": "昔がんばってたこと",
-     "example": "高校まで陸上部で長距離を走っていました。久しぶりに大会に出てみたいです"},
+     "example": "学生時代はずっとバスケ部でした。運動不足なので、またゆるくボールを触れる仲間がほしいです。"},
     {"key": "now", "text": "最近はまってること",
-     "example": "最近、仕事終わりにレイトショーに行くのにハマってます。洋画をよく見ます。"},
+     "example": "仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。"},
     {"key": "future", "text": "今度やってみたいこと",
-     "example": "今度、陶芸教室で器づくりに挑戦してみたいです。一緒に体験しませんか"},
+     "example": "陶芸教室で、自分用のお皿を作ってみたいです。一人だと行きづらいので、一緒に体験しませんか。"},
 )
 # The prompts offered on the first post (chips over the box). Each key is one of
 # EXTRA_PROMPTS' keys, and a chosen chip is recorded as the post's `prompt` like that prompt.

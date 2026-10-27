@@ -922,7 +922,6 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .screen.tinted .input, .screen.tinted .textarea { background: transparent; border: 1px solid #fff; border-radius: 6px; color: #fff; }
 .screen.tinted .input::placeholder, .screen.tinted .textarea::placeholder { color: rgba(255,255,255,.8); }
 #compose .scroller { padding-top: 8px; }
-#compose .textarea { height: 112px; min-height: 112px; padding: 16px; }
 #composeLede { margin-bottom: 12px; font-size: 12px; }
 #composeCounter .ring { display: none; }
 .counter-row { justify-content: flex-end; }
@@ -967,20 +966,9 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .landing .btn { margin-top: 16px; }
 .landing .returning { margin-top: 44px; font-weight: bold; }
 .version-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 12px; background: white; color: #173047; box-shadow: var(--shadow); text-align: center; font-size: 13px; }
-#compose.first-post .topbar-inline { display: none; }
-#compose.first-post .scroller { flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px 80px; overflow: visible; }
-#compose.first-post { overflow-y: auto; }
-#compose.first-post #composeLede { white-space: pre-line; font-size: 20px; font-weight: 700; line-height: 1.625; margin-bottom: 32px; color: white; }
-#firstPostFooter { margin-top: auto; padding-top: 32px; }
-#firstPostFooter .btn { width: 100%; min-height: 48px; }
+#compose.first-post #composeLede { white-space: pre-line; font-size: 20px; font-weight: 700; line-height: 1.625; margin-bottom: 20px; color: white; }
 #compose .scroller { display: flex; flex-direction: column; }
-#compose .textarea { display: block; resize: none; }
-#compose .counter-row { margin-top: 4px; }
-#compose .field:has(#composeBody) { margin-bottom: 4px; }
 #compose .slider { padding-left: 8px; padding-right: 8px; }
-#compose .scroller > .field:has(.image-row) { order: 3; }
-#compose .scroller > .field:has(.checks) { order: 4; }
-#compose .scroller > .notice, #compose .scroller > .error, #firstPostFooter { order: 5; }
 #compose:not(.first-post) #composeLede { display: none; }
 #auth { overflow-y: auto; }
 #auth .auth-scroll { display: flex; flex-direction: column; flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px; overflow: visible; }
@@ -1040,7 +1028,7 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .extra-chip[aria-pressed=true] { background: #fff; color: var(--sea-ink); border-color: #fff; }
 
 /* 参加者募集中: the deadline and the first-come limit open under the tags. */
-#compose .scroller > .compose-recruit { order: 4; margin-top: 0; }
+#compose .compose-recruit { margin-top: 0; }
 .recruit-clip {
   display: grid; grid-template-rows: 0fr; opacity: 0;
   transition: grid-template-rows .24s var(--ease), opacity .2s var(--ease);
@@ -1536,7 +1524,6 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 #compose.first-post.own-closed .compose-tags,
 #compose.first-post.own-closed .compose-recruit,
 #compose.first-post.own-closed #composeMoveNotice,
-#compose.first-post.own-closed #firstPostFooter,
 #compose.first-post.own-closed .scroller > .field { display: none; }
 #compose.first-post:not(.own-closed) .examples-own { display: none; }
 #compose.first-post:not(.own-closed) .examples { margin-bottom: 22px; }
@@ -1706,7 +1693,9 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   color: #fff; font-size: 12px; font-weight: 700; line-height: 1.5; max-width: 100%;
   overflow-wrap: anywhere;
 }
-#compose.compose-blocked .scroller > :not(.compose-community) { display: none; }
+#compose.compose-blocked .compose-step > :not(.compose-community),
+#compose.compose-blocked .compose-dock { display: none; }
+#compose.compose-blocked .compose-progress { visibility: hidden; }
 .compose-community.blocked { border-radius: var(--radius-sm); background: rgba(255, 255, 255, .95); color: var(--bad); font-weight: 600; padding: 10px 14px; }
 
 /* The community edit screen (#/community/:id) */
@@ -1956,3 +1945,75 @@ html, body { touch-action: manipulation; }
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not(.code-input),
   textarea, select { font-size: 16px !important; }
 }
+
+/* ---------------------------------------------------------------- 投稿：3つのステップ（2026-10-27） */
+/* ① 書く ② どれくらい本気？ ③ タグ・ほかのコミュニティ。1画面で1つのことだけを聞く（screens/compose.js）。 */
+.compose-progress { display: flex; gap: 6px; width: 100%; max-width: 512px; margin: -6px auto 0; padding: 0 24px 4px; flex: none; }
+.compose-progress i { flex: 1; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .3); transition: background-color .2s var(--ease); }
+#compose[data-step="1"] .compose-progress i:nth-child(1),
+#compose[data-step="2"] .compose-progress i:nth-child(-n+2),
+#compose[data-step="3"] .compose-progress i { background: #fff; }
+.compose-step { display: flex; flex-direction: column; }
+.compose-step[hidden] { display: none; }
+
+/* ① No frame around the words (as on X). The copy behind the box has the same words in clear ink and
+   paints only those past the limit, so they show red under the box's own white letters. */
+#compose .compose-body { margin-bottom: 12px; }
+#compose .compose-write { position: relative; }
+#compose #composeBody, #compose .compose-mirror {
+  /* 16px: the phone rule above holds every field at 16px (iOS zooms into smaller ones), and the copy must match. */
+  font-family: inherit; font-size: 16px; line-height: 1.7; letter-spacing: normal;
+  margin: 0; padding: 2px 0; border: 0; border-radius: 0;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; line-break: auto;
+}
+#compose #composeBody {
+  position: relative; z-index: 1; display: block; width: 100%; min-height: 112px;
+  background: transparent; color: #fff; overflow: hidden; resize: none; box-shadow: none;
+}
+#compose #composeBody:focus, #compose #composeBody:focus-visible { outline: none; background: transparent; }
+#compose .compose-mirror { position: absolute; inset: 0; color: transparent; pointer-events: none; overflow: hidden; }
+#compose .compose-mirror mark { background: rgba(255, 70, 90, .75); color: transparent; border-radius: 2px; }
+#compose.ios-text .compose-mirror { padding-left: 3px; padding-right: 3px; }
+#compose .compose-body.has-photo #composeBody { min-height: 56px; }
+.compose-photo { position: relative; margin-top: 8px; border-radius: 10px; overflow: hidden; background: rgba(255, 255, 255, .1); }
+.compose-photo[hidden] { display: none; }
+.compose-photo img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.compose-photo .image-clear { top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 50%; font-size: 13px; }
+
+/* Under ①: 次へ, and the picture and the counter. At the foot of the screen, and right on top of the
+   keyboard while it is up (the screen is fitted to what the keyboard leaves visible). */
+.compose-dock { flex: none; width: 100%; border-top: 1px solid rgba(255, 255, 255, .3); padding-bottom: env(safe-area-inset-bottom); }
+.compose-dock[hidden] { display: none; }
+body.kb-open .compose-dock { padding-bottom: 0; }
+.compose-dock-next, .compose-tools { max-width: 512px; margin: 0 auto; }
+.compose-dock-next { padding: 10px 24px 0; }
+.compose-tools { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 24px 0 17px; }
+.compose-tool { width: 40px; height: 40px; display: grid; place-items: center; color: #fff; background: transparent; border-radius: 8px; }
+.compose-tool svg { width: 26px; height: 26px; }
+#compose .compose-tools .counter { font-size: 13px; color: rgba(255, 255, 255, .9); }
+#compose .compose-tools .counter.over { color: #fff; font-weight: 700; background: #e0245e; padding: 2px 9px; border-radius: 999px; }
+#compose .compose-dock .btn, #compose .compose-foot .btn, #compose .compose-next { min-height: 50px; font-size: 16px; }
+
+/* ② The question on its own, the object larger, 次へ right under the bar. */
+#compose .compose-heat { margin-top: 12px; }
+.compose-question { font-size: 22px; font-weight: 700; line-height: 1.4; margin: 0 0 8px; color: #fff; }
+#compose .compose-heat .field-help { font-size: 13px; margin-top: 0; }
+#compose .heat-stage { height: 168px; margin: 24px 0 14px; }
+#compose .compose-next { margin-top: 36px; }
+
+/* ③ Tags and the other communities; 投稿する at the foot, in the middle. */
+#compose .compose-tags { margin-top: 12px; }
+#compose .compose-tags .field-title, #compose .compose-share .field-title { font-size: 18px; }
+#compose .compose-share { margin-top: 8px; }
+/* The deadline / first-come box is folded away until 参加者募集中 is ticked: no gap for it then. */
+#compose .compose-recruit[data-open="false"] { margin-bottom: 0; }
+.compose-foot { flex: none; width: 100%; max-width: 512px; margin: 0 auto; padding: 12px 24px calc(20px + env(safe-area-inset-bottom)); }
+.compose-foot[hidden] { display: none; }
+
+/* The hidden field a tap focuses so that iPhone raises the keyboard for a new post (keyboard.js). */
+.keyboard-primer { position: fixed; top: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+
+/* A card on a profile page: the name is that page's own person, so it is words, not a link. */
+.post-author.static { cursor: default; }
+.post-author.static .post-author-name::after { content: none; }
+.post-author.static:hover .post-author-name { text-decoration: none; }

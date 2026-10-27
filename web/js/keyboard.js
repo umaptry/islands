@@ -74,3 +74,34 @@ export function setupKeyboardGuard() {
     else if (shrunkSeen) { shrunkSeen = false; set(false); }
   });
 }
+
+// ---------------------------------------------------------------- a new post opens with the keyboard up
+
+// iPhone raises the keyboard only for a field focused inside the tap itself, and the compose screen may
+// open a moment after the tap (the router first finishes the screen it is on, which can be waiting for the
+// network). So the tap that leads to a new post focuses this hidden field at once, and the compose screen
+// takes the focus over when it opens (the keyboard stays up through the move). 2026-10-27.
+let primer = null;
+let primerTimer = 0;
+
+export function primeKeyboard() {
+  if (typeof document === 'undefined' || !window.matchMedia?.('(hover: none) and (pointer: coarse)').matches) return;
+  if (!primer) {
+    primer = document.createElement('input');
+    primer.type = 'text';
+    primer.className = 'keyboard-primer';
+    primer.tabIndex = -1;
+    primer.setAttribute('aria-hidden', 'true');
+    document.body.append(primer);
+  }
+  primer.focus({ preventScroll: true });
+  clearTimeout(primerTimer);
+  // Nothing took it over (the screen did not open): put the keyboard away again.
+  primerTimer = setTimeout(releaseKeyboard, 4000);
+}
+
+/** The compose screen has the focus now, or will not want it: the hidden field lets go. */
+export function releaseKeyboard() {
+  clearTimeout(primerTimer);
+  if (primer && document.activeElement === primer) primer.blur();
+}

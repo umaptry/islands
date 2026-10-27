@@ -8,6 +8,7 @@
 import { config, isLocal, islandColor, membersOnly, radiusOf, setReachFactor } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
+import { primeKeyboard } from '../keyboard.js';
 import {
   hasReacted, matchesFilters, reactionKey, setPosts, state, subscribe, upsertPost, notify,
 } from '../state.js';
@@ -723,6 +724,7 @@ function setupChrome() {
   document.addEventListener('wheel', closeEmptySearch, { capture: true, passive: true });
   $('mapPost').addEventListener('click', () => {
     playSe('click');
+    primeKeyboard();
     navigate('#/post');
   });
 
@@ -748,7 +750,7 @@ function setupChrome() {
       toast('まだつながりません。少し待ってからもう一度お試しください。');
     }
   });
-  $('trialWrite').addEventListener('click', () => navigate('#/post'));
+  $('trialWrite').addEventListener('click', () => { primeKeyboard(); navigate('#/post'); });
   $('mapCommunity').addEventListener('click', () => {
     playSe('hardClick');
     openCommunitySheet();

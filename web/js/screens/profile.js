@@ -9,6 +9,7 @@
 import { data, api } from '../net.js';
 import { session } from '../session.js';
 import { activeScreen, navigate, screen } from '../router.js';
+import { primeKeyboard } from '../keyboard.js';
 import { state } from '../state.js';
 import { membersOnly } from '../config.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
@@ -150,7 +151,7 @@ function postList(posts, { own, onOpen }) {
           el('p', { text: 'まだ投稿がありません。最初のひとことを書いてみましょう。' }),
           el('div', { className: 'empty-actions' }, el('button', {
             className: 'btn btn-small', attrs: { type: 'button', id: 'meEmptyPost' },
-            text: '投稿する', on: { click: () => navigate('#/post') },
+            text: '投稿する', on: { click: () => { primeKeyboard(); navigate('#/post'); } },
           })),
         ]
         : el('p', { text: '投稿はありません' })));
@@ -161,7 +162,8 @@ function postList(posts, { own, onOpen }) {
       compact: false,
       communityName: membersOnly() ? names.join('・') : '',
       onComments: () => onOpen(post),
-      onOpenAuthor: (id) => navigate(state.account?.id === id ? '#/me' : `#/u/${id}`),
+      // No onOpenAuthor: the name on a card here is this page's own person, and tapping it used to
+      // jump to the top of the same page (2026-10-27). The card shows it as plain words.
       onReact: (kind) => react(post.id, kind),
       onEdit: own ? () => navigate(`#/post/${post.id}/edit`) : null,
       onDelete: own ? () => remove(post) : null,

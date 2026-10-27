@@ -36,8 +36,8 @@ test('new profile reaches guidance before the first post, including after reload
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   await expect(page.locator('#guidanceTrack > .slide').nth(0)).toBeVisible();
-  await expect(page.locator('#guidanceTrack > .slide')).toHaveCount(4);
-  await expect(page.locator('#guidanceDots .dot')).toHaveCount(4);
+  await expect(page.locator('#guidanceTrack > .slide')).toHaveCount(5);
+  await expect(page.locator('#guidanceDots .dot')).toHaveCount(5);
   await page.locator('#guidanceNext').click();
   await page.goto('/');
   await expect(page.locator('#guidance')).toHaveClass(/active/);
@@ -50,7 +50,9 @@ test('new profile reaches guidance before the first post, including after reload
   // 入力欄は最初から開いている。例文は出ない。
   await expect(page.locator('#composeBody')).toBeVisible();
   await expect(page.locator('#composeExamples')).toBeHidden();
-  await expect(page.locator('#firstPostFooter #composeSubmit')).toBeVisible();
+  // 3つのステップ: ① の「次へ」は下に。最初の投稿には ← で戻る先がない。
+  await expect(page.locator('#composeNext')).toBeVisible();
+  await expect(page.locator('#composeBack')).toBeHidden();
 });
 
 test('reference registration saves profile and completes the first post', async ({ page }) => {
@@ -71,18 +73,24 @@ test('reference registration saves profile and completes the first post', async 
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   await expect(page.locator('#guidance h2').first()).toHaveText('islandsへようこそ');
   const pages = await page.locator('#guidanceTrack > .slide').count();
-  expect(pages).toBe(4);
+  expect(pages).toBe(5);
   await expect(page.locator('#guidanceTrack > .slide').nth(3).locator('h2')).toHaveText('島の中で盛り上がる');
-  await expect(page.locator('#guidanceTrack > .slide').nth(3).locator('.guidance-first-only')).toHaveCount(1);
+  // 5枚目（2026-10-27）: 1対1で話せること。そこから最初のひとことへ。
+  await expect(page.locator('#guidanceTrack > .slide').nth(4).locator('h2')).toHaveText('1対1でもじっくり話せる');
+  await expect(page.locator('#guidanceTrack > .slide').nth(4).locator('.guidance-first-only')).toContainText('では、実際にひとこと書いてみましょう');
+  await expect(page.locator('#guidanceTrack .guidance-first-only')).toHaveCount(1);
   for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
   await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
-  // スライダーを一度動かすまでは送られない。押すとスライダーを知らせる。
-  await expect(page.locator('#composeSubmit')).toBeEnabled();
-  await page.locator('#composeSubmit').click();
-  await expect(page.locator('#compose')).toHaveClass(/active/);
+  await expect(page.locator('#composeNext')).toBeEnabled();
+  await page.locator('#composeNext').click();
+  // ② スライダーを一度動かすまでは ③ へ進まない。押すとスライダーを知らせる。
+  await expect(page.locator('#composeHint')).toBeHidden();
+  await page.locator('#composeNext2').click();
+  await expect(page.locator('#compose')).toHaveAttribute('data-step', '2');
   await expect(page.locator('#composeHint')).toHaveClass(/alert/);
   await expect(page.locator('#composeHint')).toHaveText('バーを左右に動かして、どれくらい本気か選んでください');
   await page.locator('#composeMotivation').fill('70');
+  await page.locator('#composeNext2').click();
   await expect(page.locator('#composeSubmit')).toBeEnabled();
   await page.locator('#composeSubmit').click();
   await expect(page.locator('#map')).toHaveClass(/active/);
@@ -121,7 +129,9 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
   await page.locator('#mapPost').click();
   await expect(page.locator('#compose')).toHaveClass(/active/);
   await page.locator('#composeBody').fill('画面を移動してもこの下書きを保持します。');
-  await page.locator('[data-route="#/map"]').click();
+  // 書いている間は下のメニューがない（3つのステップのボタンがそこにある）。← で地図へ。
+  await expect(page.locator('#bottomNav')).toBeHidden();
+  await page.locator('#composeBack').click();
   await page.locator('#mapPost').click();
   await expect(page.locator('#composeBody')).toHaveValue('画面を移動してもこの下書きを保持します。');
   await page.evaluate(async (id) => {
@@ -187,12 +197,16 @@ test('a post image opens in the viewer with close and reactions, and closes by b
   const pages = await page.locator('#guidanceTrack > .slide').count();
   for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
   await page.locator('#composeBody').fill('休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。');
-  await page.locator('#composeMotivation').fill('70');
   // A 1x1 PNG is enough: the viewer does not care what the picture is.
   await page.locator('#composeImageInput').setInputFiles({
     name: 'dot.png', mimeType: 'image/png',
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
   });
+  // the picture shows under the words on ①, as on the card
+  await expect(page.locator('#composeImagePreview')).toBeVisible();
+  await page.locator('#composeNext').click();
+  await page.locator('#composeMotivation').fill('70');
+  await page.locator('#composeNext2').click();
   await page.locator('#composeSubmit').click();
   await expect(page.locator('#map')).toHaveClass(/active/);
 
@@ -316,28 +330,29 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   await expect(page.locator('#composeExamples')).toBeHidden();
   await expect(page.locator('#composeOwnBtn')).toBeHidden();
   await expect(page.locator('#composeExtraPrompts')).toBeHidden();
-  for (const id of ['#composeBody', '#composeMotivation', '#composeSubmit']) {
+  for (const id of ['#composeBody', '#composeNext']) {
     await expect(page.locator(id)).toBeVisible();
   }
   const chips = page.locator('#composeStarterList .extra-chip');
-  await expect(page.locator('#composeStarters .weekly-label')).toHaveText('お題');
+  await expect(page.locator('#composeStarters .weekly-label')).toHaveText('お題から選ぶ');
   await expect(chips).toHaveText(['昔がんばってたこと', '最近はまってること', '今度やってみたいこと']);
   // nothing chosen: the example of 最近はまってること is the placeholder
-  const example = '例：最近、仕事終わりにレイトショーに行くのにハマってます。洋画をよく見ます。';
+  const example = '例：仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。';
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', example);
   await chips.nth(1).click();
   // the box stays empty (an example is never an input) and the example shows as the placeholder
   await expect(page.locator('#composeBody')).toHaveValue('');
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', example);
   await expect(chips.nth(1)).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('#composeMotivation').fill('60');
-  await expect(page.locator('#composeSubmit')).toBeDisabled();
+  // nothing written: ① cannot go on
+  await expect(page.locator('#composeNext')).toBeDisabled();
   // words the person wrote are never replaced
   await page.locator('#composeBody').fill('ボードゲームです');
   await chips.nth(0).click();
   await expect(page.locator('#composeBody')).toHaveValue('ボードゲームです');
-  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', /^例：高校まで陸上部/);
-  // a tap anywhere on the bar sets the heat there
+  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', /^例：学生時代はずっとバスケ部/);
+  // a tap anywhere on the bar (on ②) sets the heat there
+  await page.locator('#composeNext').click();
   const bar = await page.locator('#composeMotivation').boundingBox();
   await page.mouse.click(bar.x + bar.width * 0.8, bar.y + bar.height / 2);
   const tapped = Number(await page.locator('#composeMotivation').inputValue());
@@ -348,12 +363,45 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   await expect(page.locator('#composeExamples')).toBeHidden();
 });
 
+test('a post in three steps: the box has the focus, words past 60 are red, ← goes back a step', async ({ page }) => {
+  await signInForFirstPost(page, 'steps');
+  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post'));
+  await expect(page.locator('#compose')).toHaveAttribute('data-step', '1');
+  await expect(page.locator('#composeBody')).toBeFocused();
+  await expect(page.locator('#bottomNav')).toBeHidden();
+  await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', '好きなこと、やってみたいことは？');
+  // 61 characters: the last one is painted red, the counter says so, and ① cannot go on
+  await page.locator('#composeBody').fill(`${'あ'.repeat(60)}い`);
+  await expect(page.locator('#composeMirror mark')).toHaveText('い');
+  await expect(page.locator('#composeCounterText')).toHaveText('61/60');
+  await expect(page.locator('#composeNext')).toBeDisabled();
+  await page.locator('#composeBody').fill('週末は川沿いを走っています');
+  await expect(page.locator('#composeMirror mark')).toHaveCount(0);
+  await page.locator('#composeNext').click();
+  await expect(page.locator('#composeStep2')).toBeVisible();
+  await expect(page.locator('#composeBody')).toBeHidden();
+  await page.locator('#composeMotivation').fill('40');
+  await page.locator('#composeNext2').click();
+  await expect(page.locator('#composeSubmit')).toBeVisible();
+  await expect(page.locator('#composeSubmit')).toHaveText('投稿する');
+  // ← one step at a time, and what was written is still there
+  await page.locator('#composeBack').click();
+  await expect(page.locator('#compose')).toHaveAttribute('data-step', '2');
+  await page.locator('#composeBack').click();
+  await expect(page.locator('#compose')).toHaveAttribute('data-step', '1');
+  await expect(page.locator('#composeBody')).toHaveValue('週末は川沿いを走っています');
+  await page.locator('#composeBack').click();
+  await expect(page.locator('#map')).toHaveClass(/active/);
+});
+
 test('the chosen prompt is recorded as the post prompt', async ({ page }) => {
   await signInForFirstPost(page, 'starter-prompt');
   await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
   await page.locator('#composeStarterList .extra-chip').nth(0).click();
   await page.keyboard.type('陸上部で長距離を走っていました');
+  await page.locator('#composeNext').click();
   await page.locator('#composeMotivation').fill('60');
+  await page.locator('#composeNext2').click();
   await page.locator('#composeSubmit').click();
   await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
   const prompt = await page.evaluate(async () => (await import('/static/js/state.js')).state.myPosts.at(-1)?.prompt);
@@ -394,7 +442,9 @@ async function seedNeighbours(page, rows) {
 async function writeFirstPost(page, body) {
   await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post?first=1'));
   await page.locator('#composeBody').fill(body);
+  await page.locator('#composeNext').click();
   await page.locator('#composeMotivation').fill('60');
+  await page.locator('#composeNext2').click();
   await page.locator('#composeSubmit').click();
   await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
 }

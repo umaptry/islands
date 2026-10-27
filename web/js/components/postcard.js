@@ -83,10 +83,12 @@ export function postCard(post, options = {}) {
   card.dataset.postId = post.id;
 
   // --- author row -------------------------------------------------------
-  const author = el('button', {
-    className: 'post-author',
-    attrs: { type: 'button' },
-    on: { click: () => options.onOpenAuthor && options.onOpenAuthor(post.author_id) },
+  // A button only where it leads somewhere: on a profile page the name is the page you are on
+  // (2026-10-27), so it is plain words there, with no 「›」.
+  const author = el(options.onOpenAuthor ? 'button' : 'div', {
+    className: `post-author${options.onOpenAuthor ? '' : ' static'}`,
+    attrs: options.onOpenAuthor ? { type: 'button' } : {},
+    on: options.onOpenAuthor ? { click: () => options.onOpenAuthor(post.author_id) } : {},
   },
     avatar(post, 40),
     el('span', { className: 'post-author-text' },
@@ -117,10 +119,8 @@ export function postCard(post, options = {}) {
   // --- body -------------------------------------------------------------
   card.append(el('p', { className: 'post-body', text: post.body || '' }));
 
-  // --- motivation -------------------------------------------------------
-  card.append(motivationBar(post.motivation));
-
   // --- image ------------------------------------------------------------
+  // Right under the words it goes with; the heat comes after it (2026-10-27).
   if (!options.compact && post.image_path) {
     const url = data.imageUrl(post.image_path);
     if (url) {
@@ -141,6 +141,9 @@ export function postCard(post, options = {}) {
       card.append(el('div', { className: 'post-image' }, link));
     }
   }
+
+  // --- motivation -------------------------------------------------------
+  card.append(motivationBar(post.motivation));
 
   // --- footer -----------------------------------------------------------
   // The reactions and, on a 「参加者募集中」 post, the button that shows who has

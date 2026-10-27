@@ -18,6 +18,11 @@
 // The image is downscaled and re-encoded in the browser before it is uploaded
 // (see image.js). A 4MB phone photo would be the single biggest thing this app
 // ever moves, and nobody looking at a card in a bottom sheet needs 4032 pixels.
+//
+// Since 2026-10-27 the screen asks one thing at a time, in three steps: ① the words (and a picture),
+// ② how serious, ③ tags and the other communities, and only then 投稿する. ① opens with the keyboard
+// up (a new post), the box has no frame (as on X), and its 次へ, picture and counter ride on top of the
+// keyboard. Words past the limit are painted red, so a 次へ that cannot be pressed is never a mystery.
 
 import { RECRUIT_TAG } from '../map/reads.js';
 import { config, islandColor, membersOnly } from '../config.js';
@@ -38,6 +43,8 @@ import { takePendingPost } from '../return-post.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
 import { communityNameIn, postingTarget, shareOn, shareTargets } from '../community-rules.js';
 import { sharePost } from '../share.js';
+import { bodyLength, splitOverflow, stepBefore } from '../compose-rules.js';
+import { primeKeyboard, releaseKeyboard } from '../keyboard.js';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -55,6 +62,8 @@ let selectedPrompt = null;   // "weekly", an extra prompt's key, or null
 let promptPosts = [];        // my posts, to hide the extra prompts already used
 let postBlocked = false;     // communities are on and I am in none: there is no map to post to
 let shareChosen = new Set(); // ほかのコミュニティにも出す: the communities ticked (not those that have the post already)
+let step = 1;                // ① words, ② how serious, ③ tags and other communities
+let nudged = false;          // 次へ was pressed on ② before the bar was moved: say how to answer
 
 // The prompts and the recruit fields exist only once the database has the columns.
 const extrasOn = () => Boolean(config().features?.post_extras);
@@ -65,20 +74,94 @@ function paintImage(url) {
   if (previewUrl?.startsWith('blob:') && previewUrl !== url) URL.revokeObjectURL(previewUrl);
   previewUrl = url;
   const preview = $('composeImagePreview');
+  // Under the words, as wide as on the card (a picture makes the empty box shorter).
+  $('composeBodyField').classList.toggle('has-photo', Boolean(url));
   if (!url) {
     preview.hidden = true;
     $('composeImageImg').removeAttribute('src');
+    fitBody();
     return;
   }
   preview.hidden = false;
   $('composeImageImg').src = url;
+  fitBody();
+}
+
+// ---------------------------------------------------------------- steps
+
+/** Show step `next` (1, 2 or 3): its part of the form, its button, and the bar of three at the top. */
+function goStep(next) {
+  step = next;
+  $('compose').dataset.step = String(next);
+  [1, 2, 3].forEach((n) => { $(`composeStep${n}`).hidden = n !== next; });
+  $('composeDock').hidden = next !== 1;
+  $('composeFoot').hidden = next !== 3;
+  $('composeProgress').setAttribute('aria-valuenow', String(next));
+  $('composeScroller').scrollTop = 0;
+  // The first post has nothing before its first step to go back to.
+  $('composeBack').style.visibility = firstPost && next === 1 ? 'hidden' : '';
+  // Leaving ① puts the keyboard away; ② and ③ are taps.
+  if (next !== 1 && document.activeElement === $('composeBody')) $('composeBody').blur();
+  if (next === 1) fitBody();
+  // The object stops drawing while it is out of sight (heatobject.js): start it again now it shows.
+  if (next === 2 && heat) paintMotivation();
+}
+
+/** ① → ②, once the words are there and within the limit (the button is disabled otherwise). */
+function nextFromWords() {
+  if ($('composeNext').disabled) return;
+  goStep(2);
+  buzz('tap');
+}
+
+/** ② → ③. A new post has to have moved the bar: until then 次へ shows the bar instead. */
+function nextFromHeat() {
+  if (!touched && !editing) {
+    nudgeSlider(true);
+    return;
+  }
+  goStep(3);
+  buzz('tap');
+}
+
+/** iPhone keeps the page its full height under the keyboard, so the screen is fitted to the part of it
+ * that is still visible: the dock (次へ, picture, counter) then sits right on top of the keyboard and goes
+ * down with it. Where the keyboard shrinks the page itself (Android, interactive-widget), nothing changes. */
+function fitToViewport() {
+  const node = $('compose');
+  const view = window.visualViewport;
+  if (!view || !node.classList.contains('active')) {
+    node.style.top = '';
+    node.style.bottom = '';
+    return;
+  }
+  const top = Math.max(0, Math.round(view.offsetTop));
+  const bottom = Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop));
+  node.style.top = top ? `${top}px` : '';
+  node.style.bottom = bottom ? `${bottom}px` : '';
 }
 
 // ---------------------------------------------------------------- form
 
+/** The box grows with the words (it never scrolls inside, so the red copy behind it stays in line). */
+function fitBody() {
+  const body = $('composeBody');
+  if (body.offsetParent === null) return;   // hidden (another step): measured when ① comes back
+  body.style.height = 'auto';
+  body.style.height = `${body.scrollHeight}px`;
+}
+
+/** The words past the limit, painted red on the copy behind the box. */
+function paintOverflow(value, max) {
+  const [kept, over] = splitOverflow(value, max);
+  const mirror = clear($('composeMirror'));
+  if (over) mirror.append(kept, el('mark', { text: over }));
+}
+
 function paintCounter() {
   const { body_min: min, body_max: max } = config().limits;
-  const length = $('composeBody').value.trim().length;
+  const value = $('composeBody').value;
+  const length = bodyLength(value);
   // No floor to reach any more (Q36), so the ring fills towards the cap.
   const ratio = Math.min(1, length / (min > 1 ? min : max));
   const ring = $('composeCounter').querySelector('.value');
@@ -86,19 +169,23 @@ function paintCounter() {
   $('composeCounter').classList.toggle('done', length >= min);
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
-  // The button is not held back by the slider: pressing it before the slider has
-  // been moved points at the slider instead (see nudgeSlider).
-  $('composeSubmit').disabled = submitting || postBlocked || length < min || length > max;
-  $('composeHint').hidden = Boolean(editing) || touched;
+  const invalid = submitting || postBlocked || length < min || length > max;
+  $('composeNext').disabled = invalid;
+  // The buttons are not held back by the slider: 次へ on ② points at the slider instead (see nudgeSlider).
+  $('composeSubmit').disabled = invalid;
+  $('composeHint').hidden = Boolean(editing) || touched || !nudged;
   if (touched) $('composeHint').classList.remove('alert');
+  paintOverflow(value, max);
+  fitBody();
 }
 
 /** Show the person where the answer is: scroll to the slider, shake it, and say it louder.
- * `submitted` is true when they pressed 投稿する without having moved it. */
+ * `submitted` is true when they pressed 次へ without having moved it. */
 function nudgeSlider(submitted) {
   const slider = $('composeSlider');
   const hint = $('composeHint');
   if (!touched && !editing) {
+    nudged = true;
     hint.hidden = false;
     // Emptied first, so a screen reader says the words again (the live region only speaks a change).
     hint.textContent = '';
@@ -240,7 +327,6 @@ function syncPrompt() {
     selected: selectedPrompt || (starters().length ? 'now' : null),
     weekly: config().weekly_prompt,
     extraPrompts: config().extra_prompts,
-    max: config().limits.body_max,
   });
 }
 
@@ -337,9 +423,26 @@ function paintExamples(show) {
 
 export function setupCompose() {
   const body = $('composeBody');
-  heat = heatObject(96);
+  // ② has the screen to itself, so the object is bigger than it was beside the other fields.
+  heat = heatObject(140);
   $('composeHeat').append(heat.node);
   body.addEventListener('input', paintCounter);
+  $('composeNext').addEventListener('click', nextFromWords);
+  $('composeNext2').addEventListener('click', nextFromHeat);
+  window.visualViewport?.addEventListener('resize', fitToViewport);
+  window.visualViewport?.addEventListener('scroll', fitToViewport);
+  // Turning the phone or resizing the window changes where the words wrap; the keyboard going away can
+  // come without a last viewport event. Fit both again then.
+  window.addEventListener('resize', () => {
+    if (!$('compose').classList.contains('active')) return;
+    fitToViewport();
+    fitBody();
+  });
+  body.addEventListener('blur', () => setTimeout(fitToViewport, 350));
+  // iPhone and iPad indent a textarea's words by 3px on each side, which CSS cannot take away. The red
+  // copy behind the box is indented the same, or its lines would break in other places.
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  $('compose').classList.toggle('ios-text', ios);
   // 'input' while dragging, 'change' for a keyboard or an assistive tool: either
   // counts as having answered.
   const moved = () => {
@@ -398,8 +501,11 @@ export function setupCompose() {
     if (selectedPrompt) body.focus();
   });
 
+  // ← goes one step back (what was chosen stays), and from ① leaves the screen.
   $('composeBack').addEventListener('click', () => {
-    navigate(editing ? '#/me' : '#/map');
+    const previous = stepBefore(step);
+    if (previous) goStep(previous);
+    else navigate(editing ? '#/me' : '#/map');
   });
 
   $('composeImageBtn').addEventListener('click', () => $('composeImageInput').click());
@@ -425,6 +531,9 @@ export function setupCompose() {
 
   screen('compose', {
     leave() {
+      if (document.activeElement === body) body.blur();
+      $('compose').style.top = '';
+      $('compose').style.bottom = '';
       if (draftKey) drafts.set(draftKey, { body: body.value, tags: selectedTags(), motivation: $('composeMotivation').value,
         touched, imagePath, imageBlob, requestKey, requestBody,
         prompt: selectedPrompt, deadline: $('composeDeadline').value, capacity: $('composeCapacity').value,
@@ -434,23 +543,34 @@ export function setupCompose() {
       const first = query && query.get('first') === '1';
       firstPost = Boolean(first);
       $('compose').classList.toggle('first-post', firstPost);
-      $('firstPostFooter').hidden = !firstPost;
-      (firstPost ? $('firstPostFooter') : document.querySelector('#compose .topbar-inline')).append($('composeSubmit'));
-      if (firstPost) {
-        $('bottomNav').hidden = true;
-        document.body.classList.remove('has-nav');
-      }
       editing = null;
       imageBlob = null;
       imagePath = null;
       submitting = false;
       touched = false;
+      nudged = false;
+      // Nothing of the last visit carries over until this one says so: leaving early (a post that cannot be
+      // edited, a first post with nowhere to go) must not save this screen over another draft.
+      draftKey = '';
+      postBlocked = false;
+      $('compose').classList.remove('compose-blocked');
+      $('composeError').textContent = '';
+      goStep(1);
+      // A new post opens with the keyboard up, as on X. iPhone raises it only for a focus made in the tap
+      // that opened the screen: this runs before anything here waits, and the ways in focus a hidden field
+      // in the tap itself (primeKeyboard) for when the screen opens late. The box takes that focus over.
+      if (!(params && params.id)) body.focus({ preventScroll: true });
+      releaseKeyboard();
 
       if (params && params.id) {
         editing = state.myPosts.find((post) => post.id === params.id)
           || state.postsById.get(params.id) || await data.getPost(params.id);
         if (!editing || editing.author_id !== state.account?.id) {
           $('composeError').textContent = 'この投稿は編集できません。';
+          // Nothing to write into here, and nothing to send.
+          postBlocked = true;
+          $('compose').classList.add('compose-blocked');
+          $('composeNext').disabled = true;
           $('composeSubmit').disabled = true;
           return;
         }
@@ -470,6 +590,7 @@ export function setupCompose() {
       postBlocked = target.blocked;
       // Nothing to type into when nothing can be posted: the box is hidden, the ← still works.
       $('compose').classList.toggle('compose-blocked', target.blocked);
+      if (target.blocked) body.blur();
       $('composeCommunity').hidden = !target.show;
       $('composeCommunity').textContent = target.blocked ? target.message : target.text;
       $('composeCommunity').classList.toggle('blocked', target.blocked);
@@ -477,6 +598,7 @@ export function setupCompose() {
         // A new account that is in no community has nowhere to post; do not leave it
         // stuck on the first-post step. The map says what to do.
         setOnboardingStep(null);
+        draftKey = '';
         navigate('#/map', { replace: true });
         return;
       }
@@ -498,7 +620,8 @@ export function setupCompose() {
       touched = Boolean(editing);
       paintTags(editing ? (editing.tags || []) : []);
       promptPosts = state.myPosts;
-      paintPrompt(!editing && !firstPost, !editing && !firstPost);
+      // The weekly prompt is put away for now (2026-10-27): ① offers the three standing ones only.
+      paintPrompt(false, !editing && !firstPost);
       paintStarters();
       refreshPromptPosts(editing);
       paintExamples(false);
@@ -538,6 +661,7 @@ export function setupCompose() {
       setOwnOpen(true);
       paintCounter();
       paintMotivation();
+      fitToViewport();
     },
   });
 }
@@ -571,13 +695,6 @@ function refreshPromptPosts(post) {
   }).catch(() => {});
 }
 
-/** show('compose') brings the bottom nav back; the first post is still in the way of it. */
-function keepNavHidden() {
-  if (!firstPost) return;
-  $('bottomNav').hidden = true;
-  document.body.classList.remove('has-nav');
-}
-
 /** What 参加者募集中 does, told to the author (who never sees the star). */
 function recruitNote(tags) {
   return (tags || []).includes(RECRUIT_TAG)
@@ -587,8 +704,9 @@ function recruitNote(tags) {
 
 async function submit() {
   if (submitting) return;
-  // The heat has not been answered yet: show the slider instead of sending.
+  // The heat has not been answered yet: back to ② and its slider instead of sending.
   if (!editing && !touched) {
+    goStep(2);
     nudgeSlider(true);
     return;
   }
@@ -667,7 +785,6 @@ async function submit() {
     // The server words its 422s for a person (a past deadline, a bad number).
     if (error.status === 422) toast(error.message);
     show('compose');
-    keepNavHidden();
   } finally {
     submitting = false;
     $('composeSubmit').textContent = editing ? '保存' : '投稿する';
@@ -703,7 +820,6 @@ export async function tryExample(text) {
   } catch (error) {
     $('composeError').textContent = error.message;
     show('compose');
-    keepNavHidden();
   } finally {
     submitting = false;
     paintCounter();
@@ -824,7 +940,7 @@ function nearIslands(result, count, islands) {
 
 export function setupReveal() {
   $('revealToMap').addEventListener('click', () => showTrial());
-  $('revealWrite').addEventListener('click', () => navigate('#/post'));
+  $('revealWrite').addEventListener('click', () => { primeKeyboard(); navigate('#/post'); });
   screen('reveal', {});
   screen('computing', {});
 }

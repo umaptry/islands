@@ -279,7 +279,9 @@ test.describe('スイッチ「入」のとき', () => {
     await guest.page.locator('#guidanceSkip').click();
     await expect(guest.page.locator('#compose')).toHaveClass(/active/);
     await guest.page.locator('#composeBody').fill('最近はコーヒーを自分で焙煎しています');
+    await guest.page.locator('#composeNext').click();
     await guest.page.locator('#composeMotivation').evaluate((node) => { node.value = '55'; node.dispatchEvent(new Event('input', { bubbles: true })); });
+    await guest.page.locator('#composeNext2').click();
     await guest.page.locator('#composeSubmit').click();
     await expect(guest.page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
     // 最初の投稿のあとは「あなたの近くの投稿」のカードが先に出る。閉じると、招待で一緒に開く投稿が開く。
