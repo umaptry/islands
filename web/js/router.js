@@ -118,8 +118,9 @@ async function apply(hash) {
 export function show(id) {
   $$('.screen').forEach((node) => node.classList.toggle('active', node.id === id));
   // The nav is hidden on the screens you have to finish before you can use the
-  // app - a guidance you are half way through, a sign-in, a first profile.
-  const chrome = ['map', 'notifications', 'me', 'user', 'compose', 'profileEdit', 'dmList', 'communityEdit'].includes(id);
+  // app - a guidance you are half way through, a sign-in, a first profile - and while
+  // a post is being written in its three steps (their buttons sit where the nav was).
+  const chrome = ['map', 'notifications', 'me', 'user', 'profileEdit', 'dmList', 'communityEdit'].includes(id);
   $('bottomNav').hidden = !chrome;
   document.body.classList.toggle('has-nav', chrome);
   refreshNav();

@@ -13,6 +13,7 @@
 
 import { api, data } from '../net.js';
 import { activeScreen, navigate, screen } from '../router.js';
+import { primeKeyboard } from '../keyboard.js';
 import { state } from '../state.js';
 import { membersOnly } from '../config.js';
 import { communityIdOfPost, communityNameFor } from '../communities.js';
@@ -274,7 +275,7 @@ function paintList() {
         }),
         el('button', {
           className: 'btn btn-small', attrs: { type: 'button', id: 'notifEmptyPost' },
-          text: '投稿する', hidden: !postsKnownEmpty(), on: { click: () => navigate('#/post') },
+          text: '投稿する', hidden: !postsKnownEmpty(), on: { click: () => { primeKeyboard(); navigate('#/post'); } },
         }),
       ),
     ));

@@ -103,14 +103,15 @@ test('promptPlaceholder: an extra prompt shows its example sentence, the weekly 
     { key: 'now', text: '最近はまってること' },
   ];
   const weekly = { text: '週末の過ごし方' };
-  const say = (selected) => promptPlaceholder({ selected, weekly, extraPrompts, max: 60 });
+  const say = (selected) => promptPlaceholder({ selected, weekly, extraPrompts });
   assert.equal(say('past'), '例：高校まで陸上部でした');
   // An extra prompt without an example still names itself.
   assert.equal(say('now'), 'お題：最近はまってること');
   assert.equal(say('weekly'), 'お題：週末の過ごし方');
-  assert.equal(say(null), '取り組みや活動内容（最大60文字）');
-  assert.equal(say('gone'), '取り組みや活動内容（最大60文字）');
-  assert.equal(promptPlaceholder({ selected: 'weekly', weekly: null, extraPrompts, max: 60 }), '取り組みや活動内容（最大60文字）');
+  // Nothing chosen: a question about what the person likes (2026-10-27), not 「最大60文字」.
+  assert.equal(say(null), '好きなこと、やってみたいことは？');
+  assert.equal(say('gone'), '好きなこと、やってみたいことは？');
+  assert.equal(promptPlaceholder({ selected: 'weekly', weekly: null, extraPrompts }), '好きなこと、やってみたいことは？');
 });
 
 test('extrasPayload: nothing when off, only filled values on create, nulls on edit', () => {

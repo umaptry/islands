@@ -20,6 +20,7 @@ import { api, data } from '../net.js';
 import { session } from '../session.js';
 import { state } from '../state.js';
 import { onboardingStep, setOnboardingStep } from '../onboarding.js';
+import { primeKeyboard } from '../keyboard.js';
 import { navigate, screen } from '../router.js';
 import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
@@ -455,7 +456,8 @@ export function setupProfileSetup() {
 // ---------------------------------------------------------------- guidance
 
 // The picture slides (what islands is, how a one-line post makes an island,
-// how islands connect, and what happens inside one), shown once to a new account between the profile and the
+// how islands connect, what happens inside one, and - since 2026-10-27 - that two people who both press
+// 「もっと話してみたい」 can talk one to one), shown once to a new account between the profile and the
 // first post. Buttons are the only
 // way through: a scroll-snap track let a half swipe settle between two slides
 // with the dots showing one thing and the screen showing another.
@@ -492,6 +494,7 @@ export function setupGuidance() {
       return;
     }
     setOnboardingStep('post');
+    primeKeyboard();
     navigate('#/post?first=1');
   };
   $('guidanceSkip').addEventListener('click', finish);

@@ -104,13 +104,17 @@ export function usedPromptKeys(posts) {
 
 /** What the body says while it is empty: an example sentence for an extra
  * prompt ("例：…"), the weekly prompt itself, or the plain hint. */
-export function promptPlaceholder({ selected, weekly, extraPrompts, max }) {
+export function promptPlaceholder({ selected, weekly, extraPrompts }) {
   if (selected === 'weekly' && weekly?.text) return `お題：${weekly.text}`;
   const extra = selected ? (extraPrompts || []).find((item) => item?.key === selected) : null;
   if (extra?.example) return `例：${extra.example}`;
   if (extra?.text) return `お題：${extra.text}`;
-  return `取り組みや活動内容（最大${max}文字）`;
+  return BODY_PLACEHOLDER;
 }
+
+/** The box's words with no prompt chosen (2026-10-27). A question, as X asks 「いまどうしてる？」, but about
+ * what a person likes or wants to try, so it does not ask for 「ラーメン食べてるなう」. The limit is on the counter. */
+export const BODY_PLACEHOLDER = '好きなこと、やってみたいことは？';
 
 /** The extra prompts still on offer: none when the feature is off, and a key
  * disappears once its owner has posted with it. */

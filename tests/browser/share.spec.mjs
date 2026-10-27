@@ -81,6 +81,9 @@ test('編集画面から出す → プロフィールは1枚に2つの名前 →
   // 編集画面: 南の会だけが選べる（北の会はこの投稿のコミュニティ）。
   await host.page.goto(`/?e=${unique()}#/post/${post.id}/edit`);
   await expect(host.page.locator('#compose')).toHaveClass(/active/);
+  // 3つのステップ（2026-10-27）: 出す欄は ③ にある。編集では熱量は答え済みなので、そのまま進める。
+  await host.page.locator('#composeNext').click();
+  await host.page.locator('#composeNext2').click();
   const box = host.page.locator('#composeShare');
   await expect(box).toBeVisible();
   await expect(box.locator('.check')).toHaveCount(1);
@@ -110,6 +113,8 @@ test('編集画面から出す → プロフィールは1枚に2つの名前 →
 
   // もう一度編集画面を開くと、南の会は「出しています」。
   await host.page.goto(`/?e2=${unique()}#/post/${post.id}/edit`);
+  await host.page.locator('#composeNext').click();
+  await host.page.locator('#composeNext2').click();
   await expect(host.page.locator('#composeShare .check.fixed')).toContainText('出しています');
 
   // 削除: 3つの答え。片方だけ外すと、カードはもう片方の名前だけになる。
