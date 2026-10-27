@@ -161,6 +161,14 @@ prepareは投稿・runtimeを変更しないが、サーバー専用embedding_ca
 3. **流したあと**：最大60秒ほどで自動で `features.post_extras` が `true`、`post_extras_ready` が `true` になる（再起動は要らない）。確認は `GET /api/health` と `GET /api/config`。あわせて SQL エディタで `select recruit_closed from map_posts(-1000,-1000,1000,1000,1)` が列として返ることを確かめる。
 4. **戻すとき**：コードだけ古いものに戻してよい（列は残る。古いコードは読まない）。受付終了のトリガーは残るので、期限・人数の付いた募集には新しく参加できないままになる。古い画面を開いたままの人が満員・期限切れの参加を押すと、トーストに `recruit_full` / `recruit_closed` の文字がそのまま出ることがある（`web/js/recruit-rules.js` の言い換えは新しい画面だけ）。
 
+## お題「困ってること」の出し方（2026-10-28）
+
+1. コードを main へ出す（CI がそのまま本番へ）。SQL より先でもよい
+2. `supabase/migrations/20261029010000_help_prompt.sql` を Supabase の SQL エディタで流す（お題の CHECK 制約に `help` を足すだけ・何度流しても壊れない）
+3. **流すまで**：「困ってること」で書いた投稿は、制約に断られたあとお題なしで保存される（本文・タグ「助けてほしい」はそのまま。サーバーのログに `posts_prompt_check does not know the prompt 'help' yet` と出る）。そのため、その人の画面には「困ってること」が出続ける
+4. **流したあと**：確かめる SQL（1文）`select pg_get_constraintdef(oid) from pg_constraint where conname = 'posts_prompt_check';` の結果に `'help'` が入っていること。以後に書いた投稿の `prompt` が `help` になる
+5. **戻すとき**：コードだけ古いものに戻してよい（制約に `help` が残っても、古いコードは送らない）
+
 ## 島の AI 命名の出し方と戻し方（2026-10-12）
 
 島の名前を Gemini で付ける機能は、**環境変数 `ISLAND_NAMING_ENABLED` が `1` のときだけ**動く。既定はオフ（未設定なら従来の上位語の名前のまま）。CI の変数・秘密は変えず、次の順で人が操作する。

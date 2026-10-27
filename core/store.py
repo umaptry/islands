@@ -2250,12 +2250,41 @@ class SupabaseStore:
             data = {key: value for key, value in data.items() if key not in SHARE_COLUMNS}
         return data
 
+    @staticmethod
+    def _prompt_refused(response):
+        """True when a 400 is posts_prompt_check refusing a prompt the database does not know yet:
+        a prompt added in code (2026-10-28 'help') before its migration was run."""
+        if response.status_code != 400:
+            return False
+        try:
+            body = response.json() or {}
+        except Exception:
+            return False
+        return str(body.get("code", "")) == "23514" and "posts_prompt_check" in str(body.get("message", ""))
+
+    def _send_post_fields(self, method, *, label, data, **kwargs):
+        """POST / PATCH a post. A prompt the database's check does not know yet is dropped and the
+        rest saved (the post keeps its words and tags; only the prompt is not recorded) until
+        supabase/migrations/20261029010000_help_prompt.sql is run. Any other refusal fails as before."""
+        response = self._send(method, POSTS, label=label, json=data, allow_statuses=(400,), **kwargs)
+        if response.status_code != 400:
+            return response
+        if not (data.get("prompt") and self._prompt_refused(response)):
+            print(f"[store] {label} refused: HTTP 400: {response.text[:200]}", flush=True)
+            raise StoreError(label)
+        print(f"[store] posts_prompt_check does not know the prompt {data['prompt']!r} yet; saved without it "
+              "until supabase/migrations/20261029010000_help_prompt.sql is run", flush=True)
+        data = {key: value for key, value in data.items() if key != "prompt"}
+        if not data:
+            return None   # an edit of the prompt alone: nothing left to change
+        return self._send(method, POSTS, label=label, json=data, **kwargs)
+
     def insert_post(self, record):
-        response = self._send(
-            "POST", POSTS, label="保存",
+        response = self._send_post_fields(
+            "POST", label="保存",
             headers={"Prefer": "return=representation,resolution=ignore-duplicates"},
             params={"select": self._post_columns()},
-            json=self._without_extras(record),
+            data=self._without_extras(record),
         )
         rows = response.json()
         if rows:
@@ -2276,16 +2305,22 @@ class SupabaseStore:
         fields = self._without_extras(fields)
         if not fields:
             return None
-        response = self._send(
-            "PATCH", POSTS, label="更新",
+        response = self._send_post_fields(
+            "PATCH", label="更新",
             headers={"Prefer": "return=representation"},
             params={
                 "id": f"eq.{post_id}", "author_id": f"eq.{author_id}",
                 "deleted_at": "is.null", "select": self._post_columns(),
             },
-            json=fields,
+            data=fields,
         )
-        rows = response.json()
+        if response is None:
+            rows = self._get(POSTS, {
+                "select": self._post_columns(), "id": f"eq.{post_id}", "author_id": f"eq.{author_id}",
+                "deleted_at": "is.null", "limit": "1",
+            })
+        else:
+            rows = response.json()
         return shape(rows[0]) if rows else None
 
     def soft_delete_post(self, post_id, author_id):
