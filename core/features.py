@@ -33,7 +33,37 @@ from core.config import (
     FEATURE_CONFIG,
     SPARSE_WEIGHT,
 )
-from core.stopwords import GENERAL_STOP_WORDS, LABEL_ONLY_STOP_WORDS
+from core.artifact_manifest import PREPROCESSING, PREPROCESSING_V1
+from core.stopwords import (
+    GENERAL_STOP_WORDS,
+    LABEL_ONLY_STOP_WORDS,
+    NORMALISED_STOP_WORDS,
+    STANCE_STOP_WORDS,
+)
+
+# The stop words of each preprocessing version (core.artifact_manifest). A map is read
+# with the ones it was built with: serving and every script that loads a map call
+# use_preprocessing() with its manifest's, a build with the version it writes. Until one
+# does, it is "-v1", what every map before 2026-10-28 was built with.
+STOP_WORDS_BY_PREPROCESSING = {
+    PREPROCESSING_V1: frozenset(GENERAL_STOP_WORDS),
+    PREPROCESSING: frozenset(GENERAL_STOP_WORDS | STANCE_STOP_WORDS | NORMALISED_STOP_WORDS),
+}
+_stop_words = STOP_WORDS_BY_PREPROCESSING[PREPROCESSING_V1]
+
+
+def use_preprocessing(name):
+    """Read texts the way the map built with preprocessing `name` did. Process-wide:
+    one process serves one map."""
+    global _stop_words
+    if name not in STOP_WORDS_BY_PREPROCESSING:
+        raise RuntimeError(f"Unknown preprocessing: {name}")
+    _stop_words = STOP_WORDS_BY_PREPROCESSING[name]
+
+
+def active_stop_words():
+    return _stop_words
+
 
 ALLOWED_POS = {"名詞", "動詞", "形容詞"}
 EXCLUDED_SUBPOS = {"代名詞", "数詞", "助数詞可能", "接尾辞", "形式名詞"}
@@ -76,7 +106,7 @@ def normalize_text(text):
 
 def is_meaningful_term(term):
     """Keep content words, including single-kanji concepts such as 山 or 畑."""
-    if not term or term in GENERAL_STOP_WORDS or term.isdigit():
+    if not term or term in _stop_words or term.isdigit():
         return False
     if len(term) < 2 and not _SINGLE_KANJI.fullmatch(term):
         return False

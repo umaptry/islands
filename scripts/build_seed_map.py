@@ -10,6 +10,10 @@ somewhere else. Treat artifacts/ as immutable once the demo is live.
         # an existing build, under a new MAP_BUILD_VERSION: the seed variants
         # (scripts/seed_variants.jsonl) and the current SEED_PLACEMENT. No point
         # of the layout moves.
+    python scripts/build_seed_map.py --keep-layout OLD --artifacts NEW
+        # the layout of the build in OLD, every vector recomputed by the current
+        # code (e.g. new stop words), under a new MAP_BUILD_VERSION. No point of
+        # the layout moves; new texts are read the new way.
 
 Pipeline (following pokeDB's build_map_data):
 
@@ -47,7 +51,7 @@ from core.config import (  # noqa: E402
     MODEL_VERSION,
 )
 from core.encoder import load_encoder, save_encoder  # noqa: E402
-from core.features import build_hybrid_features, extract_label_terms  # noqa: E402
+from core.features import build_hybrid_features, extract_label_terms, use_preprocessing  # noqa: E402
 from core.geometry import (  # noqa: E402
     dejitter_exact_overlaps,
     isotropic_scale_coordinates,
@@ -175,6 +179,7 @@ def build(args):
     from core.artifact_manifest import embedding_spec, write_manifest
     provider = os.environ.get("EMBEDDING_PROVIDER", "onnx")
     spec = embedding_spec(provider)
+    use_preprocessing(spec["preprocessing"])
     model = load_embedder()
     if provider == "gemini":
         from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
@@ -425,6 +430,7 @@ def relabel(_args):
     from core.embedder import load_embedder
     from core.artifact_manifest import validate_manifest, write_manifest
     manifest = validate_manifest(ARTIFACTS, os.environ.get("EMBEDDING_PROVIDER", "onnx"))
+    use_preprocessing(manifest["embedding"]["preprocessing"])
 
     if not SEED_MAP_JSON.exists():
         print(f"[NG] {SEED_MAP_JSON.name} がありません。")
@@ -479,6 +485,7 @@ def add_variants(_args):
 
     provider = os.environ.get("EMBEDDING_PROVIDER", "onnx")
     manifest = validate_manifest(ARTIFACTS, provider)
+    use_preprocessing(manifest["embedding"]["preprocessing"])
     version = os.environ.get("MAP_BUILD_VERSION", "")
     if not version or version == manifest["artifact_version"]:
         print(f"[NG] MAP_BUILD_VERSION に新しい版の名前を指定してください（いまは {manifest['artifact_version']}）。")
@@ -526,6 +533,127 @@ def add_variants(_args):
     return 0
 
 
+def keep_layout(args):
+    """A new build on the layout of an existing one (--keep-layout DIR), every vector
+    recomputed by the current code: after a change to the stop words, say.
+
+    The seeds keep their spots and the islands their names, so nothing on the map moves.
+    What is new is how a text is read - the TF-IDF and its projection, the centroid, the
+    seeds' and variants' vectors, 似てる度's scale, the idf of shared words - and so where
+    a NEW text lands. The student is retrained to the same spots (it only stands in for a
+    map without seed placement) and the gates run as in a build. It needs a new
+    --artifacts directory and a new MAP_BUILD_VERSION; posts already on the map are moved
+    by scripts/migrate_map.py like any other change of map.
+
+    The embedding cache is read under the old build's spec: a cached vector depends only
+    on the text sent and the model, its task and dimensions. The preprocessing decides
+    which texts are sent, not what any one of them is embedded as.
+    """
+    import train_parametric
+
+    import build_similarity_calibration as calibration
+    from core.artifact_manifest import embedding_spec, validate_manifest, write_manifest
+    from core.embedder import load_embedder
+    from core.geometry import unscale_coordinates
+
+    source = Path(args.keep_layout)
+    provider = os.environ.get("EMBEDDING_PROVIDER", "onnx")
+    old = validate_manifest(source, provider)
+    version = os.environ.get("MAP_BUILD_VERSION", "")
+    if not version or version == old["artifact_version"]:
+        print(f"[NG] MAP_BUILD_VERSION に新しい版の名前を指定してください（元は {old['artifact_version']}）。")
+        return 1
+    if (ARTIFACTS / "manifest.json").exists():
+        print("[NG] 版付き成果物は上書きできません。--artifacts で新しい出力先を指定してください。")
+        return 1
+    with io.open(source / "seed_map.json", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if (payload.get("placement") or {}).get("method") != "seed_mode":
+        print("[NG] お手本で置く地図（v3 以降）にだけ使えます。")
+        return 1
+    texts, _ = load_corpus(CORPUS_PATH)
+    if len(texts) != payload["meta"]["seed_count"]:
+        print("[NG] コーパスの件数が元の地図と一致しません。--keep-layout は使えません。")
+        return 1
+
+    spec = embedding_spec(provider)
+    use_preprocessing(spec["preprocessing"])
+    print(f"[1/6] {old['artifact_version']} の座標のまま、{spec['preprocessing']} で作り直します（{len(texts)} 件）")
+    model = load_embedder(provider=provider)
+    if provider == "gemini":
+        from core.embedding_cache import CachedEmbedder, SQLiteEmbeddingCache
+        model = CachedEmbedder(model, SQLiteEmbeddingCache(os.environ.get(
+            "EMBEDDING_CACHE_PATH", str(ROOT / ".cache" / "embeddings.sqlite3"))), old["embedding"])
+
+    print("[2/6] 448次元ベクトルを構築中...")
+    features, token_lists, zero_rows, sparse_artifacts = build_hybrid_features(texts, model, fit_sparse=True)
+    if zero_rows:
+        print(f"[NG] 内容語が一つも残らない行が {zero_rows} 件あります。ビルドを中断します。")
+        return 1
+    centroid, view = calibration.map_view_centroid(features)
+
+    coords = np.array([[row[0], row[1]] for row in payload["seed"]], dtype=float)
+    scale_bounds = payload["scale_bounds"]
+    reference_coords = unscale_coordinates(coords, scale_bounds)
+    print("[3/6] エンコーダ f を同じ座標に合わせて学習中...")
+    ab_params = train_parametric._umap_ab(LAYOUT_CONFIG["spread"], LAYOUT_CONFIG["min_dist"])
+    encoder, torch_artifacts, train_stats = train_parametric.train_encoder(
+        view, reference_coords, graph=None, ab_params=ab_params
+    )
+    print(f"      {train_stats}")
+
+    variants = load_variants(VARIANTS_PATH, len(texts))
+    sources = np.zeros(0, dtype=int)
+    rows = view
+    if variants is not None:
+        sources, variant_texts = variants
+        print(f"[4/6] 種類ちがいの例文 {len(sources)} 件（元のシードの位置に置く）")
+        rows = np.vstack([view, variant_views(variant_texts, model, sparse_artifacts, centroid)])
+    seed_vectors = rows.astype(np.float16)
+
+    print("[5/6] 品質ゲートを検証中...")
+    gates, passed = run_gates(
+        view, reference_coords, encoder, torch_artifacts, train_stats, ab_params,
+        skip_holdout=args.fast,
+    )
+    gates["placement"] = placement_gate(seed_vectors.astype(float), coords, sources)
+    passed = passed and gates["placement"][0]
+    for name, (ok, detail) in gates.items():
+        print(f"      [{'OK' if ok else 'NG'}] {name}: {detail}")
+    if not passed:
+        print("\n[NG] 品質ゲートを通過しませんでした。artifacts は書き込みません。")
+        return 1
+
+    print("[6/6] 書き込み...")
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    save_encoder(
+        ENCODER_NPZ, torch_artifacts["encoder_state_dict"], torch_artifacts["encoder_arch"],
+        torch_artifacts["coord_mean"], torch_artifacts["coord_scale"], scale_bounds,
+    )
+    atomic_write(VECTORIZERS_PICKLE, lambda h: pickle.dump(sparse_artifacts, h), mode="wb")
+    atomic_write(ARTIFACTS / SEED_VECTORS, lambda h: np.save(h, seed_vectors), mode="wb")
+    # The layout ("seed", "islands", "scale_bounds", "distance_quantiles") is the old one.
+    payload["meta"].update({
+        "model_version": version,
+        "layout_from": old["artifact_version"],
+        "feature_config": FEATURE_CONFIG,
+        "feature_dim": int(features.shape[1]),
+        "train_stats": train_stats,
+        "gates": {name: detail for name, (_, detail) in gates.items()},
+        "quality_checked": not args.fast and passed,
+    })
+    payload["idf"] = build_idf(token_lists)
+    payload["placement"] = dict(SEED_PLACEMENT, variant_sources=sources.tolist())
+    anchors, quantiles, _pairs, _nearest = calibration.measure(view, space=centroid["space"])
+    payload["cosine_anchors"] = anchors
+    payload["cosine_centroid"] = centroid
+    payload["cosine_quantiles"] = quantiles
+    atomic_write(SEED_MAP_JSON, lambda h: json.dump(payload, h, ensure_ascii=False, separators=(",", ":")))
+    write_manifest(ARTIFACTS, spec)
+    print(f"完了: {version}（{old['artifact_version']} の座標のまま、{spec['preprocessing']}）")
+    return 0
+
+
 def verify(_args):
     """Re-check an existing build without rebuilding anything."""
     from core.artifact_manifest import validate_manifest
@@ -562,6 +690,8 @@ def main():
                         help="座標はそのままに、島の分け方と名前だけ付け直す")
     parser.add_argument("--add-variants", action="store_true",
                         help="既存の地図に種類ちがいの例文と今の置き方を足して新しい版にする（座標は不変）")
+    parser.add_argument("--keep-layout", metavar="DIR",
+                        help="DIR の地図の座標のまま、今のコード（除外語など）で数値を作り直して新しい版にする")
     parser.add_argument("--fast", action="store_true", help="ホールドアウト検証を省略（開発用）")
     parser.add_argument("--corpus", help="別のコーパスを使う（開発用）")
     parser.add_argument("--artifacts", help="別の出力先を使う（開発用）")
@@ -574,6 +704,8 @@ def main():
         return relabel(args)
     if args.add_variants:
         return add_variants(args)
+    if args.keep_layout:
+        return keep_layout(args)
     return build(args)
 
 

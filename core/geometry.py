@@ -72,6 +72,21 @@ def scale_projected_coordinate(raw_x, raw_y, bounds):
     )
 
 
+def unscale_coordinates(points, bounds):
+    """Map coordinates back into the reference space: scale_projected_coordinate undone
+    (all but its clipping at the edge of the box). Used to train an encoder to the
+    layout of an existing map."""
+    points = np.asarray(points, dtype=float)
+    world_center = bounds["world_center"]
+    x, y = points[:, 0], points[:, 1]
+    if bounds.get("quarter_turn"):
+        x, y = 2.0 * world_center - y, x
+    return np.stack([
+        bounds["center_x"] + (x - world_center) / bounds["scale"],
+        bounds["center_y"] + (y - world_center) / bounds["scale"],
+    ], axis=1)
+
+
 def dejitter_exact_overlaps(points, epsilon=OVERLAP_EPSILON):
     resolved = np.array(points, dtype=float, copy=True)
     seen = {}

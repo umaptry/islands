@@ -6,18 +6,19 @@ import sys
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.artifact_manifest import embedding_spec
+from core.artifact_manifest import matches_spec
 
 
 def validate(health, config, provider, version, supabase_url, phase="ready"):
     errors = []
     if phase not in ("ready", "pre-migration", "maintenance"):
         raise ValueError("Unknown verification phase")
-    spec = embedding_spec(provider)
     for name, expected in (("store", "supabase"), ("store_ok", True), ("artifact_version", version)):
         if health.get(name) != expected:
             errors.append(f"health.{name} mismatch")
-    if health.get("embedding") != spec:
+    # Under any preprocessing this code reads: the server reports its map's, and the map
+    # decides (core.artifact_manifest), so a release of the code alone keeps the map it had.
+    if not matches_spec(health.get("embedding"), provider):
         errors.append("health.embedding mismatch")
     if config.get("mode") != "supabase" or config.get("map_version") != version:
         errors.append("config mode/version mismatch")

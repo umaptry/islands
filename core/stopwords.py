@@ -60,6 +60,49 @@ GENERAL_STOP_WORDS = {
     "日々", "目指す", "成長", "流す", "楽しむ", "作り", "現在形", "以来", "頃", "ころ",
 }
 
+# The two sets below are read only by maps built with preprocessing "-v2" (2026-10-28):
+# core.features.use_preprocessing. A map keeps the stop words it was built with, so
+# older maps place posts exactly as before.
+#
+# Words that say HOW or WHEN somebody does a thing rather than WHAT it is: looking for
+# somebody (探しています / 撮ってくれる人), an invitation (一緒に / 初心者歓迎 / 会を開きます),
+# when (学生時代 / 毎朝 / 今年 / 身につけたい) and how it felt (悩んでいます / 楽しみ). They
+# are shared with posts on every other topic in the same stance and pulled such posts
+# together. Picked from the 15,579 seed texts: words spread evenly over all eight regions
+# and over-represented in one kind of variant (scripts/seed_variants.jsonl). Measured on
+# the v6 layout, these against the "-v1" stop words: of 32 test posts (8 topics x やった /
+# やってる / やりたい / 探してる, scripts/probe_stances.jsonl) a post's three nearest in
+# another topic but the same stance went 20 -> 4 of 96, 「町内のお祭りで料理を作ってくれる人を
+# 探しています」 landed 74 from the other cooking posts instead of 434, and an invitation
+# variant's ten nearest held another region's invitation 15.9% -> 4.2% of the time. The
+# map did not lose its topics for it: the labelled probes' nearest on the same topic went
+# 0.87 -> 0.93 (on the map 0.71 -> 0.74), the placement gate 0.91 -> 0.95 at k=15.
+# Normalised forms (Sudachi's), as they are looked up.
+STANCE_STOP_WORDS = frozenset({
+    # looking for somebody, asking
+    "探す", "呉れる", "下さる", "欲しい", "頼む", "願う", "御願い", "求める", "手伝う",
+    "見付ける", "御勧め",
+    # an invitation
+    "募集", "募集中", "歓迎", "初心者", "経験者", "参加", "参加者", "一緒", "集まる", "集まり",
+    "開く", "開催", "会", "共有", "交換", "持ち寄る", "持ち寄り", "持参", "語り合う", "教え合う",
+    "見せ合う", "相談", "話す", "日時", "後日", "お知らせ", "OK", "交流会", "体験会",
+    # when, and how far along
+    "学生時代", "時代", "時期", "懐かしい", "思い出す", "思い出", "去年", "今年", "来年", "今月",
+    "来月", "毎年", "毎月", "毎週", "毎朝", "毎晩", "毎回", "今日", "いま", "最中", "半年", "一度",
+    "何度", "久し振り", "再開", "日課", "習慣", "準備", "進める", "向ける", "身", "つける", "付ける",
+    "憧れる", "極める", "上達", "磨く", "試す",
+    # how it felt
+    "悩む", "迷う", "困る", "不安", "驚く", "感動", "楽しみ", "怖い", "心配", "凄い", "本当",
+    "結局", "実感", "びっくり", "忘れる", "感じる",
+})
+
+# Entries of GENERAL_STOP_WORDS that never matched: Sudachi hands over its normalised
+# form (くる -> 来る, ハマる -> 嵌まる, ため -> 為) and that is what is looked up.
+NORMALISED_STOP_WORDS = frozenset({
+    "行く", "来る", "為", "時", "所", "嵌まる", "物", "此の", "此れ", "全て", "其の", "其れ",
+    "偶に", "一寸", "又", "奴", "良く", "遠い",
+})
+
 # Fine inside a document vector, but not worth SHOWING a reader - as an island
 # heading or as a shared keyword. Changing this set never moves a coordinate.
 LABEL_ONLY_STOP_WORDS = {

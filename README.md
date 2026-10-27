@@ -640,6 +640,13 @@ python scripts/build_similarity_calibration.py            # 似てる度の目�
 島名を直したいときは、まず `core/stopwords.py` の `LABEL_ONLY_STOP_WORDS` /
 `DISPLAY_STOP_WORDS` を調整してください。この2つは**ベクトルに一切影響しません**。
 `GENERAL_STOP_WORDS` のほうは特徴量に効くので、触ると再ビルドが必要になります。
+除外語は地図ごとに決まります（manifest の `embedding.preprocessing`。`-v1` は
+`GENERAL_STOP_WORDS`、`-v2` はそれに `STANCE_STOP_WORDS` と `NORMALISED_STOP_WORDS` を足したもの。
+`core.features.use_preprocessing`）。除外語を変えるときは、新しい版を
+`core.artifact_manifest` と `core.features.STOP_WORDS_BY_PREPROCESSING` に足して、
+`build_seed_map.py --keep-layout`（座標はそのまま）で地図を作り直してください。
+既存の版の中身を書き換えると、その版の地図で置いた投稿と食い違います。
+語は Sudachi の標準形で書きます（「くる」ではなく「来る」。標準形が違うと効きません）。
 
 `scripts/seed_corpus.jsonl` は 1行1件の JSONL（UTF-8 / LF）で、`{"text": "..."}` のみ。
 30字以上、内容語が2語以上残ること。同じ文型の繰り返しは避けてください（内容ではなく

@@ -47,7 +47,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build_seed_map as build  # noqa: E402
 
 from core.config import DENSE_WEIGHT, SPARSE_WEIGHT, VIEW_DENSE_WEIGHT, VIEW_SPARSE_WEIGHT  # noqa: E402
-from core.features import build_hybrid_features  # noqa: E402
+from core.features import build_hybrid_features, use_preprocessing  # noqa: E402
 from core.similarity import (  # noqa: E402
     CENTERED_SPACE,
     MAP_VIEW_SPACE,
@@ -77,6 +77,8 @@ def seed_features():
 
     with open(build.VECTORIZERS_PICKLE, "rb") as handle:
         sparse_artifacts = pickle.load(handle)
+    # The stop words this map was built with (core.features).
+    use_preprocessing(json.loads((build.ARTIFACTS / "manifest.json").read_text(encoding="utf-8"))["embedding"]["preprocessing"])
 
     print("[2/3] 448次元ベクトルを再構築中（学習はしません / fit_sparse=False）...")
     features, _tokens, zero_rows, _ = build_hybrid_features(

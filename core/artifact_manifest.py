@@ -8,7 +8,14 @@ from core.config import FEATURE_CONFIG
 FILES = ("seed_map.json", "encoder.npz", "vectorizers.pkl")
 # A map placed by its seeds (core.placement) also ships their map-view vectors.
 SEED_VECTORS = "seed_vectors.npy"
-PREPROCESSING = "hybrid-raw35-concept65-dense65-sparse35-v1"
+# What a build turns a text into before it is embedded. "-v2" (2026-10-28) drops more stop
+# words: how and when somebody does a thing (探す, 募集, 学生時代 ...), see
+# core.stopwords.STANCE_STOP_WORDS. Older maps keep "-v1" and are still read with the stop
+# words they were built with (core.features.use_preprocessing): the artifact decides, so new
+# code serves an older map exactly as before, and a map can be switched and rolled back.
+PREPROCESSING_V1 = "hybrid-raw35-concept65-dense65-sparse35-v1"
+PREPROCESSING = "hybrid-raw35-concept65-dense65-sparse35-v2"   # what a new build writes
+SUPPORTED_PREPROCESSING = (PREPROCESSING_V1, PREPROCESSING)
 
 # 1: the encoder reads the stored vector itself. 2 (2026-10-15): it reads
 # core.similarity.map_view of it, through the centroid in seed_map.json. The
@@ -25,19 +32,28 @@ def digest(path):
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def embedding_spec(provider="onnx"):
+def embedding_spec(provider="onnx", preprocessing=PREPROCESSING):
     from core.embedder import ONNX_MODEL_NAME, ONNX_MODEL_REVISION
     from core.config import GEMINI_MODEL_NAME, GEMINI_DIMENSIONS, GEMINI_TASK
     if provider not in ("onnx", "gemini"):
         raise ValueError("EMBEDDING_PROVIDER must be onnx or gemini")
+    if preprocessing not in SUPPORTED_PREPROCESSING:
+        raise ValueError("Unknown preprocessing")
     return {
         "provider": provider,
         "model": GEMINI_MODEL_NAME if provider == "gemini" else ONNX_MODEL_NAME,
         "dimensions": GEMINI_DIMENSIONS if provider == "gemini" else 384,
         "task": GEMINI_TASK if provider == "gemini" else "passage",
         "revision": None if provider == "gemini" else ONNX_MODEL_REVISION,
-        "preprocessing": PREPROCESSING,
+        "preprocessing": preprocessing,
     }
+
+
+def matches_spec(embedding, provider):
+    """Whether an artifact's (or a server's) embedding is this provider's, under any
+    preprocessing this code can read."""
+    preprocessing = (embedding or {}).get("preprocessing")
+    return preprocessing in SUPPORTED_PREPROCESSING and embedding == embedding_spec(provider, preprocessing)
 
 
 def write_manifest(directory, spec):
@@ -64,7 +80,7 @@ def validate_manifest(directory, provider):
     if manifest.get("schema_version") not in (SCHEMA_STORED_VECTOR, SCHEMA_MAP_VIEW) \
             or not manifest.get("artifact_version"):
         raise RuntimeError("Unsupported or unversioned artifact manifest")
-    if manifest["embedding"] != embedding_spec(provider):
+    if not matches_spec(manifest.get("embedding"), provider):
         raise RuntimeError("Embedding backend does not match the artifact manifest")
     if manifest["feature_config"] != FEATURE_CONFIG or manifest["feature_dimensions"] != 448:
         raise RuntimeError("Feature configuration does not match the artifact manifest")

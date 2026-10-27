@@ -143,7 +143,7 @@ from core.energy import constants as energy_constants, reach_factor
 from core.artifact_manifest import SEED_VECTORS
 from core.placement import place_by_seeds, placement_spots
 from core.energy import name_landmasses
-from core.features import build_hybrid_features, extract_label_terms, normalize_text
+from core.features import build_hybrid_features, extract_label_terms, normalize_text, use_preprocessing
 from core.geometry import scale_projected_coordinate
 from core.similarity import (
     SPARSE_DIM,
@@ -251,6 +251,8 @@ def load_artifacts():
     """Load the frozen map. Missing artifacts is a hard failure, not a warning."""
     from core.artifact_manifest import validate_manifest
     manifest = validate_manifest(ARTIFACTS, os.environ.get("EMBEDDING_PROVIDER", "onnx"))
+    # Texts are read with the stop words this map was built with (core.features).
+    use_preprocessing(manifest["embedding"]["preprocessing"])
     seed_map_path = ARTIFACTS / "seed_map.json"
     if not seed_map_path.exists():
         raise RuntimeError(

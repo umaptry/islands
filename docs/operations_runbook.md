@@ -296,6 +296,21 @@ $env:EMBEDDING_PROVIDER = 'onnx'; $env:MAP_BUILD_VERSION = 'kotoba-map-e5-v3'
 python scripts/build_seed_map.py --artifacts output/e5-v3   # 手元と CI 用。artifacts/ の5ファイルを置き換える
 ```
 
+**v7（2026-10-28）**：v6 の**座標のまま**、除外語を増やして数値だけ作り直した版（`--keep-layout`）。増やしたのは「何について」ではなく「どう・いつ」を表す語（探す・くれる・募集・一緒・学生時代・毎朝・悩む など94語、`core.stopwords.STANCE_STOP_WORDS`）と、一覧にあるのに Sudachi の標準形が違って効いていなかった語（行く・来る・為・嵌まる など18語、`NORMALISED_STOP_WORDS`）。「〜してくれる人を探しています」のような投稿が、ほかの話題の「探してる」投稿に引っ張られていた（検証は `islands_261012/地図の対象とスタンスの検証_20261027/`）。
+
+- 除外語は成果物の `embedding.preprocessing` で決まる（`-v1` は今までの除外語、`-v2` は増やした除外語。`core.features.use_preprocessing`）。**新しいコードは v6（`-v1`）を今までどおりに読む**ので、コードを先に出してよい。地図を v7 に切り替えると除外語も切り替わり、v6 に戻すと元に戻る
+- 島・お手本の位置・島の名前は v6 と同じ。変わるのは、語の辞書（`vectorizers.pkl`）、お手本と例文のベクトル、重心、似てる度の目盛り、共通の語の珍しさ（`idf`）。新しい投稿の置き場所と、`migrate_map` で計算し直した既存の投稿の位置が変わる（「探す」「募集」などを含む投稿ほど動く）
+- 埋め込みのキャッシュは元の版の spec の名前で引く（埋め込みは送った文字列とモデル・用途・次元だけで決まり、除外語は「どの文字列を送るか」を変えるだけのため）。v6 のキャッシュがあれば、送るのは内容語の文が変わった約8,000件だけ
+- `compare_map_release.py` は、テスト投稿32件（`scripts/probe_stances.jsonl`、8つの対象×やった／やってる／やりたい／探してる）でも測り、候補の地図が `STANCE_FLOORS` に届かなければ不合格にする
+
+```powershell
+$env:EMBEDDING_PROVIDER = 'gemini'; $env:MAP_BUILD_VERSION = 'islands-gemini-20261028-v7'
+$env:GEMINI_REQUESTS_PER_MINUTE = '60'; $env:GEMINI_ITEMS_PER_MINUTE = '600'
+python scripts/build_seed_map.py --keep-layout ..\islands-map-v2\output\gemini-v6 --artifacts output/gemini-v7
+```
+
+本番への出し方は下の「本番への出し方」と同じ（CI 変数・GCS・本番 DB を触るので相手の方との合意が要る）。島の形は変わらない。既存の投稿は計算し直すので、多くはほぼ同じ場所に残るが、「探す」「募集」などを含む投稿は動くことがある（MOVED_FIXME）。
+
 **v6（2026-10-16）**：v5（用途 `clustering`）に、先生役 UMAP の新しい設定（`core.config.LAYOUT_CONFIG` の `repulsion_strength` 2・`spread` 0.5、`LAYOUT_VERSION` v3）を加えて作り直した版。埋め込みは v5 と同じなのでキャッシュがあれば送信はなく、所要は学習とゲートで約1時間:
 
 ```powershell
