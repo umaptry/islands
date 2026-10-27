@@ -132,12 +132,22 @@ jobs:
       # (toomanyrequests: Data limit exceeded, every run since 2026-10-23). Supabase publishes the
       # same images on ghcr.io; the CLI reads this variable (internal/utils/docker.go, GetRegistry).
       SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
+    # packages: read lets the job's own token sign in to ghcr.io (below).
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           check-latest: true
+      # Anonymous pulls from ghcr.io are throttled for the shared runners as well (toomanyrequests,
+      # every run of 2026-10-28 03:00 JST on). Signed in with the job's own token, the CLI's pulls
+      # (it reads the Docker config's credentials for the registry) are not anonymous any more.
+      - run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npx --yes supabase@2.39.2 start
       - run: npx --yes supabase@2.39.2 test db
       - if: always()
