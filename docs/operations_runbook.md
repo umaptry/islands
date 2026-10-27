@@ -301,6 +301,7 @@ python scripts/build_seed_map.py --artifacts output/e5-v3   # 手元と CI 用�
 - 除外語は成果物の `embedding.preprocessing` で決まる（`-v1` は今までの除外語、`-v2` は増やした除外語。`core.features.use_preprocessing`）。**新しいコードは v6（`-v1`）を今までどおりに読む**ので、コードを先に出してよい。地図を v7 に切り替えると除外語も切り替わり、v6 に戻すと元に戻る
 - 島・お手本の位置・島の名前は v6 と同じ。変わるのは、語の辞書（`vectorizers.pkl`）、お手本と例文のベクトル、重心、似てる度の目盛り、共通の語の珍しさ（`idf`）。新しい投稿の置き場所と、`migrate_map` で計算し直した既存の投稿の位置が変わる（「探す」「募集」などを含む投稿ほど動く）
 - 埋め込みのキャッシュは元の版の spec の名前で引く（埋め込みは送った文字列とモデル・用途・次元だけで決まり、除外語は「どの文字列を送るか」を変えるだけのため）。v6 のキャッシュがあれば、送るのは内容語の文が変わった約8,000件だけ
+- **本番の埋め込みキャッシュ（Supabase の `embedding_cache`）は効かない**：キャッシュの鍵には embedding spec（`preprocessing` を含む）が入るので、`-v1` の地図で貯まった分は `-v2` の地図では1件も当たらない。`migrate_map.py prepare` は全投稿（本文と内容語の文の2通り）を Gemini に送り直し、`compare_map_release.py` の候補の評価も評価用の投稿を送る。実行する環境に `GEMINI_API_KEY` と速度（`GEMINI_REQUESTS_PER_MINUTE` / `GEMINI_ITEMS_PER_MINUTE`）を入れ、止まったら同じ backup / output で `prepare --resume`。prepare は maintenance on の前に済ませる。切り替え直後の数分は、島の目印・ジャンルの埋め込みも一度ずつ取り直す
 - `compare_map_release.py` は、テスト投稿32件（`scripts/probe_stances.jsonl`、8つの対象×やった／やってる／やりたい／探してる）でも測り、候補の地図が `STANCE_FLOORS` に届かなければ不合格にする
 
 ```powershell
@@ -309,7 +310,7 @@ $env:GEMINI_REQUESTS_PER_MINUTE = '60'; $env:GEMINI_ITEMS_PER_MINUTE = '600'
 python scripts/build_seed_map.py --keep-layout ..\islands-map-v2\output\gemini-v6 --artifacts output/gemini-v7
 ```
 
-本番への出し方は下の「本番への出し方」と同じ（CI 変数・GCS・本番 DB を触るので相手の方との合意が要る）。島の形は変わらない。既存の投稿は計算し直すので、多くはほぼ同じ場所に残るが、「探す」「募集」などを含む投稿は動くことがある（MOVED_FIXME）。
+本番への出し方は下の「本番への出し方」と同じ（CI 変数・GCS・本番 DB を触るので相手の方との合意が要る）。島の形は変わらない。既存の投稿は計算し直すので、多くはほぼ同じ場所に残るが、「探す」「募集」などを含む投稿は動くことがある（評価用の投稿132件で、58% は動かず、93% は 10 未満。50 以上動いたのは 4%（5件）で、いちばん大きいのは「町内のお祭りで料理を作ってくれる人を探しています」の 385＝お祭りの投稿の近くから料理の投稿の近くへ）。
 
 **v6（2026-10-16）**：v5（用途 `clustering`）に、先生役 UMAP の新しい設定（`core.config.LAYOUT_CONFIG` の `repulsion_strength` 2・`spread` 0.5、`LAYOUT_VERSION` v3）を加えて作り直した版。埋め込みは v5 と同じなのでキャッシュがあれば送信はなく、所要は学習とゲートで約1時間:
 

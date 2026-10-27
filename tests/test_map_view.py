@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from core.artifact_manifest import SCHEMA_MAP_VIEW, SCHEMA_STORED_VECTOR, validate_manifest
+from core.artifact_manifest import PREPROCESSING_V1, SCHEMA_MAP_VIEW, SCHEMA_STORED_VECTOR, validate_manifest
 from core.config import DENSE_WEIGHT, SPARSE_WEIGHT
 from core.similarity import (
     CENTERED_SPACE,
@@ -201,7 +201,7 @@ def as_map_view_artifact(directory):
     seed["cosine_centroid"] = centroid
     seed["cosine_anchors"] = dict(seed["cosine_anchors"], space=MAP_VIEW_SPACE)
     (directory / "seed_map.json").write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
-    write_manifest(directory, embedding_spec("onnx"))
+    write_manifest(directory, embedding_spec("onnx", PREPROCESSING_V1))   # the bundled map is -v1
     return centroid
 
 
@@ -245,7 +245,7 @@ def test_a_centroid_that_does_not_fit_the_encoder_stops_the_load(tmp_path, monke
     seed = json.loads((tmp_path / "seed_map.json").read_text(encoding="utf-8"))
     seed["cosine_centroid"]["dense_mean"] = seed["cosine_centroid"]["dense_mean"][:100]
     (tmp_path / "seed_map.json").write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
-    write_manifest(tmp_path, embedding_spec("onnx"))
+    write_manifest(tmp_path, embedding_spec("onnx", PREPROCESSING_V1))
     monkeypatch.setattr(application, "ARTIFACTS", tmp_path)
     with pytest.raises(RuntimeError, match="cosine_centroid"):
         application.load_artifacts()

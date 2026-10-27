@@ -22,9 +22,10 @@ from benchmark_embeddings import score_probe
 # Posts on one topic in different stances - did it, do it, want to, looking for somebody
 # who can (scripts/probe_stances.jsonl) - should stand together, not with other topics in
 # the same stance. A candidate map must reach these shares on its own, whatever the baseline
-# does (2026-10-28: the islands-gemini-20261016-v6 map reached 0.79 and 0.75, its stop-word
-# rebuild islands-gemini-20261028-v7 FIXME).
-STANCE_FLOORS = {"topic_top3": 0.85, "map_topic_nearest": 0.85}
+# does. Measured 2026-10-28: islands-gemini-20261016-v6 0.79 / 0.94, its rebuild with the
+# stance stop words islands-gemini-20261028-v7 0.96 / 1.00. The first is the one that tells
+# a map that groups by stance (v6 fails it); the second allows a stray two-topic post or two.
+STANCE_FLOORS = {"topic_top3": 0.90, "map_topic_nearest": 0.90}
 
 
 def stance_scores(vectors, coords, topics):
