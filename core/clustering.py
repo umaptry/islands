@@ -21,8 +21,8 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
 from core.config import CLUSTER_CANDIDATES, CLUSTER_VOTE_K, cluster_size_bounds
-from core.features import _SPLIT_MODE, display_term, get_tokenizer, make_label_candidates
-from core.stopwords import DISPLAY_STOP_WORDS, GENERAL_STOP_WORDS, LABEL_ONLY_STOP_WORDS
+from core.features import _SPLIT_MODE, active_stop_words, display_term, get_tokenizer, make_label_candidates
+from core.stopwords import DISPLAY_STOP_WORDS, LABEL_ONLY_STOP_WORDS
 
 MAX_RANKED_TERMS = 20
 # Serving-time naming. Deliberately NOT rank_cluster_keywords: that one embeds
@@ -164,7 +164,7 @@ def rank_cluster_keywords(labels, cluster_id, token_lists, model, embedding_cach
     relevance = {}
     for term, support in cluster_df.items():
         shown = display_term(term)
-        if support < minimum_support or shown in GENERAL_STOP_WORDS or shown in LABEL_ONLY_STOP_WORDS:
+        if support < minimum_support or shown in active_stop_words() or shown in LABEL_ONLY_STOP_WORDS:
             continue
         specificity = math.log((len(token_lists) + 1) / (global_df[term] + 1))
         relevance[term] = (support / cluster_size) * specificity

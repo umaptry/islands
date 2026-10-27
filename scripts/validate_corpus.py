@@ -24,7 +24,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.config import MIN_TEXT_LENGTH
-from core.features import extract_content_terms, normalize_text
+from core.artifact_manifest import PREPROCESSING
+from core.features import extract_content_terms, normalize_text, use_preprocessing
+
+# A corpus is checked for the next build, which uses the newest stop words.
+use_preprocessing(PREPROCESSING)
 
 DEFAULT_PATH = Path(__file__).resolve().parent / "seed_corpus.jsonl"
 

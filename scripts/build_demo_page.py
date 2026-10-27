@@ -75,6 +75,7 @@ from core.encoder import load_encoder  # noqa: E402
 from core.features import (  # noqa: E402
     build_hybrid_features,
     extract_label_terms,
+    use_preprocessing,
 )
 from core.geometry import scale_projected_coordinate  # noqa: E402
 from core.placement import place_by_seeds, placement_spots  # noqa: E402
@@ -206,6 +207,8 @@ def recompute(live_map, live_users):
     encoder, scale_bounds = load_encoder(ARTIFACTS / "encoder.npz")
     with open(ARTIFACTS / "vectorizers.pkl", "rb") as handle:
         sparse_artifacts = pickle.load(handle)
+    # The stop words this map was built with (core.features).
+    use_preprocessing(json.loads((ARTIFACTS / "manifest.json").read_text(encoding="utf-8"))["embedding"]["preprocessing"])
 
     order = [user["id"] for user in live_map["users"]]
     texts = [live_users[uid]["text"] for uid in order]
