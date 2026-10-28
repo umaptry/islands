@@ -32,9 +32,9 @@ function openVenueView(name, url) {
       lines: [google ? 'メールアドレスか Google で登録して、最初の投稿まで進みます' : 'メールアドレスで登録して、最初の投稿まで進みます'] },
     { title: 'ホーム画面に追加する',
       lines: ['iPhone：Safari の［共有］→［ホーム画面に追加］', 'Android：Chrome の［⋮］→［ホーム画面に追加］',
-        'ホーム画面の islands を開く（iPhone はもう一度ログイン）。明日からも、ここから開けます'] },
+        'ホーム画面の islands を開く（iPhone はもう一度ログイン）', '明日からも、ここから開けます'] },
     { title: '「通知を受け取る」を押す',
-      lines: ['ホーム画面から開いた islands で。投稿のあとに出るカードか、「通知」画面のいちばん上にあります'] },
+      lines: ['ホーム画面から開いた islands で。投稿のあとに出るカードか、', '「通知」画面のいちばん上にあります'] },
   ];
   const previous = document.activeElement;
   let qr;
