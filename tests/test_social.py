@@ -231,6 +231,28 @@ def test_the_name_is_the_one_field_that_cannot_be_cleared(people, fresh_client):
         assert response.status_code == 422, value
 
 
+def test_the_affiliation_cannot_be_emptied_but_a_save_without_it_goes_through(people, fresh_client):
+    """2026-10-29: 所属組織 is required. Sent empty or null it is refused; left out it is not asked."""
+    akari = people("a@example.com", "あかり")
+    for value in (None, "", "   "):
+        response = fresh_client.put(
+            "/api/account/me", json={"affiliation": value}, headers=akari.headers
+        )
+        assert response.status_code == 422, value
+        assert response.json()["detail"] == "所属組織を入力してください。"
+    # Nothing was saved by the refused requests, and a save that does not carry
+    # the key (a photo-only save) is untouched by the rule.
+    row = fresh_client.put(
+        "/api/account/me", json={"icon_id": "7"}, headers=akari.headers
+    ).json()["account"]
+    assert row["icon_id"] == "7"
+    saved = fresh_client.put(
+        "/api/account/me", json={"affiliation": " コクヨ "}, headers=akari.headers
+    )
+    assert saved.status_code == 200
+    assert saved.json()["account"]["affiliation"] == "コクヨ"
+
+
 def test_an_avatar_can_be_taken_off_again(people, fresh_client):
     """The emoji discs are the fallback, so avatar_path has to be clearable."""
     akari = people("a@example.com", "あかり")

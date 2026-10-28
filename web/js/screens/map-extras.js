@@ -31,7 +31,7 @@ let cardOpener = null;   // what had focus before the card opened
 const snapshot = () => (typeof mapApi.mapSnapshot === 'function' ? mapApi.mapSnapshot() : null);
 const finite = (value) => Number.isFinite(value);
 const hasCenter = (island) => finite(island.cx) && finite(island.cy);
-const islandKey = (island) => island.island_id || island.label;   // the same key map/index.js uses
+const islandKey = (island) => island.island_id || (island.name_pending ? `${island.label}@${island.cx},${island.cy}` : island.label);   // the same key map/index.js uses
 const islandName = (island) => island.label || island.name || '名前のない島';
 
 // ---------------------------------------------------------------- near islands

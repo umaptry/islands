@@ -14,12 +14,13 @@ import { setupZoomGuard } from './zoom-guard.js';
 import { navigate, refreshNav, route, screen, setGuard, setNavVisible, show, startRouter } from './router.js';
 import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
 import { setupPush, syncPush } from './push.js';
+import { setupPushAsk } from './push-ask.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
 import { watchScreenTone } from './screen-tone.js';
 import { setupFeedback } from './feedback.js';
 import { setupAudio } from './audio.js';
-import { setupAuth, setupGuidance, setupProfileSetup, setupWelcome } from './screens/auth.js';
+import { rememberAffiliationReturn, setupAffiliation, setupAuth, setupGuidance, setupProfileSetup, setupWelcome } from './screens/auth.js';
 import { setupCompose, setupReveal } from './screens/compose.js';
 import { setupMapScreen, refreshMyPosts, forgetMapData } from './screens/map.js';
 import { refreshNotifications, setupNotifications, paintBadge } from './screens/notifications.js';
@@ -37,6 +38,7 @@ route('#/welcome', 'welcome');
 route('#/auth', 'auth');
 route('#/setup', 'setup');
 route('#/guidance', 'guidance');
+route('#/affiliation', 'affiliation');
 route('#/invite/:code', 'invite');
 route('#/map', 'map');
 route('#/post', 'compose');
@@ -59,9 +61,22 @@ const NEEDS_ACCOUNT = new Set([
 // The bottom bar is マップ／DM／通知／マイページ. The DM tab exists only when signed in and 「話してみたい」 is on.
 setNavVisible((target) => (target === '#/dm' ? dmTabVisible() : true));
 
+// 2026-10-29: 所属組織 is required. A named account with none, outside the sign-up
+// steps, is held on #/affiliation until it has one. These screens are left alone:
+// the sign-up steps themselves, and an invite link (which asks first).
+const AFFILIATION_EXEMPT = new Set(['#/welcome', '#/auth', '#/setup', '#/guidance', '#/invite/:code', '#/affiliation']);
+const needsAffiliation = () => Boolean(state.account && state.account.display_name)
+  && !String(state.account.affiliation || '').trim() && !onboardingStep();
+
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
   const onboarding = onboardingStep();
+  if (pattern === '#/affiliation') return needsAffiliation() ? null : '#/map';
+  if (needsAffiliation() && !AFFILIATION_EXEMPT.has(pattern)) {
+    // Remember where they were going, so saving can take them there.
+    rememberAffiliationReturn(window.location.hash || '#/map');
+    return '#/affiliation';
+  }
   if (signedIn && pattern === '#/map' && onboarding) {
     if (onboarding === 'photo') return '#/setup';
     return onboarding === 'post' ? '#/post?first=1' : '#/guidance';
@@ -106,6 +121,7 @@ async function boot() {
   setupAuth();
   setupInvite();
   setupProfileSetup();
+  setupAffiliation();
   setupGuidance();
   setupCompose();
   setupReveal();
@@ -116,6 +132,7 @@ async function boot() {
   setupCommunityEdit();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
+  setupPushAsk();
   screen('booting', {});
 
   // A link to one post (#/map?post=<id>) is read first of all: the OAuth return
@@ -170,7 +187,8 @@ async function boot() {
 
   // Not signed in, or signed in but not yet through the first-post steps: the
   // link waits. (A finished account is simply taken to it by the router.)
-  const settled = Boolean(state.account && state.account.display_name) && !onboardingStep();
+  const settled = Boolean(state.account && state.account.display_name) && !onboardingStep()
+    && Boolean(String(state.account.affiliation || '').trim());
   if (linkedPost && (invalidatedSession || !settled)) savePendingPost(browserStorage(), linkedPost);
 
   // The first route is decided BEFORE the router starts, not after. Starting

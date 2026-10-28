@@ -437,7 +437,7 @@ export function ripple(x, y, { big = false, color = MINE } = {}) {
 let emphasis = { id: null, until: 0 };
 
 function islandKey(island) {
-  return island.island_id || island.label;
+  return island.island_id || (island.name_pending ? `${island.label}@${island.cx},${island.cy}` : island.label);
 }
 
 // A screen that wants to show its own card for a tapped island registers here;
@@ -1893,6 +1893,9 @@ export function playReveal(post, { then } = {}) {
     then: () => { if (reveal) reveal.began = performance.now(); },
   });
 }
+
+/** A new post is still being brought onto the map (push-ask.js waits for it). */
+export const revealing = () => Boolean(reveal);
 
 /** Stop an introduction that is under way without finishing it (the screen was left). */
 export function abortReveal() {

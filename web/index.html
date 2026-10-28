@@ -71,7 +71,7 @@
       <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
       <div id="registerFields" hidden>
         <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
-        <label class="field"><span class="label-text">所属組織<span class="hint-text">任意</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属組織"></label>
+        <label class="field"><span class="label-text">所属組織<span class="hint-text">必須</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属（例：コクヨ、〇〇大学、フリー）"></label>
       </div>
       <label class="field">
         <span class="label-text">メールアドレス</span>
@@ -141,14 +141,30 @@
         <input class="input" id="setupName" maxlength="16" placeholder="名前" autocomplete="nickname">
       </label>
       <label class="field">
-        <span class="label-text">所属組織<span class="hint-text">任意</span></span>
-        <input class="input" id="setupAffiliation" maxlength="32" placeholder="所属組織">
+        <span class="label-text">所属組織<span class="hint-text">必須</span></span>
+        <input class="input" id="setupAffiliation" maxlength="32" placeholder="例：コクヨ、〇〇大学、フリーランス">
       </label>
     </div>
     <div class="error" id="setupError" role="alert"></div>
   </div>
   <div class="form-footer">
     <button class="btn btn-block" id="setupSave">次へ</button>
+  </div>
+</section>
+
+<!-- ============ 3a. affiliation (accounts that have none yet, 2026-10-29) ============ -->
+<section id="affiliation" class="screen tinted">
+  <div class="scroller">
+    <h2 class="screen-title">所属組織を教えてください</h2>
+    <p class="lede">はじめて会う人にも、どこの人か分かるように、プロフィールに出します。</p>
+    <label class="field">
+      <span class="label-text">所属組織<span class="hint-text hint-required">必須</span></span>
+      <input class="input" id="affiliationInput" maxlength="32" placeholder="例：コクヨ、〇〇大学、フリーランス">
+    </label>
+    <div class="error" id="affiliationError" role="alert"></div>
+  </div>
+  <div class="form-footer">
+    <button class="btn btn-block" id="affiliationSave" disabled>保存して続ける</button>
   </div>
 </section>
 
@@ -453,7 +469,7 @@
     </label>
     <label class="field">
       <span class="label-text">所属組織</span>
-      <input class="input" id="editAffiliation" maxlength="32" placeholder="所属組織">
+      <input class="input" id="editAffiliation" maxlength="32" placeholder="例：コクヨ、〇〇大学、フリーランス">
     </label>
     <label class="field">
       <span class="label-text">メールアドレス</span>

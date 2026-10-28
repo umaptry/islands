@@ -292,6 +292,10 @@ export function setupProfileEdit() {
       $('editError').textContent = '名前を入力してください。';
       return;
     }
+    if (!$('editAffiliation').value.trim()) {
+      $('editError').textContent = '所属組織を入力してください。';
+      return;
+    }
     $('editSave').disabled = true;
     try {
       // Empty boxes go as null on purpose: the API reads an explicit null as
@@ -299,7 +303,7 @@ export function setupProfileEdit() {
       // that is what used to make 自己紹介 and リンク impossible to take back.
       const result = await api.put('/api/account/me', {
         display_name: name,
-        affiliation: $('editAffiliation').value.trim() || null,
+        affiliation: $('editAffiliation').value.trim(),
         bio: $('editBio').value.trim() || null,
         link_url: $('editLink').value.trim() || null,
         ...(await avatarField.commit()),

@@ -22,7 +22,7 @@ async function person(browser, testInfo, name) {
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
   }, { email, name });
   who.name = name;
   return who;
@@ -68,6 +68,7 @@ const noSideScroll = async (page) =>
 async function signUpByEmail(page, name) {
   await page.locator('#inviteRegister').click();
   await page.locator('#registerName').fill(name);
+  await page.locator('#registerAffiliation').fill('テスト');
   await page.locator('#authEmail').fill(`new-${crypto.randomUUID()}@example.com`);
   await page.locator('#authSend').click();
   await expect(page.locator('#authDevCode .dev-code-value')).toBeVisible();
@@ -161,7 +162,7 @@ test('招待制のとき、招待なしでは登録できず、招待リンク�
       const email = `direct-${crypto.randomUUID()}@example.com`;
       const otp = await session.requestCode(email);
       await session.verifyCode(email, otp.devCode);
-      try { await api.put('/api/account/me', { display_name: 'すり抜け', icon_id: 'photo' }); return 'ok'; }
+      try { await api.put('/api/account/me', { display_name: 'すり抜け', affiliation: 'テスト', icon_id: 'photo' }); return 'ok'; }
       catch (error) { return `error ${error.status ?? ''}`; }
     });
     expect(direct).toMatch(/^error 403/);

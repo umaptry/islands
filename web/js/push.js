@@ -128,6 +128,9 @@ export async function enablePush() {
   return 'on';
 }
 
+/** やめる was pressed on this device: nobody asks it to take notifications again (push-ask.js). */
+export const pushDeclined = () => readOff();
+
 /** The やめる button: this device stops, and stays stopped across sign-ins. */
 export async function disablePush() {
   writeOff(true);

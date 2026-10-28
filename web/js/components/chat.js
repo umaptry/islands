@@ -10,14 +10,15 @@
 import { config } from '../config.js';
 import { data } from '../net.js';
 import { state } from '../state.js';
-import { avatar, clear, clip, confirmAction, el, timeAgo, toast } from '../ui.js';
+import { avatar, clear, confirmAction, el, timeAgo, toast } from '../ui.js';
 import { buzz } from '../feedback.js';
-import { sendsOnEnter } from '../chat-rules.js';
+import { icon } from '../icons.js';
+import { answeredName, sendsOnEnter, threadAnswersMe, threadMessages } from '../chat-rules.js';
 
 const POLL_MS = 5000;
 const CHAT_INPUT_MAX_PX = 120;   // about five lines of the message box
 
-export function postChat(postId, { onCountChange, onReply } = {}) {
+export function postChat(postId, { onCountChange, onReply, onOpenProfile } = {}) {
   const list = el('div', { className: 'chat-list' });
   const wrap = el('div', { className: 'chat' }, list);
   let timer = 0;
@@ -49,44 +50,102 @@ export function postChat(postId, { onCountChange, onReply } = {}) {
       }));
       return;
     }
-    const byId = new Map(comments.map((comment) => [comment.id, comment]));
-    comments.forEach((comment) => {
-      const author = comment.author || {};
-      const mine = state.account && author.id === state.account.id;
-      list.append(el('div', { className: `chat-line${mine ? ' mine' : ''}` },
-        avatar(author, 30),
-        el('div', { className: 'chat-bubble' },
-          el('div', { className: 'chat-meta' },
-            el('span', { className: 'chat-name', text: author.display_name || '' }),
-            el('span', { className: 'chat-time', text: timeAgo(comment.created_at) }),
-            replyButton(comment, mine),
-          ),
-          quote(comment, byId),
-          el('p', { className: 'chat-text', text: comment.body }),
-        ),
-        action(comment, mine),
-      ));
+    threadMessages(comments).forEach((thread) => {
+      list.append(line(thread.top, thread));
+      if (!thread.replies.length) return;
+      const id = thread.top.id;
+      const replies = el('div', { className: 'chat-replies' },
+        thread.replies.map((reply) => line(reply, thread, { nested: true })));
+      // 「返信 N件を見る」 where the answers would start; 「返信を閉じる」 under the last of them (the user, 10/29).
+      const show = el('button', {
+        className: 'chat-thread-toggle chat-thread-open', attrs: { type: 'button', 'data-thread': id, 'aria-expanded': 'false' },
+        text: `返信 ${thread.replies.length}件を見る`,
+      });
+      const hide = el('button', {
+        className: 'chat-thread-toggle chat-thread-close', attrs: { type: 'button', 'data-thread': id, 'aria-expanded': 'true' },
+        text: '返信を閉じる',
+      });
+      const top = list.lastElementChild;
+      const paintOpen = (open) => {
+        show.hidden = open;
+        replies.hidden = !open;
+        hide.hidden = !open;
+      };
+      show.addEventListener('click', () => {
+        opened.add(id);
+        shut.delete(id);
+        paintOpen(true);
+      });
+      hide.addEventListener('click', () => {
+        shut.add(id);
+        opened.delete(id);
+        paintOpen(false);
+        // A long thread folds up above the reader: bring its message back into view.
+        top.scrollIntoView({ block: 'nearest' });
+      });
+      paintOpen(isOpen(thread));
+      list.append(el('div', { className: 'chat-thread' }, show, replies, hide));
     });
     if (atBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
   }
 
-  /** A reply shows one line of what it answers; a withdrawn message says so. */
-  function quote(comment, byId) {
-    if (!comment.reply_to) return null;
-    const parent = byId.get(comment.reply_to);
-    if (!parent) return el('p', { className: 'chat-quote gone', text: '元のメッセージは削除されました' });
-    return el('p', { className: 'chat-quote',
-      text: `${parent.author?.display_name || ''}：${clip(parent.body, 28)}` });
+  // Answers are folded under the message they start from (2026-10-29, YouTube's comments). A thread is open
+  // when it was opened here, when I just answered in it, or when somebody answered me in it - until closed.
+  const opened = new Set();
+  const shut = new Set();
+  const isOpen = (thread) => opened.has(thread.top.id)
+    || (!shut.has(thread.top.id) && threadAnswersMe(thread, state.account?.id));
+
+  /** One message: the top of a thread, or (nested) an answer in it, one step in and a little smaller. */
+  function line(comment, thread, { nested = false } = {}) {
+    const author = comment.author || {};
+    const mine = state.account && author.id === state.account.id;
+    const at = nested ? answeredName(thread, comment) : '';
+    return el('div', { className: `chat-line${mine ? ' mine' : ''}${nested ? ' nested' : ''}`, attrs: { 'data-comment-id': comment.id } },
+      toProfile(author, avatar(author, nested ? 24 : 30), true),
+      el('div', { className: 'chat-bubble' },
+        el('div', { className: 'chat-meta' },
+          toProfile(author, el('span', { className: 'chat-name', text: author.display_name || '' })),
+          el('span', { className: 'chat-time', text: timeAgo(comment.created_at) }),
+        ),
+        nested ? null : gone(comment),
+        el('p', { className: 'chat-text' }, at ? el('span', { className: 'chat-at', text: `@${at} ` }) : null, comment.body),
+        replyButton(comment, mine, thread.top.id),
+      ),
+      action(comment, mine),
+    );
   }
 
-  function replyButton(comment, mine) {
+  /** The face and the name open the sender's page, as they do on a post card (2026-10-29: they did nothing). */
+  function toProfile(author, node, face = false) {
+    if (!onOpenProfile || !author.id) return node;
+    return el('button', {
+      className: `chat-who${face ? ' chat-face' : ''}`,
+      attrs: { type: 'button', ...(face ? { 'aria-label': `${author.display_name || ''}さんのページ` } : {}) },
+      on: { click: () => onOpenProfile(author.id) },
+    }, node);
+  }
+
+  /** An answer whose message was withdrawn stands on its own, and says so. */
+  function gone(comment) {
+    if (!comment.reply_to) return null;
+    return el('p', { className: 'chat-quote gone', text: '元のメッセージは削除されました' });
+  }
+
+  /** 「↩ 返信する」 under the message, where Instagram and YouTube put it; the answer joins this thread. */
+  function replyButton(comment, mine, threadId) {
     if (!state.account || !onReply || mine) return null;
     return el('button', {
       className: 'chat-reply',
       attrs: { type: 'button', 'aria-label': `${comment.author?.display_name || ''}さんに返信` },
-      text: '返信',
-      on: { click: () => onReply(comment) },
-    });
+      on: {
+        click: () => {
+          opened.add(threadId);
+          shut.delete(threadId);
+          onReply(comment);
+        },
+      },
+    }, icon('reply', 15), '返信する');
   }
 
   /** The one thing you can do to a message: take yours back, or report theirs.

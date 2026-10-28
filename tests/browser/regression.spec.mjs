@@ -33,6 +33,7 @@ test('new profile reaches guidance before the first post, including after reload
     await navigate('#/setup');
   });
   await page.locator('#setupName').fill('ガイド確認');
+  await page.locator('#setupAffiliation').fill('テスト');
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   await expect(page.locator('#guidanceTrack > .slide').nth(0)).toBeVisible();
@@ -121,7 +122,7 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
     await session.verifyCode(email, otp.devCode);
     await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: '比較用', icon_id: '1' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: '比較用', affiliation: 'テスト', icon_id: '1' })).account;
     return (await api.post('/api/posts', { body: '週末はソロキャンプに出かけて、焚き火を眺めながら静かに過ごすのが好きです。', motivation: 50 })).id;
   });
   await page.reload();
@@ -329,6 +330,7 @@ test('guidance can be skipped and the last button invites a first post', async (
     await navigate('#/setup');
   });
   await page.locator('#setupName').fill('スキップ確認');
+  await page.locator('#setupAffiliation').fill('テスト');
   await page.locator('#setupSave').click();
   await expect(page.locator('#guidance')).toHaveClass(/active/);
   const slides = await page.locator('#guidanceTrack > *').count();
@@ -376,7 +378,7 @@ async function signInForFirstPost(page, label) {
     await session.verifyCode(email, otp.devCode);
     await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: name, icon_id: '1' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: '1' })).account;
   }, label);
 }
 
@@ -542,7 +544,7 @@ async function seedNeighbours(page, rows) {
     const otp = await (await page.request.post('/api/local/auth/otp', { data: { email } })).json();
     const got = await (await page.request.post('/api/local/auth/verify', { data: { email, code: otp.code } })).json();
     const headers = { Authorization: `Bearer ${got.access_token}` };
-    await page.request.put('/api/account/me', { data: { display_name: row.name, icon_id: '1' }, headers });
+    await page.request.put('/api/account/me', { data: { display_name: row.name, affiliation: 'テスト', icon_id: '1' }, headers });
     await page.request.post('/api/local/invites/claim', { data: { code: 'demo-invite-code-local-0001' }, headers });
     const mine = await (await page.request.get('/api/local/communities/mine', { headers })).json();
     const communityId = mine.communities[0].id || mine.communities[0].community_id;
@@ -723,4 +725,61 @@ test('trial hint still works when localStorage refuses', async ({ page }) => {
   await expect(page.locator('#map')).toHaveClass(/active/);
   await expect(page.locator('#trialBanner')).toBeVisible();
   expect(errors.filter((message) => message !== 'denied')).toEqual([]);
+});
+
+// 2026-10-29: 所属組織は必須。
+test('registration needs an affiliation before 次へ can be pressed', async ({ page }) => {
+  await page.goto('/#/invite/demo-invite-code-local-0001');
+  await page.locator('#inviteRegister').click();
+  await expect(page.locator('#registerAffiliation')).toHaveAttribute('placeholder', '所属（例：コクヨ、〇〇大学、フリー）');
+  await page.locator('#authEmail').fill(`aff-${crypto.randomUUID()}@example.com`);
+  await page.locator('#registerName').fill('所属の確認');
+  await expect(page.locator('#authSend')).toBeDisabled();
+  await page.locator('#registerAffiliation').fill('コクヨ');
+  await expect(page.locator('#authSend')).toBeEnabled();
+  await page.locator('#registerAffiliation').fill('   ');
+  await expect(page.locator('#authSend')).toBeDisabled();
+});
+
+test('an account with no affiliation is held on the affiliation screen, then goes to the map', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#welcome')).toHaveClass(/active/);
+  await page.evaluate(async () => {
+    const { session } = await import('/static/js/session.js');
+    const { api } = await import('/static/js/net.js');
+    const email = `noaff-${crypto.randomUUID()}@example.com`;
+    const otp = await session.requestCode(email);
+    await session.verifyCode(email, otp.devCode);
+    await api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
+    await api.put('/api/account/me', { display_name: '所属なし', icon_id: 'photo' });
+  });
+  await page.reload();
+  await page.evaluate(() => { location.hash = '#/map'; });
+  await expect(page.locator('#affiliation')).toHaveClass(/active/);
+  await expect(page.locator('#affiliation h2')).toHaveText('所属組織を教えてください');
+  await expect(page.locator('#affiliationSave')).toBeDisabled();
+  await expect(page.locator('#setupName')).toBeHidden();
+  // 先へは進めない。
+  await page.evaluate(() => { location.hash = '#/me'; });
+  await expect(page.locator('#affiliation')).toHaveClass(/active/);
+  await page.locator('#affiliationInput').fill('コクヨ');
+  await expect(page.locator('#affiliationSave')).toBeEnabled();
+  await page.locator('#affiliationSave').click();
+  // もともと行こうとしていた場所（#/me）へ。
+  await expect(page.locator('#me')).toHaveClass(/active/);
+  await page.evaluate(() => { location.hash = '#/map'; });
+  await expect(page.locator('#map')).toHaveClass(/active/);
+  await page.reload();
+  await expect(page.locator('#map')).toHaveClass(/active/);
+});
+
+test('the profile edit screen refuses an empty affiliation', async ({ page }) => {
+  await signInForFirstPost(page, 'editaff');
+  await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/me/edit'));
+  await expect(page.locator('#profileEdit')).toHaveClass(/active/);
+  await expect(page.locator('#editAffiliation')).toHaveAttribute('placeholder', '例：コクヨ、〇〇大学、フリーランス');
+  await page.locator('#editAffiliation').fill('');
+  await page.locator('#editSave').click();
+  await expect(page.locator('#editError')).toHaveText('所属組織を入力してください。');
+  await expect(page.locator('#profileEdit')).toHaveClass(/active/);
 });
