@@ -199,7 +199,7 @@ export function freshness(row, now = Date.now()) {
   return 0.95 - Math.min(1, days / FRESH_DAYS) * 0.5;
 }
 
-const islandKey = (island) => island.island_id || island.label || `${island.cx},${island.cy}`;
+const islandKey = (island) => island.island_id || (island.name_pending ? `${island.label}@${island.cx},${island.cy}` : island.label) || `${island.cx},${island.cy}`;
 
 let membershipCache = { islands: null, byPost: new Map() };
 
