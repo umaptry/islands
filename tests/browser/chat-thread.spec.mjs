@@ -72,13 +72,22 @@ test('answers fold under their message; an answer to an answer joins it with @�
 
   const top = page.locator(`.chat-line[data-comment-id="${c1}"]`);
   await expect(top.locator('.chat-reply')).toHaveText('返信する');
-  const toggle = page.locator(`.chat-thread-toggle[data-thread="${c1}"]`);
-  await expect(toggle).toHaveText('返信 1件を見る');
+  const show = page.locator(`.chat-thread-open[data-thread="${c1}"]`);
+  const hide = page.locator(`.chat-thread-close[data-thread="${c1}"]`);
+  await expect(show).toHaveText('返信 1件を見る');
+  await expect(hide).toBeHidden();
   const answer = page.locator(`.chat-replies .chat-line[data-comment-id="${r1}"]`);
   await expect(answer).toBeHidden();
-  await toggle.click();
+  await show.click();
   await expect(answer).toBeVisible();
-  await expect(toggle).toHaveText('返信を閉じる');
+  await expect(show).toBeHidden();
+  // 「返信を閉じる」 is under the last answer.
+  await expect(hide).toHaveText('返信を閉じる');
+  expect((await hide.boundingBox()).y).toBeGreaterThan((await answer.boundingBox()).y);
+  await hide.click();
+  await expect(answer).toBeHidden();
+  await expect(show).toBeVisible();
+  await show.click();
   // One step in from the message it answers.
   const [topBox, answerBox] = [await top.boundingBox(), await answer.boundingBox()];
   expect(answerBox.x).toBeGreaterThan(topBox.x + 20);
@@ -93,7 +102,7 @@ test('answers fold under their message; an answer to an answer joins it with @�
   const mine = page.locator('.chat-replies .chat-line', { hasText: 'クロスバイクでも大丈夫ですか？' });
   await expect(mine).toBeVisible({ timeout: 15000 });
   await expect(mine.locator('.chat-at')).toContainText('@たくみ');
-  await expect(toggle).toHaveText('返信を閉じる');
+  await expect(hide).toBeVisible();
 
   // The person answered is told (a 'reply' row), not only the post's author.
   await expect.poll(async () => {
@@ -109,7 +118,7 @@ test('a thread where somebody answered me is open from the start', async ({ page
   await say(page, owner, postId, '朝7時に駅前です！', c1);
   await openThread(page, postId);
   await expect(page.locator('.chat-replies .chat-line', { hasText: '朝7時に駅前です！' })).toBeVisible();
-  await expect(page.locator(`.chat-thread-toggle[data-thread="${c1}"]`)).toHaveText('返信を閉じる');
+  await expect(page.locator(`.chat-thread-close[data-thread="${c1}"]`)).toBeVisible();
   // My own message has no 返信する.
   await expect(page.locator(`.chat-line[data-comment-id="${c1}"] .chat-reply`)).toHaveCount(0);
 });

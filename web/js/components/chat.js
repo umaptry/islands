@@ -56,22 +56,35 @@ export function postChat(postId, { onCountChange, onReply, onOpenProfile } = {})
       const id = thread.top.id;
       const replies = el('div', { className: 'chat-replies' },
         thread.replies.map((reply) => line(reply, thread, { nested: true })));
-      const toggle = el('button', {
-        className: 'chat-thread-toggle', attrs: { type: 'button', 'data-thread': id },
+      // 「返信 N件を見る」 where the answers would start; 「返信を閉じる」 under the last of them (the user, 10/29).
+      const show = el('button', {
+        className: 'chat-thread-toggle chat-thread-open', attrs: { type: 'button', 'data-thread': id, 'aria-expanded': 'false' },
+        text: `返信 ${thread.replies.length}件を見る`,
       });
-      const paintOpen = (isOpen) => {
-        replies.hidden = !isOpen;
-        toggle.setAttribute('aria-expanded', String(isOpen));
-        toggle.textContent = isOpen ? '返信を閉じる' : `返信 ${thread.replies.length}件を見る`;
+      const hide = el('button', {
+        className: 'chat-thread-toggle chat-thread-close', attrs: { type: 'button', 'data-thread': id, 'aria-expanded': 'true' },
+        text: '返信を閉じる',
+      });
+      const top = list.lastElementChild;
+      const paintOpen = (open) => {
+        show.hidden = open;
+        replies.hidden = !open;
+        hide.hidden = !open;
       };
-      toggle.addEventListener('click', () => {
-        const isOpen = replies.hidden;
-        (isOpen ? opened : shut).add(id);
-        (isOpen ? shut : opened).delete(id);
-        paintOpen(isOpen);
+      show.addEventListener('click', () => {
+        opened.add(id);
+        shut.delete(id);
+        paintOpen(true);
+      });
+      hide.addEventListener('click', () => {
+        shut.add(id);
+        opened.delete(id);
+        paintOpen(false);
+        // A long thread folds up above the reader: bring its message back into view.
+        top.scrollIntoView({ block: 'nearest' });
       });
       paintOpen(isOpen(thread));
-      list.append(el('div', { className: 'chat-thread' }, toggle, replies));
+      list.append(el('div', { className: 'chat-thread' }, show, replies, hide));
     });
     if (atBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
   }
