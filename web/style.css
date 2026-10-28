@@ -1785,6 +1785,52 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .invite-manage .btn { flex: 1; }
 .invite-revoke { color: var(--bad); }
 @media (prefers-reduced-motion: reduce) { .invite-switch-track, .invite-switch-track::after { transition: none; } }
+
+/* 2026-10-29 会場で映す: full-screen invite QR + notification steps for a projector (no scrolling on landscape) */
+.invite-venue { margin-top: 10px; }
+.venue {
+  position: fixed; inset: 0; z-index: 10000; background: #1f5c99; color: #fff; box-sizing: border-box;
+  display: grid; grid-template-columns: minmax(0, 36fr) minmax(0, 64fr); gap: 4vw; align-items: center;
+  padding: 5vh 5vw; overflow: hidden;
+}
+.venue-close {
+  position: absolute; top: 2.4vh; right: 2vw; width: 44px; height: 44px; border-radius: 999px; border: 0;
+  background: rgba(255, 255, 255, .16); color: #fff; font-size: 20px; cursor: pointer;
+}
+.venue-close:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.venue-card {
+  background: #fff; color: #183a5c; border-radius: 28px; padding: 3vh 2vw 2.6vh; text-align: center;
+  display: flex; flex-direction: column; align-items: center; min-width: 0;
+}
+.venue-who { margin: 0 0 .3vh; font-size: clamp(20px, 4.2vh, 56px); font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.venue-sub { margin: 0 0 1.6vh; font-size: clamp(14px, 2.4vh, 32px); font-weight: 700; color: #4a6a8a; }
+.venue-qr { width: min(100%, 52vh); aspect-ratio: 1; }
+.venue-qr .invite-qr-svg { display: block; width: 100%; height: 100%; }
+.venue-scan { margin: 1.6vh 0 0; font-size: clamp(14px, 2.6vh, 34px); font-weight: 800; }
+.venue-title { margin: 0 0 3vh; font-size: clamp(22px, 4.6vh, 64px); font-weight: 800; letter-spacing: .02em; line-height: 1.3; }
+.venue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2.2vh; }
+.venue-list li { display: flex; gap: 1.4vw; align-items: flex-start; background: rgba(255, 255, 255, .12); border-radius: 18px; padding: 2.2vh 1.8vw; }
+.venue-n {
+  flex: none; width: clamp(30px, 5.4vh, 72px); height: clamp(30px, 5.4vh, 72px); border-radius: 999px; background: #fff; color: #1f5c99;
+  font-weight: 800; font-size: clamp(16px, 3vh, 40px); display: flex; align-items: center; justify-content: center;
+}
+.venue-list b { display: block; font-size: clamp(16px, 3vh, 40px); line-height: 1.4; }
+.venue-list p { margin: .6vh 0 0; font-size: clamp(13px, 2.2vh, 30px); line-height: 1.5; color: rgba(255, 255, 255, .9); }
+@media (max-width: 800px), (orientation: portrait) {
+  .venue { display: block; overflow-y: auto; padding: 64px 16px 32px; }
+  .venue-card { padding: 20px 16px; }
+  .venue-who { font-size: 22px; }
+  .venue-sub { font-size: 15px; }
+  .venue-qr { width: min(100%, 320px); }
+  .venue-scan { font-size: 16px; }
+  .venue-steps { margin-top: 24px; }
+  .venue-title { font-size: 22px; margin-bottom: 16px; }
+  .venue-list { gap: 12px; }
+  .venue-list li { gap: 12px; padding: 14px; }
+  .venue-n { width: 36px; height: 36px; font-size: 18px; }
+  .venue-list b { font-size: 17px; }
+  .venue-list p { font-size: 14px; }
+}
 /* ==== end コミュニティ ==== */
 
 /* ==== 2026-10-26 map header, post button, community sheet, DM tab ==== */
