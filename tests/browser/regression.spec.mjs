@@ -234,6 +234,63 @@ test('a post image opens in the viewer with close and reactions, and closes by b
   await expect(page.locator('#me')).toHaveClass(/active/);
 });
 
+test('a photo posts from a browser that cannot write WebP (Safari, iPhone included): sent as a JPEG under 1MB', async ({ page }) => {
+  // Asked for WebP, Safari quietly writes a PNG. This makes Chromium do the same.
+  await page.addInitScript(() => {
+    const toBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+      return toBlob.call(this, callback, type === 'image/webp' ? 'image/png' : type, quality);
+    };
+  });
+  await page.goto('/#/invite/demo-invite-code-local-0001');
+  await page.locator('#inviteRegister').click();
+  await page.locator('#authEmail').fill(`safari-${crypto.randomUUID()}@example.com`);
+  await page.locator('#registerName').fill('iPhoneの確認');
+  await page.locator('#registerAffiliation').fill('islands');
+  await page.locator('#authSend').click();
+  await expect(page.locator('.dev-code-value')).toBeVisible();
+  await page.locator('#authCode').fill(await page.locator('.dev-code-value').innerText());
+  await page.locator('#authVerify').click();
+  await page.locator('#setupSave').click();
+  await expect(page.locator('#guidance')).toHaveClass(/active/);
+  const pages = await page.locator('#guidanceTrack > .slide').count();
+  for (let i = 0; i < pages; i++) await page.locator('#guidanceNext').click();
+  await page.locator('#composeBody').fill('週末に海辺で写真を撮っています。景色の話ができる仲間を探しています。');
+  // A 1600x1200 picture of pure noise - the hardest thing to squeeze. As a PNG at 1280px
+  // it is about 6MB, which the upload (like the bucket) refuses past 1MB.
+  const noise = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1600;
+    canvas.height = 1200;
+    const ctx = canvas.getContext('2d');
+    const pixels = ctx.createImageData(canvas.width, canvas.height);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i] = Math.random() * 256;
+      pixels.data[i + 1] = Math.random() * 256;
+      pixels.data[i + 2] = Math.random() * 256;
+      pixels.data[i + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  await page.locator('#composeImageInput').setInputFiles({
+    name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(noise, 'base64'),
+  });
+  await expect(page.locator('#composeImagePreview')).toBeVisible();
+  await page.locator('#composeNext').click();
+  await page.locator('#composeMotivation').fill('70');
+  await page.locator('#composeNext2').click();
+  const upload = page.waitForRequest((request) => request.url().includes('/api/local/upload'));
+  await page.locator('#composeSubmit').click();
+  const sent = await upload;
+  expect(sent.headers()['content-type']).toBe('image/jpeg');
+  // /api/local/upload answers 413 past 1MB, as the bucket does.
+  expect((await sent.response()).status()).toBe(200);
+  await expect(page.locator('#map')).toHaveClass(/active/);
+  await page.goto('/#/me');
+  await expect(page.locator('.post-card .post-image img').first()).toBeVisible();
+});
+
 
 test('a Google or LINE round trip: a failure is said and cleaned up, a success remembers how', async ({ page }) => {
   // Cancelled at the provider: Supabase comes back with the error in the fragment.

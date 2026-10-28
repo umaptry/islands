@@ -20,6 +20,7 @@ import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
 import { readPress, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
 import { communitiesOn, shareOn } from './community-rules.js';
+import { imageExtension } from './image.js';
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -403,7 +404,7 @@ const supabaseBackend = {
   },
   async uploadImage(blob) {
     const { url, anon_key: key, bucket } = config().supabase;
-    const path = `${session.userId()}/${crypto.randomUUID()}.webp`;
+    const path = `${session.userId()}/${crypto.randomUUID()}.${imageExtension(blob.type)}`;
     const token = await session.accessToken();
     const response = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
       method: 'POST',
