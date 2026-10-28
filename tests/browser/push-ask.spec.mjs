@@ -35,7 +35,14 @@ async function firstPostThenCloseNearby(page) {
 
 const goTo = (page, hash) => page.evaluate(async (target) => (await import('/static/js/router.js')).navigate(target), hash);
 
+// CI's headless Chromium answers Notification.permission with 'denied' (a phone that refused, which is
+// rightly never asked). A phone that was never asked says 'default': make this browser one of those.
+const neverAsked = (page) => page.addInitScript(() => {
+  try { Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'default' }); } catch { /* none */ }
+});
+
 test('after the first post the card asks once; 「あとで」 ends it, and the 通知 screen still says so', async ({ page }) => {
+  await neverAsked(page);
   await signIn(page, 'push-ask');
   await firstPostThenCloseNearby(page);
   const card = page.locator('#sheet.on #pushAsk');
@@ -60,6 +67,7 @@ test('after the first post the card asks once; 「あとで」 ends it, and the 
 });
 
 test('a device where やめる was pressed is not asked anywhere', async ({ page }) => {
+  await neverAsked(page);
   await signIn(page, 'push-off');
   await page.evaluate(() => localStorage.setItem('islands.push.off', '1'));
   await firstPostThenCloseNearby(page);
