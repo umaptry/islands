@@ -10,6 +10,7 @@ import { notify, state } from '../state.js';
 import { $, clear, confirmAction, el, toast } from '../ui.js';
 import { communitiesActive, refreshCommunities } from '../communities.js';
 import { icon } from '../icons.js';
+import { config } from '../config.js';
 import { qrPng, qrSvg } from '../qr.js';
 import {
   COMMUNITY_NAME_MAX, DEFAULT_EXPIRY, EXPIRY_CHOICES, activeInvites, checkCommunityName,
@@ -19,6 +20,54 @@ import {
 } from '../community-rules.js';
 
 // ---------------------------------------------------------------- inviting members
+
+/**
+ * 会場で映す: a full-screen layer for a projector (10/30 BAR): the invite QR on the left, the steps for
+ * getting notifications on the right. Always built from the link given now, so it is never stale.
+ */
+function openVenueView(name, url) {
+  const google = (config().oauth || []).includes('google');
+  const steps = [
+    { title: 'QR を読み取って、登録する',
+      lines: [google ? 'メールアドレスか Google で登録して、最初の投稿まで進みます' : 'メールアドレスで登録して、最初の投稿まで進みます'] },
+    { title: 'ホーム画面に追加する',
+      lines: ['iPhone：Safari の［共有］→［ホーム画面に追加］', 'Android：Chrome の［⋮］→［ホーム画面に追加］',
+        'ホーム画面の islands を開く（iPhone はもう一度ログイン）。明日からも、ここから開けます'] },
+    { title: '「通知を受け取る」を押す',
+      lines: ['ホーム画面から開いた islands で。投稿のあとに出るカードか、「通知」画面のいちばん上にあります'] },
+  ];
+  const previous = document.activeElement;
+  let qr;
+  try { qr = qrSvg(url); } catch { qr = el('p', { className: 'venue-note', text: 'QR コードを作れませんでした。' }); }
+  const close = el('button', { className: 'venue-close', attrs: { type: 'button', 'aria-label': '閉じる' }, text: '✕' });
+  const layer = el('div', { className: 'venue', attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-label': '会場で映す' } },
+    close,
+    el('div', { className: 'venue-card' },
+      el('p', { className: 'venue-who', text: name }),
+      el('p', { className: 'venue-sub', text: 'islands に参加する' }),
+      el('div', { className: 'venue-qr' }, qr),
+      el('p', { className: 'venue-scan', text: 'スマホのカメラで読み取ってください' })),
+    el('div', { className: 'venue-steps' },
+      el('h2', { className: 'venue-title', text: '反応やメッセージを、スマホで受け取る' }),
+      el('ol', { className: 'venue-list' }, ...steps.map((item, i) =>
+        el('li', {},
+          el('span', { className: 'venue-n', text: String(i + 1) }),
+          el('div', {},
+            el('b', { text: item.title }),
+            ...item.lines.map((line) => el('p', { text: line }))))))));
+  const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); shut(); } };
+  function shut() {
+    document.removeEventListener('keydown', onKey, true);
+    layer.remove();
+    try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch { /* ignore */ }
+    try { previous && previous.focus && previous.focus(); } catch { /* ignore */ }
+  }
+  close.addEventListener('click', shut);
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(layer);
+  close.focus();
+  try { document.documentElement.requestFullscreen().catch(() => {}); } catch { /* ignore */ }
+}
 
 /** Copy a sentence to the clipboard; the fallback is the old select-and-copy. */
 async function copyText(text, field = null) {
@@ -296,6 +345,10 @@ function invitePanel(entry) {
     return el('div', { className: 'invite-live' },
       ...postSwitch(swap),
       qrBox,
+      qrBox.querySelector('svg') ? el('button', {
+        className: 'btn btn-block btn-quiet invite-venue', attrs: { type: 'button' }, text: '会場で映す',
+        on: { click: () => openVenueView(entry.name, linkOf(rows[0] || row)) },
+      }) : null,
       el('p', { className: 'invite-line', attrs: { 'aria-label': inviteLineText(row) } },
         el('span', { className: 'invite-line-expiry', text: inviteRowText(row).expiry.replace(/ /g, ' ') }),
         el('span', { className: 'invite-line-dot', text: '・', attrs: { 'aria-hidden': 'true' } }),
