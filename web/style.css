@@ -199,6 +199,7 @@ body.kb-open .island-card { bottom: calc(env(safe-area-inset-bottom) + 12px); }
 }
 .hint-text { font-weight: 400; font-size: 11px; color: var(--on-sea-3); }
 .post-card .hint-text { color: var(--ink-3); }
+.hint-text.hint-required { color: var(--bad); font-weight: 700; }
 
 .input, .textarea {
   width: 100%;

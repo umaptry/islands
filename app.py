@@ -3888,6 +3888,10 @@ def account_update(payload: AccountPatch, request: Request):
         if not name:
             raise HTTPException(status_code=422, detail="名前を入力してください。")
         fields["display_name"] = name[:MAX_NAME_LENGTH]
+    if "affiliation" in fields and not str(fields["affiliation"] or "").strip():
+        # 2026-10-29: required, like the name. Only a save that carries the key
+        # is checked, so a photo-only save from an older account still goes through.
+        raise HTTPException(status_code=422, detail="所属組織を入力してください。")
     for key, cap in (
         ("affiliation", MAX_AFFILIATION_LENGTH),
         ("bio", MAX_BIO_LENGTH),

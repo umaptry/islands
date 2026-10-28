@@ -104,7 +104,7 @@ export function setupAuth() {
     } else if (seconds > 0 && !resendTimer) {
       resendTimer = setInterval(paintSend, 250);
     }
-    send.disabled = sending || seconds > 0 || !email.value.includes('@') || (registerIntent && !$('registerName').value.trim());
+    send.disabled = sending || seconds > 0 || !email.value.includes('@') || (registerIntent && (!$('registerName').value.trim() || !$('registerAffiliation').value.trim()));
     send.textContent = sending ? '送信中…' : (
       seconds > 0 ? `再送まで ${seconds}秒` : '次へ'
     );
@@ -125,6 +125,7 @@ export function setupAuth() {
     $('authError').textContent = '';
   });
   $('registerName').addEventListener('input', paintSend);
+  $('registerAffiliation').addEventListener('input', paintSend);
   code.addEventListener('input', () => {
     // GoTrue's email codes are six digits; local mode's are too. Anything
     // shorter cannot be one, and enabling the button for it only produces a
@@ -274,14 +275,14 @@ export async function afterSignIn() {
     return;
   }
   if (!state.account || !state.account.display_name) {
-    if (registerIntent && $('registerName').value.trim()) {
+    if (registerIntent && $('registerName').value.trim() && $('registerAffiliation').value.trim()) {
       try {
         // icon_id PHOTO_ICON marks the account as "photo only" from the start,
         // so a person who skips the photo gets the silhouette and not the
         // default emoji the column would otherwise hand out.
         state.account = (await api.put('/api/account/me', {
           display_name: $('registerName').value.trim(),
-          affiliation: $('registerAffiliation').value.trim() || null,
+          affiliation: $('registerAffiliation').value.trim(),
           icon_id: PHOTO_ICON,
         })).account;
         setOnboardingStep('photo');
@@ -414,8 +415,9 @@ export function setupProfileSetup() {
   const save = $('setupSave');
   const field = setupAvatarField('setup');
   let needsName = false;
-  const sync = () => { save.disabled = needsName && !name.value.trim(); };
+  const sync = () => { save.disabled = needsName && (!name.value.trim() || !$('setupAffiliation').value.trim()); };
   name.addEventListener('input', sync);
+  $('setupAffiliation').addEventListener('input', sync);
 
   save.addEventListener('click', async () => {
     save.disabled = true;
@@ -424,7 +426,7 @@ export function setupProfileSetup() {
       const result = await api.put('/api/account/me', {
         ...(needsName ? {
           display_name: name.value.trim(),
-          affiliation: $('setupAffiliation').value.trim() || null,
+          affiliation: $('setupAffiliation').value.trim(),
         } : {}),
         ...(await field.commit()),
       });
@@ -448,6 +450,49 @@ export function setupProfileSetup() {
       name.value = (state.account && state.account.display_name) || '';
       $('setupAffiliation').value = (state.account && state.account.affiliation) || '';
       $('setupError').textContent = '';
+      sync();
+    },
+  });
+}
+
+// ---------------------------------------------------------------- affiliation
+
+/**
+ * 2026-10-29: 所属組織 became required. An account that already has a name but no
+ * affiliation is sent here by the router guard (app.js) before anything else, once,
+ * and cannot go on until it is filled. `returnTo` is where it was headed.
+ */
+let affiliationReturn = null;
+export function rememberAffiliationReturn(hash) { affiliationReturn = hash; }
+
+export function setupAffiliation() {
+  const input = $('affiliationInput');
+  const save = $('affiliationSave');
+  const sync = () => { save.disabled = !input.value.trim(); };
+  input.addEventListener('input', sync);
+
+  save.addEventListener('click', async () => {
+    const value = input.value.trim();
+    if (!value) return;
+    save.disabled = true;
+    $('affiliationError').textContent = '';
+    try {
+      const result = await api.put('/api/account/me', { affiliation: value });
+      state.account = result.account;
+      const waiting = takePendingPost(browserStorage());
+      const target = waiting ? mapLinkFor(waiting) : (affiliationReturn || '#/map');
+      affiliationReturn = null;
+      navigate(target);
+    } catch (error) {
+      $('affiliationError').textContent = error.message;
+      sync();
+    }
+  });
+
+  screen('affiliation', {
+    enter: () => {
+      input.value = '';
+      $('affiliationError').textContent = '';
       sync();
     },
   });

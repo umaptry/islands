@@ -39,7 +39,7 @@ async function person(browser, testInfo, name) {
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
   }, { email, name });
   who.name = name;
   who.id = await who.page.evaluate(async () => (await import('/static/js/session.js')).session.userId());
@@ -261,6 +261,7 @@ test.describe('スイッチ「入」のとき', () => {
     await expect(guest.page.locator('#invite')).toHaveClass(/active/);
     await guest.page.locator('#inviteRegister').click();
     await guest.page.locator('#registerName').fill('あたらしい人');
+    await guest.page.locator('#registerAffiliation').fill('テスト');
     await guest.page.locator('#authEmail').fill(`new-${crypto.randomUUID()}@example.com`);
     await guest.page.locator('#authSend').click();
     await expect(guest.page.locator('#authDevCode .dev-code-value')).toBeVisible();

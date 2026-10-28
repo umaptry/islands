@@ -17,7 +17,7 @@ async function newPerson(browser, testInfo, name) {
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
   }, { email, name });
   // セッションを持ったまま、もう一度ページを起こす。
   await page.goto('/?again=1#/map');
@@ -312,7 +312,7 @@ test('#/map?post=<id> で投稿が開く（未ログインでも、ログイン�
     const email = `back-${crypto.randomUUID()}@example.com`;
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: 'もどる', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: 'もどる', affiliation: 'テスト', icon_id: 'photo' });
     const { afterSignIn } = await import('/static/js/screens/auth.js');
     await afterSignIn();
   });
