@@ -1863,6 +1863,22 @@ class SupabaseStore:
         for key in PROFILE_VECTOR_COLUMNS:
             if record.get(key) is not None:
                 record[key] = "[" + ",".join(repr(float(v)) for v in record[key]) + "]"
+        if not record.get("display_name"):
+            # Without the name this can only be a change to an account that exists - and it has
+            # to be an UPDATE. merge-duplicates is INSERT ... ON CONFLICT, and Postgres checks NOT
+            # NULL on the row it would insert before it looks for the conflict, so the icon-photo
+            # step after an e-mail sign-up (icon_id and avatar_path only) was refused with 23502
+            # every time (2026-10-28, two new people stuck on 「次へ」).
+            response = self._send(
+                "PATCH", ACCOUNTS, label="プロフィールの保存",
+                headers={"Prefer": "return=representation"},
+                params={"id": f"eq.{account_id}", "select": ACCOUNT_COLUMNS},
+                json={key: value for key, value in record.items() if key != "id"},
+            )
+            rows = response.json()
+            if rows:
+                return rows[0]
+            # No such account yet: the insert below refuses it the way it always did.
         response = self._send(
             "POST", ACCOUNTS, label="プロフィールの保存",
             headers={"Prefer": "return=representation,resolution=merge-duplicates"},

@@ -209,6 +209,15 @@ class FakePostgrest(BaseHTTPRequestHandler):
         rows = TABLES[table]
         select = parse_qs(parsed.query).get("select", ["*"])[0]
 
+        # Postgres checks NOT NULL on the row an INSERT ... ON CONFLICT would insert BEFORE it
+        # looks for the conflict, so an upsert without display_name is refused even for an
+        # account that exists (production, 2026-10-28). The fake used to merge it.
+        if table == "accounts" and isinstance(record, dict) and not record.get("display_name"):
+            return self._send(400, {
+                "code": "23502", "details": "Failing row contains (...)", "hint": None,
+                "message": 'null value in column "display_name" of relation "accounts" violates not-null constraint',
+            })
+
         if isinstance(record, list):  # bulk insert / upsert
             saved = [self._insert(table, rows, item, parsed, prefer) for item in record]
             saved = [row for row in saved if row is not None]
@@ -556,6 +565,27 @@ def test_a_null_field_clears_it_rather_than_being_ignored(store):
     assert row["display_name"] == "けす人"   # untouched: never sent
     assert row["bio"] is None
     assert row["link_url"] is None
+
+
+def test_the_icon_photo_step_after_an_email_sign_up_saves(store):
+    """2026-10-28: registration saves the name, then 「次へ」 on the photo step sends only
+    icon_id and avatar_path. As an upsert that was refused (NOT NULL display_name) every time."""
+    account_id = str(uuid.uuid4())
+    store.upsert_account(account_id, {"display_name": "とうろく", "affiliation": "コクヨ", "icon_id": "photo"})
+    saved = store.upsert_account(account_id, {"icon_id": "photo", "avatar_path": f"{account_id}/a.jpg"})
+    assert saved["display_name"] == "とうろく" and saved["affiliation"] == "コクヨ"
+    assert saved["avatar_path"] == f"{account_id}/a.jpg"
+    # Skipping the photo is the same request with avatar_path null.
+    assert store.upsert_account(account_id, {"icon_id": "photo", "avatar_path": None})["avatar_path"] is None
+
+
+def test_a_save_without_a_name_does_not_make_an_account(store):
+    from core.store import StoreError
+
+    nobody = str(uuid.uuid4())
+    with pytest.raises(StoreError):
+        store.upsert_account(nobody, {"icon_id": "photo", "avatar_path": None})
+    assert store.get_account(nobody) is None
 
 
 def test_bad_credentials_raise_rather_than_return_empty(store):
