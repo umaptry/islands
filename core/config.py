@@ -385,17 +385,21 @@ ISLAND_INTRO_MAX_LENGTH = 30       # AI one-line intro; the column allows 60
 
 # 島の名前を AI（Gemini）で付ける。島の追跡処理（10分に1回まで）の中だけで呼ぶ。
 # 鍵なし・失敗・時間切れのときは、島の投稿の上位語から作る従来の名前のまま。
-# 既定はオフ。移行 SQL を流し、新しいコードを出して確かめてから ISLAND_NAMING_ENABLED=1 にする。
+# 既定はオフ。本番は CI のデプロイが ISLAND_NAMING_ENABLED=1 を付ける（2026-10-28〜）。
 ISLAND_NAMING_ENABLED = os.environ.get("ISLAND_NAMING_ENABLED", "0") == "1"
 ISLAND_NAMING_MODEL = os.environ.get("ISLAND_NAMING_MODEL", "gemini-3.5-flash-lite")
 ISLAND_NAMING_TIMEOUT = 5.0        # 1回の呼び出しの秒数。越えたら従来の名前
 ISLAND_NAMING_MAX_PER_RUN = 4      # 1回の追跡で呼ぶ回数の上限（費用と時間の上限。聞き直しも数える）
 ISLAND_NAMING_SAMPLE_POSTS = 30    # プロンプトに入れる投稿の数
 ISLAND_NAMING_KEEP_OVERLAP = 0.7   # 顔ぶれ（投稿ID）の重なりがこれ以上なら前の名前を使い回す
-ISLAND_NAMING_RETRY_HOURS = 24     # 同じ島を（成功も失敗も）呼び直す最短の間隔
+# 同じ島を（成功も失敗も）呼び直す最短の間隔。24時間だと、BAR の夜に島の中身が入れ替わっても
+# 名前が翌日まで古いままになるので 30分にした（2026-10-28）。呼ぶのは1回の追跡で MAX_PER_RUN まで。
+ISLAND_NAMING_RETRY_HOURS = 0.5
 ISLAND_NAMING_NOTIFY_OVERLAP = 0.4  # AI名→AI名の改名を通知するのは、投稿の重なりがこれ未満のときだけ
-ISLAND_NAMING_MIN_AUTHORS = 3      # AI で名前を付けるのは、書き手がこれ以上
-ISLAND_NAMING_MIN_POSTS = 5        # かつ投稿がこれ以上の島だけ（それ未満は従来方式）
+# すべての島（1人・1件でも）を AI で名付ける（2026-10-28 ユーザー決定）。一覧から選ぶ方式は、
+# 小さな島で票が同点になりやすく、地図 v7 で投稿の中身と関係ない「料理」が付いたため。
+ISLAND_NAMING_MIN_AUTHORS = 1      # AI で名前を付けるのは、書き手がこれ以上
+ISLAND_NAMING_MIN_POSTS = 1        # かつ投稿がこれ以上の島（それ未満は一覧から選ぶ方式）
 ISLAND_NAME_MAX_LENGTH = 8         # 「島」「大陸」を付ける前の最大字数
 # Activity genres an island can be called when no AI name exists (the default).
 # The live name is the genre closest in meaning to the island's words, instead of

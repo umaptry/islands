@@ -11,7 +11,8 @@ word-count name.
 
 Guard rails (2026-10-12):
   * only islands with ISLAND_NAMING_MIN_AUTHORS writers and ISLAND_NAMING_MIN_POSTS
-    posts are named by AI; smaller ones keep the word-count name
+    posts are named by AI; smaller ones keep the genre name (since 2026-10-28 both
+    floors are 1: every island)
   * an island is asked about at most once per ISLAND_NAMING_RETRY_HOURS, whatever
     came back (name_tried_at), so a failing or repeating island cannot eat the
     per-run call budget every ten minutes
@@ -62,6 +63,11 @@ PROMPT = (
     "- 紹介文にも、人名・地名の固有名詞、URL、絵文字、差別的・性的・暴力的な言葉は使わない。"
     "投稿の文をそのまま写さない\n"
     "- 答えは2行だけ（1行目 ジャンル名、2行目 紹介文）。ラベル、説明、引用符は書かない\n"
+    # 2026-10-28: 1人・1件の島にも名前が付くようになり、競馬の投稿1件の島が「ギャンブル」
+    # 「勝負師たち」になった。社外の人も見る地図で本人へのレッテルにならないように。
+    "- 人を評価したり決めつけたりする言葉（勝負師、依存など）は、名前にも紹介文にも使わない。"
+    "ギャンブル・お金の困りごと・病気・宗教・政治など、本人が人に知られたくないかもしれない話題は、"
+    "その言葉を使わず、中立的な活動のジャンルにする\n"
     "{current}{taken}\n"
     "<posts>\n{posts}\n</posts>\n"
 )
@@ -367,7 +373,7 @@ def name_islands(islands, previous, bodies, namer, people_names=None, max_calls=
     previous: stored islands_state rows. bodies: post_ids -> texts, called per island.
     author_count: island -> number of writers (default: its author_ids).
     A failed call leaves the island as it is (its AI name, or the word-count one),
-    but is remembered (name_tried_at) so the island is skipped for a day (a failed
+    but is remembered (name_tried_at) so the island is skipped for ISLAND_NAMING_RETRY_HOURS (a failed
     transport call is not remembered: a wrong key must not lock every island). The run
     stops early only after two transport failures (HTTP error, timeout) in a row.
     """

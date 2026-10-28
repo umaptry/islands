@@ -173,6 +173,8 @@ prepareは投稿・runtimeを変更しないが、サーバー専用embedding_ca
 
 島の名前を Gemini で付ける機能は、**環境変数 `ISLAND_NAMING_ENABLED` が `1` のときだけ**動く。既定はオフ（未設定なら従来の上位語の名前のまま）。CI の変数・秘密は変えず、次の順で人が操作する。
 
+**2026-10-28〜 本番はオン**：`.github/workflows/ci.yml` のデプロイが `--update-env-vars` で `ISLAND_NAMING_ENABLED=1` を付ける（下の手順5を CI が毎回する）。鍵は地図の埋め込みと同じ `GEMINI_API_KEY`（gemini 構成なら CI が Secret で付けている）。対象は**すべての島**（書き手1人・投稿1件から。`ISLAND_NAMING_MIN_AUTHORS` / `ISLAND_NAMING_MIN_POSTS`）、同じ島の呼び直しは **30分**あける（`ISLAND_NAMING_RETRY_HOURS`）。きっかけは、ジャンル一覧から選ぶ方式が小さな島で同点になり、地図 v7 で「アプリ」の島に「料理」が付いたこと。下の手順5の「書き手3人以上・投稿5件以上」「24時間」は当時の値。
+
 1. **SQL を流す**：`supabase/migrations/20261012000000_ai_island_names_no_connection.sql` を Supabase の SQL エディタで流す（何度流しても壊れない。古いコードも壊れない）。
 2. **新しいコードを出す**：main へ入れて CI を通す。`/api/health` の `ready` は、`islands_state` に `name_source` 列が読めないと `false` になる（`island_names_ready`・`not_ready_reasons` に理由が出る）ので、手順1を忘れると `verify_release.py --phase ready` が昇格を止める。
 3. **動作確認**：`/api/health` が `ready=true`、`island_names_ready=true`。`/api/islands` が今までどおり返ること。この時点ではまだ AI 命名はオフ。
@@ -180,9 +182,9 @@ prepareは投稿・runtimeを変更しないが、サーバー専用embedding_ca
 5. **オンにする**：Cloud Run の環境変数に `ISLAND_NAMING_ENABLED=1` を足して新しい revision を出す。**同時に `web/how.html` の島名の説明（216行目付近）を更新する**（AI が投稿全体のジャンルを1語で付ける＝書き手3人以上・投稿5件以上の島。それ以外の島や、鍵がない・失敗したときは、投稿の名詞から上位2語）。AI で名前を付けるのは書き手3人以上かつ投稿5件以上の島だけ。同じ島は24時間あけないと呼び直さない（通信エラーは「試した」印を付けないので、次の追跡でまた呼ぶ）。1回の追跡で呼ぶのは最大4回。既定のモデルは `gemini-3.5-flash-lite`（`ISLAND_NAMING_MODEL` で変えられる）。
 6. **オンにした直後の確認**：ログに `island naming: … -> …`（INFO。投稿本文・個人名は出ない）が出ること。**`island naming: HTTP 404` / `HTTP 400` のログが出ていないこと**（モデル名の誤り・提供終了・鍵の誤りのサインで、出ていたら `ISLAND_NAMING_MODEL` と鍵を見直す。通信エラーの間は島に印が付かないので、直せばすぐ付き直す）。
 
-**一言紹介（2026-10-26〜）**：名前と同じ1回の呼び出しで、30字以内の紹介文（住人がどんな人たちか）も作り、`islands_state.intro` に残す（先に `supabase/migrations/20261028000000_island_intro.sql` を流す。流す前にコードが出ても、列が無いのを見分けて島の保存と AI の名前は続く）。紹介文だけ不適切なときは紹介文を捨てて名前は使う。手で付けた名前（`manual`）の島には AI の紹介文を付けない。名前はあるのに紹介文が無い島は、名前を変えずに紹介文だけ聞き直す（24時間おきの決まりは同じ）。AI の紹介文が無い島は、画面に島の話題語2つから作った文（「「A」「B」の話をする人たちが住んでいます」）を出す。
+**一言紹介（2026-10-26〜）**：名前と同じ1回の呼び出しで、30字以内の紹介文（住人がどんな人たちか）も作り、`islands_state.intro` に残す（先に `supabase/migrations/20261028000000_island_intro.sql` を流す。流す前にコードが出ても、列が無いのを見分けて島の保存と AI の名前は続く）。紹介文だけ不適切なときは紹介文を捨てて名前は使う。手で付けた名前（`manual`）の島には AI の紹介文を付けない。名前はあるのに紹介文が無い島は、名前を変えずに紹介文だけ聞き直す（同じ島は30分あけて呼び直す決まりは同じ。2026-10-28 までは24時間）。AI の紹介文が無い島は、画面に島の話題語2つから作った文（「「A」「B」の話をする人たちが住んでいます」）を出す。
 
-**止めたいとき**：`ISLAND_NAMING_ENABLED` を外す（または `0`）。すでに付いた AI の名前は `islands_state` に残り、そのまま表示され続ける（新しく付けないだけ）。
+**止めたいとき**：`ISLAND_NAMING_ENABLED` を外す（または `0`）。すでに付いた AI の名前は `islands_state` に残り、そのまま表示され続ける（新しく付けないだけ）。2026-10-28 からは CI のデプロイが毎回 `1` を付けるので、**ずっと止めるなら `ci.yml` の `ISLAND_NAMING_ENABLED=1` を `=0` に書き換える**（行を消すだけでは、`--update-env-vars` は前の値を残すので止まらない）。すぐ止めたいときは `gcloud run services update islands --project <ID> --region asia-northeast1 --update-env-vars ISLAND_NAMING_ENABLED=0`（同じイメージで新しい revision ができる。本番の設定変更なので相方に伝える）。直前の revision（AI 命名なし）へ traffic を戻すだけでもよい。今のコードは保存された AI の名前を読むので、名前は消えず、「名前が変わった」通知が一斉に出ることもない。
 
 **古い版のコードへ戻すとき**：古いコードは `name_source` を知らないので、AI の名前が付いた島を従来の名前に戻し、**AI の名前が付いた島の書き手に「名前が変わった」通知**（人と島ごとに1日1件まで）を出してしまう。これを防ぐには、旧イメージから `ISLANDS_AUTO_TRACK=0` を付けた**新しい revision を作って**そこへ traffic を向ける。**旧 revision への単純な `update-traffic` だけでは `ISLANDS_AUTO_TRACK=0` が付かず、通知が出る**（環境変数は revision ごとの設定のため）。
 

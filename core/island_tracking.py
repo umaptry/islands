@@ -255,6 +255,8 @@ def update(previous, current, posts_by_id, events, now=None, rank_landmarks=None
         # The same goes for the first genre name ('genre', chosen by meaning in app.name_by_genre)
         # and for moving between genre and AI names. A genre name changing for the same
         # island (or falling back to the word count when the encoder is down) is quiet too.
+        # An island left without a name (a bigger island's AI name took its genre name, until
+        # the AI names it too) is saved quietly: there is no new name to tell (2026-10-28).
         named_by_meaning = ("ai", "genre")
         old_source = old.get("name_source") if old is not None else None
         switched = (state["name_source"] in named_by_meaning and old is not None
@@ -263,7 +265,8 @@ def update(previous, current, posts_by_id, events, now=None, rank_landmarks=None
                     and ((state["name_source"] in named_by_meaning and old_source == state["name_source"])
                          or (old_source == "genre" and state["name_source"] == "terms"))
                     and jaccard(old.get("post_ids"), state["post_ids"]) >= ISLAND_NAMING_NOTIFY_OVERLAP)
-        if old is not None and not switched and not reworded and _heading(old.get("name")) != _heading(state["name"]):
+        if (old is not None and not switched and not reworded and state["name"]
+                and _heading(old.get("name")) != _heading(state["name"])):
             # A genre is chosen by meaning, like an AI name: its cause reads "the topic changed".
             ai_involved = bool({"ai", "genre"} & {state["name_source"], old.get("name_source")})
             record(island_id, "rename", "rename_ai" if ai_involved else "rename", place, {"name": old.get("name")}, {"name": state["name"]})

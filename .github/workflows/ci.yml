@@ -228,7 +228,7 @@ jobs:
           gcloud run deploy "$CLOUD_RUN_SERVICE" --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" \
             --image "$IMAGE" --no-traffic --tag "candidate-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --service-account "$RUNTIME_SA" --memory 2Gi --cpu 1 --max-instances 4 --concurrency 12 --timeout 120 --cpu-boost \
-            --update-env-vars "^##^SUPABASE_URL=$SUPABASE_URL##SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY##EMBEDDING_PROVIDER=$PROVIDER##MAP_RUNTIME_CHECK=1##MAP_ARTIFACTS_DIR=/app/artifacts" \
+            --update-env-vars "^##^SUPABASE_URL=$SUPABASE_URL##SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY##EMBEDDING_PROVIDER=$PROVIDER##MAP_RUNTIME_CHECK=1##MAP_ARTIFACTS_DIR=/app/artifacts##ISLAND_NAMING_ENABLED=1" \
             --update-secrets "$SECRETS" --format=json > /tmp/deploy.json
           REVISION=$(jq -r '.status.latestCreatedRevisionName' /tmp/deploy.json)
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" --format=json > /tmp/service.json
