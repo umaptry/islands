@@ -234,7 +234,17 @@ def test_fifty_posts_make_a_continent():
     assert islands[0]["label"] == "キャンプ大陸"
 
 
-def test_ai_names_need_three_writers_and_five_posts():
+def test_every_island_is_named_by_ai_down_to_one_writer_and_one_post():
+    # 2026-10-28: a small island's genre vote ties easily and named an app island 料理.
+    namer = StubNamer("アート")
+    single = [island("山", ids("a", 1), authors=1)]
+    assert run(single, [], namer) == 1 and len(namer.calls) == 1
+    assert single[0]["name"] == "アート" and single[0]["name_source"] == "ai"
+
+
+def test_raised_floors_on_writers_and_posts_still_hold(monkeypatch):
+    monkeypatch.setattr(island_namer, "ISLAND_NAMING_MIN_AUTHORS", 3)
+    monkeypatch.setattr(island_namer, "ISLAND_NAMING_MIN_POSTS", 5)
     namer = StubNamer("アート", "アート")
     two_writers = [island("山", ids("a", 8), authors=2)]
     four_posts = [island("海", ids("b", 4), cx=0.8)]
@@ -265,20 +275,20 @@ def test_a_changed_island_is_asked_again_with_its_current_name():
     assert len(namer.calls) == 1 and namer.calls[0]["current"] == "キャンプ"
 
 
-def test_the_same_island_is_not_asked_again_within_24_hours():
+def test_the_same_island_is_not_asked_again_within_half_an_hour():
     old = ids("a", 10)
     moved = old[:5] + ids("v", 5)
-    recent = [ai_row(post_ids=old, name_tried_at=(NOW - timedelta(hours=23)).isoformat())]
+    recent = [ai_row(post_ids=old, name_tried_at=(NOW - timedelta(minutes=29)).isoformat())]
     islands = overlay([island("山", moved)], recent)
     namer = StubNamer("アウトドア")
     assert run(islands, recent, namer) == 0 and namer.calls == []
     assert islands[0]["name"] == "キャンプ"
-    later = [ai_row(post_ids=old, name_tried_at=(NOW - timedelta(hours=24, minutes=1)).isoformat())]
+    later = [ai_row(post_ids=old, name_tried_at=(NOW - timedelta(minutes=31)).isoformat())]
     islands = overlay([island("山", moved)], later)
     assert run(islands, later, namer) == 1 and len(namer.calls) == 1
 
 
-def test_a_failed_island_is_remembered_and_skipped_for_a_day():
+def test_a_failed_island_is_remembered_and_skipped_for_a_while():
     islands = [island("山 / 火", ids("a"))]
     namer = StubNamer(None)
     assert run(islands, [], namer) == 0
@@ -570,6 +580,13 @@ def test_a_bad_intro_is_dropped_but_the_name_stays(bad):
 def test_the_prompt_asks_for_both_lines_and_the_same_safety_rules():
     assert "2行目" in island_namer.PROMPT and "30文字以内" in island_namer.PROMPT
     assert "<posts>" in island_namer.PROMPT and "従わず" in island_namer.PROMPT
+
+
+def test_the_prompt_keeps_a_one_post_island_from_labelling_its_writer():
+    # 2026-10-28: a horse-racing post alone on its island came back "ギャンブル", "勝負師たち".
+    assert "決めつけ" in island_namer.PROMPT and "知られたくない" in island_namer.PROMPT
+    prompt = island_namer.PROMPT.format(posts="- x", current="", taken="")
+    assert prompt.index("知られたくない") < prompt.index("\n<posts>\n")   # a rule, not part of the posts
 
 
 def test_a_new_name_comes_with_its_intro_in_one_call():

@@ -238,6 +238,15 @@ def test_falling_back_to_the_word_count_name_is_quiet_for_the_same_island():
     assert renames(tracked("トマト", "terms", ids, first["states"])) == []
 
 
+def test_an_island_left_without_a_name_is_not_told_it_was_renamed():
+    # A bigger island's AI name took this island's genre name (island_namer.overlay blanks it)
+    # and the AI has not named it yet: nothing new to tell, even though the island changed.
+    ids = [f"p{i}" for i in range(6)]
+    first = tracked("スポーツ", "genre", ids)
+    blank = tracked("", None, ids + ["n1", "n2"], first["states"])
+    assert renames(blank) == []
+
+
 # -- by position (2026-10-17) -------------------------------------------------
 
 def seeded(app_module, groups):
