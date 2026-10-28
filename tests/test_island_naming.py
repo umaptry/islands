@@ -202,7 +202,7 @@ def test_naming_is_off_by_default_and_budgets(monkeypatch):
     try:
         importlib.reload(config)
         assert config.ISLAND_NAMING_ENABLED is False
-        assert config.ISLAND_NAMING_TIMEOUT == 5.0 and config.ISLAND_NAMING_MAX_PER_RUN == 4
+        assert config.ISLAND_NAMING_TIMEOUT == 5.0 and config.ISLAND_NAMING_MAX_PER_RUN == 10
         monkeypatch.setenv("ISLAND_NAMING_ENABLED", "1")
         importlib.reload(config)
         assert config.ISLAND_NAMING_ENABLED is True
@@ -337,11 +337,92 @@ def test_a_second_duplicate_is_given_up_and_remembered():
     assert len(namer.calls) == 3
 
 
-def test_calls_are_capped_at_four_per_run_including_re_asks():
-    many = [island(f"n{i}", ids(f"p{i}_", 6), cx=i / 30) for i in range(10)]
-    namer = StubNamer(*[f"ジャンル{i}" for i in range(10)])
+def test_calls_are_capped_per_run_including_re_asks():
+    from core.config import ISLAND_NAMING_MAX_PER_RUN
+    many = [island(f"n{i}", ids(f"p{i}_", 6), cx=i / 30) for i in range(ISLAND_NAMING_MAX_PER_RUN + 4)]
+    namer = StubNamer(*[f"ジャンル{i}" for i in range(ISLAND_NAMING_MAX_PER_RUN + 4)])
     run(many, [], namer)
-    assert len(namer.calls) == 4
+    assert len(namer.calls) == ISLAND_NAMING_MAX_PER_RUN
+
+
+def test_islands_without_an_ai_name_are_asked_before_bigger_named_ones():
+    big = island("大", ids("b", 12), cx=0.1)
+    small = island("小", ids("s", 3), cx=0.6)
+    previous = [ai_row("山", ids("b", 12))]
+    namer = StubNamer("川")
+    run([big, small], previous, namer, max_calls=1)
+    assert small["name"] == "川" and small["name_source"] == "ai"
+    assert big["name"] == "大"
+
+
+def test_a_quick_step_gives_first_names_only():
+    big = island("大", ids("b", 6) + ids("n", 6), cx=0.1)
+    previous = [ai_row("山", ids("b", 12))]   # the big island changed a lot: normally re-asked
+    small = island("小", ids("s", 3), cx=0.6)
+    namer = StubNamer("川", "海")
+    run([big, small], previous, namer, new_only=True)
+    assert len(namer.calls) == 1 and small["name"] == "川"
+
+
+# -- no genre-vote name while the AI has not named the island (2026-10-29) ----
+
+class _AiOn:
+    pass
+
+
+@pytest.fixture
+def ai_on(client, monkeypatch):
+    import app as application
+    monkeypatch.setitem(application.state, "island_namer", _AiOn())
+    monkeypatch.setitem(application.state, "pending_since", {})
+    # Left behind, a waiting island would start a background tracking step on every later
+    # test's post (create_post) - and the whole suite hung in one process.
+    monkeypatch.setitem(application.state, "naming_pending", {})
+    return application
+
+
+POSTS = {pid: {"id": pid, "author_id": "u1"} for pid in ids("p", 3)}
+
+
+def test_an_island_without_an_ai_name_shows_thinking_and_keeps_the_genre_name(ai_on):
+    islands = [island("読書", ids("p", 3))]
+    waiting = ai_on.hide_unnamed_genre_names(islands, POSTS, None, 1000.0)
+    assert waiting == 1
+    assert islands[0]["name"] == islands[0]["label"] == "名前を考え中" and islands[0]["name_pending"]
+    public = ai_on.public_island(islands[0])
+    assert "genre_name" not in public and public["name_pending"] is True
+    ai_on.reveal_genre_names(islands)
+    assert islands[0]["name"] == "読書" and islands[0]["label"] == "読書島" and "name_pending" not in islands[0]
+
+
+def test_ai_named_and_hand_named_islands_are_not_hidden(ai_on):
+    a, m = island("山", ids("p", 3)), island("川", ids("p", 3))
+    a["name_source"], m["name_source"] = "ai", "manual"
+    assert ai_on.hide_unnamed_genre_names([a, m], POSTS, None, 1000.0) == 0
+    assert a["name"] == "山" and m["name"] == "川"
+
+
+def test_after_half_an_hour_the_genre_name_comes_back(ai_on):
+    first = [island("読書", ids("p", 3))]
+    ai_on.hide_unnamed_genre_names(first, POSTS, None, 1000.0)
+    later = [island("読書", ids("p", 3))]
+    assert ai_on.hide_unnamed_genre_names(later, POSTS, None, 1000.0 + 1801) == 0
+    assert later[0]["name"] == "読書" and "name_pending" not in later[0]
+
+
+def test_an_island_the_ai_could_not_name_shows_the_genre_name(ai_on):
+    tried = island("読書", ids("p", 3))
+    tried["name_tried_at"] = datetime.now(timezone.utc).isoformat()
+    assert ai_on.hide_unnamed_genre_names([tried], POSTS, None, 1000.0) == 0
+    assert tried["name"] == "読書"
+
+
+def test_without_the_ai_namer_the_genre_name_stays(client, monkeypatch):
+    import app as application
+    monkeypatch.setitem(application.state, "island_namer", None)
+    islands = [island("読書", ids("p", 3))]
+    assert application.hide_unnamed_genre_names(islands, POSTS, None, 1000.0) == 0
+    assert islands[0]["name"] == "読書"
 
 
 def test_unusable_answers_do_not_stop_the_run_but_two_transport_errors_do():

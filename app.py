@@ -96,7 +96,12 @@ from core.config import (
     ISLAND_GENRES,
     ISLAND_NOTIFY_PER_DAY,
     ISLAND_RESIDENTS_SHOWN,
+    ISLAND_NAME_PENDING_LABEL,
+    ISLAND_NAME_PENDING_MAX_SECONDS,
+    ISLAND_NAMING_MIN_AUTHORS,
+    ISLAND_NAMING_MIN_POSTS,
     ISLAND_RUN_MIN_SECONDS,
+    ISLAND_RUN_PENDING_SECONDS,
     LANDMARK_CANDIDATES,
     MAP_MAX,
     MAP_MIN,
@@ -925,6 +930,7 @@ def live_islands(force=False, community=None):
         named = island_namer.overlay(named, saved)
     except StoreError:
         pass
+    pending = hide_unnamed_genre_names(named, {post["id"]: post for post in posts}, community, now)
     attach_residents(named, posts)
     # Explicit membership replaces the client's former centre-distance guess.
     payload = named
@@ -935,7 +941,66 @@ def live_islands(force=False, community=None):
 
     with lock:
         cache.update({"stamp": now, "value": payload, "key": membership})
+    state.setdefault("naming_pending", {})[community or ""] = pending
     return payload
+
+
+def island_naming_available():
+    """True when the AI namer can run here (key set, naming on, migration in). Loads it once."""
+    try:
+        if not getattr(state["store"], "supports_island_names", True):
+            return False
+        namer = state.get("island_namer")
+        if namer is None and "island_namer" not in state:
+            namer = state["island_namer"] = island_namer.load_namer()
+        return namer is not None
+    except Exception:
+        return False
+
+
+def hide_unnamed_genre_names(named, posts_by_id, community, now):
+    """While the AI has not named an island yet, show 'thinking' instead of the genre-vote name.
+
+    Only where the AI namer is available. An island that was asked and got no usable answer
+    (name_tried_at), or has waited ISLAND_NAME_PENDING_MAX_SECONDS, goes back to its genre name.
+    The genre name is kept in genre_name / genre_label; track_islands puts it back before
+    naming and saving. Returns how many islands are waiting.
+    """
+    seen = state.setdefault("pending_since", {})
+    if not named or not island_naming_available():
+        return 0
+    live_keys, waiting = set(), 0
+    for island in named:
+        post_ids = island.get("post_ids") or []
+        if (island.get("name_source") in ("ai", "manual") or island.get("name_hold") or not island.get("name")
+                or len(post_ids) < ISLAND_NAMING_MIN_POSTS):
+            continue
+        authors = {posts_by_id[pid].get("author_id") for pid in post_ids
+                   if pid in posts_by_id and posts_by_id[pid].get("author_id")}
+        if len(authors) < ISLAND_NAMING_MIN_AUTHORS:
+            continue
+        if island_namer.tried_recently(island, datetime.now(timezone.utc)):
+            continue  # asked, no usable answer: the genre name stands
+        key = (community or "", min(post_ids))
+        live_keys.add(key)
+        if now - seen.setdefault(key, now) >= ISLAND_NAME_PENDING_MAX_SECONDS:
+            continue
+        island["genre_name"], island["genre_label"] = island["name"], island.get("label") or island["name"]
+        island["name"] = island["label"] = ISLAND_NAME_PENDING_LABEL
+        island["name_pending"] = True
+        waiting += 1
+    for key in [key for key in seen if key[0] == (community or "") and key not in live_keys]:
+        del seen[key]
+    return waiting
+
+
+def reveal_genre_names(islands):
+    """Undo hide_unnamed_genre_names on a copy, so naming and saving see the real names."""
+    for island in islands:
+        if island.pop("name_pending", None):
+            island["name"] = island.pop("genre_name")
+            island["label"] = island.pop("genre_label")
+    return islands
 
 
 def _created_stamp(value):
@@ -981,7 +1046,7 @@ def attach_residents(islands, posts):
 
 
 # Bookkeeping of island naming (post-id lists, timestamps): kept out of API answers.
-_INTERNAL_ISLAND_KEYS = ("name_basis", "name_tried_at", "name_hold", "resident_ids", "author_counts")
+_INTERNAL_ISLAND_KEYS = ("genre_name", "genre_label", "name_basis", "name_tried_at", "name_hold", "resident_ids", "author_counts")
 
 
 def island_intro(island):
@@ -1563,8 +1628,8 @@ def notify_resident(post_id, author_id, display_name, community=None, now=None, 
             island_id = states[identity[0]]["id"]
     except StoreError:
         pass
-    label = entry.get("label") or entry.get("name") or ""
-    island_key = island_id or label
+    label = "" if entry.get("name_pending") else (entry.get("label") or entry.get("name") or "")
+    island_key = island_id or label or str(post_id)
     earlier = [row for row in store.recent_notifications("island", now - timedelta(days=1), recipient_ids=others)
                if (row.get("payload") or {}).get("kind") == "resident"]
     per_island = Counter((row["recipient_id"], row.get("island_id") or (row.get("payload") or {}).get("name"))
@@ -1587,7 +1652,7 @@ def notify_resident(post_id, author_id, display_name, community=None, now=None, 
     return rows
 
 
-def name_islands_with_ai(named, previous, posts_by_id, now=None):
+def name_islands_with_ai(named, previous, posts_by_id, now=None, new_only=False):
     """Genre names from Gemini for islands whose membership moved. Never raises.
 
     Runs inside the tracking step only (at most every ISLAND_RUN_MIN_SECONDS).
@@ -1623,13 +1688,13 @@ def name_islands_with_ai(named, previous, posts_by_id, now=None):
                         if pid in posts_by_id and posts_by_id[pid].get("author_id")})
 
         return island_namer.name_islands(named, previous, bodies, namer, people_names,
-                                         now=now, author_count=author_count)
+                                         now=now, author_count=author_count, new_only=new_only)
     except Exception:
         _logger.exception("island naming failed")
         return 0
 
 
-def track_islands(now=None, community=None):
+def track_islands(now=None, community=None, new_only=False):
     """One tracking step: match the live islands to the stored ones, save, notify.
 
     The first step ever records every island as born but tells nobody: those
@@ -1645,12 +1710,12 @@ def track_islands(now=None, community=None):
     if community is None and _members_flag():
         total = {"states": [], "events": [], "notifications": [], "ids": {}}
         for each in store.community_ids():
-            step = track_islands(now=now, community=each)
+            step = track_islands(now=now, community=each, new_only=new_only)
             for key in ("states", "events", "notifications"):
                 total[key].extend(step[key])
         return total
     # Work on a copy: the cached islands are read by requests while this runs.
-    named = copy.deepcopy(live_islands(force=True, **scoped(community)))
+    named = reveal_genre_names(copy.deepcopy(live_islands(force=True, **scoped(community))))
     posts_by_id = {post["id"]: post for post in store.list_terms(limit=NAMING_POST_LIMIT, **scoped(community))}
     events = store.interaction_events(since=None)
     if community:
@@ -1659,7 +1724,7 @@ def track_islands(now=None, community=None):
     else:
         previous = store.island_states()
     island_namer.overlay(named, previous)  # idempotent; live_islands already did it
-    name_islands_with_ai(named, previous, posts_by_id, now=now)
+    name_islands_with_ai(named, previous, posts_by_id, now=now, new_only=new_only)
     try:
         ranker = landmark_ranker(named, posts_by_id)
     except Exception:  # an embedding outage costs the landmarks, not the step
@@ -1680,11 +1745,17 @@ def track_islands(now=None, community=None):
 
 
 def maybe_track_islands():
-    """Start a tracking step in the background if this caller wins the claim."""
+    """Start a tracking step in the background if this caller wins the claim.
+
+    While some island waits for its first AI name the claim interval is short
+    (ISLAND_RUN_PENDING_SECONDS) and the step only names such islands, unless a full
+    step has not run for ISLAND_RUN_MIN_SECONDS."""
     if not ISLAND_AUTO_TRACK or not _island_run_lock.acquire(blocking=False):
         return False
+    waiting = any((state.get("naming_pending") or {}).values())
+    new_only = waiting and time.time() - state.get("full_track_at", 0) < ISLAND_RUN_MIN_SECONDS
     try:
-        claimed = state["store"].claim_island_run(ISLAND_RUN_MIN_SECONDS)
+        claimed = state["store"].claim_island_run(ISLAND_RUN_PENDING_SECONDS if waiting else ISLAND_RUN_MIN_SECONDS)
     except StoreError:
         claimed = False
     if not claimed:
@@ -1693,9 +1764,12 @@ def maybe_track_islands():
 
     def work():
         try:
-            track_islands()
+            if not new_only:
+                state["full_track_at"] = time.time()
+            track_islands(new_only=new_only)
         except Exception:
             _logger.exception("island tracking failed")
+        invalidate_islands()  # the next request shows the names just made
         try:
             if QUIET_POST_ENABLED:  # off by default: the "resident" notice replaced it
                 notify_quiet_posts()
@@ -2765,12 +2839,15 @@ def create_post(payload: PostCreate, request: Request):
     except Exception:  # a failed notice never costs the post
         _logger.exception("resident notice failed")
 
+    result_island = island_of(row["id"], community_id) if members else island_of(row["id"])
+    if any((state.get("naming_pending") or {}).values()):
+        maybe_track_islands()  # a new island waiting for its AI name is named within a minute
     return {
         **row,
         "display_name": account.get("display_name", ""),
         "icon_id": account.get("icon_id", "0"),
         "avatar_path": account.get("avatar_path"),
-        "island": island_of(row["id"], community_id) if members else island_of(row["id"]),
+        "island": result_island,
         "neighbors": (neighbors_for(row["id"], terms, NEIGHBOR_COUNT, community=community_id)
                       if members else neighbors_for(row["id"], terms, NEIGHBOR_COUNT)),
     }

@@ -366,7 +366,7 @@ def _author_count(island):
 
 
 def name_islands(islands, previous, bodies, namer, people_names=None, max_calls=ISLAND_NAMING_MAX_PER_RUN,
-                 now=None, author_count=None):
+                 now=None, author_count=None, new_only=False):
     """Ask the namer about islands whose membership moved; returns how many names changed.
 
     islands: live islands (already overlaid with stored names), edited in place.
@@ -384,11 +384,18 @@ def name_islands(islands, previous, bodies, namer, people_names=None, max_calls=
     previous = [row for row in previous or [] if row.get("active", True)]
     _links, identity = island_tracking.match(previous, islands)
     changed = calls = transport_failures = 0
-    order = sorted(range(len(islands)), key=lambda k: -len(islands[k].get("post_ids") or []))
+    def has_ai_name(k):
+        row = previous[identity[k]] if k in identity else None
+        return bool(row and row.get("name_source") == "ai" and row.get("name"))
+
+    # Islands with no AI name yet come first (a brand-new island waits for this), then the biggest.
+    order = sorted(range(len(islands)), key=lambda k: (has_ai_name(k), -len(islands[k].get("post_ids") or [])))
     for j in order:
         island = islands[j]
         post_ids = island.get("post_ids") or []
         known = previous[identity[j]] if j in identity else None
+        if new_only and has_ai_name(j):
+            continue  # a quick step only gives first names
         if known and known.get("name_source") == "manual":
             continue  # a person fixed this name; never touched
         if len(post_ids) < ISLAND_NAMING_MIN_POSTS or author_count(island) < ISLAND_NAMING_MIN_AUTHORS:

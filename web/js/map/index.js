@@ -437,7 +437,7 @@ export function ripple(x, y, { big = false, color = MINE } = {}) {
 let emphasis = { id: null, until: 0 };
 
 function islandKey(island) {
-  return island.island_id || island.label;
+  return island.island_id || (island.name_pending ? `${island.label}@${island.cx},${island.cy}` : island.label);
 }
 
 // A screen that wants to show its own card for a tapped island registers here;
