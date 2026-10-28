@@ -375,6 +375,9 @@ def ai_on(client, monkeypatch):
     import app as application
     monkeypatch.setitem(application.state, "island_namer", _AiOn())
     monkeypatch.setitem(application.state, "pending_since", {})
+    # Left behind, a waiting island would start a background tracking step on every later
+    # test's post (create_post) - and the whole suite hung in one process.
+    monkeypatch.setitem(application.state, "naming_pending", {})
     return application
 
 
