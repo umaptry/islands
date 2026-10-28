@@ -41,6 +41,7 @@ import {
 import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
 import { nearestPosts } from '../nearby-rules.js';
 import { deleteOwnPost } from '../share.js';
+import { askAfterFirstPost } from '../push-ask.js';
 
 const VIEWS_MS = 60000;
 const viewed = new Set();   // posts already counted in this visit (Q35)
@@ -303,6 +304,7 @@ export async function showNearbyPosts(post, { thenOpen = null } = {}) {
       if (!picked && thenOpen) setTimeout(() => { if (!sheetOpen()) openLinkedPost(thenOpen); }, 0);
     },
   });
+  askAfterFirstPost();
   clear($('sheetFoot'));
   const rows = near.map((entry) => el('li', {},
     el('button', {
@@ -947,6 +949,11 @@ function paintThread(post, container) {
   activeChat = postChat(post.id, {
     onCountChange: (count) => upsertPost({ id: post.id, comment_count: count }),
     onReply: (comment) => input?.replyTo(comment),
+    onOpenProfile: (id) => {
+      restorePost = post.id;
+      closeSheet();
+      navigate(id === state.account?.id ? '#/me' : `#/u/${id}`);
+    },
   });
   container.append(el('div', { className: 'section-label', text: 'メッセージ' }), activeChat.node);
   if (state.account) {

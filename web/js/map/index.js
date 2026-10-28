@@ -1894,6 +1894,9 @@ export function playReveal(post, { then } = {}) {
   });
 }
 
+/** A new post is still being brought onto the map (push-ask.js waits for it). */
+export const revealing = () => Boolean(reveal);
+
 /** Stop an introduction that is under way without finishing it (the screen was left). */
 export function abortReveal() {
   reveal = null;

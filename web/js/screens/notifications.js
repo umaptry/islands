@@ -25,6 +25,7 @@ import {
 import { icon } from '../icons.js';
 import { setupCatchup } from '../catchup.js';
 import { moment } from '../feedback.js';
+import { openPushCard, pushAskKind, turnOn } from '../push-ask.js';
 import { $, avatar, clear, clip, el, timeAgo } from '../ui.js';
 import {
   arrivals, bodyText, defaultSettings, dmMessageRows, headline, knownIds, listable, matchSignature, mergeSettings,
@@ -257,11 +258,47 @@ function communityLine(entry) {
   return node;
 }
 
+// ③ of push-ask.js: until notifications come to this device, the top of the list says so - 'ask' | 'ios' | null.
+let pushRow = null;
+
+function pushRowNode() {
+  if (!pushRow) return null;
+  const ios = pushRow === 'ios';
+  const button = el('button', {
+    className: 'btn btn-block', attrs: { type: 'button', id: 'notifPushButton' },
+    text: ios ? 'やり方を見る' : '通知を受け取る',
+  });
+  button.addEventListener('click', async () => {
+    if (ios) { openPushCard('ios', { from: 'list' }); return; }
+    button.disabled = true;
+    // Straight into the question: an iPhone asks only in direct answer to a tap.
+    await turnOn();
+    button.disabled = false;
+  });
+  return el('div', { className: 'notify-device push-row', attrs: { id: 'notifPush' } },
+    el('span', { className: 'notify-device-text' },
+      el('span', { className: 'push-row-head', text: 'いまは、スマホに通知が届きません' }),
+      el('span', {
+        className: 'push-row-sub',
+        text: ios ? 'iPhone は、ホーム画面に追加すると届くようになります' : '反応やメッセージに気づけるよう、通知を受け取ってください',
+      })),
+    button);
+}
+
+async function checkPushRow() {
+  const kind = state.account ? await pushAskKind() : null;
+  if (kind === pushRow) return;
+  pushRow = kind;
+  if (activeScreen() === 'notifications') paintList();
+}
+
 function paintList() {
   const entries = state.notifications;
   painted = signature(entries);
   const list = clear($('notifList'));
   $('notifReadAll').hidden = !entries.some((entry) => entry.unread);
+  const ask = pushRowNode();
+  if (ask) list.append(ask);
 
   if (!entries.length) {
     list.append(el('div', { className: 'empty-panel' },
@@ -383,9 +420,16 @@ export function setupNotifications() {
     }
   });
 
+  // The row goes once this device takes notifications, here or anywhere else (プロフィール編集, the card).
+  document.addEventListener('push:changed', checkPushRow);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && activeScreen() === 'notifications') checkPushRow();
+  });
+
   screen('notifications', {
     async enter() {
       paintList();
+      checkPushRow();
       await refreshNotifications();
       paintList();
     },

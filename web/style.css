@@ -675,6 +675,9 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 .chat-time { font-size: 10.5px; color: var(--ink-3); }
 .chat-text { margin: 1px 0 0; font-size: 14px; line-height: 1.65; word-break: break-word; white-space: pre-wrap; }
 .chat-line.mine .chat-name { color: var(--sea); }
+/* The face and the name open the sender's page (2026-10-29). */
+.chat-who { text-align: left; }
+.chat-face { flex: none; display: inline-flex; border-radius: 999px; }
 /* 削除 on your own message, 報告 on somebody else's. Quiet until reached for:
  * a thread is for reading, and this is the thing you need only rarely. */
 .chat-action {
@@ -1651,6 +1654,21 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .nearby-who { flex: none; width: 5.5em; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .nearby-empty { margin: 10px 2px 4px; font-size: 13.5px; color: var(--ink-2); line-height: 1.7; word-break: auto-phrase; }
 .nearby-close { margin-top: 14px; min-height: 48px; background: var(--ui); color: #fff; box-shadow: none; }
+
+/* Taking notifications (push-ask.js, 2026-10-29): ① a card of its own, ③ the top of the 通知 list. */
+.push-ask-icon { display: flex; justify-content: center; margin: 6px 0 10px; color: var(--sea-deep); }
+.push-ask .stack-title { text-align: center; font-size: 17px; }
+.push-ask .nearby-lede { text-align: center; margin: 0 6px 4px; word-break: auto-phrase; text-wrap: pretty; }
+.push-ask .ios-steps { margin: 12px 0 0; }
+.push-ask .ios-step { background: var(--surface-2); }
+.push-ask-note { margin: 10px 4px 0; font-size: 12px; line-height: 1.6; color: var(--ink-3); text-align: center; word-break: auto-phrase; text-wrap: pretty; }
+.push-ask-warn { color: #9a4a00; font-weight: 700; }
+.push-ask .push-later { margin-top: 8px; min-height: 44px; background: var(--surface-2); color: var(--ink-2); border-color: transparent; box-shadow: none; }
+.notify-device.push-row { margin: 4px 0 10px; padding: 14px 14px 12px; }
+.push-row .notify-device-text { display: block; }
+.push-row .push-row-head { display: block; font-size: 14px; font-weight: 800; line-height: 1.5; }
+.push-row .push-row-sub { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; line-height: 1.55; color: var(--on-sea-2); }
+.push-row .btn { margin-top: 10px; min-height: 44px; }
 
 /* A person in no community gets words where the map would be. */
 .map-notice {

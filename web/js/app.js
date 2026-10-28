@@ -14,6 +14,7 @@ import { setupZoomGuard } from './zoom-guard.js';
 import { navigate, refreshNav, route, screen, setGuard, setNavVisible, show, startRouter } from './router.js';
 import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
 import { setupPush, syncPush } from './push.js';
+import { setupPushAsk } from './push-ask.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
 import { watchScreenTone } from './screen-tone.js';
@@ -116,6 +117,7 @@ async function boot() {
   setupCommunityEdit();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
+  setupPushAsk();
   screen('booting', {});
 
   // A link to one post (#/map?post=<id>) is read first of all: the OAuth return

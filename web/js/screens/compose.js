@@ -38,6 +38,7 @@ import { REDUCED_MOTION } from '../map/decor.js';
 import { ripple } from '../map/index.js';
 import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
 import { openOnMap, showNearbyPosts, showTrial } from './map.js';
+import { firstPostLanding } from '../push-ask.js';
 import { browserStorage } from '../talk.js';
 import { takePendingPost } from '../return-post.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
@@ -819,7 +820,9 @@ async function submit() {
 
 /** Open the new post on the map, with a ripple where it landed. */
 async function landOnMap(result, thenOpen = null) {
-  // The first post is followed by the posts nearest to it (which opens `thenOpen`, if any, after it).
+  // The first post is followed by the posts nearest to it (which opens `thenOpen`, if any, after it),
+  // and then by the ask to take notifications (push-ask.js).
+  if (firstPost) firstPostLanding();
   await openOnMap(result.id, { thenOpen,
     afterLand: firstPost ? () => showNearbyPosts(result, { thenOpen }) : null });
   ripple(result.x, result.y, { big: true });

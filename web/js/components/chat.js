@@ -17,7 +17,7 @@ import { sendsOnEnter } from '../chat-rules.js';
 const POLL_MS = 5000;
 const CHAT_INPUT_MAX_PX = 120;   // about five lines of the message box
 
-export function postChat(postId, { onCountChange, onReply } = {}) {
+export function postChat(postId, { onCountChange, onReply, onOpenProfile } = {}) {
   const list = el('div', { className: 'chat-list' });
   const wrap = el('div', { className: 'chat' }, list);
   let timer = 0;
@@ -54,10 +54,10 @@ export function postChat(postId, { onCountChange, onReply } = {}) {
       const author = comment.author || {};
       const mine = state.account && author.id === state.account.id;
       list.append(el('div', { className: `chat-line${mine ? ' mine' : ''}` },
-        avatar(author, 30),
+        toProfile(author, avatar(author, 30), true),
         el('div', { className: 'chat-bubble' },
           el('div', { className: 'chat-meta' },
-            el('span', { className: 'chat-name', text: author.display_name || '' }),
+            toProfile(author, el('span', { className: 'chat-name', text: author.display_name || '' })),
             el('span', { className: 'chat-time', text: timeAgo(comment.created_at) }),
             replyButton(comment, mine),
           ),
@@ -68,6 +68,16 @@ export function postChat(postId, { onCountChange, onReply } = {}) {
       ));
     });
     if (atBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  }
+
+  /** The face and the name open the sender's page, as they do on a post card (2026-10-29: they did nothing). */
+  function toProfile(author, node, face = false) {
+    if (!onOpenProfile || !author.id) return node;
+    return el('button', {
+      className: `chat-who${face ? ' chat-face' : ''}`,
+      attrs: { type: 'button', ...(face ? { 'aria-label': `${author.display_name || ''}さんのページ` } : {}) },
+      on: { click: () => onOpenProfile(author.id) },
+    }, node);
   }
 
   /** A reply shows one line of what it answers; a withdrawn message says so. */
