@@ -709,9 +709,27 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 }
 .chat-send:disabled { background: var(--surface-3); color: var(--ink-3); }
 
-/* Replies (段4): a quiet 返信 beside the name, the line answered above the text. */
-.chat-reply { font-size: 11px; font-weight: 700; color: var(--ink-3); padding: 0 2px; }
+/* Replies (2026-10-29): 「↩ 返信する」 under each message, and the answers folded under the message
+   they start from, one step in (YouTube's comments). The 11px grey 返信 beside the name went unnoticed. */
+.chat-reply {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; padding: 4px 0; min-height: 28px;
+  font-size: 12.5px; font-weight: 700; color: var(--ink-2);
+}
 .chat-reply:hover, .chat-reply:focus-visible { color: var(--sea); }
+.chat-thread { display: flex; flex-direction: column; gap: 10px; margin: -6px 0 0 39px; }
+.chat-thread-toggle {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 0;
+  font-size: 12.5px; font-weight: 700; color: var(--sea);
+}
+.chat-thread-toggle::before {
+  content: ''; width: 7px; height: 7px; margin: 0 2px 0 1px;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg);
+}
+.chat-thread-toggle[aria-expanded="true"]::before { transform: translateY(2px) rotate(-135deg); }
+.chat-replies { display: flex; flex-direction: column; gap: 12px; }
+.chat-line.nested { gap: 8px; }
+.chat-line.nested .chat-text { font-size: 13.5px; }
+.chat-at { color: var(--sea); font-weight: 700; }
 .chat-quote {
   margin: 3px 0 1px; padding: 3px 9px; border-radius: 8px;
   background: var(--surface-2); color: var(--ink-3); font-size: 12px;
