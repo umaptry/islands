@@ -72,6 +72,7 @@ async function write(page, body, { first = true } = {}) {
   await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
 }
 
+const NO_MATCH = /^まだ、つながりそうな投稿はありません。\s*似た話が投稿されたら、通知でお知らせします$/;
 const FIRST = '休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。';
 
 test('最初の投稿のあとカードが出て、めくると 2 / 3 になり、閉じると通知の案内が出る', async ({ page }) => {
@@ -125,6 +126,7 @@ for (const [label, install] of FALLBACKS) {
     await expect(page.locator('#nearbyList, #nearbyEmpty').first()).toBeVisible({ timeout: 40000 });
     await expect(page.locator('#sheet .stack-title')).toHaveText('あなたの近くの投稿');
     await expect(page.locator('#matchTrack')).toHaveCount(0);
+    await expect(page.locator('#toast')).not.toHaveClass(/on/);      // the first post shows the nearest instead
     await page.locator('#nearbyClose').click();
     await expect(page.locator('#sheet.on #pushAsk')).toBeVisible({ timeout: 10000 });
   });
@@ -137,10 +139,26 @@ test('2回目の投稿：差し替えありならカード、なしなら自分�
   await write(page, FIRST);
   await page.locator('#nearbyClose').click({ timeout: 30000 });
 
-  // 差し替えなし（手元のサーバーは常に空）: 自分の投稿カードが開く
+  // 差し替えなし（手元のサーバーは止めてあり「unknown」）: 自分の投稿カードが開き、一文は出ない
   await write(page, '二つ目の投稿です。週末は川沿いを走っています。', { first: false });
   await expect(page.locator('#sheet.on .post-card')).toBeVisible({ timeout: 30000 });
   await expect(page.locator('#matchTrack')).toHaveCount(0);
+  await expect(page.locator('#toast')).not.toHaveClass(/on/);
+  await page.locator('#sheetClose').click();
+
+  // だれもいない（サーバーの答えが空）: 自分の投稿カードに加えて、一文が出る
+  await answerWith(page, []);
+  await write(page, '四つ目の投稿です。猫アレルギーなので、猫カフェに行けません。', { first: false });
+  await expect(page.locator('#sheet.on .post-card')).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('#toast.on')).toHaveText(NO_MATCH, { timeout: 10000 });
+  await expect(page.locator('#matchTrack')).toHaveCount(0);
+  // On a phone it stands above the own post card, not over its buttons.
+  if ((page.viewportSize()?.width || 0) < 768) {
+    await expect.poll(async () => {
+      const [note, sheet] = await Promise.all([page.locator('#toast').boundingBox(), page.locator('#sheet').boundingBox()]);
+      return note.y + note.height <= sheet.y + 1;
+    }).toBe(true);
+  }
   await page.locator('#sheetClose').click();
 
   // 差し替えあり: カード（二度目は通知の案内を増やさない）

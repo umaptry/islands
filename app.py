@@ -3295,14 +3295,15 @@ def matches(request: Request, post: str = ""):
             raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     if not origin or origin.get("author_id") != user_id:
         raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
-    empty = {"post": post, "matches": []}
+    # Switched off or failed: empty too, but marked, so the screen does not tell "nobody yet".
+    unknown = {"post": post, "matches": [], "unknown": True}
     if os.environ.get("ISLANDS_MATCH_CARDS", "1") == "0":
-        return empty
+        return unknown
     try:
         return {"post": post, "matches": match_rows(user_id, origin)}
     except Exception as error:
         _logger.warning("matches failed for %s: %s", post, error)
-        return empty
+        return unknown
 
 
 def pick_connections(user_id, origin, members=None):

@@ -347,18 +347,19 @@ const MATCH_CARDS_ON = true;
 export function startMatchFetch(postId) {
   if (!MATCH_CARDS_ON || !postId || !state.account) return null;
   const startedAt = Date.now();
+  // null: no answer (failed, switched off, another post); [] is the server's own "nobody yet".
   const promise = api.get(`/api/matches?post=${encodeURIComponent(postId)}`)
-    .then((result) => (result?.post === postId ? usableMatches(result.matches) : []))
-    .catch(() => []);
+    .then((result) => (result?.post === postId && !result.unknown ? usableMatches(result.matches) : null))
+    .catch(() => null);
   promise.startedAt = startedAt;
   return promise;
 }
 
-/** The rows of a startMatchFetch, or [] when they take longer than MATCH_FETCH_MS since it started. */
+/** The rows of a startMatchFetch, or null when they take longer than MATCH_FETCH_MS since it started. */
 async function waitForMatches(pending) {
   const left = Math.max(300, MATCH_FETCH_MS - (Date.now() - (pending.startedAt || Date.now())));
   let timer = 0;
-  const late = new Promise((resolve) => { timer = setTimeout(() => resolve([]), left); });
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); });
   try {
     return await Promise.race([pending, late]);
   } finally {
@@ -366,9 +367,21 @@ async function waitForMatches(pending) {
   }
 }
 
+export const NO_MATCH_TEXT = 'まだ、つながりそうな投稿はありません。\n似た話が投稿されたら、通知でお知らせします';
+
+/** The line for "nobody yet". It comes once the own post card is up (the caller opens it), and on a phone
+ * just above that card rather than over its buttons; the side panel of a wide screen leaves room below. */
+function noMatchNote() {
+  setTimeout(() => {
+    const top = sheetOpen() && !desktopSheet() ? $('sheet').getBoundingClientRect().top : 0;
+    toast(NO_MATCH_TEXT, 6000, { bottom: top > 0 ? Math.round(innerHeight - top + 12) : null });
+  }, 600);
+}
+
 /** 「あなたの話とつながりそうな人」: after a post, the posts that may connect to it as cards to swipe, with
  * dotted lines from the new post on the map. true when the cards came up; false (nothing changed) when there
- * is nobody, it took too long, or anything failed - the caller then does what it always did.
+ * is nobody, it took too long, or anything failed - the caller then does what it always did. Nobody (the
+ * server's own empty answer) on a later post also says so in one line (noMatchNote).
  * `first`: the first post, which asks about notifications once the card is closed (push-ask.js).
  * `thenOpen`: a post to open once the cards are closed. `pending`: startMatchFetch's promise. */
 export async function showMatchCards(post, { thenOpen = null, first = false, pending = null } = {}) {
@@ -376,7 +389,13 @@ export async function showMatchCards(post, { thenOpen = null, first = false, pen
   let picked = false;
   try {
     const rows = await waitForMatches(pending);
-    if (!rows.length || activeScreen() !== 'map') return false;
+    if (!rows || activeScreen() !== 'map') return false;
+    // Nobody yet (the server said so): one line, so the post does not seem to have done nothing.
+    // The first post shows the nearest posts instead.
+    if (!rows.length) {
+      if (!first) noMatchNote();
+      return false;
+    }
     if (!Number.isFinite(Number(post.x)) || !Number.isFinite(Number(post.y))) return false;
     const from = { x: Number(post.x), y: Number(post.y) };
     const leave = () => { picked = true; closeSheet(); };
