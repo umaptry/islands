@@ -103,7 +103,9 @@ jobs:
   browser-test:
     runs-on: ubuntu-latest
     # 20 was hit at 19m52s already (2026-10-26) and the catch-up / talk tests add about a minute.
-    timeout-minutes: 30
+    # 30 was hit twice on 2026-10-29 (380 tests): a slow runner took 4.6 s a test, against 3.2 s
+    # on the PR run of the same commit, and was cut off at test 374-378 with nothing failing.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@v4
