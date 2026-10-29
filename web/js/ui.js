@@ -66,9 +66,11 @@ export function avatar(person, size = 40, overrideUrl = null) {
 
 let toastTimer = 0;
 
-export function toast(message, ms = 3200) {
+export function toast(message, ms = 3200, { bottom = null } = {}) {
   const node = $('toast');
   node.textContent = message;
+  // `bottom`: px from the bottom of the screen, to stand clear of an open card; otherwise the usual place.
+  node.style.bottom = bottom == null ? '' : `${bottom}px`;
   node.classList.add('on');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => node.classList.remove('on'), ms);

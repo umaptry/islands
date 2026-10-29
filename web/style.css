@@ -882,7 +882,7 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
   bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 18px);
   z-index: 70; max-width: min(88vw, 420px); width: max-content;
   background: rgba(14, 36, 60, .95); color: #fff;
-  padding: 11px 18px; border-radius: 20px; font-size: 13px; line-height: 1.5; text-align: center;
+  padding: 11px 18px; border-radius: 20px; font-size: 13px; line-height: 1.5; text-align: center; white-space: pre-line;
   opacity: 0; pointer-events: none;
   transition: opacity .22s var(--ease), transform .22s var(--ease);
 }

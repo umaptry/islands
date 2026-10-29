@@ -72,7 +72,7 @@ async function write(page, body, { first = true } = {}) {
   await expect(page.locator('#map')).toHaveClass(/active/, { timeout: 30000 });
 }
 
-const NO_MATCH = 'まだ、つながりそうな投稿はありません。似た話が投稿されたら、通知でお知らせします';
+const NO_MATCH = /^まだ、つながりそうな投稿はありません。\s*似た話が投稿されたら、通知でお知らせします$/;
 const FIRST = '休日に公園を散歩しながら季節の花を撮影しています。写真を楽しめる仲間と交流してみたいです。';
 
 test('最初の投稿のあとカードが出て、めくると 2 / 3 になり、閉じると通知の案内が出る', async ({ page }) => {
@@ -152,6 +152,13 @@ test('2回目の投稿：差し替えありならカード、なしなら自分�
   await expect(page.locator('#sheet.on .post-card')).toBeVisible({ timeout: 30000 });
   await expect(page.locator('#toast.on')).toHaveText(NO_MATCH, { timeout: 10000 });
   await expect(page.locator('#matchTrack')).toHaveCount(0);
+  // On a phone it stands above the own post card, not over its buttons.
+  if ((page.viewportSize()?.width || 0) < 768) {
+    await expect.poll(async () => {
+      const [note, sheet] = await Promise.all([page.locator('#toast').boundingBox(), page.locator('#sheet').boundingBox()]);
+      return note.y + note.height <= sheet.y + 1;
+    }).toBe(true);
+  }
   await page.locator('#sheetClose').click();
 
   // 差し替えあり: カード（二度目は通知の案内を増やさない）
