@@ -287,6 +287,7 @@ class MemoryStore:
         self._island_run_at = None
         self._views = set()         # (post_id, viewer)
         self._push_pending = []     # notification ids not yet taken by the dispatcher
+        self._pushed_at = {}        # notification id -> when the dispatcher took it (pushed_at)
         self._talk_wishes = {}      # (from_id, to_id) -> {event_post_id, created_at}
         self._dm_rooms = {}         # room id -> {id, user_a, user_b, event_post_id, created_at}
         self._dm_messages = []      # oldest first
@@ -1499,6 +1500,7 @@ class MemoryStore:
         with self._lock:
             rows = [dict(self._notifications[i]) for i in self._push_pending
                     if i in self._notifications]
+            self._pushed_at.update({row["id"]: _now() for row in rows})
             self._push_pending.clear()
         rows.sort(key=lambda row: row["created_at"])
         return rows

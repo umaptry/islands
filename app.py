@@ -65,6 +65,7 @@ from core import connections as lines
 from core import growth
 from core import introductions
 from core import island_namer
+from core import matching
 from core import island_tracking
 from core import notifications as notices
 from core import quiet
@@ -90,6 +91,8 @@ from core.config import (
     PREVIEW_ISLAND_RADIUS,
     PREVIEW_NEIGHBORS,
     CONNECTION_CACHE_SECONDS,
+    MATCH_CANDIDATES,
+    MATCH_LIMIT,
     CONNECTIONS_SINCE,
     DIGEST_CONTRIBUTORS,
     ISLAND_COLORS,
@@ -1843,6 +1846,8 @@ PUSH_TEXT = {
     "talk_wish": f"誰かが、あなたと{TALK_LABEL}と言っています",
     "talk_match": "{name}さんと、お互いに『" + TALK_LABEL + "』でした。DMが開きました",
     "dm": "{name}さんからメッセージが届きました",
+    # 2026-10-29. Normally the row's own payload.reason is read out; this is the fallback.
+    "match": "あなたの投稿とつながりそうな投稿が見つかりました。",
 }
 PUSH_GROUP_TEXT = "あなたの投稿に反応しました。"
 
@@ -1902,6 +1907,12 @@ def push_message(entry, hashed_tag=False):
         # Never reads the actors: whoever pressed is not in the row, and must not get in.
         title = "だれか"
         body = PUSH_TEXT["talk_wish"]
+    elif entry["type"] == "match":
+        first = (entry["actors"][0] if entry["actors"] else None) or {}
+        title = f"{_plain_name(first['display_name'])}さん" if first.get("display_name") else "だれか"
+        body = payload.get("reason") or PUSH_TEXT["match"]
+        if entry.get("post_id"):
+            url = f"/#/map?post={entry['post_id']}"
     elif entry["type"] in ("talk_match", "dm"):
         first = (entry["actors"][0] if entry["actors"] else None) or {}
         title = first.get("display_name") or "だれか"
@@ -1914,7 +1925,7 @@ def push_message(entry, hashed_tag=False):
         body = PUSH_GROUP_TEXT if entry["others"] else PUSH_TEXT.get(entry["type"], PUSH_GROUP_TEXT)
     # Reactions to one post share a tag, so "A ほか2人" replaces "A" on the
     # device instead of stacking. Everything else stands alone.
-    if entry["category"] == "reaction" and entry.get("post_id"):
+    if entry["category"] == "reaction" and entry.get("post_id") and entry["type"] != "match":
         tag = f"reaction-{entry['post_id']}"
         if hashed_tag:
             tag = webpush.topic_for(tag)
@@ -2838,6 +2849,10 @@ def create_post(payload: PostCreate, request: Request):
                         community=community_id if members else None, post_community=community_id)
     except Exception:  # a failed notice never costs the post
         _logger.exception("resident notice failed")
+    try:
+        start_match_notice(row["id"])
+    except Exception:  # a failed notice never costs the post
+        _logger.warning("match notice could not start for %s", row["id"])
 
     result_island = island_of(row["id"], community_id) if members else island_of(row["id"])
     if any((state.get("naming_pending") or {}).values()):
@@ -3259,6 +3274,142 @@ def neighbors(request: Request, post: str = "", limit: int = ORBIT_NEIGHBOR_COUN
         "neighbors": neighbors_for(post, origin.get("terms") or [], limit,
                                    community=origin.get("community_id") if communities_on() else None),
     }
+
+
+@app.get("/api/matches")
+def matches(request: Request, post: str = ""):
+    """Up to three people whose post connects to the caller's own post (the cards after posting).
+
+    Only the author asks (404 otherwise). Anything that goes wrong answers an empty list, so the
+    screen falls back to what it showed before.
+    """
+    user_id = current_user(request)
+    if not post:
+        raise HTTPException(status_code=422, detail="投稿が指定されていません。")
+    if members_only_on():
+        origin = member_post(user_id, post)
+    else:
+        try:
+            origin = state["store"].get_post(post)
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+    if not origin or origin.get("author_id") != user_id:
+        raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+    empty = {"post": post, "matches": []}
+    if os.environ.get("ISLANDS_MATCH_CARDS", "1") == "0":
+        return empty
+    try:
+        return {"post": post, "matches": match_rows(user_id, origin)}
+    except Exception as error:
+        _logger.warning("matches failed for %s: %s", post, error)
+        return empty
+
+
+def pick_connections(user_id, origin, members=None):
+    """The posts that connect to `origin` (written by `user_id`): nearest posts -> bar -> stance -> pick.
+
+    One answer for the cards (GET /api/matches) and for the 'match' notices. `members`: when given,
+    only posts of these authors count (the notice skips people who left the community).
+    Returns the picked candidates ({"id", "author_id", "prompt", "tags", "cosine", "reason", "kind"})
+    and the community id the search was held to."""
+    store = state["store"]
+    community = origin.get("community_id")
+    community = str(community) if community and (members_only_quiet() or communities_on()) else None
+    if community and members_only_quiet():
+        ranked = store.nearest_posts(origin["id"], MATCH_CANDIDATES, community=community)
+    elif community:
+        of_community = store.post_communities()
+        ranked = [pair for pair in store.nearest_posts(origin["id"], min(max(MATCH_CANDIDATES * 6, 60), 300))
+                  if of_community.get(pair[0]) == community][:MATCH_CANDIDATES]
+    else:
+        ranked = store.nearest_posts(origin["id"], MATCH_CANDIDATES)
+    # Below the lowest bar nothing can be shown: skip the lookups.
+    bar = matching.lowest_bar()
+    ranked = [(other_id, cosine) for other_id, cosine in ranked if cosine >= bar]
+    if not ranked:
+        return [], community
+    candidates = []
+    for other_id, cosine in ranked:
+        try:
+            other = store.get_post(other_id)
+        except StoreError:
+            continue
+        if not other or other.get("deleted_at") or other["author_id"] == user_id:
+            continue
+        if community and members_only_quiet() and other.get("community_id") != community:
+            continue
+        if members is not None and other["author_id"] not in members:
+            continue
+        candidates.append({"id": other["id"], "author_id": other["author_id"], "prompt": other.get("prompt"),
+                           "tags": other.get("tags") or [], "cosine": float(cosine)})
+    blocked = store.blocked_with(user_id) if candidates else set()
+    picked = matching.pick_matches(
+        {"author_id": user_id, "prompt": origin.get("prompt"), "tags": origin.get("tags") or []},
+        candidates, limit=MATCH_LIMIT, excluded_authors=blocked)
+    return picked, community
+
+
+def match_rows(user_id, origin):
+    """The cards for `origin`: the connections (pick_connections) with the people's names."""
+    picked, community = pick_connections(user_id, origin)
+    if not picked:
+        return []
+    extra = {item["id"]: item for item in picked}
+    rows = neighbor_rows([(item["id"], item["cosine"]) for item in picked], origin.get("terms") or [],
+                         community=community if members_only_quiet() else None)
+    return [{**row, "prompt": extra[row["id"]]["prompt"], "reason": extra[row["id"]]["reason"],
+             "kind": extra[row["id"]]["kind"]} for row in rows]
+
+
+def notify_matches(post_id, now=None):
+    """Tell the people whose older post connects to the new post `post_id` (a 'match' notification).
+
+    A new post P (author A) that pick_connections joins to an older post Q (author B), at most
+    MATCH_LIMIT of them, tells B once: payload {kind, other_post: Q, reason}, `reason` being what B
+    reads (matching.NOTICE_REASONS, seen from B). No per-day limit; the same P and B never twice.
+    Nobody is told who is A, who blocked or was blocked by A, who left the community, or when Q is
+    gone. Never raises: any failure (also a database that has not had 20261029020000_match_notice.sql
+    yet) is a warning in the log and the post is untouched. Returns the rows written."""
+    if os.environ.get("ISLANDS_MATCH_NOTICE", "1") == "0":
+        return []
+    try:
+        store = state["store"]
+        now = now or datetime.now(timezone.utc)
+        origin = store.get_post(post_id)
+        if not origin or origin.get("deleted_at"):
+            return []
+        author = origin["author_id"]
+        raw_community = origin.get("community_id")
+        community = str(raw_community) if raw_community and (members_only_quiet() or communities_on()) else None
+        members = set(store.community_member_ids(community)) if community else None
+        picked, _community = pick_connections(author, origin, members=members)
+        if not picked:
+            return []
+        told = {(str(row.get("post_id")), row["recipient_id"]) for row in store.recent_notifications(
+            "match", now - timedelta(days=1), recipient_ids=[item["author_id"] for item in picked])}
+        rows = [{
+            "recipient_id": item["author_id"], "actor_id": author, "type": "match", "post_id": post_id,
+            "payload": {"kind": item["kind"], "other_post": item["id"],
+                        "reason": matching.NOTICE_REASONS.get(item["kind"], matching.NOTICE_REASONS["near"])},
+            **({"community_id": raw_community} if raw_community else {}),
+        } for item in picked if (str(post_id), item["author_id"]) not in told]
+        if rows:
+            store.insert_notifications(rows)
+        return rows
+    except Exception as error:
+        _logger.warning("match notice failed for %s: %s", post_id, error)
+        return []
+
+
+def start_match_notice(post_id):
+    """notify_matches in a background thread, so the answer to the writer does not wait for it.
+    ISLANDS_AUTO_MATCH_NOTICE=0 keeps it from starting (tests call notify_matches themselves)."""
+    if (os.environ.get("ISLANDS_AUTO_MATCH_NOTICE", "1") == "0"
+            or os.environ.get("ISLANDS_MATCH_NOTICE", "1") == "0"):
+        return None
+    thread = threading.Thread(target=notify_matches, args=(post_id,), name="match-notice", daemon=True)
+    thread.start()
+    return thread
 
 
 @app.get("/api/pair")

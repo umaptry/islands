@@ -1674,6 +1674,33 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .nearby-empty { margin: 10px 2px 4px; font-size: 13.5px; color: var(--ink-2); line-height: 1.7; word-break: auto-phrase; }
 .nearby-close { margin-top: 14px; min-height: 48px; background: var(--ui); color: #fff; box-shadow: none; }
 
+/* After a post: the posts that may connect to it, as cards to turn sideways (screens/map.js showMatchCards). */
+.match-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding-right: 46px; }  /* the close button sits at the right */
+.match-head .stack-title { margin-bottom: 4px; }
+.match-count { flex: none; font-size: 13px; font-weight: 800; color: var(--accent); }
+.match-dots { display: flex; justify-content: center; gap: 6px; margin: 2px 0 8px; }
+.match-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); transition: background .2s, transform .2s; }
+.match-dots i.on { background: var(--accent); transform: scale(1.25); }
+.match-track {
+  display: flex; align-items: flex-start; gap: 10px; overflow-x: auto; overflow-y: hidden;
+  margin: 0 -15px -8px; padding: 0 15px 10px; scroll-padding: 0 15px;
+  scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y; scrollbar-width: none;
+}
+.match-track::-webkit-scrollbar { display: none; }
+/* The next card shows a little at the edge, so it is plain that there is more to turn to. */
+.match-slide { flex: 0 0 calc(100% - 22px); min-width: 0; scroll-snap-align: start; scroll-snap-stop: always; }
+.match-slide:only-child { flex-basis: 100%; }
+.match-why {
+  margin: 0 0 8px; padding: 8px 12px; border-radius: 10px; background: #fff0ec; color: #c2410c;
+  font-size: 13px; font-weight: 800; line-height: 1.5; word-break: auto-phrase; text-wrap: pretty;
+}
+.match-slide .post-card { margin: 0; }
+/* A tall card scrolls inside the sheet on a phone (the sheet does not grow to full height here). */
+@media not all and (min-width: 768px) and (min-height: 500px) {
+  .sheet.match-mode:not(.full) .sheet-scroll { overflow-y: auto; touch-action: pan-x pan-y; }
+}
+
 /* Taking notifications (push-ask.js, 2026-10-29): ① a card of its own, ③ the top of the 通知 list. */
 .push-ask-icon { display: flex; justify-content: center; margin: 6px 0 10px; color: var(--sea-deep); }
 .push-ask .stack-title { text-align: center; font-size: 17px; }

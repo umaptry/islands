@@ -25,10 +25,12 @@ export function dragBackdrop(dy, height = 800) {
  * 参加 is left to the card. Where the card has no way to open its messages
  * (onComments), the message count is shown but cannot be pressed.
  */
-export function viewerActions({ hasComments = false } = {}) {
-  return [
+export function viewerActions({ hasComments = false, showHelp = false } = {}) {
+  const actions = [
     { kind: 'comments', label: 'メッセージ', icon: 'message', countKey: 'comment_count', pressable: Boolean(hasComments) },
     { kind: 'like', label: 'いいね', icon: 'heart', countKey: 'like_count', pressable: true },
-    { kind: 'help', label: '手伝えるかも', icon: 'help', countKey: 'help_count', pressable: true },
   ];
+  // 手伝えるかも only where the card shows it (see showHelp in recruit-rules.js).
+  if (showHelp) actions.push({ kind: 'help', label: '手伝えるかも', icon: 'help', countKey: 'help_count', pressable: true });
+  return actions;
 }

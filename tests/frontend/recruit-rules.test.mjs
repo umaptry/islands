@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../../web/js/recruit-rules.js', import.meta.url), 'utf8');
 const {
   addDays, availablePrompts, deadlineRange, extrasPayload, formatDeadline, jstToday, joinRefusal,
-  parseCapacity, promptPlaceholder, recruitState, formatDeadlineShort, joinTerms, joinWord, usedPromptKeys,
+  parseCapacity, promptPlaceholder, recruitState, formatDeadlineShort, joinTerms, joinWord, usedPromptKeys, showHelp,
 } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('jstToday follows Japan time, not the phone zone', () => {
@@ -88,11 +88,12 @@ test('joinRefusal reads the PostgREST message and the local detail', () => {
   assert.equal(joinRefusal('うまくいきませんでした (500)'), null);
 });
 
-test('extra prompts: hidden once used, and none when the feature is off', () => {
+test('extra prompts: all of them every time, and none when the feature is off', () => {
   const extra = [{ key: 'past', text: 'a' }, { key: 'now', text: 'b' }, { key: 'future', text: 'c' }];
   const posts = [{ prompt: 'now' }, { prompt: 'weekly' }, { prompt: null }, {}];
   assert.deepEqual([...usedPromptKeys(posts)].sort(), ['now', 'weekly']);
-  assert.deepEqual(availablePrompts(extra, posts, true).map((e) => e.key), ['past', 'future']);
+  // using a prompt does not hide it
+  assert.deepEqual(availablePrompts(extra, posts, true).map((e) => e.key), ['past', 'now', 'future']);
   assert.deepEqual(availablePrompts(extra, [], true).length, 3);
   assert.deepEqual(availablePrompts(extra, posts, false), []);
 });
@@ -100,13 +101,13 @@ test('extra prompts: hidden once used, and none when the feature is off', () => 
 test('promptPlaceholder: an extra prompt shows its example sentence, the weekly one its words', () => {
   const extraPrompts = [
     { key: 'past', text: '昔がんばってたこと', example: '高校まで陸上部でした' },
-    { key: 'now', text: '最近はまってること' },
+    { key: 'now', text: '最近やってること' },
   ];
   const weekly = { text: '週末の過ごし方' };
   const say = (selected) => promptPlaceholder({ selected, weekly, extraPrompts });
   assert.equal(say('past'), '例：高校まで陸上部でした');
   // An extra prompt without an example still names itself.
-  assert.equal(say('now'), 'お題：最近はまってること');
+  assert.equal(say('now'), 'お題：最近やってること');
   assert.equal(say('weekly'), 'お題：週末の過ごし方');
   // Nothing chosen: a question about what the person likes (2026-10-27), not 「最大60文字」.
   assert.equal(say(null), '好きなこと、やってみたいことは？');
@@ -125,4 +126,26 @@ test('extrasPayload: nothing when off, only filled values on create, nulls on ed
     { recruit_deadline: '2026-12-31', recruit_capacity: 15 });
   assert.deepEqual(extrasPayload({ ...base, enabled: true, editing: true, recruiting: false }),
     { recruit_deadline: null, recruit_capacity: null });
+});
+
+test('showHelp: only 助けてほしい posts, or one already pressed, or your own with help given', () => {
+  const plain = { id: 'p', author_id: 'other', tags: ['楽しみたい'], help_count: 0 };
+  assert.equal(showHelp(plain, 'me'), false);
+  assert.equal(showHelp({ ...plain, tags: ['助けてほしい'] }, 'me'), true);
+  assert.equal(showHelp({ ...plain, tags: null }, 'me'), false);
+  // pressed already: it can be taken back
+  assert.equal(showHelp(plain, 'me', { reacted: true }), true);
+  // your own post: only once somebody has pressed it
+  assert.equal(showHelp({ ...plain, author_id: 'me' }, 'me'), false);
+  assert.equal(showHelp({ ...plain, author_id: 'me', help_count: 1 }, 'me'), true);
+  // somebody else's post with a count is not enough
+  assert.equal(showHelp({ ...plain, help_count: 3 }, 'me'), false);
+  assert.equal(showHelp({ ...plain, author_id: 'x', help_count: 1 }, null), false);
+});
+
+test('availablePrompts: still four after every one was used; empty when off', () => {
+  const extra = ['past', 'now', 'future', 'help'].map((key) => ({ key, text: key }));
+  const used = extra.map((e) => ({ prompt: e.key }));
+  assert.equal(availablePrompts(extra, used, true).length, 4);
+  assert.deepEqual(availablePrompts(extra, used, false), []);
 });

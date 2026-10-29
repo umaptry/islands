@@ -367,6 +367,9 @@ NOTIFICATION_CATEGORY_OF = {
     # 2026-10-26: 「話してみたい」と DM. They use the existing switches (the settings
     # screen does not change): the talk lines are reactions, a new message is a reply.
     "talk_wish": "reaction", "talk_match": "reaction", "dm": "reply",
+    # 2026-10-29: 「つながり」: somebody just posted something that connects to your post. A reaction
+    # (the settings screen only gets a longer note), one row each, never folded.
+    "match": "reaction",
 }
 # Only these are folded into one line ("A ほか2人") when they follow each other. The
 # talk lines are shown one by one: a talk_wish has no actor and no post.
@@ -461,7 +464,7 @@ PROMPT_UTC_OFFSET_HOURS = 9
 # Q40: the first post is made by choosing one of these. It is placed to show
 # where it would stand and is never saved, so the map does not fill up with
 # the same sentence. Three, on different topics on purpose so the tryout lands
-# on different islands: 昔がんばってたこと, 最近はまってること and an event (参加者募集中).
+# on different islands: 昔がんばってたこと, 最近やってること and an event (参加者募集中).
 # Under them, the first post offers the extra prompts below. 仮: by Claude Code,
 # 2026-10-20; cut from eight to three on 2026-10-21.
 EXAMPLE_POSTS = (
@@ -470,9 +473,11 @@ EXAMPLE_POSTS = (
     "今度の日曜に公園で朝ランをします。ゆっくりペースで5人ほど募集中です",
 )
 
-# Extra writing prompts next to the weekly one. Each is shown until the person
-# has posted once with it (the browser decides from the post's `prompt`); the
-# weekly prompt is not one of these and keeps coming back every week.
+# Extra writing prompts next to the weekly one. All of them are always offered (since 2026-10-29 a
+# prompt is no longer hidden once used; the browser still hides all of them when post_extras is off);
+# the weekly prompt is not one of these and keeps coming back every week.
+# 2026-10-29 (chosen by the founder): 最近はまってること became 最近やってること (the key `now` and the
+# saved posts do not change).
 # `example` is what the body's placeholder says while the prompt is chosen
 # ("例：…"), on topics none of EXAMPLE_POSTS uses. 2026-10-20; examples 2026-10-21.
 # Rewritten 2026-10-27 (chosen by the founder): what the person does in concrete words (they place the
@@ -485,8 +490,8 @@ EXAMPLE_POSTS = (
 EXTRA_PROMPTS = (
     {"key": "past", "text": "昔がんばってたこと",
      "example": "学生時代はずっとバスケ部でした。運動不足なので、またゆるくボールを触れる仲間がほしいです。"},
-    {"key": "now", "text": "最近はまってること",
-     "example": "仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。"},
+    {"key": "now", "text": "最近やってること",
+     "example": "仕事帰りにレイトショーを観ています。洋画が多めです。おすすめがあれば教えてください。"},
     {"key": "future", "text": "今度やってみたいこと",
      "example": "陶芸教室で、自分用のお皿を作ってみたいです。一人だと行きづらいので、一緒に体験しませんか。"},
     {"key": "help", "text": "困ってること", "tag": "助けてほしい",
@@ -497,7 +502,7 @@ EXTRA_PROMPTS = (
 # A chip puts nothing in the box: the prompt's example sentence shows as the placeholder.
 POST_STARTERS = (
     {"key": "past", "text": "昔がんばってたこと"},
-    {"key": "now", "text": "最近はまってること"},
+    {"key": "now", "text": "最近やってること"},
     {"key": "future", "text": "今度やってみたいこと"},
     {"key": "help", "text": "困ってること"},
 )
@@ -585,3 +590,28 @@ RECRUIT_DEADLINE_MAX_DAYS = 365  # at most a year from today
 # standing on that post's island. 仮: about one landmass radius at 50 energy.
 PREVIEW_ISLAND_RADIUS = 40.0
 PREVIEW_NEIGHBORS = 3
+
+
+# ---------------------------------------------------------------------------
+# Match cards (2026-10-29): after a post, up to MATCH_LIMIT people whose post connects to it
+# (GET /api/matches). Cosines are the 448-dim centred ones, never the 似てる度 percent. PROVISIONAL:
+# measured on 32 short sentences (10/27: at 0.40 the complementary pairs let 1 wrong pair of about
+# 270 through) and on 21 real posts (10/28: 0 wrong at 0.40). Real posts are longer and messier,
+# so these lean towards showing fewer lines.
+# ---------------------------------------------------------------------------
+MATCH_LIMIT = 3
+# need/have, want/have and the like: the two posts complete each other, so the bar is lower.
+MATCH_COSINE_COMPLEMENT = 0.40
+# want/want, have/have, need/want and "close in words only": the same side of the table,
+# which also scores high across topics (need x need did even at 0.365 on average), so higher.
+MATCH_COSINE_SAME = 0.45
+# How many nearest posts are looked at before the filters.
+MATCH_CANDIDATES = 15
+
+# ---------------------------------------------------------------------------
+# Match notices (2026-10-29): a new post P (author A) that connects to an older post Q (author B)
+# tells B ('match' notification, at most MATCH_LIMIT per new post). No per-day limit (the founder's
+# decision): only "one row per P and B". The push goes out at once, one per row, like any other
+# notification (the founder's decision, 10/29 evening: a 5-minute bundle needed a timer that is lost
+# while Cloud Run sleeps, so a push could be late or never come).
+# ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ import { heatObject } from '../components/heatobject.js';
 import { REDUCED_MOTION } from '../map/decor.js';
 import { ripple } from '../map/index.js';
 import { availablePrompts, deadlineRange, extrasPayload, parseCapacity, promptPlaceholder } from '../recruit-rules.js';
-import { openOnMap, showNearbyPosts, showTrial } from './map.js';
+import { openOnMap, showMatchCards, showNearbyPosts, showTrial, startMatchFetch, openLinkedPost } from './map.js';
 import { firstPostLanding } from '../push-ask.js';
 import { browserStorage } from '../talk.js';
 import { takePendingPost } from '../return-post.js';
@@ -61,7 +61,7 @@ let touched = false;     // the heat slider has been moved (a new post cannot go
 let promptTicked = null; // the tag a chosen prompt ticked at ③, until the person touches it (compose-rules)
 let heat = null;         // the HeatObject above the slider
 let selectedPrompt = null;   // "weekly", an extra prompt's key, or null
-let promptPosts = [];        // my posts, to hide the extra prompts already used
+let promptPosts = [];        // my posts (kept for the draft; no longer hides used prompts)
 let postBlocked = false;     // communities are on and I am in none: there is no map to post to
 let shareChosen = new Set(); // ほかのコミュニティにも出す: the communities ticked (not those that have the post already)
 let step = 1;                // ① words, ② how serious, ③ tags and other communities
@@ -279,7 +279,7 @@ function paintPrompt(weeklyShown, extrasShown) {
   syncPrompt();
 }
 
-/** The three standing prompts, minus the ones this person has already posted with. */
+/** The standing prompts: all four every time (using one does not hide it). */
 function paintExtraPrompts(show) {
   const items = show ? availablePrompts(config().extra_prompts, promptPosts, extrasOn()) : [];
   const kept = [...items, ...starters()];
@@ -823,8 +823,13 @@ async function landOnMap(result, thenOpen = null) {
   // The first post is followed by the posts nearest to it (which opens `thenOpen`, if any, after it),
   // and then by the ask to take notifications (push-ask.js).
   if (firstPost) firstPostLanding();
+  // Which posts may connect to this one is asked for now, so the answer is ready when the landing is over
+  // (map.js: showMatchCards; anything but cards brings back what was shown before).
+  const pending = startMatchFetch(result.id);
   await openOnMap(result.id, { thenOpen,
-    afterLand: firstPost ? () => showNearbyPosts(result, { thenOpen }) : null });
+    afterLand: firstPost
+      ? () => showNearbyPosts(result, { thenOpen, pending })
+      : async () => { if (!(await showMatchCards(result, { thenOpen, pending }))) await openLinkedPost(thenOpen || result.id); } });
   ripple(result.x, result.y, { big: true });
 }
 

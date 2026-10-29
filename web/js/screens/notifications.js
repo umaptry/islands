@@ -46,13 +46,13 @@ let dmNoticeSeen = '';     // the DM-message rows known, so a new one re-reads t
 
 const TONES = { like: 'like', help: 'help', join: 'join', comment: 'comment', reply: 'comment',
   connection: 'join', similar: 'help', island: 'join', quiet_post: 'help',
-  talk_wish: 'join', talk_match: 'join', dm: 'comment' };
+  talk_wish: 'join', talk_match: 'join', dm: 'comment', match: 'join' };
 const BAND_ICONS = { like: '♥', help: '✋', join: '➕', comment: '💬', reply: '💬',
   connection: '➕', similar: '✋', island: '📍', quiet_post: '✋',
-  talk_wish: '💬', talk_match: '💬', dm: '💬' };
+  talk_wish: '💬', talk_match: '💬', dm: '💬', match: '🔗' };
 const ICONS = { like: 'heart', help: 'help', join: 'hand', comment: 'message', reply: 'message',
   connection: 'hand', similar: 'user', island: 'pin', quiet_post: 'user',
-  talk_wish: 'user', talk_match: 'message', dm: 'message' };
+  talk_wish: 'user', talk_match: 'message', dm: 'message', match: 'link' };
 let matchSeen = null;      // the 「お互いに」 rows known, so the buttons re-read when a new one arrives
 
 /**

@@ -97,6 +97,18 @@ export function joinRefusal(message) {
   return null;
 }
 
+/** The tag a post asks for help with. */
+export const HELP_TAG = '助けてほしい';
+
+/** Whether a post shows 手伝えるかも: only on a 「助けてほしい」 post, or where the viewer already pressed it
+ * (so it can be taken back), or on their own post once somebody has. `reacted`: the viewer pressed it. */
+export function showHelp(post, meId, { reacted = false } = {}) {
+  if (!post) return false;
+  if (Array.isArray(post.tags) && post.tags.includes(HELP_TAG)) return true;
+  if (reacted) return true;
+  return Boolean(meId) && post.author_id === meId && (post.help_count || 0) >= 1;
+}
+
 /** Extra prompt keys the person has already posted with. */
 export function usedPromptKeys(posts) {
   return new Set((posts || []).map((post) => post?.prompt).filter(Boolean));
@@ -116,12 +128,11 @@ export function promptPlaceholder({ selected, weekly, extraPrompts }) {
  * what a person likes or wants to try, so it does not ask for 「ラーメン食べてるなう」. The limit is on the counter. */
 export const BODY_PLACEHOLDER = '好きなこと、やってみたいことは？';
 
-/** The extra prompts still on offer: none when the feature is off, and a key
- * disappears once its owner has posted with it. */
+/** The extra prompts on offer: all of them every time (using one does not hide it), none when the feature
+ * is off. `posts` is no longer read. */
 export function availablePrompts(extraPrompts, posts, enabled) {
   if (!enabled) return [];
-  const used = usedPromptKeys(posts);
-  return (extraPrompts || []).filter((entry) => entry && !used.has(entry.key));
+  return (extraPrompts || []).filter(Boolean);
 }
 
 /** The new fields of a create / edit request. Nothing at all when the feature is

@@ -9,6 +9,7 @@ import { hasReacted, state, subscribe } from '../state.js';
 import { el, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { dragBackdrop, shouldDismissSwipe, viewerActions } from '../image-viewer-rules.js';
+import { showHelp } from '../recruit-rules.js';
 
 const HISTORY_KEY = 'islandsImageViewer';
 let active = null;
@@ -41,7 +42,10 @@ export function openImageViewer({ url, post, options = {}, opener = null }) {
   // --- reaction bar -----------------------------------------------------
   const buttons = new Map();
   const bar = el('div', { className: 'image-viewer-bar' });
-  viewerActions({ hasComments: Boolean(options.onComments) }).forEach((action) => {
+  viewerActions({
+    hasComments: Boolean(options.onComments),
+    showHelp: showHelp(post, state.account?.id, { reacted: hasReacted(post.id, 'help') }),
+  }).forEach((action) => {
     const body = [
       el('span', { className: 'post-action-icon' }, icon(action.icon, action.kind === 'help' ? 18 : 20)),
       action.kind === 'help' ? el('span', { className: 'post-action-label', text: action.label }) : null,

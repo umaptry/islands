@@ -22,8 +22,9 @@ import {
 import { detectLandmasses, membership } from './landmass.js';
 import { cameraAt, viewHolding } from './camera-path.js';
 import { clearTownSpot, landmarkSlots } from './spots.js';
-import { drawKin, drawLinks, drawPlanes, islandFinder, waterBetween } from './lines.js';
+import { drawKin, drawLinks, drawMatchBeams, drawPlanes, islandFinder, waterBetween } from './lines.js';
 import { kinLines } from './kin.js';
+import { beamProgress, beamStyle } from '../match-rules.js';
 import { sparkleLevel, sparkleSpots } from './sparkles.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
@@ -1247,6 +1248,7 @@ function renderMap(time) {
   // Dotted lines to people like you: yours alone, only close up (DETAIL_AT),
   // and not while the map is showing who joined a post.
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
+  if (matchBeams) paintMatchBeams(lineView);
 
   // Settlements and their landmarks, back to front.
   places.sort((a, b) => a.foot - b.foot).forEach((place) => {
@@ -1892,6 +1894,51 @@ export function playReveal(post, { then } = {}) {
     lift: 0.4,
     then: () => { if (reveal) reveal.began = performance.now(); },
   });
+}
+
+// ---------------------------------------------------------------- match beams
+
+// Lines from a new post to the posts its 「つながりそうな投稿」 cards show. null when there are none;
+// screens/map.js starts them, moves the bold one with the card in view, and clears them.
+let matchBeams = null;
+
+/** `from`: the new post {x, y}; `targets`: [{x, y, key}] in card order; `delay`: ms before the first starts
+ * (the camera is still on its way). The first card's line is the bold one. */
+export function playMatchBeams(from, targets, { delay = 0 } = {}) {
+  if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y) || !targets?.length) {
+    matchBeams = null;
+    return;
+  }
+  matchBeams = {
+    from: { x: from.x, y: from.y },
+    targets: targets.map((target) => ({ x: target.x, y: target.y, key: target.key })),
+    startedAt: performance.now() + delay, focus: 0,
+  };
+}
+
+/** The bold line is the one for card `index`; -1 makes them all thin and pale (the cards are closed). */
+export function focusMatchBeam(index) {
+  if (matchBeams) matchBeams.focus = index;
+}
+
+export function clearMatchBeams() {
+  matchBeams = null;
+}
+
+function paintMatchBeams(lineView) {
+  const beams = matchBeams;
+  const elapsed = performance.now() - beams.startedAt;
+  if (elapsed < 0) return;
+  ctx.save();
+  try {
+    drawMatchBeams(ctx, lineView, beams.from, beams.targets.map((target, index) => ({
+      ...target, t: beamProgress(elapsed, index, { reduced: REDUCED_MOTION }), ...beamStyle(index, beams.focus),
+    })));
+  } catch {
+    matchBeams = null;   // a line that cannot be drawn must not stop the map
+  } finally {
+    ctx.restore();
+  }
 }
 
 /** A new post is still being brought onto the map (push-ask.js waits for it). */

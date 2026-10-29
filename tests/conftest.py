@@ -28,6 +28,8 @@ os.environ.pop("GEMINI_API_KEY", None)
 os.environ["ISLANDS_AUTO_TRACK"] = "0"
 # Same for Web Push: tests call dispatch_pushes() and never reach a push service.
 os.environ["ISLANDS_AUTO_PUSH"] = "0"
+# The match notice (a thread started by create_post) is switched on by the tests that look at it.
+os.environ["ISLANDS_AUTO_MATCH_NOTICE"] = "0"
 
 pytest.importorskip("fastapi")
 

@@ -23,7 +23,7 @@ import { clearDigest, loadDigest, paintMarks, setupMeet } from './meet.js';
 import { refreshExtras, hideTrialHint, setupMapExtras, showTrialHint } from './map-extras.js';
 import { searchClosesOnTouch, trialView } from './map-extras-logic.js';
 import {
-  abortReveal, fitCamera, focusOn, initMap, onCameraSettled, participantView, playReveal,
+  abortReveal, clearMatchBeams, fitCamera, focusMatchBeam, focusOn, initMap, onCameraSettled, participantView, playMatchBeams, playReveal,
   resize, ripple, setFreshPosts, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
 } from '../map/index.js';
 import { noteLinks } from '../map/lines.js';
@@ -40,6 +40,9 @@ import {
 } from '../community-rules.js';
 import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
 import { nearestPosts } from '../nearby-rules.js';
+import {
+  MATCH_FETCH_MS, cardPost, matchView, slideIndex, usableMatches,
+} from '../match-rules.js';
 import { deleteOwnPost } from '../share.js';
 import { askAfterFirstPost } from '../push-ask.js';
 
@@ -291,8 +294,12 @@ async function nearbyCandidates() {
 
 /** 「あなたの近くの投稿」: right after a first post, up to three people who stand nearest to it. `thenOpen`
  * (the post an invite link led to) opens once the card is closed. */
-export async function showNearbyPosts(post, { thenOpen = null } = {}) {
-  await new Promise((resolve) => setTimeout(resolve, NEARBY_WAIT_MS));
+export async function showNearbyPosts(post, { thenOpen = null, pending = null } = {}) {
+  const began = Date.now();
+  // The cards of posts that may connect come first; when there are none (or anything goes wrong) the
+  // nearby posts come as they always did.
+  if (await showMatchCards(post, { thenOpen, first: true, pending })) return;
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, NEARBY_WAIT_MS - (Date.now() - began))));
   const near = nearestPosts(await nearbyCandidates(), post, { meId: state.account?.id, gone: state.removed });
   if (activeScreen() !== 'map') return;
   let picked = false;
@@ -328,6 +335,133 @@ export async function showNearbyPosts(post, { thenOpen = null } = {}) {
   );
 }
 
+// ---------------------------------------------------------------- match cards (after a post)
+
+// One switch for the whole thing: false and every post lands as it did before (the server has its own,
+// ISLANDS_MATCH_CARDS).
+const MATCH_CARDS_ON = true;
+
+/** Ask the server which posts may connect to a new one. Start it the moment the post exists: it is done by
+ * the time the landing show is over. Resolves to the rows; never rejects (a failure is an empty list). null
+ * when the cards are off. */
+export function startMatchFetch(postId) {
+  if (!MATCH_CARDS_ON || !postId || !state.account) return null;
+  const startedAt = Date.now();
+  const promise = api.get(`/api/matches?post=${encodeURIComponent(postId)}`)
+    .then((result) => (result?.post === postId ? usableMatches(result.matches) : []))
+    .catch(() => []);
+  promise.startedAt = startedAt;
+  return promise;
+}
+
+/** The rows of a startMatchFetch, or [] when they take longer than MATCH_FETCH_MS since it started. */
+async function waitForMatches(pending) {
+  const left = Math.max(300, MATCH_FETCH_MS - (Date.now() - (pending.startedAt || Date.now())));
+  let timer = 0;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve([]), left); });
+  try {
+    return await Promise.race([pending, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 「あなたの話とつながりそうな人」: after a post, the posts that may connect to it as cards to swipe, with
+ * dotted lines from the new post on the map. true when the cards came up; false (nothing changed) when there
+ * is nobody, it took too long, or anything failed - the caller then does what it always did.
+ * `first`: the first post, which asks about notifications once the card is closed (push-ask.js).
+ * `thenOpen`: a post to open once the cards are closed. `pending`: startMatchFetch's promise. */
+export async function showMatchCards(post, { thenOpen = null, first = false, pending = null } = {}) {
+  if (!MATCH_CARDS_ON || !pending) return false;
+  let picked = false;
+  try {
+    const rows = await waitForMatches(pending);
+    if (!rows.length || activeScreen() !== 'map') return false;
+    if (!Number.isFinite(Number(post.x)) || !Number.isFinite(Number(post.y))) return false;
+    const from = { x: Number(post.x), y: Number(post.y) };
+    const leave = () => { picked = true; closeSheet(); };
+    const track = el('div', { className: 'match-track', attrs: { id: 'matchTrack' } });
+    const slides = rows.map((row, index) => {
+      const shown = cardPost(row, state.postsById.get(row.id));
+      const card = postCard(shown, {
+        onReact: (kind) => react(row.id, kind),
+        onOpenAuthor: (authorId) => {
+          restorePost = row.id;
+          leave();
+          navigate(`#/u/${authorId}`);
+        },
+        onComments: () => { leave(); openLinkedPost(row.id); },
+        onReport: () => report(shown),
+      });
+      return el('section', {
+        className: 'match-slide',
+        attrs: { 'data-post-id': row.id, 'aria-label': `${index + 1} / ${rows.length}` },
+      }, el('p', { className: 'match-why', text: row.reason || 'この人の話と、つながりそうです' }), card);
+    });
+    track.append(...slides);
+    const count = el('span', { className: 'match-count num', attrs: { id: 'matchCount', 'aria-live': 'polite' }, text: `1 / ${rows.length}` });
+    const dots = el('div', { className: 'match-dots', attrs: { 'aria-hidden': 'true' } },
+      rows.map((row, index) => el('i', { className: index ? '' : 'on' })));
+
+    const sheet = $('sheet');
+    const body = openSheet({
+      fit: true,
+      onClose: () => {
+        sheet.classList.remove('match-mode');
+        focusMatchBeam(-1);   // the lines stay, thin and pale
+        state.selected = null;
+        if (!picked && thenOpen) setTimeout(() => { if (!sheetOpen()) openLinkedPost(thenOpen); }, 0);
+      },
+    });
+    sheet.classList.add('match-mode');
+    if (first) askAfterFirstPost();
+    clear($('sheetFoot'));
+    clear(body).append(
+      el('div', { className: 'match-head' }, el('h3', { className: 'stack-title', text: 'あなたの話とつながりそうな人' }), count),
+      dots,
+      track,
+      el('button', {
+        className: 'btn btn-block nearby-close', attrs: { type: 'button', id: 'matchClose' }, text: '地図を見る',
+        on: { click: () => closeSheet() },
+      }),
+    );
+
+    // Swiping only turns the page: the number, the dots and the bold line follow the card in view.
+    let current = 0;
+    let waiting = 0;
+    const settle = () => {
+      waiting = 0;
+      const stride = slides.length > 1 ? slides[1].offsetLeft - slides[0].offsetLeft : track.clientWidth;
+      const index = slideIndex(track.scrollLeft, stride, slides.length);
+      if (index === current) return;
+      current = index;
+      count.textContent = `${index + 1} / ${slides.length}`;
+      [...dots.children].forEach((dot, at) => dot.classList.toggle('on', at === index));
+      focusMatchBeam(index);
+    };
+    track.addEventListener('scroll', () => { if (!waiting) waiting = setTimeout(settle, 100); }, { passive: true });
+
+    // The camera takes in the new post and everyone the cards show, above the sheet; then the lines grow.
+    const fit = state.camera.fit || state.camera.scale;
+    const view = matchView({
+      from, targets: rows.map((row) => ({ x: Number(row.x), y: Number(row.y) })),
+      width: window.innerWidth, height: window.innerHeight, fit, desktop: desktopSheet(), covered: sheet.offsetHeight,
+    });
+    zoomTo(view.x, view.y, view.scale, { x: view.anchorX, y: view.anchorY });
+    playMatchBeams(from, rows.map((row) => ({ x: Number(row.x), y: Number(row.y), key: `${post.id}|${row.id}` })),
+      { delay: 450 });
+    return true;
+  } catch {
+    clearMatchBeams();
+    if ($('sheet').classList.contains('match-mode')) {
+      picked = true;   // the caller shows its own card now: nothing of `thenOpen` here
+      $('sheet').classList.remove('match-mode');
+      closeSheet();
+    }
+    return false;
+  }
+}
+
 /** Open a post wherever it is on the map and bring the camera to it. */
 export async function openLinkedPost(postId) {
   await openPost(postId);
@@ -360,6 +494,7 @@ function justPosted(postId) {
 
 function playNewPost(post, thenOpen = null, afterLand = null) {
   introduced.add(post.id);
+  clearMatchBeams();
   if (sheetOpen()) closeSheet();
   setParticipantView(null);
   paintParticipantBar();
@@ -829,6 +964,7 @@ export function openStack(posts) {
 /** Open a post's sheet. `expand` opens the sheet at full height; `back`, the
  * list of a spot's posts it was picked from (openStack). */
 export async function openPost(postId, { expand = false, back = null } = {}) {
+  clearMatchBeams();
   if (sheetOpen()) closeSheet();
   const generation = ++selectionGeneration;
   let post = state.postsById.get(postId);
@@ -1075,6 +1211,8 @@ function setupSheetGesture() {
 
   sheet.addEventListener('touchmove', (event) => {
     if (desktopSheet()) return;
+    // The cards to swipe sideways (showMatchCards) stay as they are: no growing to full height.
+    if (sheet.classList.contains('match-mode')) return;
     const delta = startY - event.touches[0].clientY;
     if (!sheetExpanded() && delta > 24) expandSheet(true);
     // Only collapse from the top of the thread. Otherwise scrolling back up
@@ -1086,6 +1224,7 @@ function setupSheetGesture() {
 
   scroll.addEventListener('wheel', (event) => {
     if (desktopSheet()) return;
+    if (sheet.classList.contains('match-mode')) return;
     if (!sheetOpen()) return;
     if (!sheetExpanded() && event.deltaY > 8) expandSheet(true);
     else if (sheetExpanded() && event.deltaY < -8 && scroll.scrollTop <= 0) expandSheet(false);
@@ -1222,6 +1361,7 @@ export function setupMapScreen() {
       setAmbient(false);
       stopMap();   // no painting while another screen is in front
       abortReveal();
+      clearMatchBeams();
       landing = null;
       if (participantView()) {
         setParticipantView(null);

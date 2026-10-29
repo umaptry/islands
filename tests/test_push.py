@@ -555,3 +555,119 @@ def test_quiet_posts_reach_people_nearby_once(fresh_client, people):
     # here the rows carry today's time while `later` is a day ahead.)
     again = application.notify_quiet_posts(now=later)
     assert not {row["post_id"] for row in again} & {row["post_id"] for row in rows}
+
+
+
+# --------------------------------------------------------------------------
+# 2026-10-29: つながりの通知 ('match'). One line each in the app, and one push each, at once
+# --------------------------------------------------------------------------
+
+MATCH_REASON = "あなたの経験が役に立ちそうな困りごとが投稿されました"
+
+
+_match_clock = [0]
+
+
+def write_match(recipient, actor, post, reason=MATCH_REASON, kind="need_have"):
+    store = application.state["store"]
+    [row] = store.insert_notifications([{
+        "recipient_id": recipient.id, "actor_id": actor.id, "post_id": post["id"], "type": "match",
+        "payload": {"kind": kind, "other_post": "q", "reason": reason},
+    }])
+    # The clock ticks coarsely: give every row its own time so "the newest" is well defined.
+    _match_clock[0] += 1
+    store._notifications[row["id"]]["created_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=60) + timedelta(seconds=_match_clock[0] % 50)).isoformat()
+    return row
+
+
+def sent_messages(browser, service):
+    return [browser.decrypt(sent["body"]) for sent in service.sent if sent["url"] == browser.endpoint]
+
+
+@pytest.fixture
+def match_world(fresh_client, people):
+    class World:
+        pass
+
+    w = World()
+    w.client = fresh_client
+    w.reader = people("m-reader@example.test", "よむ人")
+    w.first = people("m-first@example.test", "いちばん")
+    w.second = people("m-second@example.test", "にばん")
+    w.third = people("m-third@example.test", "さんばん")
+    w.browser = subscribe(fresh_client, w.reader)
+    w.posts = {name: getattr(w, name).post(CAMPING_A, prompt="help") for name in ("first", "second", "third")}
+    return w
+
+
+def test_a_match_push_names_the_writer_and_the_reason_but_not_the_post(match_world):
+    w = match_world
+    write_match(w.reader, w.first, w.posts["first"])
+    service, tally = dispatch()
+    assert tally == {"sent": 1}
+    [message] = sent_messages(w.browser, service)
+    assert message["title"] == "いちばんさん"
+    assert message["body"] == MATCH_REASON
+    assert message["url"] == f"/#/map?post={w.posts['first']['id']}"
+    assert message["kind"] == "reaction"
+    assert CAMPING_A not in json.dumps(message, ensure_ascii=False)
+    assert message["tag"].startswith("match-")
+
+
+def test_a_name_that_already_ends_in_san_is_not_doubled(fresh_client, people):
+    reader, writer = people("san-r@example.test", "よむ人"), people("san-w@example.test", "たなかさん")
+    browser = subscribe(fresh_client, reader)
+    write_match(reader, writer, writer.post(CAMPING_A, prompt="help"))
+    service, _ = dispatch()
+    assert sent_messages(browser, service)[0]["title"] == "たなかさん"
+
+
+def test_a_match_right_after_another_is_pushed_at_once(match_world):
+    w = match_world
+    write_match(w.reader, w.first, w.posts["first"])
+    service, _ = dispatch()
+    assert len(service.sent) == 1
+    write_match(w.reader, w.second, w.posts["second"], reason="あなたの困りごとに、経験のある人が投稿しました")
+    service, tally = dispatch()                                        # no waiting, no bundling
+    assert tally == {"sent": 1}
+    [message] = sent_messages(w.browser, service)
+    assert message["title"] == "にばんさん" and message["body"] == "あなたの困りごとに、経験のある人が投稿しました"
+    again, tally = dispatch()
+    assert again.sent == [] and not tally
+
+
+def test_matches_that_arrive_together_each_get_their_own_push(match_world):
+    w = match_world
+    for name in ("first", "second", "third"):
+        write_match(w.reader, getattr(w, name), w.posts[name])
+    service, tally = dispatch()
+    messages = sent_messages(w.browser, service)
+    assert tally == {"sent": 3}
+    assert sorted(message["title"] for message in messages) == ["いちばんさん", "さんばんさん", "にばんさん"]
+    assert len({message["tag"] for message in messages}) == 3          # none replaces another on the device
+    assert len(w.reader.inbox(["match"])) == 3
+
+
+def test_matches_follow_the_reaction_push_switch(match_world):
+    w = match_world
+    response = w.client.put("/api/notification-settings", headers=w.reader.headers, json={
+        "settings": [{"category": "reaction", "push": False, "in_app": True}]})
+    assert response.status_code == 200, response.text
+    write_match(w.reader, w.first, w.posts["first"])
+    service, tally = dispatch()
+    assert service.sent == []
+    assert w.reader.unread(["match"])                                  # still in the list
+    w.client.put("/api/notification-settings", headers=w.reader.headers, json={
+        "settings": [{"category": "reaction", "push": True, "in_app": True}]})
+    write_match(w.reader, w.second, w.posts["second"])
+    service, _ = dispatch()
+    assert len(sent_messages(w.browser, service)) == 1
+
+
+def test_a_match_that_waited_too_long_is_not_pushed(match_world):
+    w = match_world
+    write_match(w.reader, w.first, w.posts["first"])
+    service, _ = dispatch(now=datetime.now(timezone.utc) + timedelta(minutes=PUSH_FRESH_MINUTES + 1))
+    assert service.sent == []
+    assert w.reader.unread(["match"])                                  # the app list keeps it

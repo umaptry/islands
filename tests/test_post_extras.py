@@ -56,7 +56,7 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     data = client.get("/api/config").json()
     assert [{"key": item["key"], "text": item["text"]} for item in data["extra_prompts"]] == [
         {"key": "past", "text": "昔がんばってたこと"},
-        {"key": "now", "text": "最近はまってること"},
+        {"key": "now", "text": "最近やってること"},
         {"key": "future", "text": "今度やってみたいこと"},
         {"key": "help", "text": "困ってること"},
     ]
@@ -68,11 +68,11 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):
     data = client.get("/api/config").json()
     assert [item["text"] for item in data["post_starters"]] == [
-        "昔がんばってたこと", "最近はまってること", "今度やってみたいこと", "困ってること"]
+        "昔がんばってたこと", "最近やってること", "今度やってみたいこと", "困ってること"]
     # the chip names the prompt; the box is never filled with it
     assert [item["text"] for item in data["post_starters"]] == [item["text"] for item in data["extra_prompts"]]
     assert next(item for item in data["extra_prompts"] if item["key"] == "now")["example"] == (
-        "仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。")
+        "仕事帰りにレイトショーを観ています。洋画が多めです。おすすめがあれば教えてください。")
     assert [item["key"] for item in data["post_starters"]] == [item["key"] for item in data["extra_prompts"]]
 
 

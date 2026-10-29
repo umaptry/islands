@@ -18,3 +18,6 @@ artifacts/map_views.json
 
 # エンジン切り替えデモの生成物。実ユーザーの投稿文を焼き込むので配布物には入れない。
 demo/
+
+# 手元専用のブラウザテスト設定
+playwright.local.config.mjs
