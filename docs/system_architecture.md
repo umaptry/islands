@@ -17,7 +17,7 @@
 | 最終成功リビジョン | `islands-00006-mej` | 同ログ。最新のCloud Run実リソース再取得は未実施 |
 | コミット | `bdfe205991a20ca55c660a3da07aaf3a326e1f30` | デプロイログと改修前ローカルHEADが一致 |
 | Artifact Registry | `asia-northeast1-docker.pkg.dev/gen-lang-client-0999045451/cloud-run-source-deploy/islands` | CIのimage組み立て式と成功ログ |
-| コンテナ制限 | 2GiB / 1CPU / 最大4インスタンス / 同時12 / timeout120秒 / CPU boost | CIのdeploy引数。現在の実リソース差分は未確認 |
+| コンテナ制限 | 2GiB / 1CPU / 最大8インスタンス / 同時40 / timeout120秒 / CPU boost（2026-10-30 に 4・12 から上げた。開いた瞬間に画面のファイル約80本を一度に取りに行き、空きがなく 429 で断られたため。相方と合意済み） | CIのdeploy引数。現在の実リソース差分は未確認 |
 | GitHub → GCP認証 | Workload Identity Federation → deployサービスアカウント | CIの `id-token: write` と `google-github-actions/auth`。WIF識別子・IAM付与の現在値は未確認 |
 | Supabase | `https://soznrzkhvktzxlslpphm.supabase.co` | 公開config。サービスキーは非公開 |
 | DB接続 / 投稿 | `store=supabase`, `store_ok=true`, 投稿6件 | 同日公開health。時点値であり件数保証ではない |

@@ -177,14 +177,15 @@ def test_the_bars_are_applied(fresh_client, people):
     me, you = people("m@example.test", "m"), people("y@example.test", "y")
     mine_ = me.post(CAMPING_A, prompt="help")
     you.post(BOOKKEEPING, prompt="past")               # far away on any scale
-    assert fresh_client.get(f"/api/matches?post={mine_['id']}", headers=me.headers).json()["matches"] == []
+    body = fresh_client.get(f"/api/matches?post={mine_['id']}", headers=me.headers).json()
+    assert body["matches"] == [] and "unknown" not in body            # a real "nobody yet"
 
 
 def test_the_switch_off_answers_empty(camp, monkeypatch):
     monkeypatch.setenv("ISLANDS_MATCH_CARDS", "0")
     response = get_matches(camp.me, camp.mine)
     assert response.status_code == 200
-    assert response.json() == {"post": camp.mine["id"], "matches": []}
+    assert response.json() == {"post": camp.mine["id"], "matches": [], "unknown": True}
     assert get_matches(camp.you, camp.mine).status_code == 404       # the author check still holds
 
 
@@ -195,6 +196,7 @@ def test_a_failing_store_answers_empty_and_200(camp, monkeypatch):
     monkeypatch.setattr(application.state["store"], "nearest_posts", broken)
     response = get_matches(camp.me, camp.mine)
     assert response.status_code == 200 and response.json()["matches"] == []
+    assert response.json()["unknown"] is True                         # not "nobody": the screen stays quiet
 
 
 def test_a_failing_name_lookup_still_answers_200(camp, monkeypatch):
