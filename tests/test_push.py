@@ -559,11 +559,10 @@ def test_quiet_posts_reach_people_nearby_once(fresh_client, people):
 
 
 # --------------------------------------------------------------------------
-# 2026-10-29: つながりの通知 ('match'). One line each in the app; the push waits and bundles
+# 2026-10-29: つながりの通知 ('match'). One line each in the app, and one push each, at once
 # --------------------------------------------------------------------------
 
 MATCH_REASON = "あなたの経験が役に立ちそうな困りごとが投稿されました"
-WINDOW = timedelta(minutes=application.MATCH_PUSH_WINDOW_MINUTES)
 
 
 _match_clock = [0]
@@ -624,88 +623,30 @@ def test_a_name_that_already_ends_in_san_is_not_doubled(fresh_client, people):
     assert sent_messages(browser, service)[0]["title"] == "たなかさん"
 
 
-def test_a_match_inside_the_window_waits_and_goes_out_after_it(match_world):
+def test_a_match_right_after_another_is_pushed_at_once(match_world):
     w = match_world
     write_match(w.reader, w.first, w.posts["first"])
     service, _ = dispatch()
     assert len(service.sent) == 1
-    held = write_match(w.reader, w.second, w.posts["second"], reason="あなたの困りごとに、経験のある人が投稿しました")
-    service, tally = dispatch()
-    assert service.sent == [] and tally["held_match"] == 1
-    assert w.reader.unread(["match"])                                  # the app list has it already
-    assert held["id"] in application.state["store"]._push_pending     # not marked sent
-    later = datetime.now(timezone.utc) + WINDOW + timedelta(minutes=1)
-    service, tally = dispatch(now=later)
+    write_match(w.reader, w.second, w.posts["second"], reason="あなたの困りごとに、経験のある人が投稿しました")
+    service, tally = dispatch()                                        # no waiting, no bundling
+    assert tally == {"sent": 1}
     [message] = sent_messages(w.browser, service)
     assert message["title"] == "にばんさん" and message["body"] == "あなたの困りごとに、経験のある人が投稿しました"
-    again, tally = dispatch(now=later)
+    again, tally = dispatch()
     assert again.sent == [] and not tally
 
 
-def test_the_window_is_five_minutes(match_world):
-    assert application.MATCH_PUSH_WINDOW_MINUTES == 5
-    w = match_world
-    write_match(w.reader, w.first, w.posts["first"])
-    dispatch()
-    write_match(w.reader, w.second, w.posts["second"])
-    inside = datetime.now(timezone.utc) + timedelta(minutes=4)
-    service, tally = dispatch(now=inside)
-    assert service.sent == [] and tally["held_match"] == 1
-
-
-def test_several_waiting_matches_go_out_as_one_push(match_world):
-    w = match_world
-    write_match(w.reader, w.first, w.posts["first"])
-    dispatch()
-    write_match(w.reader, w.second, w.posts["second"])
-    dispatch()
-    write_match(w.reader, w.third, w.posts["third"])
-    dispatch()
-    service, tally = dispatch(now=datetime.now(timezone.utc) + WINDOW + timedelta(minutes=1))
-    [message] = sent_messages(w.browser, service)
-    assert message["title"] == "新しいつながり"
-    assert message["body"] == "さんばんさん ほか1人の投稿が、あなたの投稿とつながりました"
-    assert message["url"] == "/#/notifications" and message["kind"] == "reaction"
-    assert tally == {"sent": 1}
-    assert len(w.reader.inbox(["match"])) == 3                  # the app keeps one line each
-
-
-def test_matches_that_arrive_together_are_bundled_at_once(match_world):
+def test_matches_that_arrive_together_each_get_their_own_push(match_world):
     w = match_world
     for name in ("first", "second", "third"):
         write_match(w.reader, getattr(w, name), w.posts[name])
-    service, _ = dispatch()
-    [message] = sent_messages(w.browser, service)
-    assert message["title"] == "新しいつながり"
-    assert message["body"] == "さんばんさん ほか2人の投稿が、あなたの投稿とつながりました"
-
-
-def test_the_same_writer_twice_is_not_counted_as_more_people(match_world):
-    w = match_world
-    other_post = w.first.post(CAMPING_C, prompt="help")
-    write_match(w.reader, w.first, w.posts["first"])
-    write_match(w.reader, w.first, other_post)
-    service, _ = dispatch()
-    [message] = sent_messages(w.browser, service)
-    assert message["title"] == "新しいつながり"
-    assert message["body"] == "いちばんさんの投稿が、あなたの投稿とつながりました"
-
-
-def test_held_matches_are_per_person_and_do_not_hold_other_pushes(match_world, people):
-    w = match_world
-    other = people("m-other@example.test", "べつの人")
-    other_browser = subscribe(w.client, other, Browser("https://fcm.googleapis.com/fcm/send/other"))
-    write_match(w.reader, w.first, w.posts["first"])
-    dispatch()
-    write_match(w.reader, w.second, w.posts["second"])
-    write_match(other, w.second, w.posts["second"])                    # nothing was sent to `other` yet
-    mine = w.reader.post(CAMPING_B, prompt="past")
-    w.third.react(mine["id"], "like")                                  # a like is not held back
     service, tally = dispatch()
-    assert tally["held_match"] == 1
-    assert [message["body"] for message in sent_messages(w.browser, service)] == ["あなたの投稿に「いいね」しました。"]
-    [message] = sent_messages(other_browser, service)
-    assert message["title"] == "にばんさん"
+    messages = sent_messages(w.browser, service)
+    assert tally == {"sent": 3}
+    assert sorted(message["title"] for message in messages) == ["いちばんさん", "さんばんさん", "にばんさん"]
+    assert len({message["tag"] for message in messages}) == 3          # none replaces another on the device
+    assert len(w.reader.inbox(["match"])) == 3
 
 
 def test_matches_follow_the_reaction_push_switch(match_world):
@@ -715,47 +656,18 @@ def test_matches_follow_the_reaction_push_switch(match_world):
     assert response.status_code == 200, response.text
     write_match(w.reader, w.first, w.posts["first"])
     service, tally = dispatch()
-    assert service.sent == [] and "held_match" not in tally
+    assert service.sent == []
     assert w.reader.unread(["match"])                                  # still in the list
     w.client.put("/api/notification-settings", headers=w.reader.headers, json={
         "settings": [{"category": "reaction", "push": True, "in_app": True}]})
     write_match(w.reader, w.second, w.posts["second"])
-    # (the first row was taken when it was switched off, so the window counts from then)
-    service, _ = dispatch(now=datetime.now(timezone.utc) + WINDOW + timedelta(minutes=1))
+    service, _ = dispatch()
     assert len(sent_messages(w.browser, service)) == 1
 
 
-def test_a_match_that_waited_too_long_is_dropped(match_world):
+def test_a_match_that_waited_too_long_is_not_pushed(match_world):
     w = match_world
     write_match(w.reader, w.first, w.posts["first"])
-    dispatch()
-    write_match(w.reader, w.second, w.posts["second"])
-    dispatch()                                                         # held
     service, _ = dispatch(now=datetime.now(timezone.utc) + timedelta(minutes=PUSH_FRESH_MINUTES + 1))
     assert service.sent == []
-    service, _ = dispatch()
-    assert service.sent == []
-
-
-def test_no_timer_is_set_when_push_is_off():
-    assert application.schedule_push_poke(5) is False                 # ISLANDS_AUTO_PUSH=0 in the tests
-
-
-def test_the_timer_wakes_the_dispatcher_once(monkeypatch):
-    woken = []
-
-    class Instant:
-        daemon = False
-
-        def __init__(self, seconds, function):
-            self.function = function
-
-        def start(self):
-            self.function()
-
-    monkeypatch.setattr(application, "PUSH_AUTO", True)
-    monkeypatch.setattr(application, "poke_push_dispatch", lambda: woken.append(1))
-    monkeypatch.setattr(application.threading, "Timer", Instant)
-    assert application.schedule_push_poke(5) is True
-    assert woken == [1]
-    assert application._push_timer["set"] is False
+    assert w.reader.unread(["match"])                                  # the app list keeps it

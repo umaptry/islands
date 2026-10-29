@@ -1505,22 +1505,6 @@ class MemoryStore:
         rows.sort(key=lambda row: row["created_at"])
         return rows
 
-    def release_pushes(self, ids):
-        """Give claimed notifications back (pushed_at empty again): the next dispatch takes them."""
-        with self._lock:
-            for i in ids:
-                if i in self._notifications and self._pushed_at.pop(i, None) is not None:
-                    self._push_pending.append(i)
-
-    def pushed_matches(self, since, recipient_ids):
-        """[{id, recipient_id, pushed_at}] of 'match' rows taken by the dispatcher since `since`."""
-        start, wanted = _stamp(_since(since)), set(recipient_ids)
-        with self._lock:
-            return [{"id": i, "recipient_id": self._notifications[i]["recipient_id"], "pushed_at": at}
-                    for i, at in self._pushed_at.items()
-                    if i in self._notifications and self._notifications[i]["type"] == "match"
-                    and self._notifications[i]["recipient_id"] in wanted and _stamp(at) >= start]
-
     def push_subscriptions(self, account_ids):
         wanted = set(account_ids)
         with self._lock:
@@ -2688,22 +2672,6 @@ class SupabaseStore:
         )
         rows = response.json()
         rows.sort(key=lambda row: _stamp(row["created_at"]))
-        return rows
-
-    def release_pushes(self, ids):
-        """Give claimed notifications back (pushed_at empty again): the next dispatch takes them."""
-        for batch in _batches(list(ids)):
-            self._send("PATCH", NOTIFICATIONS, label="通知の取り戻し",
-                       params={"id": f"in.({','.join(batch)})"}, json={"pushed_at": None})
-
-    def pushed_matches(self, since, recipient_ids):
-        """[{id, recipient_id, pushed_at}] of 'match' rows taken by the dispatcher since `since`."""
-        rows = []
-        for batch in _batches(list(recipient_ids)):
-            rows += self._get(NOTIFICATIONS, {
-                "select": "id,recipient_id,pushed_at", "type": "eq.match",
-                "pushed_at": f"gte.{_since(since)}", "recipient_id": f"in.({','.join(batch)})",
-                "limit": "1000"}, label="通知の読み込み")
         return rows
 
     def push_subscriptions(self, account_ids):

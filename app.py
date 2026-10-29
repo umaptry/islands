@@ -93,7 +93,6 @@ from core.config import (
     CONNECTION_CACHE_SECONDS,
     MATCH_CANDIDATES,
     MATCH_LIMIT,
-    MATCH_PUSH_WINDOW_MINUTES,
     CONNECTIONS_SINCE,
     DIGEST_CONTRIBUTORS,
     ISLAND_COLORS,
@@ -1850,7 +1849,6 @@ PUSH_TEXT = {
     # 2026-10-29. Normally the row's own payload.reason is read out; this is the fallback.
     "match": "あなたの投稿とつながりそうな投稿が見つかりました。",
 }
-PUSH_MATCH_BUNDLE_TITLE = "新しいつながり"
 PUSH_GROUP_TEXT = "あなたの投稿に反応しました。"
 
 
@@ -1937,67 +1935,6 @@ def push_message(entry, hashed_tag=False):
             "kind": entry["category"], "at": entry["created_at"]}
 
 
-def match_bundle_message(entries):
-    """Several waiting 'match' entries (newest first) as ONE push: nobody's text, just how many."""
-    first = (entries[0]["actors"][0] if entries[0]["actors"] else None) or {}
-    name = f"{_plain_name(first['display_name'])}さん" if first.get("display_name") else "だれか"
-    people = {(entry["actors"][0] or {}).get("id") if entry["actors"] else None for entry in entries}
-    others = len(people) - 1
-    body = (f"{name} ほか{others}人の投稿が、あなたの投稿とつながりました" if others > 0
-            else f"{name}の投稿が、あなたの投稿とつながりました")
-    return {"title": PUSH_MATCH_BUNDLE_TITLE, "body": body, "tag": f"match-{entries[0]['id']}",
-            "url": PUSH_URL, "kind": "reaction", "at": entries[0]["created_at"]}
-
-
-def hold_match_pushes(matched, now):
-    """Keep back the match rows of everybody who was sent a match push less than
-    MATCH_PUSH_WINDOW_MINUTES ago: they stay unsent (pushed_at empty) and a later dispatch bundles
-    them. `matched`: {recipient: set of row ids}, edited in place. Returns how many rows were held."""
-    store = state["store"]
-    window = timedelta(minutes=MATCH_PUSH_WINDOW_MINUTES)
-    taken = {row_id for ids in matched.values() for row_id in ids}
-    last = {}
-    for row in store.pushed_matches(now - window, list(matched)):
-        if row["id"] in taken:
-            continue  # claimed a moment ago by this very run
-        stamp = notices.parse_time(row["pushed_at"])
-        last[row["recipient_id"]] = max(stamp, last.get(row["recipient_id"], stamp))
-    held, wait = [], None
-    for recipient in list(matched):
-        if recipient in last and now - last[recipient] < window:
-            held += matched.pop(recipient)
-            left = (last[recipient] + window - now).total_seconds()
-            wait = left if wait is None else min(wait, left)
-    if held:
-        store.release_pushes(held)
-        schedule_push_poke(wait + 1.0)
-    return len(held)
-
-
-_push_timer = {"set": False}
-
-
-def schedule_push_poke(seconds):
-    """Wake the dispatcher once more after `seconds`: held match rows would otherwise wait for
-    some other notification. One timer at a time; does nothing when push is off (tests)."""
-    if not PUSH_AUTO:
-        return False
-    with _push_lock:
-        if _push_timer["set"]:
-            return False
-        _push_timer["set"] = True
-
-    def wake():
-        with _push_lock:
-            _push_timer["set"] = False
-        poke_push_dispatch()
-
-    timer = threading.Timer(max(1.0, seconds), wake)
-    timer.daemon = True
-    timer.start()
-    return True
-
-
 # Notifications that are about one community even when they name no post.
 _COMMUNITY_NOTICE_TYPES = ("island", "quiet_post", "similar")
 
@@ -2062,15 +1999,11 @@ def dispatch_pushes(now=None, client=None):
     targets = defaultdict(list)
     for subscription in store.push_subscriptions({row["recipient_id"] for row in rows}):
         targets[subscription["account_id"]].append(subscription)
-    claimed, matched = defaultdict(set), defaultdict(set)
+    claimed = defaultdict(set)
     for row in rows:
         if targets.get(row["recipient_id"]):
-            (matched if row["type"] == "match" else claimed)[row["recipient_id"]].add(row["id"])
-    if matched:
-        held = hold_match_pushes(matched, now)
-        if held:
-            tally["held_match"] = held
-    if not claimed and not matched:
+            claimed[row["recipient_id"]].add(row["id"])
+    if not claimed:
         return tally
     keys = push_keys()
     if keys is None:
@@ -2080,19 +2013,12 @@ def dispatch_pushes(now=None, client=None):
     own_client = client is None
     client = client or httpx.Client()
     try:
-        for recipient in list(claimed) + [person for person in matched if person not in claimed]:
-            ids = claimed.get(recipient, set())
+        for recipient, ids in claimed.items():
             # The feed is grouped the way the app lists it, so the push says
             # what the list will say when it is opened.
             feed = notices.group_feed(store.list_notifications(recipient, limit=100), limit=100)
             messages = [push_message(entry, hashed_tag=members)
                         for entry in reversed(feed) if ids.intersection(entry["ids"])]
-            # Match rows go out together: one line for one, a count for several.
-            waiting = [entry for entry in feed if matched.get(recipient, set()).intersection(entry["ids"])]
-            if len(waiting) == 1:
-                messages.append(push_message(waiting[0], hashed_tag=members))
-            elif waiting:
-                messages.append(match_bundle_message(waiting))
             for subscription in targets[recipient]:
                 for message in messages:
                     outcome = webpush.send(

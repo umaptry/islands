@@ -611,8 +611,7 @@ MATCH_CANDIDATES = 15
 # ---------------------------------------------------------------------------
 # Match notices (2026-10-29): a new post P (author A) that connects to an older post Q (author B)
 # tells B ('match' notification, at most MATCH_LIMIT per new post). No per-day limit (the founder's
-# decision): only "one row per P and B". The PUSH is calmer: per recipient at most one match push per
-# window; rows arriving inside it wait (pushed_at stays empty) and the next dispatch after the window
-# sends everything waiting as one push.
+# decision): only "one row per P and B". The push goes out at once, one per row, like any other
+# notification (the founder's decision, 10/29 evening: a 5-minute bundle needed a timer that is lost
+# while Cloud Run sleeps, so a push could be late or never come).
 # ---------------------------------------------------------------------------
-MATCH_PUSH_WINDOW_MINUTES = 5
