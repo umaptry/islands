@@ -12,6 +12,6 @@ export default defineConfig({
     command: 'python -m uvicorn app:app --host 127.0.0.1 --port 7861',
     url: 'http://127.0.0.1:7861/api/health', timeout: 180000, reuseExistingServer: false,
     env: { SUPABASE_URL: '', SUPABASE_SERVICE_KEY: '', SUPABASE_ANON_KEY: '',
-      EMBEDDING_PROVIDER: 'onnx', MAP_ARTIFACTS_DIR: '', MAP_RUNTIME_CHECK: '0', KOTOBA_DISABLE_RATE_LIMIT: '1' },
+      EMBEDDING_PROVIDER: 'onnx', MAP_ARTIFACTS_DIR: '', MAP_RUNTIME_CHECK: '0', KOTOBA_DISABLE_RATE_LIMIT: '1', ISLANDS_MATCH_CARDS: '0', ISLANDS_MATCH_NOTICE: '0' },
   },
 });

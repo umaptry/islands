@@ -17,6 +17,8 @@ export const CATEGORY_OF = Object.freeze({
   quiet_post: 'island',
   // 「話してみたい」 and the DM (2026-10-24). Mirrors core/config.py exactly.
   talk_wish: 'reaction', talk_match: 'reaction', dm: 'reply',
+  // A post that may connect to one of mine (2026-10-29).
+  match: 'reaction',
 });
 
 /** The three kinds that belong to 「話してみたい」 / DM. */
@@ -30,7 +32,7 @@ export const isTalkType = (type) => TALK_TYPES.includes(type);
  * written before still list, under CATEGORY_OF above. */
 export const CATEGORIES = Object.freeze([
   { id: 'reply', title: '返信・メッセージ', note: 'あなたの投稿へのメッセージと、あなたへの返信' },
-  { id: 'reaction', title: '反応', note: 'いいね・手伝えるかも・参加（10分ぶんをまとめます）' },
+  { id: 'reaction', title: '反応', note: 'いいね・手伝えるかも・参加・つながりそうな投稿（10分ぶんをまとめます）' },
   { id: 'island', title: '島の変化', note: 'あなたの投稿がある島の変化と、新しい住人のお知らせ（島の変化は1つの島につき1日1件まで、新しい住人は1つの島につき1日3件・全部で1日5件まで）' },
 ]);
 
@@ -45,6 +47,7 @@ export const KIND_TEXT = Object.freeze({
   island: '島が変わりました。',
   // Never "nobody answered": to the reader it is only a recommendation.
   quiet_post: '近くの島に、話が合いそうな投稿があります。',
+  match: 'あなたの投稿とつながりそうな投稿が見つかりました。',
   // Templates: {label} is the button's name from /api/config, {name} the other
   // person. The same words as PUSH_TEXT, so the lock screen and the list agree.
   talk_wish: '誰かが、あなたと{label}と言っています',
@@ -179,6 +182,8 @@ export function bodyText(entry, talkLabel = '') {
   }
   if (entry.type === 'island') return payload.cause ? `${payload.cause}。` : KIND_TEXT.island;
   if (entry.type === 'quiet_post') return payload.message || KIND_TEXT.quiet_post;
+  // The reason is written for the reader by the server (payload.reason).
+  if (entry.type === 'match') return String(payload.reason || '').trim() || KIND_TEXT.match;
   if (entry.others) return GROUP_TEXT;
   return KIND_TEXT[entry.type] || GROUP_TEXT;
 }

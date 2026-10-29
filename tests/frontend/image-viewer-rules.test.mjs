@@ -32,11 +32,12 @@ test('the backdrop thins as the image is pulled down, never below a quarter', ()
   assert.equal(dragBackdrop(5000, 800), 0.25);
 });
 
-test('the reaction bar: messages, いいね, 手伝えるかも - never 参加; messages press only where the card can open them', () => {
-  const withComments = viewerActions({ hasComments: true });
+test('the reaction bar: 手伝えるかも only where the card shows it; messages press only where the card can open them', () => {
+  assert.deepEqual(viewerActions({ hasComments: true }).map((a) => a.kind), ['comments', 'like']);
+  const withComments = viewerActions({ hasComments: true, showHelp: true });
   assert.deepEqual(withComments.map((a) => a.kind), ['comments', 'like', 'help']);
   assert.ok(withComments.every((a) => a.pressable));
-  const without = viewerActions({ hasComments: false });
+  const without = viewerActions({ hasComments: false, showHelp: true });
   assert.equal(without[0].pressable, false);
   assert.ok(without.slice(1).every((a) => a.pressable));
 });

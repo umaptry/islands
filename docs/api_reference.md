@@ -349,6 +349,8 @@ PRIMARY KEY (post_id, actor_id, kind)
 | `island` | 自分の島が合流・分割・名称変更・段の変化をした | 島の住人（サーバーが作る。1島1日1件）。`actor_id` は `null`、`island_id`・`event_id`・`payload`（名前・きっかけ）が入る |
 | `quiet_post` | 24時間〜7日たっても反応のない投稿があった（Q34・2026-10-09） | 同じ島か近い2島に投稿している人のうち、14日以内に来た人から近い順に3人まで（サーバーが作る。1人1日1件・1投稿1回）。**アプリの中だけ**で push しない。アプリ内で出すかは「島の変化」（`island`）のアプリ内スイッチに従う（下の「quiet_post の切り替え」）。`actor_id` は投稿の著者。文言は「近くの島に、話が合いそうな投稿があります。」で、反応がないとは書かない。著者には何も届かない |
 
+| `match` | 新しい投稿 P が、だれかの前の投稿 Q とつながった（2026-10-29。`core/matching.py` の判定。`GET /api/matches` と同じ計算） | Q の書き手。P 1つにつき最大3人（サーバーが作る。1日の上限なし・同じ P と同じ人へは1回）。ブロック関係の人・もうコミュニティにいない人・別のコミュニティ・本人・消えた投稿・「ほかのコミュニティにも出す」の写しには送らない。`actor_id` は P の書き手、`post_id` は P、`community_id` は P のコミュニティ、`payload` は `{kind, other_post: Q の id, reason: Q の書き手に見せる1行}`。計算は投稿の応答のあと別のスレッドで行い、失敗しても投稿は無事（警告ログだけ）。**`supabase/migrations/20261029020000_match_notice.sql` をコードより先に流す**（流すまでは保存されない）。環境変数 `ISLANDS_MATCH_NOTICE=0` で止まる |
+
 `actor_id` は `island` のために `null` を許すようになりました（2026-10-06）。
 
 **通知の分類と切り替え**：種類は3つの分類にまとめ（2026-10-12に「新しいつながり」「おすすめ」を外した。API の `categories` は `reply`・`reaction`・`island` の3つ）、分類ごとにアプリ外（push）とアプリ内を切り替えられます（`notification_settings`。行がなければ両方オン）。
@@ -356,7 +358,7 @@ PRIMARY KEY (post_id, actor_id, kind)
 | 分類 | 含む `type` |
 |---|---|
 | `reply` | `comment`・`reply` |
-| `reaction` | `like`・`help`・`join` |
+| `reaction` | `like`・`help`・`join`・`match`（2026-10-29。`match` は10分でまとめず1件ずつ） |
 | `island` | `island`・`quiet_post`（`quiet_post` はアプリ内だけ。push しない） |
 | （分類なし） | 過去の `connection`・`similar` の行（一覧には残る。切り替えなし） |
 
@@ -672,6 +674,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `DELETE` | `/api/posts/{id}` | ✅ 必要 | 投稿を削除 | 地図からピンを取り除く |
 | `GET` | `/api/neighbors` | ❌ 不要 | 近い投稿の取得 | 画面からは未使用（2026-10-12） |
 | `GET` | `/api/pair` | ❌ 不要 | 2投稿の類似度 | 2人を選んだときの「似てる度」表示 |
+| `GET` | `/api/matches?post={id}` | ✅ 必要 | 自分の投稿とつながる人（最大3人） | 投稿した直後の「線とカード」（2026-10-29）。投稿した本人だけ |
 | `GET` | `/api/account/me` | ✅ 必要 | 自分のプロフィール取得 | ログイン直後のプロフィール確認 |
 | `PUT` | `/api/account/me` | ✅ 必要 | プロフィール更新 | 名前・所属・自己紹介・話題・目標などの編集 |
 | `GET` | `/api/connections?person={id}` | ❌ 不要 | 人と人の線 | 地図に線を引く（`person` で1人に絞れる） |
@@ -781,8 +784,8 @@ Host: localhost:7860
 | `similarity.floor` / `ceiling` | `number\|null` | コサイン値を「似てる度 0〜100%」に変換するための校正パラメータ |
 | `open_tag` | `string` | 「話しかけていいよ」の切り替えが付けるタグ（`tags[0]`＝「気軽に話しかけて」）。Q45 |
 | `weekly_prompt` | `{key, text, until}` | 今週のお題（Q37）。月曜0時（日本時間）に替わる。`key` は `"2026-W41"` の形、`until` は次に替わる日時（UTC） |
-| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文）。2026-10-21 から3つ（昔がんばってたこと・最近はまってること・イベントの告知を1つずつ） |
-| `extra_prompts` | `{key, text, example}[]` | 今週のお題のほかに出すお題（2026-10-20）。`example` は選んだときに本文の欄に薄く出す例文（画面が「例：」を付ける。2026-10-21）。`past`＝昔がんばってたこと、`now`＝最近はまってること、`future`＝今度やってみたいこと。その人が一度そのお題で投稿したら、そのお題だけ出さない（画面が自分の投稿の `prompt` で判断する）。今週のお題（`weekly`）は対象外 |
+| `example_posts` | `string[]` | 最初の投稿のお試しで選べる例文（Q40。仮の文）。2026-10-21 から3つ（昔がんばってたこと・最近やってること・イベントの告知を1つずつ。「最近やってること」は2026-10-29まで「最近はまってること」） |
+| `extra_prompts` | `{key, text, example}[]` | 今週のお題のほかに出すお題（2026-10-20）。`example` は選んだときに本文の欄に薄く出す例文（画面が「例：」を付ける。2026-10-21）。`past`＝昔がんばってたこと、`now`＝最近やってること（2026-10-29に「最近はまってること」から改名。`key` と保存済みの投稿は変わらない）、`future`＝今度やってみたいこと、`help`＝困ってること。**2026-10-29 から、一度使ったお題も消えない**（毎回すべて選べる。`features.post_extras` が `false` のときは出さない）。今週のお題（`weekly`）は対象外 |
 | `features.post_extras` | `boolean` | DB が投稿の `prompt`・`recruit_deadline`・`recruit_capacity` を持っているか。`false` の間（本番に移行 SQL `20261020000000` が未適用）は、画面はお題の記録・申込期限・先着人数の入力を出さず、サーバーも送られてきた値を無視して保存する。ローカルは常に `true`。約60秒キャッシュ |
 | `push.public_key` | `string\|null` | ブラウザが push を購読するときの VAPID 公開鍵。`null` なら push は使えない（設定の欄は「このブラウザは端末への通知に対応していません」と出し、ベルの通知だけになる） |
 | `push.presence_seconds` / `presence_hold` | `number` | 画面に出ている間、`presence_seconds`（30秒）ごとに「あと `presence_hold`（75秒）は画面にいる」と伝える（`mark_active`）。その間サーバーは push しない |
@@ -1107,6 +1110,7 @@ DB のトリガー `notifications_push`（ローカルでは `MemoryStore.on_not
 1. `pushed_at` が `null` の行を1回の UPDATE でまとめて取り、印を付ける（2台が同じ行を送らない）。
 2. 次の行は送らずに終わりにする：`quiet_post`（`NEVER_PUSHED`・アプリの中だけ）、10分（`PUSH_FRESH_MINUTES`）より古い行、**画面にアプリを出している人**（`push_presence`。帯で見せる）、push を切った分類。
 3. 届け先ごとに、通知の一覧と同じまとめ方（10分以内の反応は1件）で文にして送る。
+4. `match`（2026-10-29）だけは、受け取る人ごとに5分（`MATCH_PUSH_WINDOW_MINUTES`）に1通まで。5分以内に来た行は、その場では送らず `pushed_at` を空に戻して保留にし（レスポンスの内訳には `held_match`）、5分たったあとの次の送信で、保留中のもの（10分以内）を1通にまとめる。1件なら題＝書き手の名前＋「さん」、本文＝相手から見た理由の1行、押すと `#/map?post={P}`。2件以上なら題「新しいつながり」、本文「{最新の書き手}さん ほか{N}人の投稿が、あなたの投稿とつながりました」（同じ人は1人と数える）、押すと `#/notifications`。投稿の本文は入れない。
 
 | 項目 | 中身 |
 |---|---|
@@ -1405,6 +1409,33 @@ Authorization: Bearer eyJhbG...
 ```
 
 自分の投稿でない・無い投稿は `404`、自分が入っていないコミュニティは `403`、コミュニティを選んでいない・60文字を超える投稿は `422`、メンバー限定が切・DB に列が無いときは `409`。
+
+---
+
+#### `GET /api/matches?post={id}` — 自分の投稿とつながる人（最大3人）🔒
+
+> **いつ使うか**: 投稿した直後の「線とカード」（2026-10-29）。**投稿した本人だけ**が呼べる（ほかの人・存在しない投稿は `404`、`post` なしは `422`、ログインなしは `401`）。
+> **何を返すか**: 近い投稿（448次元のコサイン）のうち、お題とタグから読んだ立場（助けてほしい・仲間がほしい・やっている）がかみ合う人。補い合う組み合わせ（need/have・want/have）は 0.40、同じ側（want/want・have/have・need/want・言葉だけ近い）は 0.45 以上。1人につき1件、優先順（補い合う→同じ側→言葉だけ）、同じなら近い順。need × need は出さない。ブロック関係の人・自分の別の投稿・別のコミュニティは除く。
+> **失敗したとき**: 空の一覧（`200`）を返す。画面は今までの表示に戻る。環境変数 `ISLANDS_MATCH_CARDS=0` でも常に空。
+> **同じ計算を通知にも使う**: `pick_connections()`。新しい投稿のたびに、つながった人へ `match` の通知（上の通知の表）を送る。
+
+**返り値**
+```json
+{
+  "post": "550e8400-e29b-41d4-a716-446655440000",
+  "matches": [
+    {
+      "id": "…", "author_id": "…", "display_name": "ホクト", "icon_id": "3", "avatar_path": null,
+      "body": "…", "tags": ["助けてほしい"], "motivation": 60, "x": 412.3, "y": 288.9, "cluster_id": 4,
+      "similarity": 78, "cosine": 0.61, "shared": ["焚き火"], "note": "…",
+      "prompt": "past", "kind": "need_have",
+      "reason": "あなたの困りごとを、この人は経験しています"
+    }
+  ]
+}
+```
+
+`kind` は `need_have`・`have_need`・`want_have`・`have_want`・`want_want`・`need_want`・`have_have`・`near` のどれか（`reason` は画面に出す1行）。
 
 ---
 

@@ -562,6 +562,35 @@ export function drawKin(ctx, view, kin) {
   });
 }
 
+// The lines a new post draws to the posts it may connect to (the 「つながりそうな投稿」 cards): orange
+// dots that grow out of the new post one after another, the one under the card in view the boldest.
+const BEAM = { color: '#FF7251', under: 'rgba(255, 255, 255, .75)', dash: [4, 6], bend: 0.12 };
+
+/** `items`: [{ x, y, key, t (0 to 1: how far it has grown), width, alpha }], each a line from `from`.
+ * match-rules.js decides the numbers; the caller keeps the map going if this throws. */
+export function drawMatchBeams(ctx, view, from, items) {
+  const { toScreen, width, height } = view;
+  const p = toScreen(from.x, from.y);
+  items.forEach((item, index) => {
+    if (!(item.t > 0)) return;
+    const q = toScreen(item.x, item.y);
+    const shape = arc(p, q, hashId(item.key || String(index)), BEAM.bend);
+    if (!onScreen(shape, width, height)) return;
+    const part = item.t >= 1 ? shape : slice(shape, 0, 1 - (1 - item.t) ** 3);
+    // A closed card leaves the line as a plain white dotted one, like KIN.
+    if (item.closed) {
+      stroke(ctx, part, {
+        color: ROUTE, width: KIN.width, alpha: KIN.alpha[view.level] || KIN.alpha.near, dash: KIN.dash,
+      });
+      return;
+    }
+    stroke(ctx, part, {
+      color: BEAM.color, under: BEAM.under,
+      width: item.width, alpha: item.alpha, dash: BEAM.dash,
+    });
+  });
+}
+
 /** How many boats a route gets: one per tier, 1 to 3. */
 export function boatCount(tier) {
   return Math.max(1, Math.min(3, Math.round(Number(tier)) || 1));

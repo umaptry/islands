@@ -424,3 +424,13 @@ test('a new-resident row says who moved onto which island, like its push', () =>
   assert.equal(rules.isResident({ type: 'island', payload: { cause: 'x' } }), false);
   assert.equal(rules.headline({ type: 'island', payload: { name: 'A島' } }), '島「A島」');
 });
+
+test('match rows: filed under 反応, read as the reason the server wrote, with a fallback', () => {
+  assert.equal(rules.categoryOf('match'), 'reaction');
+  const row = { type: 'match', actors: [{ display_name: 'あき' }], payload: { kind: 'need_have', other_post: 'q', reason: 'あなたの困りごとに、経験のある人が投稿しました' } };
+  assert.equal(rules.bodyText(row), 'あなたの困りごとに、経験のある人が投稿しました');
+  assert.equal(rules.headline(row), 'あき');
+  assert.equal(rules.bodyText({ type: 'match', payload: {} }), 'あなたの投稿とつながりそうな投稿が見つかりました。');
+  assert.ok(rules.CATEGORIES.find((c) => c.id === 'reaction').note.includes('・つながりそうな投稿'));
+  assert.equal(rules.interrupts(row, rules.defaultSettings()), true);
+});

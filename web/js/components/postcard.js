@@ -19,7 +19,7 @@ import { buzz } from '../feedback.js';
 import { attachLongPress } from '../longpress.js';
 import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
-import { joinTerms, joinWord, joinCount } from '../recruit-rules.js';
+import { joinTerms, joinWord, joinCount, showHelp } from '../recruit-rules.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -261,7 +261,10 @@ function footer(post, options) {
   // Somebody else's 参加 button on a post that is not recruiting would be a
   // promise nobody asked for. Your own earlier join stays visible and undoable.
   const showJoin = isRecruiting(post) || hasReacted(post.id, 'join');
-  const all = showJoin ? [...REACTIONS, JOIN] : REACTIONS;
+  // 手伝えるかも only where help is asked for (or already given / pressed).
+  const helpOn = showHelp(post, state.account?.id, { reacted: hasReacted(post.id, 'help') });
+  const base = REACTIONS.filter((r) => r.kind !== 'help' || helpOn);
+  const all = showJoin ? [...base, JOIN] : base;
 
   all.forEach((reaction) => {
     const isJoin = reaction.kind === 'join';

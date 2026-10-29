@@ -394,9 +394,9 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   }
   const chips = page.locator('#composeStarterList .extra-chip');
   await expect(page.locator('#composeStarters .weekly-label')).toHaveText('お題から選ぶ');
-  await expect(chips).toHaveText(['昔がんばってたこと', '最近はまってること', '今度やってみたいこと', '困ってること']);
-  // nothing chosen: the example of 最近はまってること is the placeholder
-  const example = '例：仕事帰りにレイトショーを観るのにはまっています。洋画が多めです。おすすめがあれば教えてください。';
+  await expect(chips).toHaveText(['昔がんばってたこと', '最近やってること', '今度やってみたいこと', '困ってること']);
+  // nothing chosen: the example of 最近やってること is the placeholder
+  const example = '例：仕事帰りにレイトショーを観ています。洋画が多めです。おすすめがあれば教えてください。';
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', example);
   await chips.nth(1).click();
   // the box stays empty (an example is never an input) and the example shows as the placeholder
