@@ -909,6 +909,11 @@ function refreshFresh() {
   freshIslands = freshIslandKeys(state.islands, freshIds, islandKey);
 }
 
+/** The posts not opened yet on this device (the island card counts them). */
+export function freshPostSet() {
+  return freshIds;
+}
+
 /** For tests and checks: the keys of the islands that glow right now. */
 export function freshIslandSet() {
   refreshFresh();
@@ -2409,6 +2414,14 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       ctx.lineWidth = yours ? 2 : 1.2;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
+      // Not opened yet on this device: an orange ring round the dot.
+      if (!yours && !dim && freshIds.has(post.id)) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, (deep ? 3.5 : 3) + 2.2, 0, Math.PI * 2);
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = UNREAD;
+        ctx.stroke();
+      }
       if (!plain) ctx.restore();
       if (yours) youLabel(claim, point.x, point.y);
       if (!dim) hits.push({ x: point.x, y: point.y, r: yours ? 14 : 12, post, dot: true });
@@ -2428,6 +2441,10 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     // they meant, and the map had too much on it.
     const stack = entry.stack;
     if (stack) stackChip(point.x + r * 1.05, headY - r * 0.85, stack.length - 1);
+    // Not opened yet on this device (2026-10-31, the user: inside an island there
+    // was no telling which posts were new): a dot on the head's top right corner,
+    // the top left when a "+N" is there.
+    if (!mine && !dim && freshIds.has(post.id)) unreadDot(point.x + (stack ? -1 : 1) * r * 0.74, headY - r * 0.74, r);
 
     if (name) {
       ctx.save();
@@ -2452,6 +2469,24 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
 }
 
 /** "+N" on a face with N more posts under it at full zoom. */
+// The colour of "not opened yet": an orange of a notification badge, apart from
+// the reds of the heat and of yours.
+const UNREAD = '#FF7A2F';
+
+function unreadDot(x, y, headR) {
+  const r = Math.max(3.6, headR * 0.26);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r + 1.6, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = UNREAD;
+  ctx.fill();
+  ctx.restore();
+}
+
 function stackChip(x, y, more) {
   const text = `+${more > 99 ? 99 : more}`;
   ctx.save();

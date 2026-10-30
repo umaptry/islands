@@ -1446,6 +1446,10 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .island-card-close:hover { background: var(--surface-2); }
 .island-card-name { margin: 0 36px 2px 0; font-size: 20px; font-weight: 800; line-height: 1.3; }
 .island-card-count { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+/* not opened yet on this device (2026-10-31): the same orange as the dot on the pins (map/index.js UNREAD) */
+.island-card-unread { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; font-size: 13px; font-weight: 700; color: #D9591A; }
+.unread-mark { width: 9px; height: 9px; border-radius: 50%; background: #FF7A2F; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #ffd9c2; flex: none; }
+.island-post-new { flex: none; font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .03em; color: #fff; background: #FF7A2F; border-radius: 999px; padding: 1px 6px; }
 .island-card-topics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
 .island-card-label { font-size: 11.5px; font-weight: 800; color: var(--ui); margin-right: 2px; }
 .island-topic { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: #e5f2fb; color: #14618f; }
