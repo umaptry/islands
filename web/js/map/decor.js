@@ -93,9 +93,47 @@ function drawGlint(ctx, x, y, size) {
   ctx.fill();
 }
 
+// Short white strokes on the open water, anchored to the world and spaced on the
+// screen (so there are always some, at any zoom). Drawn before the ground, which
+// covers the land and the shallows: only the open sea shows them.
+const DASH_GAP = [23, 19];
+const DASH_FILL = 'rgba(255, 255, 255, 0.42)';
+
+function dashHash(x, y) {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function drawDashes(ctx, view) {
+  const { toScreen, width, height } = view;
+  const [gapX, gapY] = DASH_GAP;
+  const origin = toScreen(0, 0);
+  const r0 = Math.floor(-origin.y / gapY) - 1;
+  const r1 = Math.ceil((height - origin.y) / gapY) + 1;
+  const c0 = Math.floor(-origin.x / gapX) - 1;
+  const c1 = Math.ceil((width - origin.x) / gapX) + 1;
+  // A round-capped stroke, which is far cheaper than hundreds of ellipses.
+  const along = [Math.cos(1.05) * 1.45, Math.sin(1.05) * 1.45];
+  ctx.strokeStyle = DASH_FILL;
+  ctx.lineWidth = 1.7;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let r = r0; r <= r1; r += 1) {
+    for (let c = c0; c <= c1; c += 1) {
+      const x = origin.x + c * gapX + (r & 1) * gapX / 2 + (dashHash(c, r) - 0.5) * 9;
+      const y = origin.y + r * gapY + (dashHash(r + 7, c) - 0.5) * 7;
+      ctx.moveTo(x - along[0], y - along[1]);
+      ctx.lineTo(x + along[0], y + along[1]);
+    }
+  }
+  ctx.stroke();
+}
+
 export function drawSeaMarks(ctx, view, time) {
   const { sea, toScreen, width, height } = view;
   ctx.save();
+  drawDashes(ctx, view);
   // (The white crests that used to be here are gone: the incoming surf along the
   // coasts, surf.js, replaces them.)
   if (!REDUCED_MOTION) {
