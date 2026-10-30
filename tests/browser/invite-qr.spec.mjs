@@ -26,12 +26,13 @@ async function person(browser, testInfo, name, { create = null, join = null, ini
   return { page, context, made };
 }
 
-const makePost = (who, body, communityId) => who.page.evaluate(async ({ body, communityId }) => {
+// 招待につなげるのは「参加者募集中」の投稿だけ（2026-10-31）。ここで作る投稿は募集中にする。
+const makePost = (who, body, communityId, tags = ['参加者募集中']) => who.page.evaluate(async ({ body, communityId, tags }) => {
   const { api } = await import('/static/js/net.js');
-  const made = await api.post('/api/posts', { body, tags: [], motivation: 55, community_id: communityId },
+  const made = await api.post('/api/posts', { body, tags, motivation: 55, community_id: communityId },
     { headers: { 'Idempotency-Key': crypto.randomUUID() } });
   return made.id;
-}, { body, communityId });
+}, { body, communityId, tags });
 
 // この会の、まだ使える招待（サーバー側の事実）
 const activeCodes = (who, communityId) => who.page.evaluate(async (id) => {

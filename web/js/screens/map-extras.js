@@ -56,15 +56,19 @@ export function refreshNearIslands() {
   box.hidden = picked.length === 0;
   clear(box);
   if (!picked.length) return;
-  box.append(el('span', { className: 'near-label' }, icon('pin', 14), el('span', { text: label })));
+  // A heading in small words over a row of buttons (2026-10-31, the user: the
+  // heading was a blue pill beside white ones and read as one more button, and as
+  // their equal rather than their title).
+  const chips = el('div', { className: 'near-chips' });
+  box.append(el('span', { className: 'near-label' }, icon('pin', 13), el('span', { text: label })), chips);
   picked.forEach((island) => {
-    box.append(el('button', {
-      className: 'near-chip', attrs: { type: 'button' }, text: islandName(island),
+    chips.append(el('button', {
+      className: 'near-chip', attrs: { type: 'button' },
       on: { click: () => {
         openIslandCard(island);
         if (typeof mapApi.panTo === 'function') mapApi.panTo(island.cx, island.cy);
       } },
-    }));
+    }, el('span', { text: islandName(island) }), el('span', { className: 'near-chevron', text: '›', attrs: { 'aria-hidden': 'true' } })));
   });
   syncTopHeight();
 }
@@ -93,7 +97,9 @@ function openIslandCard(island, key = islandKey(island)) {
   const intro = String(island.intro || '').trim();
   const residents = (island.residents || []).slice(0, RESIDENT_FACES);
   const ids = island.post_ids || [];
-  const recent = recentPosts(ids, state.postsById, 2);
+  const unread = typeof mapApi.freshPostSet === 'function' ? mapApi.freshPostSet() : new Set();
+  const unreadCount = ids.filter((id) => unread.has(id)).length;
+  const recent = recentPosts(ids, state.postsById, 2, unread);
 
   card.append(
     el('button', {
@@ -103,6 +109,12 @@ function openIslandCard(island, key = islandKey(island)) {
     el('h3', { className: 'island-card-name', text: islandName(island) }),
     el('p', { className: 'island-card-count', text: `${island.people ?? 0}人・投稿${ids.length}件` }),
   );
+  // 2026-10-31 (the user): which of them you have not opened yet.
+  if (unreadCount) {
+    card.append(el('p', { className: 'island-card-unread' },
+      el('i', { className: 'unread-mark', attrs: { 'aria-hidden': 'true' } }),
+      el('span', { text: `まだ見ていない投稿 ${unreadCount}件` })));
+  }
   // One line about the island, and a few of the people living on it.
   if (intro) card.append(el('p', { className: 'island-card-intro', text: intro }));
   if (residents.length) {
@@ -117,6 +129,7 @@ function openIslandCard(island, key = islandKey(island)) {
       className: 'island-post', attrs: { type: 'button' },
       on: { click: () => handlers.openPost(post.id) },
     },
+    unread.has(post.id) ? el('em', { className: 'island-post-new', text: 'NEW' }) : null,
     el('b', { text: post.display_name || '' }),
     el('span', { text: clip(String(post.body || '').replace(/\s+/g, ' ').trim(), 40) })))));
   }

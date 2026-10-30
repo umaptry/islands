@@ -122,3 +122,18 @@ test('clearing forgets both the storage and the memory', () => {
   assert.equal(rules.readPendingPost(storage, 1500), null);
   assert.equal(storage.map.size, 0);
 });
+
+test('the 会 of an invite QR is kept for a day, until it is joined', () => {
+  rules.resetPendingMemory();
+  const storage = fakeStorage();
+  const now = Date.UTC(2026, 9, 31, 1);
+  assert.equal(rules.saveInviteJoin(storage, ID, now), true);
+  assert.equal(rules.readInviteJoin(storage, now + 23 * HOUR), ID);
+  assert.equal(rules.readInviteJoin(storage, now + 25 * HOUR), null);
+  // the post to open is a separate memory: taking it does not drop the join
+  assert.equal(rules.takePendingPost(storage, now), null);
+  assert.equal(rules.readInviteJoin(storage, now), ID);
+  rules.clearInviteJoin(storage);
+  assert.equal(rules.readInviteJoin(storage, now), null);
+  assert.equal(rules.saveInviteJoin(storage, '../etc', now), false);
+});
