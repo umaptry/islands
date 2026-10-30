@@ -33,7 +33,8 @@ import { SWITCH_FX_MS } from '../feedback-rules.js';
 import { currentTone, pageSeaFor } from '../screen-tone.js';
 import { playSe, setAmbient } from '../audio.js';
 import { browserStorage, refreshTalk } from '../talk.js';
-import { mapLinkFor, savePendingPost, validPostId } from '../return-post.js';
+import { clearInviteJoin, mapLinkFor, readInviteJoin, savePendingPost, validPostId } from '../return-post.js';
+import { recruitState } from '../recruit-rules.js';
 import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
 import {
   canPostFromMap, canSwitch, headerTitle, islandsInScope, linkIsClosed, mapNotice, postsExtent,
@@ -499,7 +500,40 @@ export async function showMatchCards(post, { thenOpen = null, first = false, pen
 }
 
 /** Open a post wherever it is on the map and bring the camera to it. */
+/** The 参加者募集中 post of the invite QR this person came in by: joined once the
+ * account exists (2026-10-31, the user). A post that no longer recruits, is closed
+ * or full, or that they are in already is let go quietly - signing up is not
+ * stopped by it. A failure that may pass (the network) keeps it for next time. */
+let joining = null;
+export function joinFromInvite() {
+  if (joining) return joining;
+  joining = (async () => {
+    const storage = browserStorage();
+    const postId = readInviteJoin(storage);
+    if (!postId || !state.account) return;
+    let post = state.postsById.get(postId) || null;
+    if (!post) post = await data.getPost(postId).catch(() => undefined);
+    if (post === undefined) return;   // could not ask: try again later
+    clearInviteJoin(storage);
+    if (!post || !isRecruiting(post) || post.author_id === state.account.id) return;
+    if (hasReacted(postId, 'join')) return;
+    if (recruitState(post)) {
+      toast(recruitState(post) === 'full' ? '会は満員のため、参加できませんでした。' : '会の受付が終わっていたため、参加できませんでした。');
+      return;
+    }
+    await react(postId, 'join');
+    if (hasReacted(postId, 'join')) toast(`「${clipText(post.body)}」に参加しました`);
+  })().finally(() => { joining = null; });
+  return joining;
+}
+
+const clipText = (text, max = 18) => {
+  const chars = Array.from(String(text || '').replace(/\s+/g, ' ').trim());
+  return chars.length > max ? `${chars.slice(0, max).join('')}…` : chars.join('');
+};
+
 export async function openLinkedPost(postId) {
+  if (state.account) await joinFromInvite().catch(() => {});
   await openPost(postId);
   if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
 }
@@ -1444,6 +1478,8 @@ export function setupMapScreen() {
       paintFresh();
       paintTrial();
       refreshMyViews();
+      // An invite QR's 会 still to join (a new person who left before their first post comes back).
+      if (state.account) joinFromInvite().catch(() => {});
       // Not awaited: the map is already up, and the pill can arrive a moment later.
       loadDigest();
       // #/map?post=<id>: a link to one post, which opens for anybody. A visitor

@@ -107,6 +107,10 @@ test('管理者が招待リンクを作り、新しい人がそのリンクか�
   await guest.page.locator('#sheet.on .post-card').waitFor({ timeout: 30000 });
   await expect(guest.page.locator('#sheet.on .post-card')).toContainText('BAR でゆるく飲む会');
   await expect(guest.page.locator('#mapCommunity')).toContainText(bar.name);
+  // 参加者募集中の投稿の QR から入った人は、その会に参加した状態で始まる（2026-10-31）。
+  await expect(guest.page.locator('#sheet.on .post-join-button')).toContainText('参加済み', { timeout: 15000 });
+  const joiners = await guest.page.evaluate(async (id) => (await import('/static/js/net.js')).data.reactorsOf(id, 'join'), eventId);
+  expect(JSON.stringify(joiners)).toContain('新しい人');
   const bodies = await guest.page.evaluate(async () => (await import('/static/js/state.js')).state.posts.map((p) => p.body));
   expect(bodies.some((b) => b.includes('焙煎'))).toBe(true);
   // 最初の投稿は、サーバー側でそのコミュニティの投稿になっている。
@@ -255,8 +259,8 @@ test('招待に付ける投稿は、そのコミュニティの投稿だけ。�
   const admin = await person(browser, testInfo, '管理のご');
   const bar = await makeCommunity(admin, `BAR ${unique()}`);
   const book = await makeCommunity(admin, `読書 ${unique()}`);
-  const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です');
-  await makePost(admin, book.community_id, '読書会の本を決めます');
+  const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です', ['参加者募集中']);
+  await makePost(admin, book.community_id, '読書会の本を決めます', ['参加者募集中']);
 
   // 選べる投稿は、そのコミュニティの投稿だけ（読書会の投稿は出ない）
   const { url, card } = await makeInviteLink(admin, bar.community_id, { postId: barPost });
@@ -305,7 +309,7 @@ test('コミュニティの一覧を読めなかったとき、会員は「入�
 test('編集画面を URL で直接開いても、自分の投稿が読み込まれて「会の投稿も一緒に開く」が押せる', async ({ browser }, testInfo) => {
   const admin = await person(browser, testInfo, '直接のご');
   const bar = await makeCommunity(admin, `BAR ${unique()}`);
-  const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です');
+  const barPost = await makePost(admin, bar.community_id, 'BAR の夜の会です', ['参加者募集中']);
   await makeInviteLink(admin, bar.community_id);
   // 開き直す: 地図を通らないので、自分の投稿はまだ読み込まれていない
   await admin.page.goto(`/?again=${unique()}#/community/${bar.community_id}`);

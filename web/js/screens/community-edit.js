@@ -12,6 +12,8 @@ import { communitiesActive, refreshCommunities } from '../communities.js';
 import { icon } from '../icons.js';
 import { config } from '../config.js';
 import { qrPng, qrSvg } from '../qr.js';
+import { isRecruiting } from '../map/reads.js';
+import { recruitState } from '../recruit-rules.js';
 import {
   COMMUNITY_NAME_MAX, DEFAULT_EXPIRY, EXPIRY_CHOICES, activeInvites, checkCommunityName,
   communityRefusal, createInviteBody, inviteImageLines, inviteImageName, inviteLineText, invitePostFor, inviteRowText,
@@ -101,8 +103,11 @@ function invitePanel(entry) {
   const panel = el('div', { className: 'invite-panel' });
   const error = el('div', { className: 'error', attrs: { role: 'alert' } });
 
-  // ---- my posts of this community (they may not be loaded yet: they come with the map)
+  // ---- my posts of this community (they may not be loaded yet: they come with the map).
+  // Only a 参加者募集中 post that still takes people (2026-10-31, the user): whoever
+  // comes in by the QR starts out joined to it (map.js joinFromInvite).
   const mineOf = (list) => postsOfCommunity(list, entry.id)
+    .filter((post) => isRecruiting(post) && !recruitState(post))
     .sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0));
   let mine = mineOf(state.myPosts);
   if (mine.length) postId = mine[0].id;
@@ -168,7 +173,12 @@ function invitePanel(entry) {
         el('span', { className: 'invite-switch-text', text: '会の投稿も一緒に開く' }),
         toggle,
         el('span', { className: 'invite-switch-track', attrs: { 'aria-hidden': 'true' } })),
-      mine.length ? null : el('p', { className: 'invite-note', text: 'この会に投稿すると、その投稿も一緒に開けるようになります。' }),
+      el('p', {
+        className: 'invite-note invite-post-note',
+        text: mine.length
+          ? '参加者募集中の投稿だけ選べます。この QR から入った人は、その投稿に参加した状態で始まります。'
+          : '参加者募集中の投稿をすると、ここで選べます。',
+      }),
       picker,
     ];
   }

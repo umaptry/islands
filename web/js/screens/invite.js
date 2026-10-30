@@ -16,7 +16,7 @@ import { state } from '../state.js';
 import { navigate, screen } from '../router.js';
 import { $, clear, el, toast } from '../ui.js';
 import { browserStorage } from '../talk.js';
-import { mapLinkFor, savePendingPost } from '../return-post.js';
+import { mapLinkFor, saveInviteJoin, savePendingPost } from '../return-post.js';
 import { communitiesActive, dropCommunities, joinedCommunity, refreshCommunities } from '../communities.js';
 import {
   NEW_ACCOUNT_NOTE, RETRY_LATER_NOTE, clearPendingInvite, inviteActions, inviteView, readClaim,
@@ -37,6 +37,8 @@ export async function claimInvite({ code, post = null }, { holdPost = true } = {
   joinedCommunity(claimed);
   // The post that came with the invite opens through the same road as a linked post.
   if (post && holdPost) savePendingPost(browserStorage(), post);
+  // The 会 of the QR: joined on the map once the account is there (map.js joinFromInvite).
+  if (post) saveInviteJoin(browserStorage(), post);
   clearPendingInvite(browserStorage());
   // Roles and slugs come from the database; the name is already on screen.
   await refreshCommunities();
