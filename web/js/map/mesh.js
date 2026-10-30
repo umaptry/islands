@@ -30,6 +30,11 @@ const toLin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v 
 const toSrgb = (c) => 255 * (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.min(1, c) ** (1 / 2.4) - 0.055);
 const two = (n) => n.toString(16).padStart(2, '0');
 
+/** A point of a part on the picture: [x, y] with y DOWN, as facesOf() gives. */
+export function project(x, y, z) {
+  return [x, y * SINE - z * COSE];
+}
+
 export function part(tris, center, color) {
   return { tris, center, color: hex(color).map(toLin) };
 }
