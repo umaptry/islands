@@ -419,9 +419,17 @@ export function setupProfileSetup() {
   name.addEventListener('input', sync);
   $('setupAffiliation').addEventListener('input', sync);
 
+  // islands walked a new person straight into writing their first post,
+  // which is right: an empty map is not something to be dropped into.
+  const goOn = () => {
+    setOnboardingStep('0');
+    navigate('#/guidance');
+  };
+
   save.addEventListener('click', async () => {
     save.disabled = true;
     $('setupError').textContent = '';
+    $('setupSkip').hidden = true;
     try {
       const result = await api.put('/api/account/me', {
         ...(needsName ? {
@@ -431,15 +439,17 @@ export function setupProfileSetup() {
         ...(await field.commit()),
       });
       state.account = result.account;
-      setOnboardingStep('0');
-      // islands walked a new person straight into writing their first post,
-      // which is right: an empty map is not something to be dropped into.
-      navigate('#/guidance');
+      goOn();
     } catch (error) {
       $('setupError').textContent = error.message;
       save.disabled = false;
+      // The photo is optional and the name is saved already: a save that keeps
+      // failing must not shut the door (2026-10-31, an iPhone could not get past
+      // this screen, with or without a photo).
+      $('setupSkip').hidden = needsName;
     }
   });
+  $('setupSkip').addEventListener('click', goOn);
 
   screen('setup', {
     enter: () => {
@@ -450,6 +460,7 @@ export function setupProfileSetup() {
       name.value = (state.account && state.account.display_name) || '';
       $('setupAffiliation').value = (state.account && state.account.affiliation) || '';
       $('setupError').textContent = '';
+      $('setupSkip').hidden = true;
       sync();
     },
   });

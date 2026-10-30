@@ -57,6 +57,20 @@ let activeChat = null;
 let selectionGeneration = 0;
 let sheetEvents = null;
 let restorePost = null;
+
+// Which `#/map?post=` link this history entry has opened already, kept in the
+// entry's own state: coming back to it with the back button is not a new link,
+// while a navigation to it (a new entry, state null) is.
+const LINK_KEY = 'islandsOpenedPost';
+const linkOpened = (postId) => Boolean(history.state && history.state[LINK_KEY] === postId);
+function markLinkOpened(postId) {
+  try { history.replaceState({ ...(history.state || {}), [LINK_KEY]: postId }, ''); } catch { /* not allowed: the link opens again */ }
+}
+function forgetLinkOpened() {
+  if (!history.state || !(LINK_KEY in history.state)) return;
+  const { [LINK_KEY]: _gone, ...rest } = history.state;
+  try { history.replaceState(Object.keys(rest).length ? rest : null, ''); } catch { /* ignore */ }
+}
 let mapRequest = 0;
 let mapError = false;
 let worldCount = null;   // how many posts the whole world has (null: not asked yet)
@@ -264,7 +278,10 @@ export async function openOnMap(postId, { thenOpen = null, afterLand = null } = 
   // Any other post (a notification, somebody's page): go through the link, which also turns the map to the
   // post's own community and, if the viewer cannot read it, says so calmly.
   if (!fresh && communitiesActive() && validPostId(thenOpen || postId)) {
-    await navigate(mapLinkFor(thenOpen || postId));
+    const link = mapLinkFor(thenOpen || postId);
+    // The same address again (no new history entry): asked for, so it opens again.
+    if (window.location.hash === link) forgetLinkOpened();
+    await navigate(link);
     return;
   }
   if (!await navigate('#/map')) return;
@@ -1433,8 +1450,13 @@ export function setupMapScreen() {
       // who is not signed in keeps it, so signing in or registering (even through
       // Google, which leaves the page) brings them back to it.
       const linked = query ? query.get('post') : null;
-      if (validPostId(linked) && activeScreen() === 'map') {
+      // Back on an address whose link was opened already - the back button of a
+      // profile opened from another post - is not a new link: the post that was
+      // open when the map was left comes back instead (2026-10-31: it was always
+      // the linked post, often your own from a notification).
+      if (validPostId(linked) && !linkOpened(linked) && activeScreen() === 'map') {
         restorePost = null;
+        markLinkOpened(linked);
         if (!state.account) savePendingPost(browserStorage(), linked);
         // A link that cannot be read is a notice where the map would be, and nothing opens.
         if (!(scope.mode === 'none' && scope.reason === 'closed')) await openLinkedPost(linked);

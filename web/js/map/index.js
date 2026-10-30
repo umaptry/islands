@@ -526,6 +526,8 @@ function attachGestures() {
   let settle = 0;
   // The last few moves, to measure the speed of a flick when the finger lifts.
   let track = [];
+  // The last tap that let go without moving, for a double tap.
+  let lastTap = null;
 
   const settled = () => {
     clearTimeout(settle);
@@ -584,8 +586,24 @@ function attachGestures() {
     const had = pointers.delete(event.pointerId);
     if (pointers.size < 2) pinch = null;
     if (!had) return;
-    if (pointers.size > 0) { track = []; return; }
-    if (!dragged) { pick(event); return; }
+    if (pointers.size > 0) { track = []; lastTap = null; return; }
+    if (!dragged) {
+      // A second tap on the open map, quickly and in the same place, comes in
+      // closer round that spot, as on Google Maps (2026-10-31, the user). The
+      // first tap has already done what a tap does (closed the panel), so a
+      // tap on a face or a name still answers at once, never after a wait.
+      const tap = { x: event.clientX, y: event.clientY, at: performance.now() };
+      const again = lastTap && !lastTap.hit && tap.at - lastTap.at < DOUBLE_TAP_MS
+        && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < DOUBLE_TAP_PX;
+      if (again) {
+        lastTap = null;
+        doubleTapZoom(event);
+        return;
+      }
+      lastTap = { ...tap, hit: pick(event) };
+      return;
+    }
+    lastTap = null;
     // Speed over the last tenth of a second; a finger that stopped before
     // lifting has no flick left in it.
     const now = performance.now();
@@ -622,6 +640,20 @@ function attachGestures() {
     );
     settled();
   }, { passive: false });
+}
+
+const DOUBLE_TAP_MS = 320;
+const DOUBLE_TAP_PX = 32;
+const DOUBLE_TAP_ZOOM = 2;
+
+/** Twice as close, the tapped spot staying under the finger. */
+function doubleTapZoom(event) {
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const spot = toWorld(x, y);
+  if (clampScale(state.camera.scale * DOUBLE_TAP_ZOOM) === state.camera.scale) return;
+  zoomTo(spot.x, spot.y, state.camera.scale * DOUBLE_TAP_ZOOM, { x, y });
 }
 
 function zoomAround(point, requested, absolute = false) {
@@ -696,9 +728,10 @@ function pick(event) {
       if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, postZoom(), tapSpot());
       onPick(hit.post);
     }
-    return;
+    return true;
   }
   onPick(null);
+  return false;
 }
 
 // ---------------------------------------------------------------- loop
@@ -1349,7 +1382,7 @@ function renderMap(time) {
     place.labelBox = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 10, bottom: y + 10 };
     nameBoxes.push(place.labelBox);
     label(island.label, x, y, LABEL_FONT, {
-      alpha: place.fade,
+      alpha: place.fade * nameDim(place),
       ...(lit ? { lit: islandColor(island.cluster_id), width: textWidth } : {}),
     });
   });
@@ -1857,6 +1890,28 @@ export function participantView() {
 }
 
 const dimmed = (post) => Boolean(participants) && !participants.ids.has(post.author_id);
+
+// An island none of them is on steps back too, with its names (2026-10-31: the
+// names of the islands with nobody who joined stayed bright and read as part of
+// the answer). Fainter than full, not gone, so the map still says where is what.
+const NAME_DIM = 0.3;
+let worldAuthors = { from: null, byId: new Map() };
+function authorOf(postId) {
+  const post = state.postsById.get(postId);
+  if (post) return post.author_id;
+  // Far out not every post is read; the community's whole list knows the rest.
+  if (worldAuthors.from !== state.worldPosts) {
+    worldAuthors = { from: state.worldPosts, byId: new Map((state.worldPosts || []).map((row) => [row.id, row.author_id])) };
+  }
+  return worldAuthors.byId.get(postId);
+}
+const nameDim = (place) => {
+  if (!participants) return 1;
+  for (const id of place.members) {
+    if (participants.ids.has(authorOf(id))) return 1;
+  }
+  return NAME_DIM;
+};
 
 // ---------------------------------------------------------------- a new post lands
 
@@ -2448,7 +2503,7 @@ function landmarkNames(places, claim, label) {
       if (!mark.box) return;
       const y = mark.box.bottom + 7;
       if (claim(mark.x, y, ctx.measureText(mark.name).width, 12)) {
-        label(mark.name, mark.x, y, '600 10px system-ui, sans-serif', { soft: true });
+        label(mark.name, mark.x, y, '600 10px system-ui, sans-serif', { soft: true, alpha: nameDim(place) });
       }
     });
   });
@@ -2466,7 +2521,7 @@ function regionNames(places, claim, label) {
       if (spot.x < 0 || spot.x > width || spot.y < frame.top || spot.y > height - frame.bottom) return;
       const y = spot.y + 26;
       if (claim(spot.x, y, ctx.measureText(region.label).width, 13)) {
-        label(region.label, spot.x, y, font, { soft: true });
+        label(region.label, spot.x, y, font, { soft: true, alpha: nameDim(place) });
       }
     });
   });

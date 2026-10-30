@@ -1282,10 +1282,13 @@ html.reduce-motion .slider.untouched .slider-handle, html.reduce-motion .slider.
 .pj-info b { font-weight: 700; }
 .post-join-button.ended:disabled { opacity: 1; background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
 .post-join-button:disabled { opacity: .55; }
+/* Pinned to the very bottom of the half-open sheet: stuck at the scroller's padding
+   edge it left a strip of the card - the rest of a picture - showing under it
+   (2026-10-31), so it reaches down over that padding (the 12px of .sheet-scroll). */
 @media (max-width: 767px) {
   .sheet:not(.full) .post-footer {
-    position: sticky; bottom: 0; z-index: 1; background: var(--surface);
-    margin: 0 -4px; padding: 0 4px 14px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
+    position: sticky; bottom: -12px; z-index: 1; background: var(--surface);
+    margin: 0 -4px; padding: 0 4px 26px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
   }
 }
 
@@ -1310,6 +1313,8 @@ html.reduce-motion .slider.untouched .slider-handle, html.reduce-motion .slider.
 #setup .scroller { display: flex; flex-direction: column; justify-content: center; }
 #setup .screen-title { text-align: center; }
 #setup .lede { text-align: center; }
+#setup .setup-skip { display: block; margin: 14px auto 0; }
+#setup .error { text-align: center; }
 .unread-badge { background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; margin-left: 0; }
 .topbar-inline .unread-badge { flex: none; }
 
