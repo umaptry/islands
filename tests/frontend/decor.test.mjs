@@ -94,3 +94,65 @@ test('no gulls with reduced motion', () => {
     decor.setReducedMotion(false);
   }
 });
+
+// The white strokes on the sea (2026-10-31): a pattern in the world that grows and
+// shrinks with the map, instead of strokes of one screen size at every zoom.
+function strokeRecorder() {
+  const passes = [];
+  let current = null;
+  return {
+    passes,
+    ctx: {
+      save() {}, restore() {}, fill() {}, quadraticCurveTo() {},
+      beginPath() { current = { alpha: this.globalAlpha, width: this.lineWidth, segments: [] }; },
+      moveTo(x, y) { current.segments.push([x, y]); },
+      lineTo(x, y) { const start = current.segments.pop(); current.segments.push([start, [x, y]]); },
+      stroke() { passes.push(current); },
+      set globalAlpha(value) { this._alpha = value; }, get globalAlpha() { return this._alpha ?? 1; },
+    },
+  };
+}
+
+function strokesAt(scale, width = 390, height = 844) {
+  const { ctx, passes } = strokeRecorder();
+  decor.setReducedMotion(true);   // the sparkles are left out, only the strokes are drawn
+  decor.drawSeaMarks(ctx, viewAt(scale, width, height), 0);
+  decor.setReducedMotion(false);
+  return passes;
+}
+
+const strokeLength = ([[x0, y0], [x1, y1]]) => Math.hypot(x1 - x0, y1 - y0);
+
+test('the sea strokes are as long and as wide as before at 8 px per world unit, and grow with the map', () => {
+  const near = strokesAt(8);
+  assert.ok(near.length >= 1);
+  assert.ok(Math.abs(near[0].width - 1.68) < 1e-9);
+  assert.ok(Math.abs(strokeLength(near[0].segments[0]) - 2.88) < 1e-6);
+  assert.equal(near[0].alpha, 1);
+  const deep = strokesAt(16);
+  assert.ok(Math.abs(deep[0].width - 3.36) < 1e-9, 'twice the zoom, twice as wide');
+  assert.ok(Math.abs(strokeLength(deep[0].segments[0]) - 5.76) < 1e-6, 'and twice as long');
+});
+
+test('zoomed out the sea strokes fade, thin out, and are gone before they crowd the screen', () => {
+  // Far out (a whole map is about 0.5 px per world unit): nothing at all.
+  assert.equal(strokesAt(0.5).length, 0);
+  assert.equal(strokesAt(2.5).length, 0);
+  // Just above the floor: faint, and only every other row and column.
+  const thin = strokesAt(3);
+  assert.equal(thin.length, 1, 'the in-between strokes are left out');
+  assert.ok(thin[0].alpha > 0 && thin[0].alpha < 0.5);
+  // Close in: every stroke, at full strength.
+  const full = strokesAt(8);
+  assert.equal(full.length, 2);
+  full.forEach((pass) => assert.equal(pass.alpha, 1));
+  const strength = decor.dashStrength(4);
+  assert.ok(strength.between < strength.shown);
+});
+
+test('however far out, the sea strokes on a phone screen stay a few thousand', () => {
+  for (let scale = 0.3; scale <= 18; scale *= 1.15) {
+    const count = strokesAt(scale).reduce((sum, pass) => sum + pass.segments.length, 0);
+    assert.ok(count <= 3500, `${count} strokes at ${scale.toFixed(2)} px per world unit`);
+  }
+});

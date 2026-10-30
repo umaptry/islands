@@ -93,11 +93,24 @@ function drawGlint(ctx, x, y, size) {
   ctx.fill();
 }
 
-// Short white strokes on the open water, anchored to the world and spaced on the
-// screen (so there are always some, at any zoom). Drawn before the ground, which
-// covers the land and the shallows: only the open sea shows them.
-const DASH_GAP = [23, 19];
+// Short white strokes on the open water. They are a pattern in the world, like the
+// trees and the houses: they grow and shrink with the map (2026-10-31, the user:
+// strokes of a fixed screen size looked huge against the islands zoomed out).
+// Their sizes are the old fixed ones at a scale of 8 px per world unit. Zoomed out
+// they fade, every other row and column going first, and under DASH_MIN px they
+// are not drawn at all. Drawn before the ground, which covers the land and the
+// shallows: only the open sea shows them.
+const DASH_GAP = [2.9, 2.4];      // world units between strokes
+const DASH_JITTER = [1.1, 0.9];   // world units a stroke strays from its place
+const DASH_HALF = 0.18;           // world units, half a stroke's length
+const DASH_WIDTH = 0.21;          // world units
+const DASH_MIN = 1.5;             // px a stroke looks (caps included) under which none is drawn
+const DASH_FULL = 3;              // px from which it is drawn at full strength
+const DASH_CROWD = [10, 18];      // px between columns over which the in-between strokes fade in
 const DASH_FILL = 'rgba(255, 255, 255, 0.42)';
+const DASH_FAINT = 0.04;          // a pass fainter than this is not drawn
+
+const clamp01 = (value) => Math.max(0, Math.min(1, value));
 
 function dashHash(x, y) {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
@@ -105,29 +118,52 @@ function dashHash(x, y) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+/** How strongly the strokes show at `scale` px per world unit: `shown` for every stroke
+ * (by its size on screen), `between` for those left out zoomed out (by their spacing). */
+export function dashStrength(scale) {
+  const shown = clamp01(((2 * DASH_HALF + DASH_WIDTH) * scale - DASH_MIN) / (DASH_FULL - DASH_MIN));
+  const between = clamp01((DASH_GAP[0] * scale - DASH_CROWD[0]) / (DASH_CROWD[1] - DASH_CROWD[0]));
+  return { shown, between: shown * between };
+}
+
+/** The strokes kept when zoomed out: every other row, staggered, every other one along it. */
+const keptOut = (c, r) => (r & 1) === 0 && ((c + (r >> 1)) & 1) === 0;
+
 function drawDashes(ctx, view) {
   const { toScreen, width, height } = view;
-  const [gapX, gapY] = DASH_GAP;
   const origin = toScreen(0, 0);
+  const scale = toScreen(1, 0).x - origin.x;   // screen px per world unit
+  if (!(scale > 0)) return;
+  const { shown, between } = dashStrength(scale);
+  if (shown < DASH_FAINT) return;
+  const gapX = DASH_GAP[0] * scale;
+  const gapY = DASH_GAP[1] * scale;
   const r0 = Math.floor(-origin.y / gapY) - 1;
   const r1 = Math.ceil((height - origin.y) / gapY) + 1;
   const c0 = Math.floor(-origin.x / gapX) - 1;
   const c1 = Math.ceil((width - origin.x) / gapX) + 1;
   // A round-capped stroke, which is far cheaper than hundreds of ellipses.
-  const along = [Math.cos(1.05) * 1.45, Math.sin(1.05) * 1.45];
+  const along = [Math.cos(1.05) * DASH_HALF * scale, Math.sin(1.05) * DASH_HALF * scale];
   ctx.strokeStyle = DASH_FILL;
-  ctx.lineWidth = 1.7;
+  ctx.lineWidth = DASH_WIDTH * scale;
   ctx.lineCap = 'round';
-  ctx.beginPath();
-  for (let r = r0; r <= r1; r += 1) {
-    for (let c = c0; c <= c1; c += 1) {
-      const x = origin.x + c * gapX + (r & 1) * gapX / 2 + (dashHash(c, r) - 0.5) * 9;
-      const y = origin.y + r * gapY + (dashHash(r + 7, c) - 0.5) * 7;
-      ctx.moveTo(x - along[0], y - along[1]);
-      ctx.lineTo(x + along[0], y + along[1]);
+  const passes = [[true, shown]];
+  if (between >= DASH_FAINT) passes.push([false, between]);
+  passes.forEach(([kept, alpha]) => {
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    for (let r = r0; r <= r1; r += 1) {
+      for (let c = c0; c <= c1; c += 1) {
+        if (keptOut(c, r) !== kept) continue;
+        const x = origin.x + (c * DASH_GAP[0] + (r & 1) * DASH_GAP[0] / 2 + (dashHash(c, r) - 0.5) * DASH_JITTER[0]) * scale;
+        const y = origin.y + (r * DASH_GAP[1] + (dashHash(r + 7, c) - 0.5) * DASH_JITTER[1]) * scale;
+        ctx.moveTo(x - along[0], y - along[1]);
+        ctx.lineTo(x + along[0], y + along[1]);
+      }
     }
-  }
-  ctx.stroke();
+    ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
 }
 
 export function drawSeaMarks(ctx, view, time) {
