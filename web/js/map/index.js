@@ -1257,20 +1257,28 @@ function renderMap(time) {
   }).filter(Boolean);
   // One house for every post that has a face on the map, a little to the south
   // east of it (so the pin does not hide it), as big as a length in the world.
+  // It also stands clear of its pin on the screen (2026-10-31, the user: all the
+  // way in, the face stood on the house's roof). A face keeps one size in px at
+  // every zoom while the house grows with the map, so the house steps right by
+  // whatever the face - or, before faces show, the dot - takes up.
   const houseSize = scale * HOUSE_UNITS;
   const houses = [];
   if (houseSize >= HOUSE_MIN) {
     const islandOf = new Map();
     places.forEach((place) => place.members.forEach((id) => islandOf.set(id, place)));
+    const faces = scale >= faceScale();
+    const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
     visible.forEach(({ post, point }) => {
-      const x = point.x + HOUSE_SHIFT[0] * scale;
+      const clear = faces ? pinGeometry(pinSize, post.motivation).headR : HOUSE_DOT_CLEAR;
+      const shift = Math.max(HOUSE_SHIFT[0] * scale, clear + HOUSE_GAP + houseSize * HOUSE_HALF);
+      const x = point.x + shift;
       const foot = point.y + HOUSE_SHIFT[1] * scale;
       if (x < -houseSize || x > width + houseSize || foot < -houseSize || foot > height + houseSize * 2) return;
       const place = islandOf.get(post.id);
       const own = stage && post.id === reveal.id ? stage.land : 1;
       houses.push({
         x, foot, size: houseSize, seed: hashId(post.id), calm: Boolean(place && place.island.quiet),
-        alpha: own * (place ? place.fade : 1), wx: post.x + HOUSE_SHIFT[0], wy: post.y + HOUSE_SHIFT[1],
+        alpha: own * (place ? place.fade : 1), wx: post.x + shift / scale, wy: post.y + HOUSE_SHIFT[1],
       });
     });
   }
@@ -1870,7 +1878,10 @@ const TREE_MIN = 3;       // px: smaller than this is not drawn
 const TREE_MAX = 400;     // px: a ceiling for the largest zoom
 const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
 const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
-const HOUSE_SHIFT = [2.0, 1.6];   // world units from its post to its house
+const HOUSE_SHIFT = [2.0, 1.6];   // world units from its post to its house (at least; see HOUSE_GAP)
+const HOUSE_HALF = 0.7;   // of a house's size: how far its roof reaches left of where it stands
+const HOUSE_GAP = 6;      // px between a pin and the left of its house
+const HOUSE_DOT_CLEAR = 6;   // px a dot pin takes up, its unread ring included
 const HOUSE_CLEAR = 1.9;  // world units a tree keeps from a house's foot
 const REEF_RING = 'rgba(225,246,252,0.45)';
 
