@@ -56,15 +56,19 @@ export function refreshNearIslands() {
   box.hidden = picked.length === 0;
   clear(box);
   if (!picked.length) return;
-  box.append(el('span', { className: 'near-label' }, icon('pin', 14), el('span', { text: label })));
+  // A heading in small words over a row of buttons (2026-10-31, the user: the
+  // heading was a blue pill beside white ones and read as one more button, and as
+  // their equal rather than their title).
+  const chips = el('div', { className: 'near-chips' });
+  box.append(el('span', { className: 'near-label' }, icon('pin', 13), el('span', { text: label })), chips);
   picked.forEach((island) => {
-    box.append(el('button', {
-      className: 'near-chip', attrs: { type: 'button' }, text: islandName(island),
+    chips.append(el('button', {
+      className: 'near-chip', attrs: { type: 'button' },
       on: { click: () => {
         openIslandCard(island);
         if (typeof mapApi.panTo === 'function') mapApi.panTo(island.cx, island.cy);
       } },
-    }));
+    }, el('span', { text: islandName(island) }), el('span', { className: 'near-chevron', text: '›', attrs: { 'aria-hidden': 'true' } })));
   });
   syncTopHeight();
 }
