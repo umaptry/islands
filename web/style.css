@@ -17,8 +17,8 @@
   --sea-deep: #2E9AD6;
   --sea-ink: #1D5F90;
   /* The island green of the map (grass in web/js/map/palette.js). */
-  --grass: #94C973;
-  --sand: #EAD39A;      /* the map beach (palette.js sand): the ring outside the profile photo */
+  --grass: #74AD4E;
+  --sand: #E3C98B;      /* the map beach (palette.js sand): the ring outside the profile photo */
 
   --surface: #ffffff;
   --surface-2: #f4f7fb;
