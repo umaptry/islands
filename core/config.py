@@ -539,6 +539,11 @@ TALK_ERROR_DAILY_LIMIT = (
     "明日（0時すぎ）からまた押せます。"
 )
 DM_ERROR_SEND = "このDMには送信できません。"
+# 2026-10-31 (supabase/migrations/20261031000000_dm_reactions.sql): the reactions to a DM message,
+# kept as keys (the screen turns them into emoji). Not being in the room and being blocked get the SAME words.
+DM_REACTION_KINDS = ("heart", "thumbs", "laugh", "wow", "sad", "pray")
+DM_ERROR_REACT = "このメッセージには反応できません。"
+DM_ERROR_REACT_KIND = "その反応は使えません。"
 
 # Communities and invite links (2026-10-26, supabase/migrations/20261026010000_communities_and_invites.sql).
 # The words the database functions raise (PostgREST {"message"}; local mode 4xx {"detail"}).

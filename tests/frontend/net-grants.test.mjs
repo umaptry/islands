@@ -62,7 +62,7 @@ const EXTRA_COLUMNS = ['prompt', 'recruit_deadline', 'recruit_capacity'];
 // Added by the communities migration; net.js asks for it only when features.communities is on.
 const COMMUNITY_COLUMNS = ['community_id'];
 // Tables that only exist through later migrations (schema.sql is the first snapshot).
-const LATER_TABLES = ['dm_messages', 'dm_rooms', 'dm_blocks', 'communities'];
+const LATER_TABLES = ['dm_messages', 'dm_rooms', 'dm_blocks', 'dm_reactions', 'communities'];
 const substitutions = {
   // The widest form, as sent when features.post_extras is on.
   'postColumns()': `${constant('POST_COLUMNS')},${EXTRA_COLUMNS.join(',')},${COMMUNITY_COLUMNS.join(',')}`,
