@@ -213,14 +213,16 @@ BIOME_THRESHOLDS = {
 }
 
 # Drawn on the client; defined here so the server and the browser cannot drift.
+# 2026-10-31 (the user, prototype E): the colours of the 3D prototype C, measured
+# off its pictures - a deeper sea, and land in warmer, more natural greens.
 BIOME_COLORS = {
-    "sea": "#46AEE6",
-    "shallow": "#9DD9F5",
-    "desert": "#EAD39A",
-    "savanna": "#C4DC86",
-    "plains": "#94C973",
-    "forest": "#5AAE72",
-    "mountain": "#3F9468",
+    "sea": "#1D88C7",
+    "shallow": "#3EA7D0",
+    "desert": "#E3C98B",
+    "savanna": "#9CBB5E",
+    "plains": "#74AD4E",
+    "forest": "#5C9F48",
+    "mountain": "#4D8A40",
 }
 
 # Settlement glyph by interaction count. islands' table, unchanged.

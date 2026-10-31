@@ -4,7 +4,7 @@
 //
 // seaFor() is pure (tests run it); applyScreenTone() writes the result to --page-sea.
 
-import { PALETTE, TIMES, addressParam, timeOfDay } from './map/palette.js';
+import { PAGE_SEA, TIMES, addressParam, timeOfDay } from './map/palette.js';
 
 const rgb = (hex) => [16, 8, 0].map((shift) => (parseInt(hex.slice(1), 16) >> shift) & 255);
 const hex = (c) => `#${c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
@@ -17,7 +17,7 @@ const BLENDS = {
 };
 
 /** The sea colour of a time of day ('morning' | 'day' | 'evening' | 'night') as #RRGGBB. */
-export function seaFor(tod, base = PALETTE.sea) {
+export function seaFor(tod, base = PAGE_SEA) {
   let c = rgb(base);
   (TIMES[tod] || []).forEach((layer) => {
     const mix = BLENDS[layer.blend] || ((_, s) => s);
@@ -48,7 +48,7 @@ export function whiteContrast(color) {
 export function pageSeaFor(tod) {
   const sea = seaFor(tod);
   if (tod === 'day') return sea;
-  const floor = whiteContrast(PALETTE.sea);
+  const floor = whiteContrast(PAGE_SEA);
   let c = rgb(sea);
   let guard = 0;
   while (whiteContrast(hex(c)) < floor && guard++ < 40) c = c.map((v) => v * 0.97);

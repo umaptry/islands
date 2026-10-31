@@ -13,6 +13,7 @@
 // real. The bounds give the off-screen canvas its size and the returned box.
 
 import { PALETTE, mixHex } from './palette.js';
+import { SHADOW_OF, facesOf, houseWindow, partsOf, shadowOutline } from './mesh.js';
 
 export const TIER_COUNT = 5;
 
@@ -50,12 +51,13 @@ function calmColor(hex) {
 /** A canvas context that also keeps track of what it drew (bounds, lights).
  * With ctx = null it only measures. `vis` is what the eye sees (the returned
  * box); `all` also holds the soft shadows (the off-screen canvas size). */
-function makePen(ctx, { calm, night, px, soft = 1 }) {
+function makePen(ctx, { calm, night, px, soft = 1, hair = 0 }) {
   const empty = () => ({ l: Infinity, t: Infinity, r: -Infinity, b: -Infinity });
   const vis = empty();
   const all = empty();
   const lights = [];
   let shadowMode = false;
+  let anchor = null;
   const tint = calm ? calmColor : (c) => c;
 
   const seen = (x, y, pad = 0) => {
@@ -72,6 +74,23 @@ function makePen(ctx, { calm, night, px, soft = 1 }) {
 
   const pen = {
     night, vis, all, lights,
+    /** Where the foot of the thing is (y), when that is not the lowest point. */
+    foot(y) { anchor = y; },
+    get anchor() { return anchor; },
+    /** One face of a solid shape: filled and edged in the same colour, so no
+     * hairline of the ground shows between two faces. */
+    facet(pts, fill) {
+      pts.forEach(([x, y]) => seen(x, y));
+      if (!ctx) return;
+      const c = tint(fill);
+      ctx.fillStyle = c;
+      ctx.strokeStyle = c;
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = hair;
+      path(pts);
+      ctx.fill();
+      ctx.stroke();
+    },
     poly(pts, fill, alpha = 1) {
       pts.forEach(([x, y]) => seen(x, y));
       if (!ctx) return;
@@ -245,33 +264,6 @@ function tree(p, cx, cy, r, tone = 0) {
   p.circ(cx + r * 0.35, cy - r * 0.55, r * 0.5, dark(leaf, 0.14), 0.45);
 }
 const treeShadow = (p, cx, cy, r) => p.shadowEll(cx + r * 0.7, cy + r * 0.2, r * 1.1, r * 0.55);
-
-function pine(p, cx, cy, r, tone = 0) {
-  const leaf = mixHex(dark(PALETTE.forest, 0.28), tone === 1 ? PALETTE.forest : INK, 0.12);
-  p.poly([[cx - 0.35 * r, cy], [cx + 0.35 * r, cy], [cx + 0.35 * r, cy - 0.7 * r], [cx - 0.35 * r, cy - 0.7 * r]], dark(WOOD, 0.35));
-  const tier = (apexY, baseY, hw) => {
-    p.poly([[cx, apexY], [cx - hw, baseY], [cx, baseY + hw * 0.22]], light(leaf, 0.2));
-    p.poly([[cx, apexY], [cx + hw, baseY], [cx, baseY + hw * 0.22]], leaf);
-  };
-  tier(cy - 2.5 * r, cy - 0.5 * r, 1.05 * r);
-  tier(cy - 3.6 * r, cy - 1.7 * r, 0.8 * r);
-}
-
-function bush(p, cx, cy, r, tone = 0) {
-  const leaf = mixHex(LEAF, PALETTE.forest, tone === 1 ? 0.4 : 0.2);
-  p.circ(cx - r * 0.6, cy - r * 0.5, r * 0.62, leaf);
-  p.circ(cx + r * 0.55, cy - r * 0.5, r * 0.66, dark(leaf, 0.06));
-  p.circ(cx, cy - r * 0.85, r * 0.72, leaf);
-  p.circ(cx - r * 0.3, cy - r * 1.1, r * 0.34, light(PALETTE.forest, 0.25), 0.8);
-}
-
-function rock(p, cx, cy, r, tone = 0) {
-  const base = mixHex(PALETTE.sand, '#8A9096', tone === 1 ? 0.62 : 0.5);
-  const pt = (x, y) => [cx + x * r, cy + y * r];
-  p.poly([pt(-1, -0.15), pt(-0.7, -0.95), pt(0.15, -1.2), pt(0.95, -0.8), pt(1.1, -0.1), pt(0.35, 0.12), pt(-0.5, 0.1)], base);
-  p.poly([pt(-0.7, -0.95), pt(0.15, -1.2), pt(0.1, -0.5), pt(-0.55, -0.45), pt(-1, -0.15)], light(base, 0.35));
-  p.poly([pt(0.95, -0.8), pt(1.1, -0.1), pt(0.35, 0.12), pt(0.2, -0.55)], dark(base, 0.2));
-}
 
 /** Seeded random numbers (mulberry32): the same island always gets the same layout. */
 function rng(seed) {
@@ -794,22 +786,37 @@ function landmarkScene(p, name) {
 }
 
 // ---------------------------------------------------------------- tree sprites
+// Trees, rocks and houses are small solids (mesh.js): their faces are laid down
+// with the pen, in world units, and the sprite is scaled so that TREE_UNITS
+// (or HOUSE_UNITS) design units are `size` px wide. The foot of the picture is
+// the point on the ground the thing stands on.
 const TREE_KINDS = ['tree', 'pine', 'bush', 'rock'];
-const TREE_R = 5;
+const TREE_UNITS = 2.2;    // a round tree or a pine is this wide, in world units, at size 1
+const HOUSE_UNITS = 3;     // `size` of a house is this many world units, in px
+
+/** Draw the faces of a solid, then its light (a house window at night). */
+function solidScene(p, kind, variant) {
+  p.foot(0);
+  facesOf(partsOf(kind, variant)).forEach((face) => p.facet(face.pts, face.fill));
+}
+
+function solidShadowScene(p, kind) {
+  const [rr, h] = SHADOW_OF[kind];
+  p.shadow(shadowOutline(rr, h));
+}
 
 function treeScene(p, kind, seed) {
-  const tone = Math.abs(seed | 0) % 3;
-  if (kind === 'pine') { pine(p, 0, 0, TREE_R * 0.8, tone); }
-  else if (kind === 'bush') { bush(p, 0, 0, TREE_R * 0.8, tone); }
-  else if (kind === 'rock') { rock(p, 0, 0, TREE_R * 0.8, tone); }
-  else { tree(p, 0, 0, TREE_R, tone); }
+  solidScene(p, kind, kind === 'rock' ? seed : 0);
 }
 
 function treeShadowScene(p, kind) {
-  const r = TREE_R * (kind === 'tree' ? 1 : 0.8);
-  if (kind === 'pine') p.shadow([[0, 0.5], [r * 2.6, r * 0.7], [r * 1.4, r * 0.1]]);
-  else if (kind === 'rock') p.shadowEll(r * 0.7, r * 0.15, r * 1.1, r * 0.4);
-  else p.shadowEll(r * 0.7, r * 0.2, r * 1.2, r * 0.55);
+  solidShadowScene(p, kind);
+}
+
+function houseScene(p, seed) {
+  solidScene(p, 'house', seed);
+  const [x, y] = houseWindow(seed);
+  p.light(x, y, 1.6, 0.7);
 }
 
 // ---------------------------------------------------------------- cache
@@ -885,14 +892,15 @@ function render({ scene, shadows, size, calm, night, dpr, fitKey, fitMode, light
   if (shadows) shadows(probe);
   scene(probe);
   const { vis, all } = probe;
-  const shiftY = -vis.b * k; // the foot of the thing sits on y = 0
+  const base = probe.anchor === null ? vis.b : probe.anchor;
+  const shiftY = -base * k; // the foot of the thing sits on y = 0
   const m = 4;
   const cl = Math.floor(all.l * k - m);
   const ct = Math.floor(all.t * k + shiftY - m);
   const cap = sharp ? Infinity : 700;
   const cw = Math.min(cap, Math.ceil(all.r * k + m - cl));
   const ch = Math.min(cap, Math.ceil(all.b * k + shiftY + m - ct));
-  const rel = { l: vis.l * k, r: vis.r * k, t: vis.t * k + shiftY, b: 0 };
+  const rel = { l: vis.l * k, r: vis.r * k, t: vis.t * k + shiftY, b: vis.b * k + shiftY };
   const scaleLights = (list) => list.map((l) => ({ ...l, x: l.x * k, y: l.y * k + shiftY, r: l.r * k }));
   // The night layer only needs where the lights are, which the measuring pass
   // already knows: no picture of the building itself.
@@ -907,7 +915,7 @@ function render({ scene, shadows, size, calm, night, dpr, fitKey, fitMode, light
     cx.setTransform(dpr, 0, 0, dpr, -cl * dpr, -ct * dpr);
     cx.translate(0, shiftY);
     cx.scale(k, k);
-    pen = makePen(cx, flags);
+    pen = makePen(cx, { ...flags, hair: 0.7 / (k * dpr) });
     if (shadows) shadows(pen);
     scene(pen);
   } catch {
@@ -1013,7 +1021,7 @@ function stamp(ctx, e, x, foot, alpha, size) {
     ctx.imageSmoothingQuality = quality;
   }
   if (alpha < 1) ctx.globalAlpha = prev;
-  return placeBox({ l: e.rel.l * f, r: e.rel.r * f, t: e.rel.t * f, b: 0 }, x, foot);
+  return placeBox({ l: e.rel.l * f, r: e.rel.r * f, t: e.rel.t * f, b: e.rel.b * f }, x, foot);
 }
 
 // ---------------------------------------------------------------- the public drawing
@@ -1045,23 +1053,39 @@ export function drawLandmark(ctx, name, x, foot, size, opts = {}) {
   return stamp(ctx, e, x, foot, alpha, size);
 }
 
-/** Draw a tree, pine, bush or rock standing on (x, foot); `size` is its width. */
+/** Draw a tree, pine, bush or rock standing on (x, foot); `size` is the width
+ * of a tree of size 1 in px (a rock or bush is smaller by its own shape). */
 export function drawTree(ctx, kind, x, foot, size, opts = {}) {
   if (!ctx || !(size > 0)) return null;
   const { alpha = 1, calm = false, seed = 0 } = opts;
   const k = TREE_KINDS.includes(kind) ? kind : 'tree';
   const dpr = scaleOf(ctx);
-  const tone = Math.abs(seed | 0) % 3;
+  const tone = k === 'rock' ? Math.abs(seed | 0) % 3 : 0;
   const e = pickEntry({ shape: 'tree', id: k, calm, night: false, dpr, seed: tone }, size, (s) => render({
     scene: (p) => treeScene(p, k, tone),
     shadows: (p) => treeShadowScene(p, k),
-    size: s, calm, night: false, dpr, fitMode: 'width', fitKey: `t|${k}`, sharp: s > STEP_MAX,
+    size: s, calm, night: false, dpr, fitMode: TREE_UNITS, fitKey: `t|${k}`, sharp: s > STEP_MAX,
+  }));
+  return stamp(ctx, e, x, foot, alpha, size);
+}
+
+/** Draw a house standing on (x, foot). `size` is the length of 3 world units in
+ * px; `seed` turns it (15 degrees a step, six turns). */
+export function drawHouse(ctx, x, foot, size, opts = {}) {
+  if (!ctx || !(size > 0)) return null;
+  const { alpha = 1, calm = false, seed = 0 } = opts;
+  const dpr = scaleOf(ctx);
+  const turn = ((Math.abs(seed | 0) % 6) + 6) % 6;
+  const e = pickEntry({ shape: 'house', id: 'house', calm, night: false, dpr, seed: turn }, size, (s) => render({
+    scene: (p) => houseScene(p, turn),
+    shadows: (p) => solidShadowScene(p, 'house'),
+    size: s, calm, night: false, dpr, fitMode: HOUSE_UNITS, fitKey: 'h', sharp: s > STEP_MAX,
   }));
   return stamp(ctx, e, x, foot, alpha, size);
 }
 
 /** The night's lights only: call after the dark colour has been laid over the
- * map. what = { tier } or { landmark: name }; pass the same `seed` / `calm` the
+ * map. what = { tier } or { landmark: name } or { house: true, seed }; pass the same `seed` / `calm` the
  * building was drawn with so the windows line up. */
 export function drawNightLights(ctx, what, x, foot, size) {
   if (!ctx || !what || !(size > 0)) return;
@@ -1075,6 +1099,13 @@ export function drawNightLights(ctx, what, x, foot, size) {
     make = (s) => render({
       scene: (p) => landmarkScene(p, what.landmark), lightsOnly: true,
       size: s, calm, night: true, dpr, fitMode: 26, fitKey: `l|${id}`,
+    });
+  } else if (what.house) {
+    const turn = ((Math.abs(what.seed | 0) % 6) + 6) % 6;
+    parts = { shape: 'lights-house', id: 'house', calm, night: true, dpr, seed: turn };
+    make = (s) => render({
+      scene: (p) => houseScene(p, turn), lightsOnly: true,
+      size: s, calm, night: true, dpr, fitMode: HOUSE_UNITS, fitKey: 'h',
     });
   } else {
     const t = Math.max(0, Math.min(TIER_COUNT - 1, Math.round(what.tier) || 0));

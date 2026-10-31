@@ -5,13 +5,14 @@
 //
 // This file is pure (no DOM, no imports), so the tests and the workers can use it.
 
+// 2026-10-31: the ground in the colours of prototype C (see core/config.py).
 export const PALETTE = {
-  sea: '#46AEE6',
-  shallow: '#9DD9F5',
-  sand: '#EAD39A',
-  grass: '#94C973',
-  forest: '#5AAE72',
-  peak: '#3F9468',
+  sea: '#1D88C7',
+  shallow: '#3EA7D0',
+  sand: '#E3C98B',
+  grass: '#74AD4E',
+  forest: '#5C9F48',
+  peak: '#4D8A40',
   halo: '#1D5F90',      // the dark rim round white island names
   wall: '#FFFFFF',      // buildings
   roof: '#EE6B5A',
@@ -44,6 +45,11 @@ export function pinColor(value) {
 // The time of day the map is painted in. Layers go over the ground and the
 // buildings and under the pins and names, each { color, blend, alpha }, with
 // `blend` a canvas globalCompositeOperation.
+// The page-like screens (compose, DM, マイページ ...) stay in the sea they had
+// before the map's sea deepened (screen-tone.js): a change of the map is not a
+// change of every screen.
+export const PAGE_SEA = '#46AEE6';
+
 export const TIMES = {
   morning: [
     { color: '#FFD9B8', blend: 'multiply', alpha: 0.26 },

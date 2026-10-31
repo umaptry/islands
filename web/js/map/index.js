@@ -28,7 +28,7 @@ import { beamProgress, beamStyle } from '../match-rules.js';
 import { sparkleLevel, sparkleSpots } from './sparkles.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
-import { TIER_COUNT, drawLandmark, drawNightLights, drawSettlement, drawTree, setSettled } from './buildings.js';
+import { TIER_COUNT, drawHouse, drawLandmark, drawNightLights, drawTree, setSettled } from './buildings.js';
 import { PREVIEW_RATIO, buildDetail, buildTerrain, gridTerrain, sharpPlan, toCanvas } from './terrain.js';
 import { drawSurf, surfShow } from './surf.js';
 import { offThread } from './offthread.js';
@@ -855,20 +855,24 @@ function liftLandAtNight(terrain, closeUp, grid, alpha) {
   ctx.restore();
 }
 
-/** Windows lit at night, over the dark layer: every settlement and landmark
- * that was drawn, with the seed it was drawn with. */
-function paintNightLights(places, townShow, calmOf) {
-  if (townShow <= 0) return;
+/** Windows lit at night, over the dark layer: every house and landmark that
+ * was drawn, with the seed it was drawn with. */
+function paintNightLights(places, townShow, calmOf, houses) {
   ctx.save();
-  places.forEach((place) => {
-    if (!place.town) return;
-    const calm = calmOf(place.island);
-    ctx.globalAlpha = place.fade * place.show;
-    drawNightLights(ctx, { tier: place.tier, seed: place.seed, calm }, place.x, place.foot, place.size);
-    (place.marks || []).forEach((mark) => {
-      drawNightLights(ctx, { landmark: mark.name, calm }, mark.x, mark.foot, mark.size);
-    });
+  houses.forEach((house) => {
+    ctx.globalAlpha = house.alpha;
+    drawNightLights(ctx, { house: true, seed: house.seed, calm: house.calm }, house.x, house.foot, house.size);
   });
+  if (townShow > 0) {
+    places.forEach((place) => {
+      if (!place.town) return;
+      const calm = calmOf(place.island);
+      ctx.globalAlpha = place.fade * place.show;
+      (place.marks || []).forEach((mark) => {
+        drawNightLights(ctx, { landmark: mark.name, calm }, mark.x, mark.foot, mark.size);
+      });
+    });
+  }
   ctx.restore();
 }
 
@@ -1251,17 +1255,44 @@ function renderMap(time) {
     }
     return { island, members, tier, size, span, seed, x: at.x, foot: at.y, fade, show, town: true, home };
   }).filter(Boolean);
-  const towns = places.filter((place) => place.town);
+  // One house for every post that has a face on the map, as big as a length in
+  // the world, up and to the right of it - the person stands in front of their
+  // door (2026-11-01, the user: south east of the face, the person looked to be
+  // behind the house). It also stands clear of its pin on the screen
+  // (2026-10-31, the user: all the way in, the face stood on the house's roof).
+  // A face keeps one size in px at every zoom while the house grows with the
+  // map, so the house's nearest corner keeps whatever the face - its unread dot
+  // included - or, before faces show, the dot takes up, off to the north east.
+  const houseSize = scale * HOUSE_UNITS;
+  const houses = [];
+  if (houseSize >= HOUSE_MIN) {
+    const islandOf = new Map();
+    places.forEach((place) => place.members.forEach((id) => islandOf.set(id, place)));
+    const faces = scale >= faceScale();
+    const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
+    visible.forEach(({ post, point }) => {
+      const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
+      const x = point.x + clear * Math.SQRT1_2 + houseSize * HOUSE_BODY[0];
+      const foot = point.y - clear * Math.SQRT1_2 - houseSize * HOUSE_BODY[1];
+      if (x < -houseSize || x > width + houseSize || foot < -houseSize || foot > height + houseSize * 2) return;
+      const place = islandOf.get(post.id);
+      const own = stage && post.id === reveal.id ? stage.land : 1;
+      houses.push({
+        x, foot, size: houseSize, seed: hashId(post.id), calm: Boolean(place && place.island.quiet),
+        alpha: own * (place ? place.fade : 1), wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
+      });
+    });
+  }
 
   if (terrain && terrain.trees) {
     const old = before && before.trees
       ? new Set(before.trees.map((tree) => `${tree.x},${tree.y},${tree.name}`)) : null;
     if (old) {
-      drawTrees(before.trees, towns, far ? [] : visible, far, 1);
+      drawTrees(before.trees, houses, far ? [] : visible, far, 1);
       drawTrees(terrain.trees.filter((tree) => !old.has(`${tree.x},${tree.y},${tree.name}`)),
-        towns, far ? [] : visible, far, stage.land);
+        houses, far ? [] : visible, far, stage.land);
     } else {
-      drawTrees(terrain.trees, towns, far ? [] : visible, far, 1);
+      drawTrees(terrain.trees, houses, far ? [] : visible, far, 1);
     }
   }
 
@@ -1288,7 +1319,9 @@ function renderMap(time) {
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
   if (matchBeams) paintMatchBeams(lineView);
 
-  // Settlements and their landmarks, back to front.
+  // Houses and landmarks, back to front. (There is no town any more: an island
+  // keeps a small box where its town stood, for its name, its tap and its glints.)
+  const standing = [];
   places.sort((a, b) => a.foot - b.foot).forEach((place) => {
     const { island, size, x, foot } = place;
     if (!place.town) {
@@ -1311,23 +1344,28 @@ function renderMap(time) {
         place.marks.push({ name, size: markSize, x: at.x, foot: at.y });
       });
     }
-    const pieces = [...place.marks, { main: true, x, foot }].sort((a, b) => a.foot - b.foot);
     const alpha = place.fade * place.show;
-    pieces.forEach((piece) => {
-      const box = piece.main
-        ? drawSettlement(ctx, place.tier, piece.x, piece.foot, size, { alpha, calm, seed: place.seed })
-        : drawLandmark(ctx, piece.name, piece.x, piece.foot, markSize, { alpha, calm });
-      if (piece.main) place.box = box;
-      else piece.box = box;
+    place.marks.forEach((piece) => {
+      standing.push({
+        foot: piece.foot,
+        draw: () => { piece.box = drawLandmark(ctx, piece.name, piece.x, piece.foot, markSize, { alpha, calm }); },
+      });
     });
-    place.box = place.box || { left: x - size / 2, right: x + size / 2, top: foot - size, bottom: foot };
+    place.box = { left: x - size / 2, right: x + size / 2, top: foot - size, bottom: foot };
   });
+  houses.forEach((house) => {
+    standing.push({
+      foot: house.foot,
+      draw: () => drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed }),
+    });
+  });
+  standing.sort((a, b) => a.foot - b.foot).forEach((item) => item.draw());
   drawPlanes(ctx, lineView, linePlan, time);
   // The fog goes under the time-of-day layers so its edge takes the evening or
   // night colour with the rest of the sea.
   drawFog(ctx, view);
   paintTimeOfDay();
-  if (tod === 'night') paintNightLights(places, townShow, calmOf);
+  if (tod === 'night') paintNightLights(places, townShow, calmOf, houses);
   // Over the time-of-day tint, so the glints stay white at any hour.
   if (far && freshIslands.size) drawFreshGlow(places, motion);
 
@@ -1832,39 +1870,82 @@ function landAtWorld(list, x, y) {
   return sum >= thresholds[order[1]];
 }
 
-/** Trees, bushes and rocks from the terrain's scatter, kept off the
- * settlements and out from under faces, and off the water: a crown reaching over
- * the shore stays home. Zoomed out, every other one. */
-const TREE_WORLD = 1.1;   // world units per tree (k = 1)
+/** Trees, bushes and rocks from the terrain's scatter, kept off the houses and
+ * out from under faces, and off the water: a crown reaching over the shore
+ * stays home (a rock in the shallows is meant to stand in the water, in a pale
+ * ring of broken water). Zoomed out, every other one. */
+const TREE_WORLD = 2.2;   // world units across a tree of size 1 (a round tree or a pine)
 const TREE_MIN = 3;       // px: smaller than this is not drawn
-const TREE_MAX = 44;      // px: a ceiling for the largest zoom
+const TREE_MAX = 400;     // px: a ceiling for the largest zoom
+const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
+const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
+// Of a house's size: how far its walls and roof reach left of where it stands,
+// and below its foot (its shadow falls further, down and to the right).
+const HOUSE_BODY = [0.7, 0.44];
+const HOUSE_GAP = 3;      // px between a pin and its house's nearest corner
+const HOUSE_DOT_CLEAR = 6;   // px a dot pin takes up, its unread ring included
+const HOUSE_CLEAR = 1.9;  // world units a tree keeps from a house's foot
+const REEF_RING = 'rgba(225,246,252,0.45)';
 
-function drawTrees(trees, places, posts, thin, alpha = 1) {
-  // A tree is a length in the world, like the towns, and a tenth of what it was
-  // (2026-10-19, the user): it grows with the map, and one too small to see on
-  // screen is not drawn - zoomed out there are no trees.
-  const base = state.camera.scale * TREE_WORLD;
+function drawTrees(trees, houses, posts, thin, alpha = 1) {
+  // A tree is a length in the world, like the houses: it grows with the map, and
+  // one too small to see on screen is not drawn - zoomed out there are no trees.
+  const scale = state.camera.scale;
+  const base = scale * TREE_WORLD;
   // With the coarse layer in play some land is not any post's cone: skip the check.
   const check = !state.saturated && groundList.length > 0;
-  trees.forEach((tree) => {
-    if (thin && tree.k < 1) return;
-    const p = toScreen(tree.x, tree.y);
-    if (p.x < -30 || p.x > width + 30 || p.y < -30 || p.y > height + 40) return;
-    const size = Math.min(TREE_MAX, base * tree.k) * (tree.name === 'bush' || tree.name === 'rock' ? 0.7 : 1);
-    if (size < TREE_MIN) return;
-    const foot = p.y + size * 0.35;
-    const covered = places.some((place) => Math.abs(p.x - place.x) < place.size * 1.45
-      && foot > place.foot - place.size * 1.15 && foot < place.foot + place.size * 0.55);
-    if (covered) return;
-    if (posts.some(({ point }) => Math.abs(point.x - p.x) < 15 && Math.abs(point.y - p.y) < 18)) return;
-    if (check) {
-      const wet = [-0.35, 0, 0.35].some((dx) => {
-        const at = toWorld(p.x + dx * size, foot);
-        return !landAtWorld(groundList, at.x, at.y);
-      });
-      if (wet) return;
+  // Houses in 4 x 4 world cells, so a tree asks a few houses, not all of them.
+  const bins = new Map();
+  houses.forEach((house) => {
+    const key = `${Math.floor(house.wx / 4)},${Math.floor(house.wy / 4)}`;
+    if (!bins.has(key)) bins.set(key, []);
+    bins.get(key).push(house);
+  });
+  const nearHouse = (tree) => {
+    const gx = Math.floor(tree.x / 4);
+    const gy = Math.floor(tree.y / 4);
+    const reach = HOUSE_CLEAR + 0.5 * tree.k;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const list = bins.get(`${gx + dx},${gy + dy}`);
+        if (list && list.some((house) => Math.hypot(house.wx - tree.x, house.wy - tree.y) < reach)) return true;
+      }
     }
-    drawTree(ctx, tree.name, p.x, foot, size, { alpha, seed: Math.round(tree.x * 7 + tree.y * 13) });
+    return false;
+  };
+  const shown = [];
+  trees.forEach((tree) => {
+    if (thin && tree.k < 1.3) return;
+    const p = toScreen(tree.x, tree.y);
+    if (p.x < -40 || p.x > width + 40 || p.y < -50 || p.y > height + 60) return;
+    const size = Math.min(TREE_MAX, base * tree.k);
+    if (size < TREE_MIN) return;
+    if (bins.size && nearHouse(tree)) return;
+    if (posts.some(({ point }) => Math.abs(point.x - p.x) < 15 && Math.abs(point.y - p.y) < 18)) return;
+    if (check && !tree.wet) {
+      const reach = tree.name === 'rock' ? 0.2 : 0.35;
+      const dry = [-reach, 0, reach].every((dx) => {
+        const at = toWorld(p.x + dx * size, p.y);
+        return landAtWorld(groundList, at.x, at.y);
+      });
+      if (!dry) return;
+    }
+    shown.push({ tree, p, size });
+  });
+  // The pale rings of the reef rocks first, so nothing behind a rock is washed over.
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.fillStyle = REEF_RING;
+  shown.forEach(({ tree, p }) => {
+    if (!tree.wet) return;
+    const r = (tree.k * 1.35 + 0.3) * scale;
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, r, r * 0.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+  shown.forEach(({ tree, p, size }) => {
+    drawTree(ctx, tree.name, p.x, p.y, size, { alpha, seed: Math.round(tree.x * 7 + tree.y * 13) });
   });
 }
 
@@ -2444,7 +2525,7 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     // Not opened yet on this device (2026-10-31, the user: inside an island there
     // was no telling which posts were new): a dot on the head's top right corner,
     // the top left when a "+N" is there.
-    if (!mine && !dim && freshIds.has(post.id)) unreadDot(point.x + (stack ? -1 : 1) * r * 0.74, headY - r * 0.74, r);
+    if (!mine && !dim && freshIds.has(post.id)) unreadDot(point.x + (stack ? -1 : 1) * r * UNREAD_AT, headY - r * UNREAD_AT, r);
 
     if (name) {
       ctx.save();
@@ -2473,11 +2554,17 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
 // the reds of the heat and of yours.
 const UNREAD = '#FF7A2F';
 
+const UNREAD_AT = 0.74;   // of the head's radius: the unread dot's centre, right and up
+const UNREAD_RIM = 1.6;   // px of white round the dot
+const unreadRadius = (headR) => Math.max(3.6, headR * 0.26);
+/** px from a face's centre to the far side of its unread dot. */
+const unreadReach = (headR) => headR * UNREAD_AT * Math.SQRT2 + unreadRadius(headR) + UNREAD_RIM;
+
 function unreadDot(x, y, headR) {
-  const r = Math.max(3.6, headR * 0.26);
+  const r = unreadRadius(headR);
   ctx.save();
   ctx.beginPath();
-  ctx.arc(x, y, r + 1.6, 0, Math.PI * 2);
+  ctx.arc(x, y, r + UNREAD_RIM, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff';
   ctx.fill();
   ctx.beginPath();

@@ -86,6 +86,70 @@ const mix = (a, b, t) => [
 const WHITE = [255, 255, 255];
 const FOAM = [240, 251, 255];
 const SHADE = [24, 46, 86];
+// 2026-10-31 (the user, prototype E): the light and shade on the steps at half
+// their old strength, the inner ring of the shallows barely lighter (it was 0.4),
+// and a little unevenness on each step (BUMP: how far the light moves, at most
+// LIT_MAX either way). The steps themselves stay: "the miniature look".
+const STEP = 0.5;
+const RING_MIX = 0.18;
+const BUMP = 2;
+const LIT_MAX = 0.08;
+// The sun of the relief, from the top-left and a little behind (prototype C).
+const SUN_X = -0.36 / Math.hypot(0.36, 0.49, 0.79);
+const SUN_Y = -0.49 / Math.hypot(0.36, 0.49, 0.79);
+
+/** Smooth value noise on a world-anchored grid (0..1), for the low mounds. */
+function hash2(x, y) {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function valueNoise(x, y) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi);
+  const b = hash2(xi + 1, yi);
+  const c = hash2(xi, yi + 1);
+  const d = hash2(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+/** How much each texture pixel's light is moved by the mounds (1 = not at all).
+ * The mounds are noise in world units, so they stay where they are at any zoom;
+ * only the land is worked out. */
+function moundLight(field, width, height, minX, minY, scaled) {
+  const n = width * height;
+  const { floor, steps } = bands();
+  const landFrom = steps[0].limit;
+  const bump = new Float32Array(n);
+  for (let y = 0; y < height; y += 1) {
+    const wy = minY + (y + 0.5) / scaled;
+    for (let x = 0; x < width; x += 1) {
+      const i = y * width + x;
+      if (field[i] < landFrom * 0.9 || field[i] < floor) continue;
+      const wx = minX + (x + 0.5) / scaled;
+      bump[i] = (valueNoise(wx * 0.22, wy * 0.22) - 0.5) * 1.2
+        + (valueNoise(wx * 0.7 + 17.3, wy * 0.7 + 5.1) - 0.5) * 0.18;
+    }
+  }
+  const lit = new Float32Array(n).fill(1);
+  const g = scaled / 2;
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const i = y * width + x;
+      if (field[i] < landFrom) continue;
+      const bx = (bump[i + 1] - bump[i - 1]) * g;
+      const by = (bump[i + width] - bump[i - width]) * g;
+      const shift = -(bx * SUN_X + by * SUN_Y) * 0.25 * BUMP;
+      lit[i] = 1 + Math.max(-LIT_MAX, Math.min(LIT_MAX, shift));
+    }
+  }
+  return lit;
+}
 
 /** Distance in pixels from the nearest set pixel of `mask` (chamfer 1/1.414). */
 function distanceFrom(mask, width, height) {
@@ -136,12 +200,12 @@ function distanceFrom(mask, width, height) {
  * width at every zoom; `perWorld` is texture pixels per world unit, so the
  * slope that decides light and shade is measured in the field's own units.
  */
-function paint(pixels, field, width, height, { perScreen, perWorld }) {
+function paint(pixels, field, width, height, { perScreen, perWorld, lit = null }) {
   const { floor, steps } = bands();
   const sea = hexToRgb(config().energy.biome_colors.sea);
   const shallow = steps[0].rgb;
   const shelf = mix(sea, shallow, 0.45);
-  const ring = mix(shallow, WHITE, 0.4);
+  const ring = mix(shallow, WHITE, RING_MIX);
   const shelfLimit = steps[0].limit * 0.35;
   const k = Math.max(0.25, perScreen);
   const foam = Math.max(1.5, 2.6 * k);
@@ -185,12 +249,17 @@ function paint(pixels, field, width, height, { perScreen, perWorld }) {
           if (t > 0) {
             const edge = (field[i] - steps[own - 1].limit) / Math.max(1e-4, Math.hypot(gx, gy));
             const w = t * (1 - smooth01(0, rim, edge));
-            if (w > 0) rgb = slope > 0 ? mix(rgb, WHITE, 0.14 * w) : mix(rgb, [rgb[0] * 0.82, rgb[1] * 0.84, rgb[2] * 0.84], w);
+            if (w > 0) rgb = slope > 0 ? mix(rgb, WHITE, 0.14 * w * STEP) : mix(rgb, [rgb[0] * 0.82, rgb[1] * 0.84, rgb[2] * 0.84], w * STEP);
           }
         }
         // No contour line: a higher band up-left of this pixel shades it softly.
         if (own >= 1 && x >= liftX && y >= liftY && band[i - liftY * width - liftX] > own) {
-          rgb = mix(rgb, SHADE, 0.14);
+          rgb = mix(rgb, SHADE, 0.14 * STEP);
+        }
+        // The mounds; on the beach at half strength.
+        if (lit) {
+          const f = own === 1 ? 1 + (lit[i] - 1) * 0.5 : lit[i];
+          if (f !== 1) rgb = [Math.round(rgb[0] * f), Math.round(rgb[1] * f), Math.round(rgb[2] * f)];
         }
       } else if (toLand[i] <= foam) {
         rgb = FOAM;
@@ -479,7 +548,8 @@ function compute({ posts, cells, region, scale, unit, padding, limit, smooth = f
 
   const pixels = new Uint8ClampedArray(width * height * 4);
   const perScreen = scaled / (scale || 1);
-  const toLand = paint(pixels, field, width, height, { perScreen, perWorld: scaled });
+  const lit = BUMP > 0 ? moundLight(field, width, height, minX, minY, scaled) : null;
+  const toLand = paint(pixels, field, width, height, { perScreen, perWorld: scaled, lit });
   if (smooth) smoothEdges(pixels, width, height);
   // The coast for the incoming surf (surf.js), found while the distance to the
   // land is at hand; the page strokes it each frame.
@@ -487,19 +557,38 @@ function compute({ posts, cells, region, scale, unit, padding, limit, smooth = f
   return { pixels, field, minX, minY, scale: scaled, width, height, coast };
 }
 
-// Trees, bushes and rocks stand on the ground the field already decided. A
-// jittered grid in WORLD units, hashed from the cell index, so a tree stays
-// where it is while you pan and zoom - the field is rebuilt at another
-// resolution, the grid is not.
-const TREE_STEP = 18;
+// Trees and rocks stand on the ground the field already decided. The places are
+// fixed in the WORLD, not in the texture: a grid of 2.2 world units with a
+// jitter, hashed from the world point itself, so a tree stays where it is while
+// you pan and zoom (the field is rebuilt at another resolution, the grid is
+// not). This is trial E of 2026-10-30: forest and mountain bear most, then
+// plains, then the yellow-green ground; lumps of the noise `grove` keep them in
+// groves rather than evenly spread; pines on the mountain and on one in three of
+// the rest. Rocks stand on the sand and in the shallows close to the land.
+const TREE_STEP = 2.2;
+const ROCK_STEP = 6;
+const ROCK_WET_FROM = 12;   // energy: the shallows nearer the land than this have rocks
+const TREE_LIMIT = 10000;   // more than this is thinned evenly
 
-// Per band: [chance, sprite, chance, sprite, ...], read as cumulative odds.
-const TREE_MIX = {
-  savanna: [0.10, 'bush'],
-  plains: [0.10, 'bush', 0.08, 'tree'],
-  forest: [0.55, 'tree', 0.30, 'pine'],
-  mountain: [0.35, 'pine', 0.30, 'rock'],
+// Chance per grid point, by the ground's name.
+const TREE_ODDS = { savanna: 0.03, plains: 0.08, forest: 0.25, mountain: 0.25 };
+// Chance per 6 x 6 cell of a rock: on the sand, and in the near shallows.
+const ROCK_ODDS = { desert: 0.15, shallow: 0.37 };
+
+const worldHash = (x, y) => {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return n - Math.floor(n);
 };
+function groveNoise(x, y) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  return worldHash(xi, yi) * (1 - u) * (1 - v) + worldHash(xi + 1, yi) * u * (1 - v)
+    + worldHash(xi, yi + 1) * (1 - u) * v + worldHash(xi + 1, yi + 1) * u * v;
+}
 
 function cellNoise(gx, gy, salt) {
   let h = (Math.imul(gx, 73856093) ^ Math.imul(gy, 19349663) ^ Math.imul(salt, 83492791)) >>> 0;
@@ -510,29 +599,52 @@ function cellNoise(gx, gy, salt) {
 
 function scatterTrees(field, width, height, minX, minY, scaled) {
   const { steps } = bands();
-  const trees = [];
   const maxX = minX + width / scaled;
   const maxY = minY + height / scaled;
-  for (let gy = Math.ceil(minY / TREE_STEP); gy * TREE_STEP < maxY; gy += 1) {
-    for (let gx = Math.ceil(minX / TREE_STEP); gx * TREE_STEP < maxX; gx += 1) {
-      const x = (gx + cellNoise(gx, gy, 1) * 0.8) * TREE_STEP;
-      const y = (gy + cellNoise(gx, gy, 2) * 0.8) * TREE_STEP;
-      const px = Math.floor((x - minX) * scaled);
-      const py = Math.floor((y - minY) * scaled);
-      if (px < 0 || py < 0 || px >= width || py >= height) continue;
-      const band = bandOf(field[py * width + px]);
-      const mix = band >= 0 ? TREE_MIX[steps[band].name] : null;
-      if (!mix) continue;
-      const roll = cellNoise(gx, gy, 3);
-      let odds = 0;
-      for (let i = 0; i < mix.length; i += 2) {
-        odds += mix[i];
-        if (roll < odds) {
-          trees.push({ x, y, name: mix[i + 1], k: 0.8 + cellNoise(gx, gy, 4) * 0.4 });
-          break;
-        }
-      }
+  const at = (x, y) => {
+    const px = Math.floor((x - minX) * scaled);
+    const py = Math.floor((y - minY) * scaled);
+    if (px < 0 || py < 0 || px >= width || py >= height) return null;
+    return field[py * width + px];
+  };
+  let trees = [];
+  for (let gj = Math.floor(minY / TREE_STEP); gj * TREE_STEP < maxY; gj += 1) {
+    for (let gi = Math.floor(minX / TREE_STEP); gi * TREE_STEP < maxX; gi += 1) {
+      const gx = gi * TREE_STEP;
+      const gy = gj * TREE_STEP;
+      const x = gx + (worldHash(gx, gy) - 0.5) * 1.8;
+      const y = gy + (worldHash(gy, gx) - 0.5) * 1.8;
+      const energy = at(x, y);
+      if (energy === null) continue;
+      const band = bandOf(energy);
+      const odds = band >= 0 ? TREE_ODDS[steps[band].name] : 0;
+      if (!odds) continue;
+      const grove = Math.sin(x * 0.11) * Math.cos(y * 0.13) + groveNoise(x * 0.08, y * 0.08) * 1.2;
+      if (worldHash(x * 3.1, y * 7.7) > odds || grove < 0.2) continue;
+      const k = 0.9 + worldHash(x, y * 2) * 0.8;
+      const pine = steps[band].name === 'mountain' || worldHash(x * 5, y) > 0.62;
+      trees.push({ x, y, name: pine ? 'pine' : 'tree', k });
     }
+  }
+  for (let gj = Math.floor(minY / ROCK_STEP); gj * ROCK_STEP < maxY; gj += 1) {
+    for (let gi = Math.floor(minX / ROCK_STEP); gi * ROCK_STEP < maxX; gi += 1) {
+      const x = (gi + cellNoise(gi, gj, 11)) * ROCK_STEP;
+      const y = (gj + cellNoise(gi, gj, 12)) * ROCK_STEP;
+      const energy = at(x, y);
+      if (energy === null) continue;
+      const band = bandOf(energy);
+      if (band < 0) continue;
+      const name = steps[band].name;
+      const wet = name === 'shallow';
+      if (wet ? energy <= ROCK_WET_FROM : name !== 'desert') continue;
+      if (cellNoise(gi, gj, 13) > ROCK_ODDS[name]) continue;
+      const k = wet ? 0.7 + cellNoise(gi, gj, 14) * 1.1 : 0.8 + cellNoise(gi, gj, 14) * 1.4;
+      trees.push(wet ? { x, y, name: 'rock', k, wet: true } : { x, y, name: 'rock', k });
+    }
+  }
+  if (trees.length > TREE_LIMIT) {
+    const all = trees.length;
+    trees = trees.filter((_, i) => Math.floor(((i + 1) * TREE_LIMIT) / all) > Math.floor((i * TREE_LIMIT) / all));
   }
   // Back to front, so a nearer tree overlaps the one behind it.
   return trees.sort((a, b) => a.y - b.y);
