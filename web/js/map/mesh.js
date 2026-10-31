@@ -23,6 +23,7 @@ export const SHADOW_STEP = [-SUN[0] / SUN[2], -SUN[1] / SUN[2]];
 
 export const COLOR = {
   pine: 0x2f8a4f, trunk: 0x8a5a3c, round: 0x58b05a, rock: 0x9a9aa6, wall: 0xf3e8d6, roof: 0xd9573f,
+  wood: 0xa97a4c, thatch: 0xd2a94a, stone: 0xc2bfb8, stoneDark: 0xa9a6a0, tower: 0x3f6db3, flag: 0xe0463a,
 };
 
 const hex = (h) => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
@@ -100,6 +101,130 @@ const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
+// ---------------------------------------------------------------- house tiers
+// A house grows with what its post gathers (2026-10-31, the user: reactions and
+// messages make the house next to it bigger: hut, house, manor, castle).
+export const HOUSE_TIERS = ['hut', 'house', 'manor', 'castle'];
+/** From this many reactions and messages on, a post's house is of that tier:
+ * [house, manor, castle]; fewer than the first is a hut. One place to tune. */
+export const HOUSE_TIER_FROM = [1, 4, 10];
+/** How wide each tier is across, in world units (a guide; the walls and roof
+ * are drawn to about this). */
+export const HOUSE_WIDTH = [2.4, 3, 4.2, 5.6];
+
+const count = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
+
+/** 0..3 (hut, house, manor, castle) from like + help + join + comment counts. */
+export function houseTier(post) {
+  const p = post || {};
+  const n = count(p.like_count) + count(p.help_count) + count(p.join_count) + count(p.comment_count);
+  return HOUSE_TIER_FROM.filter((from) => n >= from).length;
+}
+
+/** A tier by number or name, as an index 0..3 (anything else is a house). */
+export function tierIndex(tier) {
+  if (typeof tier === 'string') { const i = HOUSE_TIERS.indexOf(tier); return i < 0 ? 1 : i; }
+  const n = Math.round(Number(tier));
+  return Number.isFinite(n) ? Math.max(0, Math.min(3, n)) : 1;
+}
+
+/** Move a part by (ox, oy, oz), then turn it by `r` about the foot. */
+function placed(pt, ox, oy, oz, r) {
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  const P = ([x, y, z]) => [(x + ox) * c - (y + oy) * s, (x + ox) * s + (y + oy) * c, z + oz];
+  return { tris: pt.tris.map((t) => t.map(P)), center: P(pt.center), color: pt.color };
+}
+
+/** A hip roof on a w x d plan (w >= d): the ridge is w - d long (0 = a pyramid). */
+function roof(w, d, h, z0, color) {
+  const rl = Math.max(0, (w - d) / 2);
+  const a = [-w / 2, -d / 2, z0]; const b = [w / 2, -d / 2, z0];
+  const c = [w / 2, d / 2, z0]; const e = [-w / 2, d / 2, z0];
+  const r0 = [-rl, 0, z0 + h]; const r1 = [rl, 0, z0 + h];
+  const tris = [[a, b, r1], [a, r1, r0], [e, c, r1], [e, r1, r0], [a, e, r0], [b, c, r1]];
+  return part(tris, [0, 0, z0 + h * 0.3], color);
+}
+
+/** Groups of parts (a building = walls then roof) are laid down back to front. */
+function inOrder(groups) {
+  return groups.sort((a, b) => a.y - b.y).flatMap((g) => g.parts);
+}
+
+function tierParts(tier, turn) {
+  const r = (turn * Math.PI) / 12;
+  const g = (ox, oy, list) => {
+    const parts = list.map((f) => f(ox, oy));
+    const y = Math.sin(r) * ox + Math.cos(r) * oy;
+    return { y, parts };
+  };
+  const B = (w, d, h, z0, color) => (ox, oy) => placed(box(w, d, h, z0, color, 0), ox, oy, 0, r);
+  const R = (w, d, h, z0, color) => (ox, oy) => placed(roof(w, d, h, z0, color), ox, oy, 0, r);
+  const C = (seg, rad, h, z0, color) => (ox, oy) => placed(cyl(seg, rad, h, z0, color), ox, oy, 0, r);
+  const K = (seg, rad, h, z0, color) => (ox, oy) => placed(cone(seg, rad, h, z0, color, seg === 4 ? Math.PI / 4 : 0), ox, oy, 0, r);
+  switch (tier) {
+    case 0: // hut: one small wooden room under a low thatched roof
+      return inOrder([g(0, 0, [B(1.9, 1.7, 1.2, 0, COLOR.wood), R(2.3, 2.1, 0.95, 1.15, COLOR.thatch)])]);
+    case 2: // manor: two storeys, a wing at one end (an L), a chimney
+      return inOrder([
+        g(-0.5, -0.9, [B(3.8, 2.2, 2.6, 0, COLOR.wall), R(4.2, 2.6, 1.3, 2.55, COLOR.roof), B(0.5, 0.5, 1.1, 2.6, COLOR.stoneDark)]),
+        g(1.4, 0.8, [B(2.0, 2.4, 2.0, 0, COLOR.wall), R(2.4, 2.8, 1.1, 1.95, COLOR.roof)]),
+      ]);
+    case 3: // castle: a stone keep, four corner towers with blue cone roofs, a flag
+      return inOrder([
+        g(0, 0, [B(4.0, 4.0, 2.0, 0, COLOR.stone), B(2.2, 2.2, 1.6, 2.0, COLOR.stoneDark), K(4, 1.9, 1.3, 3.6, COLOR.tower),
+          C(4, 0.05, 1.3, 4.7, COLOR.trunk), B(0.7, 0.06, 0.4, 5.55, COLOR.flag)]),
+        g(-2.0, -2.0, [C(8, 0.8, 3.6, 0, COLOR.stone), K(8, 1.05, 1.5, 3.6, COLOR.tower)]),
+        g(2.0, -2.0, [C(8, 0.8, 3.6, 0, COLOR.stone), K(8, 1.05, 1.5, 3.6, COLOR.tower)]),
+        g(-2.0, 2.0, [C(8, 0.8, 3.6, 0, COLOR.stone), K(8, 1.05, 1.5, 3.6, COLOR.tower)]),
+        g(2.0, 2.0, [C(8, 0.8, 3.6, 0, COLOR.stone), K(8, 1.05, 1.5, 3.6, COLOR.tower)]),
+      ]);
+    default: return null;
+  }
+}
+
+/** The windows that glow at night, per tier: [x, y, r, a] on the picture
+ * (facesOf's units). Each wall shows its most front-facing side. */
+export function houseLights(tier, variant = 0) {
+  const t = tierIndex(tier);
+  const turn = ((Math.round(variant) % 6) + 6) % 6;
+  const r = (turn * Math.PI) / 12;
+  // Walls: [centre x, centre y, half width, half depth, window height, window r, how many on the side]
+  const walls = [
+    [[0, 0, 0.95, 0.85, 0.7, 1.0, 1]],
+    [[0, 0, 1.2, 1.2, 0.95, 1.6, 1]],
+    [[-0.5, -0.9, 1.9, 1.1, 0.9, 1.3, 2], [1.4, 0.8, 1.0, 1.2, 0.9, 1.3, 1]],
+    [[0, 0, 2.0, 2.0, 1.0, 1.4, 2], [0, 0, 1.1, 1.1, 2.7, 1.2, 1]],
+  ][t];
+  const out = [];
+  walls.forEach(([cx, cy, hw, hd, z, rad, n]) => {
+    let best = null;
+    for (let k = 0; k < 4; k += 1) {
+      const a = r + (k * Math.PI) / 2;
+      const nx = Math.cos(a); const ny = Math.sin(a);
+      const along = k % 2 === 0 ? hd : hw;      // the wall's own length: half of it
+      const out2 = k % 2 === 0 ? hw : hd;
+      const ex = cx * Math.cos(r) - cy * Math.sin(r);
+      const ey = cx * Math.sin(r) + cy * Math.cos(r);
+      const y = ey + ny * out2;
+      if (!best || y > best.y) best = { x: ex + nx * out2, y, tx: -ny, ty: nx, half: along };
+    }
+    for (let i = 0; i < n; i += 1) {
+      const u = n === 1 ? 0 : (i / (n - 1) - 0.5) * best.half * 1.1;
+      out.push([best.x + best.tx * u, (best.y + best.ty * u) * SINE - z * COSE, rad]);
+    }
+  });
+  if (t === 3) {
+    // a window in the front of each front tower
+    [[-2.0, 2.0], [2.0, 2.0]].forEach(([tx, ty]) => {
+      const ex = tx * Math.cos(r) - ty * Math.sin(r);
+      const ey = tx * Math.sin(r) + ty * Math.cos(r);
+      out.push([ex, (ey + 0.8) * SINE - 2.2 * COSE, 1.0]);
+    });
+  }
+  return out;
+}
+
 /** The shapes of one thing, at unit size. kind: tree | pine | bush | rock | house.
  * `variant` turns a rock (0..2) or a house (any whole number, 15 degrees a step). */
 export function partsOf(kind, variant = 0) {
@@ -109,6 +234,10 @@ export function partsOf(kind, variant = 0) {
     case 'rock': {
       const v = ((variant % 3) + 3) % 3;
       return [ico(1, [0.5, 0.65, 0.8][v], 0.12, COLOR.rock, v * 1.7 + 0.4, -0.04)];
+    }
+    case 'hut': case 'manor': case 'castle': {
+      const turn = ((Math.round(variant) % 6) + 6) % 6;
+      return tierParts(HOUSE_TIERS.indexOf(kind), turn);
     }
     case 'house': {
       const turn = ((Math.round(variant) % 6) + 6) % 6;
@@ -171,6 +300,7 @@ export function shadowOutline(rr, h, count = 14) {
 /** Size of each kind for its shadow: [radius, height] in world units at unit size. */
 export const SHADOW_OF = {
   tree: [1.1, 2.4], pine: [1.1, 2.6], bush: [0.85, 1.2], rock: [1, 0.8], house: [1.7, 3.55],
+  hut: [1.3, 2.2], manor: [2.7, 3.9], castle: [3.4, 5.4],
 };
 
 /** Where the middle of the wall that faces the viewer most is, and how high a

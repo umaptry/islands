@@ -14,7 +14,7 @@
 
 import { PALETTE, mixHex } from './palette.js';
 import { landmarkLights, landmarkMesh, landmarkSize } from './landmarks.js';
-import { SHADOW_OF, facesOf, houseWindow, partsOf, shadowOutline } from './mesh.js';
+import { HOUSE_TIERS, SHADOW_OF, facesOf, houseLights, partsOf, shadowOutline, tierIndex } from './mesh.js';
 
 export const TIER_COUNT = 5;
 
@@ -467,10 +467,9 @@ function treeShadowScene(p, kind) {
   solidShadowScene(p, kind);
 }
 
-function houseScene(p, seed) {
-  solidScene(p, 'house', seed);
-  const [x, y] = houseWindow(seed);
-  p.light(x, y, 1.6, 0.7);
+function houseScene(p, seed, tier = 1) {
+  solidScene(p, HOUSE_TIERS[tier], seed);
+  houseLights(tier, seed).forEach(([x, y, r]) => p.light(x, y, r, 0.7));
 }
 
 // ---------------------------------------------------------------- cache
@@ -725,22 +724,25 @@ export function drawTree(ctx, kind, x, foot, size, opts = {}) {
 }
 
 /** Draw a house standing on (x, foot). `size` is the length of 3 world units in
- * px; `seed` turns it (15 degrees a step, six turns). */
+ * px; `seed` turns it (15 degrees a step, six turns); `tier` is 0..3 or its name
+ * (hut, house, manor, castle; a house when left out). */
 export function drawHouse(ctx, x, foot, size, opts = {}) {
   if (!ctx || !(size > 0)) return null;
   const { alpha = 1, calm = false, seed = 0 } = opts;
   const dpr = scaleOf(ctx);
   const turn = ((Math.abs(seed | 0) % 6) + 6) % 6;
-  const e = pickEntry({ shape: 'house', id: 'house', calm, night: false, dpr, seed: turn }, size, (s) => render({
-    scene: (p) => houseScene(p, turn),
-    shadows: (p) => solidShadowScene(p, 'house'),
-    size: s, calm, night: false, dpr, fitMode: HOUSE_UNITS, fitKey: 'h', sharp: s > STEP_MAX,
+  const tier = tierIndex(opts.tier);
+  const kind = HOUSE_TIERS[tier];
+  const e = pickEntry({ shape: 'house', id: kind, calm, night: false, dpr, seed: turn }, size, (s) => render({
+    scene: (p) => houseScene(p, turn, tier),
+    shadows: (p) => solidShadowScene(p, kind),
+    size: s, calm, night: false, dpr, fitMode: HOUSE_UNITS, fitKey: `h|${kind}`, sharp: s > STEP_MAX,
   }));
   return stamp(ctx, e, x, foot, alpha, size);
 }
 
 /** The night's lights only: call after the dark colour has been laid over the
- * map. what = { tier } or { landmark: name } or { house: true, seed }; pass the same `seed` / `calm` the
+ * map. what = { tier } or { landmark: name } or { house: true, seed, tier: 0..3 }; pass the same `seed` / `calm` the
  * building was drawn with so the windows line up. */
 export function drawNightLights(ctx, what, x, foot, size) {
   if (!ctx || !what || !(size > 0)) return;
@@ -757,10 +759,12 @@ export function drawNightLights(ctx, what, x, foot, size) {
     });
   } else if (what.house) {
     const turn = ((Math.abs(what.seed | 0) % 6) + 6) % 6;
-    parts = { shape: 'lights-house', id: 'house', calm, night: true, dpr, seed: turn };
+    const tier = tierIndex(what.tier);
+    const kind = HOUSE_TIERS[tier];
+    parts = { shape: 'lights-house', id: kind, calm, night: true, dpr, seed: turn };
     make = (s) => render({
-      scene: (p) => houseScene(p, turn), lightsOnly: true,
-      size: s, calm, night: true, dpr, fitMode: HOUSE_UNITS, fitKey: 'h',
+      scene: (p) => houseScene(p, turn, tier), lightsOnly: true,
+      size: s, calm, night: true, dpr, fitMode: HOUSE_UNITS, fitKey: `h|${kind}`,
     });
   } else {
     const t = Math.max(0, Math.min(TIER_COUNT - 1, Math.round(what.tier) || 0));

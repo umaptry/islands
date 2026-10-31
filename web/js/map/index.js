@@ -36,6 +36,7 @@ import { groundOf } from './coast.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
+import { HOUSE_WIDTH, houseTier } from './mesh.js';
 import { PALETTE, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
 
 let canvas = null;
@@ -861,7 +862,7 @@ function paintNightLights(places, townShow, calmOf, houses) {
   ctx.save();
   houses.forEach((house) => {
     ctx.globalAlpha = house.alpha;
-    drawNightLights(ctx, { house: true, seed: house.seed, calm: house.calm }, house.x, house.foot, house.size);
+    drawNightLights(ctx, { house: true, seed: house.seed, tier: house.tier, calm: house.calm }, house.x, house.foot, house.size);
   });
   if (townShow > 0) {
     places.forEach((place) => {
@@ -1265,20 +1266,26 @@ function renderMap(time) {
   // included - or, before faces show, the dot takes up, off to the north east.
   const houseSize = scale * HOUSE_UNITS;
   const houses = [];
-  if (houseSize >= HOUSE_MIN) {
+  // The smallest tier is drawn from HOUSE_MIN px wide; a bigger one is wider, so it shows no later.
+  if (scale * HOUSE_WIDTH[0] >= HOUSE_MIN) {
     const islandOf = new Map();
     places.forEach((place) => place.members.forEach((id) => islandOf.set(id, place)));
     const faces = scale >= faceScale();
     const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
     visible.forEach(({ post, point }) => {
+      // Hut, house, manor, castle by what the post has gathered; a tier too small
+      // on screen (under HOUSE_MIN px wide) is not drawn.
+      const tier = houseTier(post);
+      if (scale * HOUSE_WIDTH[tier] < HOUSE_MIN) return;
       const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
-      const x = point.x + clear * Math.SQRT1_2 + houseSize * HOUSE_BODY[0];
-      const foot = point.y - clear * Math.SQRT1_2 - houseSize * HOUSE_BODY[1];
-      if (x < -houseSize || x > width + houseSize || foot < -houseSize || foot > height + houseSize * 2) return;
+      const x = point.x + clear * Math.SQRT1_2 + houseSize * HOUSE_BODY[tier][0];
+      const foot = point.y - clear * Math.SQRT1_2 - houseSize * HOUSE_BODY[tier][1];
+      const room = houseSize * 2;
+      if (x < -room || x > width + room || foot < -room || foot > height + room * 2) return;
       const place = islandOf.get(post.id);
       const own = stage && post.id === reveal.id ? stage.land : 1;
       houses.push({
-        x, foot, size: houseSize, seed: hashId(post.id), calm: Boolean(place && place.island.quiet),
+        x, foot, size: houseSize, tier, seed: hashId(post.id), calm: Boolean(place && place.island.quiet),
         alpha: own * (place ? place.fade : 1), wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
       });
     });
@@ -1356,7 +1363,7 @@ function renderMap(time) {
   houses.forEach((house) => {
     standing.push({
       foot: house.foot,
-      draw: () => drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed }),
+      draw: () => drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed, tier: house.tier }),
     });
   });
   standing.sort((a, b) => a.foot - b.foot).forEach((item) => item.draw());
@@ -1879,12 +1886,14 @@ const TREE_MIN = 3;       // px: smaller than this is not drawn
 const TREE_MAX = 400;     // px: a ceiling for the largest zoom
 const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
 const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
-// Of a house's size: how far its walls and roof reach left of where it stands,
-// and below its foot (its shadow falls further, down and to the right).
-const HOUSE_BODY = [0.7, 0.44];
+// Of a house's size, per tier (hut, house, manor, castle): how far its walls and
+// roof reach left of where it stands, and below its foot (its shadow falls
+// further, down and to the right). Measured on the drawn pictures (pixels at
+// least 120 opaque, the worst of the six turns, shadow left out).
+const HOUSE_BODY = [[0.54, 0.34], [0.7, 0.44], [0.89, 0.82], [1.3, 0.95]];
 const HOUSE_GAP = 3;      // px between a pin and its house's nearest corner
 const HOUSE_DOT_CLEAR = 6;   // px a dot pin takes up, its unread ring included
-const HOUSE_CLEAR = 1.9;  // world units a tree keeps from a house's foot
+const HOUSE_CLEAR = [1.5, 1.9, 2.9, 3.9];  // world units a tree keeps from a house's foot, per tier
 const REEF_RING = 'rgba(225,246,252,0.45)';
 
 function drawTrees(trees, houses, posts, thin, alpha = 1) {
@@ -1894,21 +1903,21 @@ function drawTrees(trees, houses, posts, thin, alpha = 1) {
   const base = scale * TREE_WORLD;
   // With the coarse layer in play some land is not any post's cone: skip the check.
   const check = !state.saturated && groundList.length > 0;
-  // Houses in 4 x 4 world cells, so a tree asks a few houses, not all of them.
+  // Houses in 6 x 6 world cells, so a tree asks a few houses, not all of them.
   const bins = new Map();
   houses.forEach((house) => {
-    const key = `${Math.floor(house.wx / 4)},${Math.floor(house.wy / 4)}`;
+    const key = `${Math.floor(house.wx / 6)},${Math.floor(house.wy / 6)}`;
     if (!bins.has(key)) bins.set(key, []);
     bins.get(key).push(house);
   });
   const nearHouse = (tree) => {
-    const gx = Math.floor(tree.x / 4);
-    const gy = Math.floor(tree.y / 4);
-    const reach = HOUSE_CLEAR + 0.5 * tree.k;
+    const gx = Math.floor(tree.x / 6);
+    const gy = Math.floor(tree.y / 6);
+    const grow = 0.5 * tree.k;
     for (let dx = -1; dx <= 1; dx += 1) {
       for (let dy = -1; dy <= 1; dy += 1) {
         const list = bins.get(`${gx + dx},${gy + dy}`);
-        if (list && list.some((house) => Math.hypot(house.wx - tree.x, house.wy - tree.y) < reach)) return true;
+        if (list && list.some((house) => Math.hypot(house.wx - tree.x, house.wy - tree.y) < HOUSE_CLEAR[house.tier] + grow)) return true;
       }
     }
     return false;
