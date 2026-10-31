@@ -59,6 +59,9 @@ const constant = (name) => {
   return [...match[1].matchAll(/'([^']*)'/g)].map((m) => m[1]).join('');
 };
 const EXTRA_COLUMNS = ['prompt', 'recruit_deadline', 'recruit_capacity'];
+// 2026-11-01: columns of accounts added by the join-approval migrations (M1/M2). net.js asks for them and falls back
+// to the narrow read on a 400, so they only have to be granted once the migrations exist (see joinReady below).
+const NEW_ACCOUNT_COLUMNS = ['age_band', 'job_title', 'name_confirmed_at'];
 // Added by the communities migration; net.js asks for it only when features.communities is on.
 const COMMUNITY_COLUMNS = ['community_id'];
 // Tables that only exist through later migrations (schema.sql is the first snapshot).
@@ -68,10 +71,13 @@ const substitutions = {
   'postColumns()': `${constant('POST_COLUMNS')},${EXTRA_COLUMNS.join(',')},${COMMUNITY_COLUMNS.join(',')}`,
   ACCOUNT_EMBED: constant('ACCOUNT_EMBED'),
   POST_AUTHOR_EMBED: constant('POST_AUTHOR_EMBED'),
+  // The whole of a person's page: the narrow columns and the new ones.
+  'accountColumns()': `${constant('ACCOUNT_COLUMNS')}${constant('ACCOUNT_COLUMNS_NEW')}`,
 };
 
 /** A select/order value with ${...} filled in. */
 function resolve(value) {
+  if (value in substitutions) return substitutions[value];
   const inner = value.replace(/^[`']|[`']$/g, '');
   return inner.replace(/\$\{([^}]*)\}/g, (_, name) => {
     assert.ok(name in substitutions, `unknown template ${name} in a select`);
@@ -152,6 +158,12 @@ const migrations = await Promise.all(migrationFiles.map((f) => readFile(new URL(
 const fromMigrations = grantsOf(migrations);
 const fromSchema = grantsOf([await read('../../supabase/schema.sql')]);
 
+// The migration of the join approval (2026-11-01, written by the database side). Until it is merged the tests
+// that need its text are skipped, and the checks on net.js itself still run.
+const JOIN_FILE = '20261101000000_join_approval.sql';
+const joinReady = migrationFiles.includes(JOIN_FILE);
+const joinSql = joinReady ? (await read(`../../supabase/migrations/${JOIN_FILE}`)).replace(/--.*$/gm, '') : '';
+
 function missing(grants, skip = () => false) {
   const problems = [];
   for (const { table, columns, where } of usedColumns()) {
@@ -186,13 +198,14 @@ test('the grant parser ends with the latest state of posts and accounts', () => 
 });
 
 test('every column net.js reads is granted by the migrations (latest state)', () => {
-  assert.deepEqual(missing(fromMigrations), []);
+  assert.deepEqual(missing(fromMigrations, (column, table) =>
+    !joinReady && table === 'accounts' && NEW_ACCOUNT_COLUMNS.includes(column)), []);
 });
 
 test('the same holds for schema.sql, apart from the columns added by later migrations', () => {
   assert.deepEqual(
     missing(fromSchema, (column, table) => EXTRA_COLUMNS.includes(column) || COMMUNITY_COLUMNS.includes(column)
-      || LATER_TABLES.includes(table)), []);
+      || LATER_TABLES.includes(table) || (table === 'accounts' && NEW_ACCOUNT_COLUMNS.includes(column))), []);
 });
 
 test('net.js never uses deleted_at on posts', () => {
@@ -216,6 +229,8 @@ test('the parser sees the DM message read, with its filters and order', () => {
   assert.ok(has('created_at', 'dm_messages order'));
 });
 
+const JOIN_RPCS = ['set_invite_approval', 'my_join_status', 'cancel_join_request', 'list_join_requests', 'decide_join_request'];
+
 test('every function net.js calls through rpc() is defined by a migration', () => {
   const names = [...net.matchAll(/\brpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
   for (const name of ['map_posts', 'notification_feed', 'talk_peers', 'my_talk_state', 'press_talk',
@@ -223,6 +238,7 @@ test('every function net.js calls through rpc() is defined by a migration', () =
     assert.ok(names.includes(name), `net.js should call ${name}`);
   }
   for (const name of new Set(names)) {
+    if (!joinReady && JOIN_RPCS.includes(name)) continue;   // its migration is not merged yet: see the join tests below
     assert.match(allSql, new RegExp(String.raw`create (?:or replace )?function (?:public\.)?${name}\s*\(`, 'i'),
       `${name} is not defined in the migrations`);
   }
@@ -311,4 +327,70 @@ test('the DM read marks: functions for signed-in people only, the table closed t
   assert.match(net, /rpc\('mark_dm_read', \{ room: roomId \}\)/);
   assert.match(net, /rpc\('dm_partner_read_at', \{ room: roomId \}\)/);
   assert.ok(!net.replace(/\/\/.*$/gm, '').includes("restCall('dm_reads'"), 'the table is never reached directly');
+});
+
+// ---- join approval (2026-11-01) ----------------------------------------------------
+// The names and arguments are the ones of D_関数の取り決め (2-1); the grants are checked against
+// supabase/migrations/20261101000000_join_approval.sql as soon as that file exists.
+
+test('net.js calls the join approval functions with the agreed argument names', () => {
+  const names = [...net.matchAll(/\brpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  for (const name of JOIN_RPCS) assert.ok(names.includes(name), `net.js should call ${name}`);
+  assert.match(net, /rpc\('set_invite_approval', \{ invite, approval \}\)/);
+  assert.match(net, /rpc\('my_join_status', \{\}\)/);
+  assert.match(net, /rpc\('cancel_join_request', \{ community \}\)/);
+  assert.match(net, /rpc\('list_join_requests', \{ community \}\)/);
+  assert.match(net, /rpc\('decide_join_request', \{ community, person, approve \}\)/);
+  // claim_invite: the terms agreed to go along; create_invite: the new arguments only when they are held.
+  assert.match(net, /rpc\('claim_invite', \{ code, consent \}\)/);
+  assert.match(net, /needs_approval: true/);
+  assert.match(net, /\.\.\.\(post \? \{ post \} : \{\}\)/);
+});
+
+test('the local routes are the ones of the table in 4-2', () => {
+  for (const route of ['/api/local/invites/${encodeURIComponent(invite)}/approval', '/api/local/join/status',
+    '/api/local/join/cancel', '/join-requests`', '/join-requests/${encodeURIComponent(person)}/decide']) {
+    assert.ok(net.includes(route), route);
+  }
+});
+
+test('a join approval function that the database does not have yet is "not known", not an error', () => {
+  for (const name of ['setInviteApproval', 'myJoinStatus', 'cancelJoinRequest', 'listJoinRequests', 'decideJoinRequest']) {
+    const bodies = [...net.matchAll(new RegExp(`${name}:[^\\n]*orUnknown`, 'g'))];
+    assert.equal(bodies.length, 2, `${name} is wrapped for both the database and the local server`);
+  }
+});
+
+test('the join approval functions are open to signed-in people and not to anon', { skip: !joinReady && `${JOIN_FILE} is not merged yet` }, () => {
+  const grantLines = (name) => joinSql.split(';').filter((s) =>
+    new RegExp(String.raw`grant execute on function (?:public\.)?${name}\(`, 'i').test(s));
+  for (const name of [...JOIN_RPCS, 'claim_invite', 'create_invite', 'list_invites']) {
+    assert.match(joinSql, new RegExp(String.raw`create (?:or replace )?function (?:public\.)?${name}\s*\(`, 'i'), `${name} is defined`);
+    const lines = grantLines(name);
+    assert.ok(lines.some((s) => /\bto\b[^;]*\bauthenticated\b/i.test(s)), `${name} must be executable by authenticated`);
+    assert.ok(lines.every((s) => !/\banon\b/i.test(s.replace(/revoke[\s\S]*/i, ''))), `${name} must not be granted to anon`);
+  }
+  // check_invite is the one that stays open to anon (a person opens a link before signing up).
+  assert.ok(grantLines('check_invite').some((s) => /\banon\b/i.test(s)), 'check_invite stays open to anon');
+});
+
+test('the join approval functions declare the argument names net.js uses', { skip: !joinReady && `${JOIN_FILE} is not merged yet` }, () => {
+  const declared = (name) => {
+    const m = joinSql.match(new RegExp(String.raw`create (?:or replace )?function public\.${name}\(([^)]*)\)`, 'i'));
+    assert.ok(m, `${name} is declared`);
+    return [...m[1].matchAll(/(?:^|,)\s*([a-z_]+)\s+(?:uuid|text|integer|boolean|double)/gi)].map((x) => x[1]);
+  };
+  assert.deepEqual(declared('claim_invite'), ['code', 'consent']);
+  assert.deepEqual(declared('create_invite'), ['community', 'minutes', 'until_end_of_day', 'needs_approval', 'post']);
+  assert.deepEqual(declared('set_invite_approval'), ['invite', 'approval']);
+  assert.deepEqual(declared('my_join_status'), []);
+  assert.deepEqual(declared('cancel_join_request'), ['community']);
+  assert.deepEqual(declared('list_join_requests'), ['community']);
+  assert.deepEqual(declared('decide_join_request'), ['community', 'person', 'approve']);
+});
+
+test('the new account columns are granted to signed-in people only', { skip: !joinReady && `${JOIN_FILE} is not merged yet` }, () => {
+  const accounts = fromMigrations.get('accounts');
+  assert.ok(accounts instanceof Set);
+  for (const column of NEW_ACCOUNT_COLUMNS) assert.ok(accounts.has(column), `${column} is granted`);
 });
