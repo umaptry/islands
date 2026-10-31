@@ -5,6 +5,16 @@ on the app's own domain, linked from the home page.
 """
 
 import re
+from datetime import datetime, timezone
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def before_the_revision(monkeypatch):
+    """These check the current text, which /{page} serves only until the new one takes effect (2026-11-16)."""
+    import app as application
+    monkeypatch.setattr(application, "policy_now", lambda: datetime(2026, 11, 1, tzinfo=timezone.utc))
 
 
 def test_the_privacy_policy_is_served(client):

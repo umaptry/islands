@@ -634,3 +634,16 @@ MATCH_CANDIDATES = 15
 # notification (the founder's decision, 10/29 evening: a 5-minute bundle needed a timer that is lost
 # while Cloud Run sleeps, so a push could be late or never come).
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 利用規約・プライバシーポリシーの改定 (2026-11-16 施行)
+# 施行の前は今の文 (web/terms.html・privacy.html)、施行のあとは新しい文 (*-next.html) を /terms・/privacy
+# が返す。お知らせの帯 (/api/config の notice) は START から END まで。日付はどれも日本時間。
+# ---------------------------------------------------------------------------
+POLICY_REVISION_ID = "policy-20261116"
+POLICY_REVISION_EFFECTIVE = "2026-11-16T00:00:00+09:00"
+POLICY_NOTICE_START = "2026-11-02T00:00:00+09:00"
+POLICY_NOTICE_END = "2026-11-30T23:59:59+09:00"
+POLICY_NOTICE_BEFORE = ("11月16日から利用規約とプライバシーポリシーが変わります"
+                        "（フルネームでの登録・承認つきの招待・会の申し込みなど）")
+POLICY_NOTICE_AFTER = "11月16日から新しい利用規約とプライバシーポリシーになりました"
