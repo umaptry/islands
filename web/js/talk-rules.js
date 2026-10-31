@@ -395,6 +395,17 @@ export function reactionsMissing(error, { rpc = false } = {}) {
   return rpc && error.status === 404;
 }
 
+/**
+ * The read marks' functions are not there yet (the migration has not been run): the feature stays quiet.
+ * Only a call to mark_dm_read / dm_partner_read_at is asked, so a bare 404 is taken as "the function is missing".
+ */
+export function dmReadMissing(error) {
+  if (!error) return false;
+  const text = String(error.message || '');
+  if (/dm_reads|mark_dm_read|dm_partner_read_at|PGRST202/.test(text)) return true;
+  return error.status === 404;
+}
+
 // ---------------------------------------------------------------- the first-time note
 
 export const INTRO_KEY = 'islands-talk-intro-seen';

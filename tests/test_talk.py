@@ -631,3 +631,64 @@ def test_reaction_routes_need_login(said, fresh_client):
     assert fresh_client.get(f"/api/local/dm/rooms/{room}/reactions").status_code == 401
     assert fresh_client.post(f"/api/local/dm/messages/{message}/reaction",
                              json={"kind": "heart"}).status_code == 401
+
+
+# --------------------------------------------------------------------------
+# read marks in a DM (2026-10-31, supabase/migrations/20261031010000_dm_read.sql)
+# --------------------------------------------------------------------------
+
+def mark_read(person, room):
+    return person.client.post(f"/api/local/dm/{room}/read", headers=person.headers)
+
+
+def partner_read(person, room):
+    return get(person, f"/api/local/dm/{room}/read")
+
+
+def test_the_other_person_sees_when_i_read_the_room(matched):
+    host, guest, *_, room = matched
+    assert partner_read(host, room).json() == {"partner_read_at": None}
+    assert mark_read(guest, room).json() == {"recorded": True}
+    seen = partner_read(host, room).json()["partner_read_at"]
+    assert seen
+    assert partner_read(guest, room).json() == {"partner_read_at": None}     # my own time is not told to me
+    assert mark_read(guest, room).json() == {"recorded": True}
+    assert partner_read(host, room).json()["partner_read_at"] >= seen         # it never goes back
+
+
+def test_reading_writes_no_notice_and_leaves_the_list_alone(matched):
+    host, guest, *_, room = matched
+    before = (feed(host), get(host, "/api/local/dm/rooms").json()["rooms"])
+    mark_read(guest, room)
+    assert host.inbox({"dm"}) == []
+    assert (feed(host), get(host, "/api/local/dm/rooms").json()["rooms"]) == before
+
+
+def test_people_outside_the_room_record_and_see_nothing(matched):
+    host, guest, guest2, outsider, room = matched
+    mark_read(guest, room)
+    for stranger in (outsider, guest2):
+        assert mark_read(stranger, room).json() == {"recorded": False}
+        assert partner_read(stranger, room).json() == {"partner_read_at": None}
+    assert mark_read(host, "no-such-room").json() == {"recorded": False}
+    assert partner_read(host, "no-such-room").json() == {"partner_read_at": None}
+    # the outsider's try left nothing behind: the host's own time is still empty for the guest
+    assert partner_read(guest, room).json() == {"partner_read_at": None}
+
+
+def test_a_block_records_nothing_and_shows_nothing_both_ways(matched):
+    host, guest, *_, room = matched
+    mark_read(guest, room)
+    guest.client.post("/api/local/dm/blocks", json={"blocked_id": host.id}, headers=guest.headers)
+    for person in (host, guest):
+        assert partner_read(person, room).json() == {"partner_read_at": None}
+        assert mark_read(person, room).json() == {"recorded": False}
+    guest.client.delete(f"/api/local/dm/blocks/{host.id}", headers=guest.headers)
+    assert partner_read(host, room).json()["partner_read_at"]                # the old mark was kept, not moved
+    assert partner_read(guest, room).json() == {"partner_read_at": None}     # and the host's try was refused
+
+
+def test_read_routes_need_login(matched, fresh_client):
+    *_, room = matched
+    assert fresh_client.post(f"/api/local/dm/{room}/read").status_code == 401
+    assert fresh_client.get(f"/api/local/dm/{room}/read").status_code == 401

@@ -18,7 +18,7 @@ import { config, isLocal } from './config.js';
 import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
-import { readPress, readReact, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
+import { dmReadMissing, readPress, readReact, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
 import { communitiesOn, shareOn } from './community-rules.js';
 import { imageExtension } from './image.js';
 
@@ -98,6 +98,10 @@ async function restCall(path, { params, method = 'GET', body, prefer, keepalive 
 
 const rpc = (name, args, options) =>
   restCall(`rpc/${name}`, { method: 'POST', body: args, ...options });
+
+// 2026-10-31: the read marks of a DM. Once the functions turn out to be missing (the SQL has not been run),
+// nothing is asked again until the page is loaded anew.
+let dmReadGone = false;
 
 const ACCOUNT_EMBED = 'accounts(id,display_name,icon_id,avatar_path)';
 // Posts also reach accounts through reactions and comments, so name the key.
@@ -367,6 +371,28 @@ const supabaseBackend = {
       throw talkError(error, 'dm');
     }
   },
+  /** I have read this room just now. Nothing is thrown when the database has no such function yet. */
+  async markDmRead(roomId) {
+    if (dmReadGone) return null;
+    try {
+      await rpc('mark_dm_read', { room: roomId });
+      return true;
+    } catch (error) {
+      if (dmReadMissing(error)) { dmReadGone = true; return null; }
+      throw error;
+    }
+  },
+  /** { partner_read_at } (ISO text or null), or null when the database cannot say yet. */
+  async dmReadState(roomId) {
+    if (dmReadGone) return null;
+    try {
+      const value = await rpc('dm_partner_read_at', { room: roomId });
+      return { partner_read_at: typeof value === 'string' && value ? value : null };
+    } catch (error) {
+      if (dmReadMissing(error)) { dmReadGone = true; return null; }
+      throw error;
+    }
+  },
   async block(blockedId) {
     await restCall('dm_blocks', {
       method: 'POST',
@@ -549,6 +575,14 @@ const localBackend = {
     } catch (error) {
       throw talkError(error, 'dm');
     }
+  },
+  markDmRead: async (roomId) => {
+    await api.post(`/api/local/dm/${encodeURIComponent(roomId)}/read`, {});
+    return true;
+  },
+  dmReadState: async (roomId) => {
+    const answer = await api.get(`/api/local/dm/${encodeURIComponent(roomId)}/read`);
+    return { partner_read_at: answer.partner_read_at || null };
   },
   block: async (blockedId) => {
     await api.post('/api/local/dm/blocks', { blocked_id: blockedId });

@@ -467,6 +467,15 @@ test('a missing table is told from an ordinary failure', () => {
   assert.equal(rules.reactionsMissing(null), false);
 });
 
+test('missing read-mark functions are told from an ordinary failure', () => {
+  assert.equal(rules.dmReadMissing({ status: 404, message: 'x' }), true);
+  assert.equal(rules.dmReadMissing({ status: 404, message: 'PGRST202 Could not find the function public.mark_dm_read' }), true);
+  assert.equal(rules.dmReadMissing({ status: 400, message: 'Could not find the function public.dm_partner_read_at(room)' }), true);
+  assert.equal(rules.dmReadMissing({ status: 500, message: 'boom' }), false);
+  assert.equal(rules.dmReadMissing({ status: 0, message: '接続できませんでした。' }), false);
+  assert.equal(rules.dmReadMissing(null), false);
+});
+
 test('the lifted message keeps its place when there is room, and moves in from the edges when there is not', () => {
   const mid = rules.liftLayout({ top: 300, height: 80 }, 800);
   assert.equal(mid.bubbleTop, 300);
