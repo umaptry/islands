@@ -25,3 +25,54 @@
 - 手元：`python -m pip install -r requirements-onnx.txt` → `python -m uvicorn app:app --reload --port 7860`（Supabase なしのローカルモード。データはメモリだけ）。
 - テスト：`python -m pytest tests/ -q` と `node --test tests/frontend/*.test.mjs`。
 - 画面を変えたら、スマホ幅（390）と PC 幅（1366）で撮って確かめてから出す。
+
+## コードの地図（探す前にここを見る）
+ファイルを足す・分ける・役目を変えたら、この節も直す。README.md の「構成」は古い部分がある。
+
+### データの通り道
+- ブラウザ → Supabase に直接：地図の読み取り・コメント・反応・通知・DM・コミュニティ。守りは RLS と RPC（supabase/migrations）。
+- ブラウザ → Cloud Run（app.py の FastAPI）：埋め込みが要るもの＝投稿の作成・編集、島の検出と命名、似てる度、つながりの線、プッシュの送信。
+- 手元モード（Supabase なし）では、Supabase に行く分が app.py の `/api/local/*` と core/store.py の `MemoryStore` に置き換わる。本番では `/api/local/*` は 404。
+
+### 1つの機能が通るファイル（データを足す・変えるとき）
+画面 web/js/screens/*.js → web/js/net.js の `data.○○`。net.js には `supabaseBackend` と `localBackend` があり、同じ名前で両方に書く。その先は次の2つ。片方だけ直すと、手元か本番のどちらかで動かない。
+- 本番：supabase/migrations/*.sql（テーブル・RLS・RPC）＋ supabase/tests/*.sql（pgTAP）。サーバーが読むなら core/store.py の `SupabaseStore` も。
+- 手元：app.py の「local mode」節の `/api/local/*` ＋ core/store.py の `MemoryStore`。
+
+### app.py の中の節（`# ----` の見出しで区切られている。上から順に）
+- startup：成果物の読み込みと起動
+- request models：受け取るデータの形
+- helpers：ログイン中の人、回数制限、機能のオンオフ（`*_on()`）
+- members only：コミュニティのメンバーだけに見せる絞り込み（`viewer_communities`・`scoped`）。島の検出と命名もこの節の後半（`live_islands`・`name_by_genre`・`name_islands_with_ai`・`track_islands`）
+- people layer：つながりの線・似ている人・新しい住人の通知（`connection_lines`・`similar_people`・`notify_resident`）
+- Web Push：プッシュ通知の送信（`dispatch_pushes`）
+- API：`/api/config`・`/api/islands`・`/api/connections`・`/api/posts`（作成・プレビュー・編集・共有・削除）・`/api/matches` など
+- local mode：`/api/local/*`（Supabase の代役）
+- account：`/api/account/me`（両方のモード）
+- static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`
+
+### core/（サーバーの部品）
+- 地図の計算：features.py（文章→448次元）、embedder.py（E5 を ONNX で動かす）、encoder.py（→座標）、placement.py、geometry.py、energy.py・terrain.py（地形）
+- 島：clustering.py（島に分ける）、island_namer.py（Gemini で名前）、island_tracking.py（作り直しても同じ島として追う）、growth.py（島の育ち方）
+- 人のつながり：connections.py（線）、affinity.py（人どうしの似かた）、matching.py（新しい投稿が誰につながるか）、introductions.py（紹介の一文）、similarity.py（距離→似てる度%）
+- 投稿：post_extras.py（お題・募集）、prompts.py（今週のお題）、quiet.py（反応のない投稿をそっと見せる）、stopwords.py
+- 通知：notifications.py、webpush.py
+- 土台：config.py（設定値はすべてここ）、auth.py（ログインの確認）、store.py（`MemoryStore` と `SupabaseStore`）
+
+### web/（画面。ビルドなしの素の ES モジュール）
+- 入口：index.html（全画面のマークアップ）、style.css、js/app.js（起動）、js/router.js（画面の切り替えと下のナビ）、js/state.js、js/config.js
+- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）
+- 部品 js/components/：postcard.js、chat.js（投稿の下のメッセージ）、talk-button.js（もっと話してみたい）、image-viewer.js、heatobject.js
+- 地図の描画 js/map/：index.js（カメラ・操作・描画の中心）、terrain.js・terrain-worker.js（地面）、coast.js・land.js・landmass.js（陸と海）、buildings.js（家と町）、pins.js、lines.js（人の線）、kin.js（点線）、decor.js・surf.js・vehicles.js・sparkles.js（飾り）、palette.js（色）
+- 通信：net.js（`api` が Cloud Run、`data` が Supabase か手元）、session.js（ログイン）、realtime.js（通知をすぐ受け取る）、push.js・push-ask.js・sw.js（プッシュ）
+- 機能ごとのまとめ役：talk.js（もっと話してみたい・DM）、communities.js、share.js（ほかのコミュニティにも出す）、catchup.js（新しい住人）
+- `*-rules.js`：画面に触らない判断だけを切り出したもの。tests/frontend/ でテストする。判断を足すならまずここ。
+
+### テスト（直した場所 → 走らせるもの）
+- core/・app.py → tests/test_*.py（pytest）
+- web/js/ の判断 → tests/frontend/*.test.mjs（node --test）
+- 画面の操作 → tests/browser/*.spec.mjs（Playwright。CI で走る）
+- supabase/migrations → supabase/tests/*.sql（pgTAP。CI で走る）
+
+### 文書
+- REQUIREMENTS.md（決まった設計）、docs/implementation_status.md、docs/operations_runbook.md（本番の出し方と戻し方）、docs/api_reference.md
