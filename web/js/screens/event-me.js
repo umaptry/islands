@@ -36,14 +36,14 @@ export function setupEventMe() {
     const mark = ++turn;
     code = params.code;
     if (!validEventCode(code)) { message(EVENT_WORDS.notFound, 'eventMeNotFound'); return; }
-    if (!session.signedIn()) { await navigate(eventHashFor(code, 'apply'), { replace: true }); return; }
+    if (!session.signedIn()) { navigate(eventHashFor(code, 'apply'), { replace: true }); return; }
     message('読み込んでいます…');
     let result;
     try {
       result = await publicApi.get(code);
     } catch (error) {
       if (mark !== turn) return;
-      if (error.status === 401) { await navigate(eventHashFor(code, 'apply'), { replace: true }); return; }
+      if (error.status === 401) { navigate(eventHashFor(code, 'apply'), { replace: true }); return; }
       message(error.status === 404 ? EVENT_WORDS.notFound : errorText(error), 'eventMeNotFound');
       return;
     }

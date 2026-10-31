@@ -84,7 +84,7 @@ export function setupEventApply() {
   const primary = (text, onClick, { disabled = false, id = null } = {}) => el('button', {
     className: 'btn btn-block ev-primary', text, attrs: { type: 'button', id }, disabled, on: { click: onClick },
   });
-  const quiet = (text, onClick) => el('button', { className: 'ev-quiet', text, attrs: { type: 'button' }, on: { click: onClick } });
+  const quiet = (text, onClick, { id = null } = {}) => el('button', { className: 'ev-quiet', text, attrs: { type: 'button', id }, on: { click: onClick } });
   const errorBox = () => el('div', { className: 'error ev-error', attrs: { role: 'alert', id: 'eventApplyError' } });
   const setError = (message) => { const box = $('eventApplyError'); if (box) box.textContent = message || ''; };
 
@@ -325,9 +325,9 @@ export function setupEventApply() {
     }
     if (mark !== turn) return;
     const me = mine.me || {};
-    if (['applied', 'attended', 'waiting'].includes(me.status)) { await navigate(eventHashFor(code, 'me'), { replace: true }); return; }
-    if (mine.event && mine.event.cancelled) { await navigate(eventHashFor(code, 'me'), { replace: true }); return; }
-    if (me.status === 'declined') { await navigate(eventHashFor(code, 'me'), { replace: true }); return; }
+    if (['applied', 'attended', 'waiting'].includes(me.status)) { navigate(eventHashFor(code, 'me'), { replace: true }); return; }
+    if (mine.event && mine.event.cancelled) { navigate(eventHashFor(code, 'me'), { replace: true }); return; }
+    if (me.status === 'declined') { navigate(eventHashFor(code, 'me'), { replace: true }); return; }
     const account = state.account || {};
     const settled = Boolean(account.display_name && account.affiliation && account.name_confirmed_at);
     flow.isMember = Boolean(me.is_member);
@@ -570,7 +570,7 @@ export function setupEventApply() {
         mine = await publicApi.get(code);
         if (mark !== turn) return;
         if (mine.me && ['applied', 'attended', 'waiting', 'declined'].includes(mine.me.status)) {
-          await navigate(eventHashFor(code, 'me'), { replace: true });
+          navigate(eventHashFor(code, 'me'), { replace: true });
           return;
         }
       } catch { /* shown as the public page */ }

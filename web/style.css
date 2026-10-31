@@ -2443,4 +2443,5 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .ev-late { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
 .ev-late-btn { padding: 12px 4px; border-radius: 12px; border: 0; background: rgba(255, 255, 255, .22); color: #fff; font-size: 12px; font-weight: 800; line-height: 1.4; cursor: pointer; }
 .ev-late-btn.is-on { background: #fff; color: var(--ui, var(--sea)); }
+a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: none; }
 /* ---- 会：公開側 ここまで ---- */
