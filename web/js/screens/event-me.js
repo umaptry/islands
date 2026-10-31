@@ -73,13 +73,13 @@ export function setupEventMe() {
 
     // How it stands.
     const status = el('div', { className: `ev-card ev-status is-${view.tone}`, attrs: { id: 'eventMeStatus' } });
-    if (view.title) status.append(el('div', { className: 'ev-status-title', text: (view.tone === 'ok' || view.tone === 'attended' ? '✓ ' : '') + view.title }));
+    if (view.title && view.tone !== 'cancelled') status.append(el('div', { className: 'ev-status-title', text: (view.tone === 'ok' || view.tone === 'attended' ? '✓ ' : '') + view.title }));
     if (view.note) status.append(el('p', { className: 'ev-status-note', text: view.note }));
     if (me.late_minutes && view.canLate) {
       status.append(el('p', { className: 'ev-status-note', attrs: { id: 'eventMeLateNote' },
         text: `${me.late_minutes === 60 ? '1時間以上' : `${me.late_minutes}分くらい`}遅れることを、主催者に伝えました。` }));
     }
-    if (view.title || view.note) content.push(status);
+    if ((view.title && view.tone !== 'cancelled') || view.note) content.push(status);
 
     // Being late: one tap on a button, no typing.
     if (view.canLate) {
