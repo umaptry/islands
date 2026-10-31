@@ -70,7 +70,7 @@
       <p class="invite-only-note" id="authInviteNote" hidden></p>
       <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
       <div id="registerFields" hidden>
-        <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
+        <label class="field"><span class="label-text">フルネーム<span class="hint-text">本名</span></span><input class="input" id="registerName" maxlength="24" autocomplete="name" placeholder="例：山田 花子"></label>
         <label class="field"><span class="label-text">所属組織<span class="hint-text">必須</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属（例：コクヨ、〇〇大学、フリー）"></label>
       </div>
       <label class="field">
@@ -177,8 +177,8 @@
 
     <div id="setupNameFields" hidden>
       <label class="field">
-        <span class="label-text">名前<span class="hint-text">16字まで</span></span>
-        <input class="input" id="setupName" maxlength="16" placeholder="名前" autocomplete="nickname">
+        <span class="label-text">フルネーム<span class="hint-text">本名・24字まで</span></span>
+        <input class="input" id="setupName" maxlength="24" placeholder="例：山田 花子" autocomplete="name">
       </label>
       <label class="field">
         <span class="label-text">所属組織<span class="hint-text">必須</span></span>
@@ -543,7 +543,7 @@
     </div>
     <label class="field">
       <span class="label-text">名前</span>
-      <input class="input" id="editName" maxlength="16" placeholder="名前">
+      <input class="input" id="editName" maxlength="24" placeholder="フルネーム">
     </label>
     <label class="field">
       <span class="label-text">所属組織</span>

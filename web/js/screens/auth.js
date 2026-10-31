@@ -283,6 +283,8 @@ export async function afterSignIn() {
         state.account = (await api.put('/api/account/me', {
           display_name: $('registerName').value.trim(),
           affiliation: $('registerAffiliation').value.trim(),
+          // The form asks for the full name, so a new account needs no separate #/fullname check.
+          name_confirmed: true,
           icon_id: PHOTO_ICON,
         })).account;
         setOnboardingStep('photo');
@@ -441,6 +443,7 @@ export function setupProfileSetup() {
         ...(needsName ? {
           display_name: name.value.trim(),
           affiliation: $('setupAffiliation').value.trim(),
+          name_confirmed: true,
         } : {}),
         ...(await field.commit()),
       });

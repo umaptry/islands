@@ -147,13 +147,12 @@ test('the screens send the session on every read the server now gates', async ()
   const profile = await read('../../web/js/screens/profile.js');
   const compose = await read('../../web/js/screens/compose.js');
   const net = await read('../../web/js/net.js');
-  // the only read left without the session is the public invite check (the community name goes with the session)
+  // every read sends the session now: even the invite check, so a removed or refused person is told it needs approval
   for (const [name, text] of [['map.js', map], ['profile.js', profile], ['compose.js', compose]]) {
     assert.doesNotMatch(text, /auth:\s*false/, `${name} reads without the session`);
   }
   const unsent = [...net.matchAll(/^.*auth:\s*false.*$/gm)].map((m) => m[0].trim());
-  assert.equal(unsent.length, 1, unsent.join('\n'));
-  assert.ok(unsent.some((line) => line.includes('invites/check')));
+  assert.equal(unsent.length, 0, unsent.join('\n'));
   // terrain and islands say which community they are for
   assert.match(map, /scoped\(\) && membersOnly\(\)\) params\.set\('community', scope\.id\)/);
   assert.match(map, /\/api\/islands\?\$\{new URLSearchParams\(\{ community: scope\.id \}\)\}/);
