@@ -12,6 +12,15 @@ export function bodyLength(text) {
 }
 
 /**
+ * How many characters count toward the 15-character floor: the server makes each run of blanks one
+ * space before it saves, so line breaks and spaces cannot fill the floor (2026-10-31). The counter
+ * ("5 / 60") and the 60 limit still use bodyLength.
+ */
+export function floorLength(text) {
+  return chars(String(text ?? '').replace(/\s+/g, ' ').trim()).length;
+}
+
+/**
  * The body cut where it passes `max`: [kept, over]. `over` is what the screen paints red (as X does).
  * Blanks before the first character do not count (they are trimmed), and blanks alone after the limit
  * are not marked, since they are trimmed too and the post is not over.

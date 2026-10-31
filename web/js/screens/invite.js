@@ -16,10 +16,12 @@ import { state } from '../state.js';
 import { navigate, screen } from '../router.js';
 import { $, clear, el, toast } from '../ui.js';
 import { browserStorage } from '../talk.js';
-import { mapLinkFor, saveInviteJoin, savePendingPost } from '../return-post.js';
+import { mapLinkFor, saveInviteJoin, savePendingPost, validPostId } from '../return-post.js';
+import { isRecruiting } from '../map/reads.js';
+import { recruitState } from '../recruit-rules.js';
 import { communitiesActive, dropCommunities, joinedCommunity, refreshCommunities } from '../communities.js';
 import {
-  NEW_ACCOUNT_NOTE, RETRY_LATER_NOTE, clearPendingInvite, inviteActions, inviteView, readClaim,
+  NEW_ACCOUNT_NOTE, RETRY_LATER_NOTE, clearPendingInvite, inviteActions, inviteJoinNote, inviteView, readClaim,
   readInviteCheck, readPendingInvite, registrationBlocked, savePendingInvite, transientFailure,
   validInviteCode,
 } from '../community-rules.js';
@@ -99,7 +101,7 @@ export function setupInvite() {
   let shown = 0;
 
   const hideButtons = () => {
-    ['inviteJoin', 'inviteRegister', 'inviteLogin', 'inviteHome', 'inviteReturning', 'inviteLegal']
+    ['inviteJoin', 'inviteRegister', 'inviteLogin', 'inviteHome', 'inviteReturning', 'inviteLegal', 'inviteJoinNote']
       .forEach((id) => { $(id).hidden = true; });
     clear($('inviteOAuth'));
   };
@@ -135,6 +137,18 @@ export function setupInvite() {
     $('inviteTitle').textContent = view.title;
     $('inviteLede').textContent = view.lede;
     $('invite').dataset.state = view.state;
+
+    // The 会 of the QR is joined too: say so before anything is pressed. Only a member can read the post;
+    // anybody else is told without its name (community-rules inviteJoinNote).
+    if (view.state === 'valid' && validPostId(post)) {
+      const meeting = session.signedIn() ? await data.getPost(post).catch(() => null) : null;
+      if (turn !== shown) return;
+      const note = inviteJoinNote({
+        post, meeting, open: !meeting || (isRecruiting(meeting) && !recruitState(meeting)),
+      });
+      $('inviteJoinNote').textContent = note || '';
+      $('inviteJoinNote').hidden = !note;
+    }
 
     const signedIn = session.signedIn();
     const hasAccount = Boolean(state.account);

@@ -442,6 +442,18 @@ test('the line under the QR, the share text, the saved picture', () => {
   assert.deepEqual(rules.inviteImageLines('朝ラン会', '2026-10-30T14:59:00Z'), { title: '朝ラン会 への招待', until: '10/30 23:59 まで' });
 });
 
+test('inviteJoinNote: the 会 of the QR is named before anything is pressed', () => {
+  assert.equal(rules.inviteJoinNote({ post: null }), null);
+  // not a member yet: the post cannot be read, so no name
+  assert.equal(rules.inviteJoinNote({ post: POST }), 'この QR の会にも参加した状態で始まります。あとで取り消せます');
+  assert.equal(rules.inviteJoinNote({ post: POST, meeting: { body: '金曜の夜に\n集まります' } }),
+    'この QR の会（金曜の夜に 集まります）にも参加した状態で始まります。あとで取り消せます');
+  assert.equal(rules.inviteJoinNote({ post: POST, meeting: { body: 'あ'.repeat(30) } }),
+    `この QR の会（${'あ'.repeat(18)}…）にも参加した状態で始まります。あとで取り消せます`);
+  // read, and closed or no longer recruiting: it will not be joined
+  assert.equal(rules.inviteJoinNote({ post: POST, meeting: { body: '会' }, open: false }), null);
+});
+
 // ---------------------------------------------------------------- the wiring (a guard against drift)
 
 const read = (url) => readFile(new URL(url, import.meta.url), 'utf8');

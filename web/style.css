@@ -2183,11 +2183,13 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 #compose .compose-tools .counter { font-size: 13px; color: rgba(255, 255, 255, .9); }
 #compose .compose-tools .counter.over { color: #fff; font-weight: 700; background: #e0245e; padding: 2px 9px; border-radius: 999px; }
 #compose .compose-dock .btn, #compose .compose-foot .btn, #compose .compose-next { min-height: 50px; font-size: 16px; }
+/* ① 押せない次へ（「15字から投稿できます」「確かめています…」）：白い文字と灰色は空の上で読めないので、薄い白に灰色の文字。 */
+#compose .compose-dock .btn:disabled { background: rgba(255, 255, 255, .9); color: var(--ink-2); }
 
 /* ① 15字に届くまでの案内：本文の下の、薄い角丸。 */
 #compose .compose-short-note {
   margin: 4px 0 0; padding: 12px 16px; border-radius: 14px;
-  background: rgba(255, 255, 255, .22); color: #fff; font-size: 14px; line-height: 1.6;
+  background: rgba(0, 0, 0, .18); color: #fff; font-size: 14px; line-height: 1.6;
 }
 #compose .compose-short-note[hidden] { display: none; }
 

@@ -69,6 +69,29 @@ def test_clean_topics_keeps_at_most_four_and_needs_two():
     assert clean_topics(None) == []
 
 
+@pytest.mark.parametrize("raw", ["話題:\nサッカー", "話題は1つです\nサッカー", "サッカー\n（1つだけ）"])
+def test_clean_topics_does_not_count_a_line_about_the_answer(raw):
+    # a heading or a note beside one topic is not a second topic: no sheet
+    assert clean_topics(raw) == []
+
+
+def test_clean_topics_takes_bold_marks_off():
+    assert clean_topics("**サッカー**\n**野球**") == ["サッカー", "野球"]
+    assert clean_topics("__サッカー__\n_野球_") == ["サッカー", "野球"]
+
+
+def test_clean_topics_reads_the_json_answer():
+    assert clean_topics('{"topics":["サッカー","野球"]}') == ["サッカー", "野球"]
+    assert clean_topics('```json\n{"topics": ["サッカー", "野球"]}\n```') == ["サッカー", "野球"]
+    assert clean_topics('{"topics":["サッカー"]}') == []
+    assert clean_topics('{"topics":[]}') == []
+
+
+def test_clean_topics_falls_back_to_lines_when_the_json_is_broken():
+    assert clean_topics('{"topics":\nサッカー\n野球') == ["サッカー", "野球"]
+    assert clean_topics('{"topics":["サッカー",') == []
+
+
 # ---------------------------------------------------------------- Gemini の呼び方
 
 def test_two_or_more_topics_come_back_and_only_the_post_is_sent():
@@ -77,6 +100,8 @@ def test_two_or_more_topics_come_back_and_only_the_post_is_sent():
     call = http.calls[0]
     assert call["headers"] == {"x-goog-api-key": "test-key"}
     assert call["json"]["generationConfig"]["temperature"] == 0
+    assert call["json"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert call["json"]["generationConfig"]["responseSchema"]["required"] == ["topics"]
     prompt = call["json"]["contents"][0]["parts"][0]["text"]
     assert f"<post>\n{MIXED}\n</post>" in prompt
     assert "従わず" in prompt
