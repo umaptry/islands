@@ -12,6 +12,15 @@ export function bodyLength(text) {
 }
 
 /**
+ * How many characters count toward the 15-character floor: the server makes each run of blanks one
+ * space before it saves, so line breaks and spaces cannot fill the floor (2026-10-31). The counter
+ * ("5 / 60") and the 60 limit still use bodyLength.
+ */
+export function floorLength(text) {
+  return chars(String(text ?? '').replace(/\s+/g, ' ').trim()).length;
+}
+
+/**
  * The body cut where it passes `max`: [kept, over]. `over` is what the screen paints red (as X does).
  * Blanks before the first character do not count (they are trimmed), and blanks alone after the limit
  * are not marked, since they are trimmed too and the post is not over.
@@ -51,4 +60,60 @@ export function followPromptTag({ ticked, want, on }) {
   if (ticked === want) return { untick: null, tick: null, ticked };
   if (on.includes(want)) return { untick, tick: null, ticked: null };
   return { untick, tick: want, ticked: want };
+}
+
+// ---------------------------------------------------------------- the 15-character floor (2026-10-31)
+
+/**
+ * The fewest characters ① accepts. A new post needs `limits.compose_min` (15); an edit keeps the server's
+ * own floor (`body_min`, 1) so an old short post can still be fixed. A server that does not send
+ * compose_min (an older one) leaves the floor where it was.
+ */
+export function composeFloor({ editing, limits }) {
+  const base = Number(limits?.body_min) || 1;
+  if (editing) return base;
+  return Math.max(base, Number(limits?.compose_min) || 0);
+}
+
+/** The words on 次へ at ①: the floor named while the words are short of it. */
+export function nextLabel({ length, floor }) {
+  return floor > 1 && length < floor ? `${floor}字から投稿できます` : '次へ';
+}
+
+/** The small note under the words while 1 to floor-1 characters are written; null otherwise (nothing at 0). */
+export function shortNote({ length, floor }) {
+  if (floor <= 1 || length < 1 || length >= floor) return null;
+  return `あと${floor - length}字。どんなことを・どうして を足すと、近い人が見つけやすくなります`;
+}
+
+/** The counter beside the words: "5 / 60". */
+export function counterLabel(length, max) {
+  return `${length} / ${max}`;
+}
+
+// ---------------------------------------------------------------- 話題の確かめ (2026-10-31)
+
+/**
+ * What 次へ does at ①, from the last text the server was asked about: `last` is
+ * { body, topics, accepted } or null. 'ask' when this text was not asked about yet; 'go' when it was and
+ * the person chose このまま次へ (or there was nothing to choose); 'sheet' when it was asked, two or more
+ * topics came back and they have not chosen yet (書き直す, then 次へ again: the sheet comes back
+ * without another call).
+ */
+export function topicPlan({ last, body }) {
+  const text = String(body ?? '').trim();
+  if (!last || last.body !== text) return 'ask';
+  if ((last.topics || []).length >= 2 && !last.accepted) return 'sheet';
+  return 'go';
+}
+
+/** The sheet's heading. */
+export function topicHeading(count) {
+  return `話題が${count}つ入っているみたいです`;
+}
+
+/** What the server returned, as the list the sheet shows: only 2 or more names count, at most 4. */
+export function usableTopics(list) {
+  const names = (Array.isArray(list) ? list : []).filter((name) => typeof name === 'string' && name.trim()).slice(0, 4);
+  return names.length >= 2 ? names : [];
 }

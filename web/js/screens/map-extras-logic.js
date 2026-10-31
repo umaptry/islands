@@ -38,9 +38,12 @@ export function pickNear({ islands, myPostIds = [], view = null, zoomed = false,
 
 /** The newest `n` loaded posts of an island (unloaded ones are skipped; a bad
  * date sorts as oldest instead of scrambling the order). */
-export function recentPosts(ids, byId, n = 2) {
+export function recentPosts(ids, byId, n = 2, unread = null) {
   const time = (post) => Date.parse(post.created_at) || 0;
-  return ids.map((id) => byId.get(id)).filter(Boolean).sort((a, b) => time(b) - time(a)).slice(0, n);
+  // The ones not opened yet come first (2026-10-31), newest first within each.
+  const fresh = (post) => (unread && unread.has(post.id) ? 1 : 0);
+  return ids.map((id) => byId.get(id)).filter(Boolean)
+    .sort((a, b) => fresh(b) - fresh(a) || time(b) - time(a)).slice(0, n);
 }
 
 /** A press on the mini map (client px, canvas rect) -> world position. */

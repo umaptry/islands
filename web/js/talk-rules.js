@@ -221,6 +221,191 @@ export function readSent(result) {
   return row && row.message ? row.message : row || null;
 }
 
+// ---------------------------------------------------------------- the thread: times, days, read marks (2026-10-31)
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+const dateOf = (stamp) => {
+  if (stamp === null || stamp === undefined || stamp === '') return null;
+  const at = new Date(stamp);
+  return Number.isFinite(at.getTime()) ? at : null;
+};
+const dayNumber = (at) => Math.round(Date.UTC(at.getFullYear(), at.getMonth(), at.getDate()) / 86400000);
+
+/** The clock time of a message on this phone's clock, 24 hours, no zero before the hour: 0:53, 22:41. */
+export function clockText(stamp) {
+  const at = dateOf(stamp);
+  return at ? `${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}` : '';
+}
+
+/** The day mark between messages: 今日, 昨日, 10/30(木), and 2025/10/30(木) when the year is not this one. */
+export function dayLabel(stamp, now = Date.now()) {
+  const at = dateOf(stamp);
+  const today = dateOf(now);
+  if (!at || !today) return '';
+  const apart = dayNumber(today) - dayNumber(at);
+  if (apart === 0) return '今日';
+  if (apart === 1) return '昨日';
+  const date = `${at.getMonth() + 1}/${at.getDate()}(${WEEKDAYS[at.getDay()]})`;
+  return at.getFullYear() === today.getFullYear() ? date : `${at.getFullYear()}/${date}`;
+}
+
+/** True when the other person has read up to (and including) this message. */
+export function readByPartner(message, partnerReadAt) {
+  const read = dateOf(partnerReadAt);
+  const sent = dateOf(message && message.created_at);
+  return Boolean(read && sent && sent.getTime() <= read.getTime());
+}
+
+/**
+ * The thread as rows to draw, oldest first: a { type: 'day', label } before the first message and wherever the
+ * day (on this phone's clock) changes, and a { type: 'message' } for each message with its clock time, whether
+ * it is mine, whether the other person has read it (mine only), and `cont` (the same person as the line
+ * above, the same day: these sit close together).
+ */
+export function threadRows(messages, { me, now = Date.now(), partnerReadAt = null } = {}) {
+  const rows = [];
+  let lastDay = null;
+  let lastSender = null;
+  (messages || []).forEach((message) => {
+    const at = dateOf(message.created_at);
+    const day = at ? dayNumber(at) : null;
+    const newDay = day !== null && day !== lastDay;
+    if (newDay) {
+      rows.push({ type: 'day', key: `day-${day}`, label: dayLabel(message.created_at, now) });
+      lastDay = day;
+      lastSender = null;
+    }
+    const mine = message.sender_id === me;
+    rows.push({
+      type: 'message', message, mine, time: clockText(message.created_at),
+      read: mine && readByPartner(message, partnerReadAt),
+      cont: lastSender !== null && lastSender === message.sender_id,
+    });
+    lastSender = message.sender_id;
+  });
+  return rows;
+}
+
+/**
+ * Whether to tell the database "I have read up to here" now. `marked` is what was recorded earlier in this
+ * room: null before the first time (the first time always goes, even into an empty room), else the
+ * created_at of the newest message of the other person that was recorded ('' when there was none).
+ * Returns the stamp to remember ('' when there is no message of theirs), or null for "do nothing".
+ */
+export function readToRecord({ messages, me, marked = null, visible = true }) {
+  if (!visible) return null;
+  const theirs = (messages || []).filter((message) => message.sender_id !== me && message.created_at);
+  const newest = theirs.length ? theirs[theirs.length - 1].created_at : '';
+  if (marked === null) return newest;
+  return newest && newest !== marked ? newest : null;
+}
+
+// ---------------------------------------------------------------- reactions to a message
+
+// What the database stores is the KEY (dm_reactions.kind); the emoji is only how the screen draws it,
+// so a variation selector on the heart can never make two spellings of one reaction.
+export const REACTIONS = [
+  { kind: 'heart', emoji: '\u2764\uFE0F', label: 'ハート' },
+  { kind: 'thumbs', emoji: '\u{1F44D}', label: 'いいね' },
+  { kind: 'laugh', emoji: '\u{1F602}', label: '笑い' },
+  { kind: 'wow', emoji: '\u{1F62E}', label: 'びっくり' },
+  { kind: 'sad', emoji: '\u{1F622}', label: '悲しい' },
+  { kind: 'pray', emoji: '\u{1F64F}', label: 'ありがとう' },
+];
+
+export const reactionOf = (kind) => REACTIONS.find((entry) => entry.kind === kind) || null;
+
+/**
+ * One chip per kind under a message, in the order of REACTIONS: { kind, emoji, label, count, mine }.
+ * Two people on the same kind are one chip with count 2.
+ */
+export function reactionChips(rows, messageId, myId) {
+  const byKind = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!row || String(row.message_id) !== String(messageId) || !reactionOf(row.kind)) return;
+    const held = byKind.get(row.kind) || { count: 0, mine: false };
+    held.count += 1;
+    if (myId && row.account_id === myId) held.mine = true;
+    byKind.set(row.kind, held);
+  });
+  return REACTIONS.filter((entry) => byKind.has(entry.kind))
+    .map((entry) => ({ ...entry, ...byKind.get(entry.kind) }));
+}
+
+/** What I hold on a message now: the kind, or null. */
+export function myReaction(rows, messageId, myId) {
+  const row = (Array.isArray(rows) ? rows : []).find((entry) =>
+    entry && String(entry.message_id) === String(messageId) && entry.account_id === myId);
+  return row ? row.kind : null;
+}
+
+/**
+ * The rows after I press `kind` on a message: the same kind again takes it off, another kind swaps it
+ * (one per person per message, like react_dm). Used to draw at once, before the database answers.
+ */
+export function withMyReaction(rows, messageId, myId, kind) {
+  return setMyReaction(rows, messageId, myId, myReaction(rows, messageId, myId) === kind ? null : kind);
+}
+
+/** My reaction to a message set to exactly `kind` (null = none); everybody else's stays. */
+export function setMyReaction(rows, messageId, myId, kind) {
+  const rest = (Array.isArray(rows) ? rows : []).filter((entry) =>
+    !(entry && String(entry.message_id) === String(messageId) && entry.account_id === myId));
+  if (!reactionOf(kind)) return rest;
+  return [...rest, { message_id: messageId, account_id: myId, kind }];
+}
+
+/**
+ * Where the pressed message, the row of emoji above it and the 「コピー」 button below it go on a screen
+ * `viewportH` tall. `rect` is the bubble's {top, height}. Everything stays inside `margin` of the edges;
+ * a bubble too tall for that is cut to fit (it scrolls inside).
+ */
+export function liftLayout(rect, viewportH, { bar = 56, copy = 44, gap = 8, margin = 12 } = {}) {
+  const room = viewportH - margin * 2 - bar - copy - gap * 2;
+  const bubbleHeight = Math.max(0, Math.min(rect.height, room));
+  const total = bar + gap + bubbleHeight + gap + copy;
+  const barTop = Math.max(margin, Math.min(rect.top - bar - gap, viewportH - margin - total));
+  const bubbleTop = barTop + bar + gap;
+  return { barTop, bubbleTop, bubbleHeight, copyTop: bubbleTop + bubbleHeight + gap };
+}
+
+/** A stable text for a room's reactions, to see whether a poll brought anything new. */
+export function reactionSignature(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => `${row.message_id}|${row.account_id}|${row.kind}`)
+    .sort()
+    .join('\n');
+}
+
+/** react_dm's reply in either shape: the kind now on the message, or null. */
+export function readReact(result) {
+  const row = Array.isArray(result) ? result[0] : result;
+  return row && reactionOf(row.kind) ? row.kind : null;
+}
+
+/**
+ * The table is not there yet (the migration has not been run): the feature stays quiet. A bare 404 is not
+ * enough on a read (local mode answers 404 for "no such room", and a 404 can be a passing hiccup); only
+ * the call to react_dm may take a bare 404 as "the function is missing".
+ */
+export function reactionsMissing(error, { rpc = false } = {}) {
+  if (!error) return false;
+  const text = String(error.message || '');
+  if (/dm_reactions|react_dm|PGRST205|PGRST202/.test(text)) return true;
+  return rpc && error.status === 404;
+}
+
+/**
+ * The read marks' functions are not there yet (the migration has not been run): the feature stays quiet.
+ * Only a call to mark_dm_read / dm_partner_read_at is asked, so a bare 404 is taken as "the function is missing".
+ */
+export function dmReadMissing(error) {
+  if (!error) return false;
+  const text = String(error.message || '');
+  if (/dm_reads|mark_dm_read|dm_partner_read_at|PGRST202/.test(text)) return true;
+  return error.status === 404;
+}
+
 // ---------------------------------------------------------------- the first-time note
 
 export const INTRO_KEY = 'islands-talk-intro-seen';

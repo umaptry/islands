@@ -62,7 +62,7 @@ const EXTRA_COLUMNS = ['prompt', 'recruit_deadline', 'recruit_capacity'];
 // Added by the communities migration; net.js asks for it only when features.communities is on.
 const COMMUNITY_COLUMNS = ['community_id'];
 // Tables that only exist through later migrations (schema.sql is the first snapshot).
-const LATER_TABLES = ['dm_messages', 'dm_rooms', 'dm_blocks', 'communities'];
+const LATER_TABLES = ['dm_messages', 'dm_rooms', 'dm_blocks', 'dm_reactions', 'communities'];
 const substitutions = {
   // The widest form, as sent when features.post_extras is on.
   'postColumns()': `${constant('POST_COLUMNS')},${EXTRA_COLUMNS.join(',')},${COMMUNITY_COLUMNS.join(',')}`,
@@ -297,4 +297,18 @@ test('net.js passes the argument names the functions declare', () => {
   assert.match(net, /rpc\('check_invite', \{ code \}\)/);
   assert.match(net, /rpc\('claim_invite', \{ code \}\)/);
   assert.match(net, /rpc\('community_map_posts', \{\s*community, min_x: minX, min_y: minY, max_x: maxX, max_y: maxY, limit_n: limit,/);
+});
+
+test('the DM read marks: functions for signed-in people only, the table closed to the browser', () => {
+  const names = [...net.matchAll(/rpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  for (const name of ['mark_dm_read', 'dm_partner_read_at']) {
+    assert.ok(names.includes(name), `net.js should call ${name}`);
+    assert.match(allSql, new RegExp(String.raw`grant execute on function (?:public\.)?${name}\([^)]*\)\s+to authenticated`, 'i'));
+    assert.doesNotMatch(allSql, new RegExp(String.raw`grant execute on function (?:public\.)?${name}\([^)]*\)[^;]*anon`, 'i'));
+  }
+  assert.match(allSql, /create or replace function public\.mark_dm_read\(room uuid\)/);
+  assert.match(allSql, /create or replace function public\.dm_partner_read_at\(room uuid\)/);
+  assert.match(net, /rpc\('mark_dm_read', \{ room: roomId \}\)/);
+  assert.match(net, /rpc\('dm_partner_read_at', \{ room: roomId \}\)/);
+  assert.ok(!net.replace(/\/\/.*$/gm, '').includes("restCall('dm_reads'"), 'the table is never reached directly');
 });

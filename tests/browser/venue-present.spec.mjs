@@ -87,7 +87,7 @@ test('「会場で映す」: 投稿のスイッチで変わったリンクを、
   const id = admin.made.community_id;
   await page.evaluate(async (id) => {
     const { api } = await import('/static/js/net.js');
-    await api.post('/api/posts', { body: '会場の投稿', tags: [], motivation: 55, community_id: id }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
+    await api.post('/api/posts', { body: '会場の投稿', tags: ['参加者募集中'], motivation: 55, community_id: id }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
   }, id);
   await page.reload();
   const again = page.locator(`#communityEditBody .community-invites[data-community-id="${id}"]`);

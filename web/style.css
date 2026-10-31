@@ -1,7 +1,7 @@
 /* islands — one sheet.
  *
- * The palette is the map's sea (#46AEE6, palette 03 クリア・スカイ, 2026-10-18;
- * it was islands' do-blue #2FA6FF) over a white card surface: blue is
+ * The palette is the map's sea (#1D88C7, 2026-10-31: the page-like screens follow the map;
+ * it was #46AEE6 and before that islands' do-blue #2FA6FF) over a white card surface: blue is
  * the sea, white is anything a person wrote, and the ten island hues are the
  * only saturated colour on the page. That leaves the map free to be the loudest
  * thing on screen, which is the point of the whole app.
@@ -13,12 +13,12 @@
 :root {
   /* The same blues as the map (web/js/map/palette.js): the sea, a deeper sea,
    * and the dark blue the map rims its island names with. */
-  --sea: #46AEE6;
-  --sea-deep: #2E9AD6;
+  --sea: #1D88C7;
+  --sea-deep: #166FA6;
   --sea-ink: #1D5F90;
   /* The island green of the map (grass in web/js/map/palette.js). */
-  --grass: #94C973;
-  --sand: #EAD39A;      /* the map beach (palette.js sand): the ring outside the profile photo */
+  --grass: #74AD4E;
+  --sand: #E3C98B;      /* the map beach (palette.js sand): the ring outside the profile photo */
 
   --surface: #ffffff;
   --surface-2: #f4f7fb;
@@ -31,6 +31,13 @@
   --on-sea: #ffffff;
   --on-sea-2: rgba(255, 255, 255, .82);
   --on-sea-3: rgba(255, 255, 255, .58);
+
+  /* My bubble in the DM (2026-10-31, the same in the morning, day, evening and night). A 若草 is the pick.
+   * To change it, change these two lines only:
+   *   B 砂浜:   --dm-mine: #FFE59A; --dm-mine-ink: #4A3608;
+   *   C サンゴ: --dm-mine: #FFD0C2; --dm-mine-ink: #5A1E10; */
+  --dm-mine: #C9EEA8;
+  --dm-mine-ink: #1E3A10;
 
   --accent: #FF7251;      /* islands' ガチ / unread / like colour */
   --help: #2FA36B;
@@ -1282,10 +1289,13 @@ html.reduce-motion .slider.untouched .slider-handle, html.reduce-motion .slider.
 .pj-info b { font-weight: 700; }
 .post-join-button.ended:disabled { opacity: 1; background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
 .post-join-button:disabled { opacity: .55; }
+/* Pinned to the very bottom of the half-open sheet: stuck at the scroller's padding
+   edge it left a strip of the card - the rest of a picture - showing under it
+   (2026-10-31), so it reaches down over that padding (the 12px of .sheet-scroll). */
 @media (max-width: 767px) {
   .sheet:not(.full) .post-footer {
-    position: sticky; bottom: 0; z-index: 1; background: var(--surface);
-    margin: 0 -4px; padding: 0 4px 14px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
+    position: sticky; bottom: -12px; z-index: 1; background: var(--surface);
+    margin: 0 -4px; padding: 0 4px 26px; box-shadow: 0 -8px 8px -6px rgba(16, 42, 71, .12);
   }
 }
 
@@ -1310,6 +1320,8 @@ html.reduce-motion .slider.untouched .slider-handle, html.reduce-motion .slider.
 #setup .scroller { display: flex; flex-direction: column; justify-content: center; }
 #setup .screen-title { text-align: center; }
 #setup .lede { text-align: center; }
+#setup .setup-skip { display: block; margin: 14px auto 0; }
+#setup .error { text-align: center; }
 .unread-badge { background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; margin-left: 0; }
 .topbar-inline .unread-badge { flex: none; }
 
@@ -1401,20 +1413,29 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .trial-banner, .digest-pill { box-shadow: var(--float-shadow); }
 .participant-stop { background: var(--mine); }
 
-/* near islands: a row of chips under the search bar */
+/* near islands under the search bar: a heading in small words, the islands as buttons under it (2026-10-31) */
 .near-islands {
-  pointer-events: auto; display: flex; align-items: center; gap: 7px;
-  width: 100%; max-width: 520px; overflow-x: auto; padding: 2px 2px 6px; margin-bottom: -6px;
-  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  pointer-events: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; max-width: 520px; margin-bottom: -6px;
 }
-.near-islands::-webkit-scrollbar { display: none; }
-.near-label, .near-chip {
-  flex: none; display: inline-flex; align-items: center; gap: 4px;
-  height: 30px; padding: 0 12px; border-radius: 999px;
-  font-size: 12.5px; font-weight: 700; white-space: nowrap; box-shadow: var(--float-shadow);
+.near-chips {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
-.near-label { background: var(--ui); color: #fff; padding-left: 9px; }
-.near-chip { background: #fff; color: var(--ink); }
+.near-chips::-webkit-scrollbar { display: none; }
+.near-label {
+  display: inline-flex; align-items: center; gap: 3px; padding: 0 4px;
+  color: #fff; font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  text-shadow: 0 1px 2px rgb(16 42 71 / .55), 0 0 6px rgb(16 42 71 / .35);
+}
+.near-label svg { filter: drop-shadow(0 1px 1.5px rgb(16 42 71 / .5)); }
+.near-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  height: 30px; padding: 0 9px 0 12px; border-radius: 999px; border: 1px solid #d6e6f2;
+  background: #fff; color: var(--ink); font-size: 12.5px; font-weight: 700; white-space: nowrap;
+  box-shadow: var(--float-shadow);
+}
+.near-chevron { color: var(--ink-3); font-size: 15px; font-weight: 600; line-height: 1; margin-top: -1px; }
 .near-chip:active { transform: scale(.96); }
 
 /* island card: floats above the bottom nav */
@@ -1432,6 +1453,10 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .island-card-close:hover { background: var(--surface-2); }
 .island-card-name { margin: 0 36px 2px 0; font-size: 20px; font-weight: 800; line-height: 1.3; }
 .island-card-count { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+/* not opened yet on this device (2026-10-31): the same orange as the dot on the pins (map/index.js UNREAD) */
+.island-card-unread { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; font-size: 13px; font-weight: 700; color: #D9591A; }
+.unread-mark { width: 9px; height: 9px; border-radius: 50%; background: #FF7A2F; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #ffd9c2; flex: none; }
+.island-post-new { flex: none; font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .03em; color: #fff; background: #FF7A2F; border-radius: 999px; padding: 1px 6px; }
 .island-card-topics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
 .island-card-label { font-size: 11.5px; font-weight: 800; color: var(--ui); margin-right: 2px; }
 .island-topic { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: #e5f2fb; color: #14618f; }
@@ -1457,7 +1482,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   position: absolute; z-index: 3; right: 14px; top: calc(var(--map-top-h) + 8px);
   width: 96px; height: 96px; border-radius: 14px; overflow: hidden;
   border: 2px solid #fff; box-shadow: var(--float-shadow); touch-action: none; cursor: pointer;
-  background: #46AEE6;
+  background: #1D88C7;
 }
 .mini-map canvas { display: block; width: 100%; height: 100%; }
 
@@ -1637,16 +1662,73 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   font-size: 12px; line-height: 1.7; text-align: center; overflow-wrap: anywhere;
   word-break: auto-phrase; text-wrap: pretty;
 }
-.dm-list { display: flex; flex-direction: column; gap: 10px; }
-.dm-line { display: flex; flex-direction: column; align-items: flex-start; }
-.dm-line.mine { align-items: flex-end; }
+/* Messages sit close when the same person sends them one after another (.cont); a change of speaker or of day opens up. */
+.dm-list { display: flex; flex-direction: column; }
+.dm-line { display: flex; align-items: flex-end; justify-content: flex-start; gap: 6px; margin-top: 16px; }
+.dm-line.mine { justify-content: flex-end; }
+.dm-line.cont { margin-top: 6px; }
+.dm-day + .dm-line { margin-top: 0; }
+.dm-list > :first-child { margin-top: 0; }
+.dm-day { display: flex; justify-content: center; margin: 18px 0 12px; }
+.dm-day:first-child { margin-top: 4px; }
+.dm-day-label {
+  padding: 2px 12px; border-radius: 999px; background: rgba(0, 0, 0, .22);
+  font-size: 11.5px; line-height: 1.6; color: var(--on-sea);
+}
+.dm-bubble-wrap { position: relative; min-width: 0; max-width: 82%; }
 .dm-bubble {
-  margin: 0; max-width: 82%; padding: 9px 14px; border-radius: 18px 18px 18px 6px;
+  margin: 0; max-width: 100%; padding: 9px 14px; border-radius: 18px 18px 18px 6px;
   background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.65;
   white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: 0 1px 2px rgba(16, 42, 71, .14);
+  /* A long press opens the reactions, not the phone's text-selection menu (「コピー」 is there instead). */
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
 }
-.dm-line.mine .dm-bubble { background: var(--sea-ink); color: #fff; border-radius: 18px 18px 6px 18px; }
-.dm-time { margin: 3px 6px 0; font-size: 10.5px; color: var(--on-sea-3); }
+.dm-line.mine .dm-bubble { background: var(--dm-mine); color: var(--dm-mine-ink); border-radius: 18px 18px 6px 18px; }
+.dm-line.mine .dm-bubble a { color: inherit; text-decoration: underline; }
+/* The time (and 「既読」 over it on mine) beside the bubble, on its bottom edge, like LINE. */
+.dm-stamp {
+  flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 0;
+  font-size: 10.5px; line-height: 1.35; color: var(--on-sea-2); white-space: nowrap; padding-bottom: 1px;
+}
+.dm-line:not(.mine) .dm-stamp { align-items: flex-start; }
+.dm-time, .dm-read { margin: 0; font-size: 10.5px; }
+/* Reactions: a white circle on the bubble's lower corner, away from the screen edge it sits on. */
+.dm-line.has-reactions { margin-bottom: 14px; }
+.dm-chips { position: absolute; bottom: -13px; display: flex; gap: 3px; }
+.dm-line:not(.mine) .dm-chips { right: 8px; }
+.dm-line.mine .dm-chips { left: 8px; }
+/* A one-letter bubble is narrower than two circles: keep it wide enough that they stay on it (no side scroll at 375px). */
+.dm-line.has-reactions .dm-bubble { min-width: 72px; }
+.dm-chip {
+  min-width: 26px; height: 26px; padding: 0 6px; box-sizing: border-box; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  background: #fff; color: var(--ink-2); box-shadow: 0 1px 4px rgba(16, 42, 71, .3);
+  font-size: 14px; line-height: 1;
+}
+.dm-chip-count { font-size: 11px; font-weight: 800; }
+/* The long-press menu: the screen dims, the pressed message lifts, emoji above and 「コピー」 below. */
+.dm-menu { position: fixed; inset: 0; z-index: 85; opacity: 0; transition: opacity .16s var(--ease); }
+.dm-menu.on { opacity: 1; }
+.dm-menu-backdrop { position: absolute; inset: 0; background: rgba(8, 28, 50, .64); }
+.dm-lifted {
+  position: absolute; margin: 0; box-sizing: border-box; overflow-y: auto;
+  background: #fff; color: var(--ink); box-shadow: 0 8px 28px rgba(0, 0, 0, .35);
+}
+.dm-lifted.mine { background: var(--dm-mine); color: var(--dm-mine-ink); border-radius: 18px 18px 6px 18px; }
+.dm-react-bar {
+  position: absolute; height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 2px;
+  padding: 0 10px; border-radius: 999px; background: #fff; box-shadow: 0 6px 22px rgba(0, 0, 0, .3);
+}
+.dm-react-btn {
+  width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 26px; line-height: 1; background: transparent; transition: transform .12s var(--ease);
+}
+.dm-react-btn[aria-pressed="true"] { background: rgba(26, 125, 200, .18); }
+.dm-react-btn:active { transform: scale(1.18); }
+.dm-copy {
+  position: absolute; height: 44px; padding: 0 22px; border-radius: 14px; background: #fff; color: var(--ink);
+  font-size: 15px; font-weight: 600; box-shadow: 0 6px 22px rgba(0, 0, 0, .3);
+}
 .dm-foot { flex: none; background: var(--surface); }
 .dm-foot .chat-compose { width: 100%; max-width: 560px; margin: 0 auto; }
 .dm-blocked {
@@ -1992,8 +2074,8 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .switch-wash {
   position: absolute; top: 0; bottom: 0; left: 0; width: 170%; z-index: 3; pointer-events: none;
   background: linear-gradient(90deg, transparent 0, rgb(255 255 255 / .85) 6%, rgb(255 255 255 / .5) 11%,
-    color-mix(in srgb, var(--wash-sea, #46AEE6) 62%, #fff) 18%,
-    color-mix(in srgb, var(--wash-sea, #46AEE6) 62%, #fff) 85%, transparent 100%);
+    color-mix(in srgb, var(--wash-sea, #1D88C7) 62%, #fff) 18%,
+    color-mix(in srgb, var(--wash-sea, #1D88C7) 62%, #fff) 85%, transparent 100%);
   transform: translateX(-100%);
   animation: switch-wash var(--wash-ms, 560ms) cubic-bezier(.45, .05, .35, 1) forwards;
 }
@@ -2103,6 +2185,37 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 #compose .compose-tools .counter { font-size: 13px; color: rgba(255, 255, 255, .9); }
 #compose .compose-tools .counter.over { color: #fff; font-weight: 700; background: #e0245e; padding: 2px 9px; border-radius: 999px; }
 #compose .compose-dock .btn, #compose .compose-foot .btn, #compose .compose-next { min-height: 50px; font-size: 16px; }
+/* ① 押せない次へ（「15字から投稿できます」「確かめています…」）：白い文字と灰色は空の上で読めないので、薄い白に灰色の文字。 */
+#compose .compose-dock .btn:disabled { background: rgba(255, 255, 255, .9); color: var(--ink-2); }
+
+/* ① 15字に届くまでの案内：本文の下の、薄い角丸。 */
+#compose .compose-short-note {
+  margin: 4px 0 0; padding: 12px 16px; border-radius: 14px;
+  background: rgba(0, 0, 0, .18); color: #fff; font-size: 14px; line-height: 1.6;
+}
+#compose .compose-short-note[hidden] { display: none; }
+
+/* ① 話題が2つ以上のとき、下から出るシート（後ろは暗くする）。 */
+.topic-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(10, 30, 52, .55); }
+.topic-scrim[hidden] { display: none; }
+.topic-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 61;
+  max-width: 560px; margin: 0 auto; box-sizing: border-box;
+  background: var(--surface); color: var(--ink);
+  border-radius: 22px 22px 0 0; box-shadow: var(--shadow-up);
+  padding: 10px 20px calc(18px + env(safe-area-inset-bottom));
+  animation: topic-rise .28s var(--ease);
+}
+.topic-sheet[hidden] { display: none; }
+@keyframes topic-rise { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .topic-sheet { animation: none; } }
+.topic-grip { width: 40px; height: 4px; border-radius: 999px; background: var(--surface-3); margin: 0 auto 16px; }
+.topic-heading { margin: 0 0 6px; font-size: 20px; font-weight: 700; line-height: 1.4; }
+.topic-lede { margin: 0 0 14px; font-size: 14px; line-height: 1.6; color: var(--ink-2); }
+.topic-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+.topic-chip { padding: 9px 16px; border-radius: 999px; background: #e8f3fb; color: #1D5F90; font-size: 15px; font-weight: 700; }
+.topic-rewrite { background: var(--ui); color: #fff; min-height: 52px; font-size: 17px; box-shadow: 0 6px 16px rgba(27, 142, 213, .3); }
+.topic-keep { display: block; width: 100%; min-height: 48px; margin-top: 6px; background: transparent; color: var(--ink-2); font-size: 15px; font-weight: 700; }
 
 /* ② The question on its own, the object larger, 次へ right under the bar. */
 #compose .compose-heat { margin-top: 12px; }

@@ -30,7 +30,7 @@
 <meta name="twitter:description" content="ひとこと書くだけで、話の合う人が見つかる地図。気軽に話しかけたり、仲間を募集したりできます。">
 <meta name="twitter:image" content="https://islands-vfjsyo6oyq-an.a.run.app/static/img/og-image.png">
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='112' fill='%2346AEE6'/><g transform='translate(256 256) scale(1.12) translate(-256 -256)'><path fill='%23F2DCA0' stroke='%23F2DCA0' stroke-width='14' stroke-linejoin='round' d='M129.1,337L124.4,397.2L194,372.8Z'/><ellipse fill='%23F2DCA0' cx='256' cy='256' rx='184' ry='140'/><path fill='%2394C973' d='M391.4,260.7C386.5,280.1 374.8,304.3 355.6,316.8C336.4,329.2 303,333.3 276.2,335.3C249.3,337.4 215.9,338.1 194.4,328.8C172.9,319.6 158.4,297.7 147,279.8C135.7,261.8 122,239.3 126.5,221.1C130.9,202.9 153.9,184.5 173.7,170.8C193.6,157 220.7,140 245.5,138.4C270.4,136.9 299.6,151.1 322.8,161.4C345.9,171.6 373,183.4 384.4,199.9C395.9,216.5 396.2,241.2 391.4,260.7Z'/><path fill='%235FAE6A' d='M337.4,238.6C334.8,248.9 328.4,261.7 318,268.3C307.6,274.8 289.5,277 275,278.1C260.4,279.1 242.3,279.5 230.7,274.6C219,269.7 211.2,258.2 205,248.7C198.9,239.2 191.5,227.3 193.9,217.7C196.3,208.1 208.7,198.4 219.5,191.1C230.2,183.8 244.9,174.9 258.4,174.1C271.8,173.2 287.7,180.7 300.2,186.2C312.8,191.6 327.4,197.8 333.6,206.5C339.8,215.3 340,228.3 337.4,238.6Z'/></g></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='112' fill='%231D88C7'/><g transform='translate(256 256) scale(1.12) translate(-256 -256)'><path fill='%23F2DCA0' stroke='%23F2DCA0' stroke-width='14' stroke-linejoin='round' d='M129.1,337L124.4,397.2L194,372.8Z'/><ellipse fill='%23F2DCA0' cx='256' cy='256' rx='184' ry='140'/><path fill='%2394C973' d='M391.4,260.7C386.5,280.1 374.8,304.3 355.6,316.8C336.4,329.2 303,333.3 276.2,335.3C249.3,337.4 215.9,338.1 194.4,328.8C172.9,319.6 158.4,297.7 147,279.8C135.7,261.8 122,239.3 126.5,221.1C130.9,202.9 153.9,184.5 173.7,170.8C193.6,157 220.7,140 245.5,138.4C270.4,136.9 299.6,151.1 322.8,161.4C345.9,171.6 373,183.4 384.4,199.9C395.9,216.5 396.2,241.2 391.4,260.7Z'/><path fill='%235FAE6A' d='M337.4,238.6C334.8,248.9 328.4,261.7 318,268.3C307.6,274.8 289.5,277 275,278.1C260.4,279.1 242.3,279.5 230.7,274.6C219,269.7 211.2,258.2 205,248.7C198.9,239.2 191.5,227.3 193.9,217.7C196.3,208.1 208.7,198.4 219.5,191.1C230.2,183.8 244.9,174.9 258.4,174.1C271.8,173.2 287.7,180.7 300.2,186.2C312.8,191.6 327.4,197.8 333.6,206.5C339.8,215.3 340,228.3 337.4,238.6Z'/></g></svg>">
 </head>
 <body>
 
@@ -109,6 +109,7 @@
     <h1 class="brand-inline">islands</h1>
     <h2 class="screen-title" id="inviteTitle">招待を確認しています</h2>
     <p class="lede" id="inviteLede"></p>
+    <p class="lede" id="inviteJoinNote" hidden></p>
     <div class="error" id="inviteError" role="alert"></div>
     <div id="inviteOAuth"></div>
     <button class="btn btn-block" id="inviteJoin" type="button" hidden>このコミュニティに参加する</button>
@@ -146,6 +147,7 @@
       </label>
     </div>
     <div class="error" id="setupError" role="alert"></div>
+    <button class="btn btn-small btn-quiet setup-skip" id="setupSkip" type="button" hidden>写真はあとで設定して進む</button>
   </div>
   <div class="form-footer">
     <button class="btn btn-block" id="setupSave">次へ</button>
@@ -256,6 +258,9 @@
       </div>
     </div>
 
+    <!-- 15字に届くまでの案内（新しい投稿だけ。compose-rules.js shortNote）。 -->
+    <p class="compose-short-note" id="composeShortNote" role="status" hidden></p>
+
     <div class="notice" id="composeMoveNotice" hidden>
       本文を書き換えると、この投稿は地図の別の場所に移動します。
     </div>
@@ -332,6 +337,16 @@
         <span id="composeCounterText"></span>
       </div>
     </div>
+  </div>
+  <!-- ① で「次へ」を押したあと、話題が2つ以上入っていたら下から出るシート（2026-10-31）。 -->
+  <div class="topic-scrim" id="topicScrim" hidden></div>
+  <div class="topic-sheet" id="topicSheet" role="dialog" aria-modal="true" aria-labelledby="topicHeading" hidden>
+    <div class="topic-grip" aria-hidden="true"></div>
+    <h3 class="topic-heading" id="topicHeading"></h3>
+    <p class="topic-lede">1つに絞ると、同じことが好きな人とつながりやすくなります</p>
+    <div class="topic-chips" id="topicChips"></div>
+    <button class="btn btn-block topic-rewrite" id="topicRewrite" type="button">1つに絞って書き直す</button>
+    <button class="topic-keep" id="topicKeep" type="button">このまま次へ</button>
   </div>
   <!-- ③ の下：画面の下の真ん中に「投稿する」（編集では「保存」）。 -->
   <div class="compose-foot" id="composeFoot" hidden>

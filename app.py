@@ -65,6 +65,7 @@ from core import connections as lines
 from core import growth
 from core import introductions
 from core import island_namer
+from core import topic_check
 from core import matching
 from core import island_tracking
 from core import notifications as notices
@@ -119,6 +120,8 @@ from core.config import (
     MAX_NAME_LENGTH,
     MAX_TEXT_LENGTH,
     MIN_TEXT_LENGTH,
+    COMPOSE_MIN_LENGTH,
+    TOPIC_CHECK_RATE_MAX,
     GEMINI_MODEL_NAME,
     MOTIVATION_DEFAULT,
     MOTIVATION_MAX,
@@ -459,6 +462,10 @@ class PostCreate(BaseModel):
     # 2026-10-26. The community whose map this post belongs to. Ignored while
     # features.communities is false; otherwise the author must be a member.
     community_id: str | None = None
+
+
+class TopicCheck(BaseModel):
+    body: str = ""
 
 
 class PostPreview(BaseModel):
@@ -2224,6 +2231,7 @@ def config():
         "island_colors": list(ISLAND_COLORS),
         "limits": {
             "body_min": MIN_TEXT_LENGTH,
+            "compose_min": COMPOSE_MIN_LENGTH,
             "body_max": MAX_TEXT_LENGTH,
             "name_max": MAX_NAME_LENGTH,
             "comment_max": MAX_COMMENT_LENGTH,
@@ -2925,6 +2933,21 @@ def preview_post(payload: PostPreview, request: Request):
         "neighbors": neighbor_rows(ranked, terms, community=community_id),
         "saved": False,
     }
+
+
+@app.post("/api/posts/topic-check")
+def topic_check_post(payload: TopicCheck, request: Request):
+    """How many separate topics a text holds (2026-10-31), asked when 次へ is pressed on ①.
+
+    Only a list of 2 or more topic names means anything; every other case (one topic, no key,
+    switched off, a failed call, too many asks) is []. Never an error: the screen goes on to ② then,
+    and a post is never held up by this. Nothing is saved or logged.
+    """
+    user_id = current_user(request)
+    body = sanitize(normalize_text(payload.body or ""))[:MAX_TEXT_LENGTH].strip()
+    if not body or not check_rate_limit(f"topic:{user_id}", TOPIC_CHECK_RATE_MAX):
+        return {"topics": []}
+    return {"topics": topic_check.find_topics(body)}
 
 
 _ANON_VIEWER = re.compile(r"^anon:[0-9a-f]{16,64}$")
@@ -3757,6 +3780,10 @@ class DmBlock(BaseModel):
     blocked_id: str
 
 
+class DmReaction(BaseModel):
+    kind: str
+
+
 def _talk_refusal(error):
     return HTTPException(status_code=error.status, detail=str(error))
 
@@ -3824,6 +3851,42 @@ def local_dm_send(room_id: str, payload: DmBody, request: Request):
         raise _talk_refusal(error)
     except StoreError:
         raise HTTPException(status_code=422, detail=f"メッセージは1〜{DM_BODY_MAX}字で入力してください。")
+
+
+@app.get("/api/local/dm/rooms/{room_id}/reactions")
+def local_dm_reactions(room_id: str, request: Request):
+    require_local()
+    try:
+        return {"reactions": state["store"].dm_reactions(current_user(request), room_id)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
+@app.post("/api/local/dm/messages/{message_id}/reaction")
+def local_dm_react(message_id: str, payload: DmReaction, request: Request):
+    require_local()
+    try:
+        return state["store"].react_dm(current_user(request), message_id, payload.kind)
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
+@app.post("/api/local/dm/{room_id}/read")
+def local_dm_mark_read(room_id: str, request: Request):
+    require_local()
+    try:
+        return {"recorded": state["store"].mark_dm_read(current_user(request), room_id)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
+@app.get("/api/local/dm/{room_id}/read")
+def local_dm_read_state(room_id: str, request: Request):
+    require_local()
+    try:
+        return {"partner_read_at": state["store"].dm_partner_read_at(current_user(request), room_id)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
 
 
 @app.post("/api/local/dm/blocks")

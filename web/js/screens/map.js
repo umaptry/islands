@@ -33,7 +33,8 @@ import { SWITCH_FX_MS } from '../feedback-rules.js';
 import { currentTone, pageSeaFor } from '../screen-tone.js';
 import { playSe, setAmbient } from '../audio.js';
 import { browserStorage, refreshTalk } from '../talk.js';
-import { mapLinkFor, savePendingPost, validPostId } from '../return-post.js';
+import { clearInviteJoin, mapLinkFor, readInviteJoin, savePendingPost, validPostId } from '../return-post.js';
+import { recruitState } from '../recruit-rules.js';
 import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
 import {
   canPostFromMap, canSwitch, headerTitle, islandsInScope, linkIsClosed, mapNotice, postsExtent,
@@ -57,6 +58,20 @@ let activeChat = null;
 let selectionGeneration = 0;
 let sheetEvents = null;
 let restorePost = null;
+
+// Which `#/map?post=` link this history entry has opened already, kept in the
+// entry's own state: coming back to it with the back button is not a new link,
+// while a navigation to it (a new entry, state null) is.
+const LINK_KEY = 'islandsOpenedPost';
+const linkOpened = (postId) => Boolean(history.state && history.state[LINK_KEY] === postId);
+function markLinkOpened(postId) {
+  try { history.replaceState({ ...(history.state || {}), [LINK_KEY]: postId }, ''); } catch { /* not allowed: the link opens again */ }
+}
+function forgetLinkOpened() {
+  if (!history.state || !(LINK_KEY in history.state)) return;
+  const { [LINK_KEY]: _gone, ...rest } = history.state;
+  try { history.replaceState(Object.keys(rest).length ? rest : null, ''); } catch { /* ignore */ }
+}
 let mapRequest = 0;
 let mapError = false;
 let worldCount = null;   // how many posts the whole world has (null: not asked yet)
@@ -264,7 +279,10 @@ export async function openOnMap(postId, { thenOpen = null, afterLand = null } = 
   // Any other post (a notification, somebody's page): go through the link, which also turns the map to the
   // post's own community and, if the viewer cannot read it, says so calmly.
   if (!fresh && communitiesActive() && validPostId(thenOpen || postId)) {
-    await navigate(mapLinkFor(thenOpen || postId));
+    const link = mapLinkFor(thenOpen || postId);
+    // The same address again (no new history entry): asked for, so it opens again.
+    if (window.location.hash === link) forgetLinkOpened();
+    await navigate(link);
     return;
   }
   if (!await navigate('#/map')) return;
@@ -482,7 +500,40 @@ export async function showMatchCards(post, { thenOpen = null, first = false, pen
 }
 
 /** Open a post wherever it is on the map and bring the camera to it. */
+/** The 参加者募集中 post of the invite QR this person came in by: joined once the
+ * account exists (2026-10-31, the user). A post that no longer recruits, is closed
+ * or full, or that they are in already is let go quietly - signing up is not
+ * stopped by it. A failure that may pass (the network) keeps it for next time. */
+let joining = null;
+export function joinFromInvite() {
+  if (joining) return joining;
+  joining = (async () => {
+    const storage = browserStorage();
+    const postId = readInviteJoin(storage);
+    if (!postId || !state.account) return;
+    let post = state.postsById.get(postId) || null;
+    if (!post) post = await data.getPost(postId).catch(() => undefined);
+    if (post === undefined) return;   // could not ask: try again later
+    clearInviteJoin(storage);
+    if (!post || !isRecruiting(post) || post.author_id === state.account.id) return;
+    if (hasReacted(postId, 'join')) return;
+    if (recruitState(post)) {
+      toast(recruitState(post) === 'full' ? '会は満員のため、参加できませんでした。' : '会の受付が終わっていたため、参加できませんでした。');
+      return;
+    }
+    await react(postId, 'join');
+    if (hasReacted(postId, 'join')) toast(`「${clipText(post.body)}」に参加しました`);
+  })().finally(() => { joining = null; });
+  return joining;
+}
+
+const clipText = (text, max = 18) => {
+  const chars = Array.from(String(text || '').replace(/\s+/g, ' ').trim());
+  return chars.length > max ? `${chars.slice(0, max).join('')}…` : chars.join('');
+};
+
 export async function openLinkedPost(postId) {
+  if (state.account) await joinFromInvite().catch(() => {});
   await openPost(postId);
   if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
 }
@@ -1427,14 +1478,21 @@ export function setupMapScreen() {
       paintFresh();
       paintTrial();
       refreshMyViews();
+      // An invite QR's 会 still to join (a new person who left before their first post comes back).
+      if (state.account) joinFromInvite().catch(() => {});
       // Not awaited: the map is already up, and the pill can arrive a moment later.
       loadDigest();
       // #/map?post=<id>: a link to one post, which opens for anybody. A visitor
       // who is not signed in keeps it, so signing in or registering (even through
       // Google, which leaves the page) brings them back to it.
       const linked = query ? query.get('post') : null;
-      if (validPostId(linked) && activeScreen() === 'map') {
+      // Back on an address whose link was opened already - the back button of a
+      // profile opened from another post - is not a new link: the post that was
+      // open when the map was left comes back instead (2026-10-31: it was always
+      // the linked post, often your own from a notification).
+      if (validPostId(linked) && !linkOpened(linked) && activeScreen() === 'map') {
         restorePost = null;
+        markLinkOpened(linked);
         if (!state.account) savePendingPost(browserStorage(), linked);
         // A link that cannot be read is a notice where the map would be, and nothing opens.
         if (!(scope.mode === 'none' && scope.reason === 'closed')) await openLinkedPost(linked);

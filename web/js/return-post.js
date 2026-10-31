@@ -79,4 +79,45 @@ export function takePendingPost(storage, now = Date.now()) {
 /** For tests. */
 export function resetPendingMemory() {
   memory = null;
+  joinMemory = null;
+}
+
+// ---------------------------------------------------------------- a 会 to join
+// 2026-10-31 (the user): somebody who came in through an invite QR that carries a
+// 参加者募集中 post starts out joined to it. The join is written once the account
+// exists and the map can take it (screens/map.js joinFromInvite), so the post is
+// remembered here until then - for a day, as an invite on a poster may be scanned
+// and finished later.
+
+export const JOIN_KEY = 'islands-invite-join';
+export const JOIN_TTL_MS = 24 * 3600 * 1000;
+
+let joinMemory = null;
+
+/** Remember the post of the invite. Returns whether anything was kept. */
+export function saveInviteJoin(storage, id, now = Date.now()) {
+  if (!validPostId(id)) return false;
+  joinMemory = { id, at: now };
+  try {
+    if (storage) storage.setItem(JOIN_KEY, JSON.stringify(joinMemory));
+  } catch { /* memory only */ }
+  return true;
+}
+
+/** The post to join, or null (none, a bad value, or too old). */
+export function readInviteJoin(storage, now = Date.now()) {
+  let held = null;
+  try {
+    held = storage ? parse(storage.getItem(JOIN_KEY)) : null;
+  } catch { /* fall back to memory */ }
+  if (!held) held = joinMemory;
+  if (!held || now - held.at > JOIN_TTL_MS || held.at - now > JOIN_TTL_MS) return null;
+  return held.id;
+}
+
+export function clearInviteJoin(storage) {
+  joinMemory = null;
+  try {
+    if (storage) storage.removeItem(JOIN_KEY);
+  } catch { /* nothing to clear */ }
 }

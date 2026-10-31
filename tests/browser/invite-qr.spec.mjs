@@ -26,12 +26,13 @@ async function person(browser, testInfo, name, { create = null, join = null, ini
   return { page, context, made };
 }
 
-const makePost = (who, body, communityId) => who.page.evaluate(async ({ body, communityId }) => {
+// 招待につなげるのは「参加者募集中」の投稿だけ（2026-10-31）。ここで作る投稿は募集中にする。
+const makePost = (who, body, communityId, tags = ['参加者募集中']) => who.page.evaluate(async ({ body, communityId, tags }) => {
   const { api } = await import('/static/js/net.js');
-  const made = await api.post('/api/posts', { body, tags: [], motivation: 55, community_id: communityId },
+  const made = await api.post('/api/posts', { body, tags, motivation: 55, community_id: communityId },
     { headers: { 'Idempotency-Key': crypto.randomUUID() } });
   return made.id;
-}, { body, communityId });
+}, { body, communityId, tags });
 
 // この会の、まだ使える招待（サーバー側の事実）
 const activeCodes = (who, communityId) => who.page.evaluate(async (id) => {
@@ -347,4 +348,26 @@ test('投稿をつけずに作ったリンクは、今までどおり投稿な�
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-url')).toHaveValue(/#\/invite\/[^?]+$/);
   await expect(card.locator('.invite-with-post')).not.toBeChecked();
+});
+
+test('QR の会つきの招待を開くと、その会にも参加した状態で始まることが先に書いてある（2026-10-31）', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '会の説明', { create: `会の説明 ${unique()}`, init: withShare });
+  const id = admin.made.community_id;
+  const postId = await makePost(admin, '金曜の夜に集まります', id);
+  const { code } = await addInvite(admin, id, 60);
+  const note = '#inviteJoinNote';
+  // メンバー（会を読める人）には会の名前つきで
+  await admin.page.goto(`/?me=${unique()}#/invite/${code}?post=${postId}`);
+  await expect(admin.page.locator(note)).toHaveText('この QR の会（金曜の夜に集まります）にも参加した状態で始まります。あとで取り消せます');
+  // まだアカウントのない人には名前なしで（会を読めない）
+  const { baseURL, viewport } = testInfo.project.use;
+  const guest = await (await browser.newContext({ baseURL, viewport })).newPage();
+  await guest.goto(`/#/invite/${code}?post=${postId}`);
+  await expect(guest.locator('#inviteRegister')).toBeVisible();
+  await expect(guest.locator(note)).toHaveText('この QR の会にも参加した状態で始まります。あとで取り消せます');
+  await noSideScroll(guest);
+  // 会のない招待では何も言わない
+  await guest.goto(`/?again=1#/invite/${code}`);
+  await expect(guest.locator('#inviteRegister')).toBeVisible();
+  await expect(guest.locator(note)).toBeHidden();
 });

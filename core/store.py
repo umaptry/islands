@@ -42,7 +42,10 @@ from core.config import (
     COMMUNITY_ERROR_RENAME_ADMIN_ONLY,
     COMMUNITY_NAME_MAX,
     DM_BODY_MAX,
+    DM_ERROR_REACT,
+    DM_ERROR_REACT_KIND,
     DM_ERROR_SEND,
+    DM_REACTION_KINDS,
     DM_ROOM_EXCERPT,
     INVITE_END_OF_DAY_MIN_MINUTES,
     INVITE_ERROR_ADMIN_ONLY,
@@ -292,6 +295,8 @@ class MemoryStore:
         self._dm_rooms = {}         # room id -> {id, user_a, user_b, event_post_id, created_at}
         self._dm_messages = []      # oldest first
         self._dm_blocks = set()     # (blocker_id, blocked_id)
+        self._dm_reactions = {}     # (message_id, account_id) -> {message_id, room_id, account_id, kind, created_at}
+        self._dm_reads = {}         # (room_id, user_id) -> the last time that person read the room (a datetime)
         self._talk_stats = {}       # JST day -> {pressed, matched}: counts only
         self._talk_daily_presses = {}   # (account_id, JST day) -> people newly pressed that day
         self._communities = {}      # id -> {id, slug, name, created_by, created_at}
@@ -1231,6 +1236,68 @@ class MemoryStore:
                        for row in self._notifications.values()):
                 self._notify(other, me, None, None, "dm")
             return dict(message)
+
+    def dm_reactions(self, me, room_id):
+        """Every reaction in the room (both people's), as {message_id, account_id, kind}."""
+        with self._lock:
+            if not self._room_of(me, room_id):
+                raise TalkRefused(DM_ERROR_SEND, status=404)
+            return [{"message_id": row["message_id"], "account_id": row["account_id"], "kind": row["kind"]}
+                    for row in self._dm_reactions.values() if row["room_id"] == room_id]
+
+    def react_dm(self, me, message_id, kind):
+        """Add, swap or take off my one reaction to a message (react_dm in the migration).
+        Answers {"kind": the reaction now on it, or None}. No notification is written."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            message = next((m for m in self._dm_messages if m["id"] == message_id), None)
+            room = self._room_of(me, message["room_id"]) if message else None
+            other = None
+            if room:
+                other = room["user_b"] if room["user_a"] == me else room["user_a"]
+            # Not in the room, no such message and a block (either way) are not told apart.
+            if not room or self._talk_blocked(me, other):
+                raise TalkRefused(DM_ERROR_REACT, status=403)
+            if kind not in DM_REACTION_KINDS:
+                raise TalkRefused(DM_ERROR_REACT_KIND)
+            held = self._dm_reactions.get((message_id, me))
+            if held and held["kind"] == kind:
+                del self._dm_reactions[(message_id, me)]
+                return {"kind": None}
+            self._dm_reactions[(message_id, me)] = {
+                "message_id": message_id, "room_id": room["id"], "account_id": me,
+                "kind": kind, "created_at": _stamp(_now()).isoformat()}
+            return {"kind": kind}
+
+    def mark_dm_read(self, me, room_id):
+        """Record that I read this room just now (mark_dm_read in the migration). The time never goes back.
+        Only the two in the room, and only without a block; anything else records nothing and says nothing.
+        Answers True when something was recorded."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            room = self._room_of(me, room_id)
+            if not room or self._talk_blocked(room["user_a"], room["user_b"]):
+                return False
+            now = _stamp(_now())
+            held = self._dm_reads.get((room_id, me))
+            self._dm_reads[(room_id, me)] = max(held, now) if held else now
+            return True
+
+    def dm_partner_read_at(self, me, room_id):
+        """When the other person last read the room (ISO text), or None: not in the room, not read yet.
+        A block does not hide the time already kept (that would tell who blocked); mark_dm_read just stops
+        moving it, so only what is sent after the block stays unread."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            room = self._room_of(me, room_id)
+            if not room:
+                return None
+            other = room["user_b"] if room["user_a"] == me else room["user_a"]
+            seen = self._dm_reads.get((room_id, other))
+            return _stamp(seen).isoformat() if seen else None
 
     def block_dm(self, me, blocked_id):
         if not blocked_id or blocked_id == me or blocked_id not in self._accounts:

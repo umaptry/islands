@@ -13,6 +13,8 @@ import app as application
 from conftest import CAMPING_A, CAMPING_B, CAMPING_C
 from core import notifications as notices
 from core.config import (
+    DM_ERROR_REACT,
+    DM_ERROR_REACT_KIND,
     DM_ERROR_SEND,
     NOTIFICATION_CATEGORY_OF,
     RECRUIT_TAG,
@@ -536,3 +538,161 @@ def test_a_new_day_starts_from_zero_and_old_counts_are_swept(crowd):
     store._talk_daily_presses[(account, "2000-01-01")] = store._talk_daily_presses.pop((account, day))
     assert press(host, guests[20]).status_code == 200
     assert list(store._talk_daily_presses.values()) == [1]       # the old row is gone
+
+
+# --------------------------------------------------------------------------
+# reactions to a DM message (2026-10-31, supabase/migrations/20261031000000_dm_reactions.sql)
+# --------------------------------------------------------------------------
+
+def react(person, message, kind):
+    return person.client.post(f"/api/local/dm/messages/{message}/reaction", json={"kind": kind},
+                              headers=person.headers)
+
+
+def reactions(person, room):
+    return get(person, f"/api/local/dm/rooms/{room}/reactions")
+
+
+@pytest.fixture
+def said(matched):
+    """The matched room with one message from the guest."""
+    host, guest, guest2, outsider, room = matched
+    message = send(guest, room, "こんにちは").json()["message"]
+    return host, guest, guest2, outsider, room, message["id"]
+
+
+def test_a_reaction_is_added_swapped_and_taken_off(said):
+    host, guest, *_, room, message = said
+    assert react(host, message, "heart").json() == {"kind": "heart"}
+    assert reactions(guest, room).json()["reactions"] == [
+        {"message_id": message, "account_id": host.id, "kind": "heart"}]
+    assert react(host, message, "thumbs").json() == {"kind": "thumbs"}
+    rows = reactions(host, room).json()["reactions"]
+    assert [row["kind"] for row in rows] == ["thumbs"]          # one per person per message
+    assert react(host, message, "thumbs").json() == {"kind": None}
+    assert reactions(host, room).json()["reactions"] == []
+
+
+def test_both_people_can_react_to_the_same_message(said):
+    host, guest, *_, room, message = said
+    react(host, message, "heart")
+    react(guest, message, "heart")                              # my own message too
+    rows = reactions(guest, room).json()["reactions"]
+    assert {(row["account_id"], row["kind"]) for row in rows} == {(host.id, "heart"), (guest.id, "heart")}
+
+
+def test_reacting_writes_no_notice_and_leaves_the_list_alone(said):
+    host, guest, *_, room, message = said
+    before = (feed(guest), get(guest, "/api/local/dm/rooms").json()["rooms"])
+    react(host, message, "pray")
+    assert guest.inbox({"dm"}) == []
+    assert (feed(guest), get(guest, "/api/local/dm/rooms").json()["rooms"]) == before
+
+
+def test_only_the_two_in_the_room_can_react_or_read(said):
+    host, guest, guest2, outsider, room, message = said
+    for stranger in (outsider, guest2):
+        refused = react(stranger, message, "heart")
+        assert refused.status_code == 403 and refused.json()["detail"] == DM_ERROR_REACT
+        assert reactions(stranger, room).status_code == 404
+    unknown = react(host, "no-such-message", "heart")
+    assert unknown.status_code == 403 and unknown.json()["detail"] == DM_ERROR_REACT
+
+
+def test_a_block_stops_reacting_both_ways_with_the_same_words(said):
+    host, guest, *_, room, message = said
+    react(host, message, "heart")
+    guest.client.post("/api/local/dm/blocks", json={"blocked_id": host.id}, headers=guest.headers)
+    for person in (host, guest):
+        refused = react(person, message, "wow")
+        assert refused.status_code == 403 and refused.json()["detail"] == DM_ERROR_REACT
+    assert "ブロック" not in DM_ERROR_REACT
+    assert len(reactions(host, room).json()["reactions"]) == 1   # what was there stays
+    guest.client.delete(f"/api/local/dm/blocks/{host.id}", headers=guest.headers)
+    assert react(host, message, "wow").status_code == 200
+
+
+def test_an_unknown_kind_is_refused(said):
+    host, *_, room, message = said
+    for kind in ("❤️", "party", "", "HEART"):
+        refused = react(host, message, kind)
+        assert refused.status_code == 422 and refused.json()["detail"] == DM_ERROR_REACT_KIND
+    assert reactions(host, room).json()["reactions"] == []
+
+
+def test_every_one_of_the_six_kinds_works(said):
+    host, *_, room, message = said
+    for kind in ("heart", "thumbs", "laugh", "wow", "sad", "pray"):
+        assert react(host, message, kind).json() == {"kind": kind}
+
+
+def test_reaction_routes_need_login(said, fresh_client):
+    *_, room, message = said
+    assert fresh_client.get(f"/api/local/dm/rooms/{room}/reactions").status_code == 401
+    assert fresh_client.post(f"/api/local/dm/messages/{message}/reaction",
+                             json={"kind": "heart"}).status_code == 401
+
+
+# --------------------------------------------------------------------------
+# read marks in a DM (2026-10-31, supabase/migrations/20261031010000_dm_read.sql)
+# --------------------------------------------------------------------------
+
+def mark_read(person, room):
+    return person.client.post(f"/api/local/dm/{room}/read", headers=person.headers)
+
+
+def partner_read(person, room):
+    return get(person, f"/api/local/dm/{room}/read")
+
+
+def test_the_other_person_sees_when_i_read_the_room(matched):
+    host, guest, *_, room = matched
+    assert partner_read(host, room).json() == {"partner_read_at": None}
+    assert mark_read(guest, room).json() == {"recorded": True}
+    seen = partner_read(host, room).json()["partner_read_at"]
+    assert seen
+    assert partner_read(guest, room).json() == {"partner_read_at": None}     # my own time is not told to me
+    assert mark_read(guest, room).json() == {"recorded": True}
+    assert partner_read(host, room).json()["partner_read_at"] >= seen         # it never goes back
+
+
+def test_reading_writes_no_notice_and_leaves_the_list_alone(matched):
+    host, guest, *_, room = matched
+    before = (feed(host), get(host, "/api/local/dm/rooms").json()["rooms"])
+    mark_read(guest, room)
+    assert host.inbox({"dm"}) == []
+    assert (feed(host), get(host, "/api/local/dm/rooms").json()["rooms"]) == before
+
+
+def test_people_outside_the_room_record_and_see_nothing(matched):
+    host, guest, guest2, outsider, room = matched
+    mark_read(guest, room)
+    for stranger in (outsider, guest2):
+        assert mark_read(stranger, room).json() == {"recorded": False}
+        assert partner_read(stranger, room).json() == {"partner_read_at": None}
+    assert mark_read(host, "no-such-room").json() == {"recorded": False}
+    assert partner_read(host, "no-such-room").json() == {"partner_read_at": None}
+    # the outsider's try left nothing behind: the host's own time is still empty for the guest
+    assert partner_read(guest, room).json() == {"partner_read_at": None}
+
+
+def test_a_block_records_nothing_new_but_keeps_showing_the_old_time_both_ways(matched):
+    host, guest, *_, room = matched
+    mark_read(guest, room)
+    seen = partner_read(host, room).json()["partner_read_at"]
+    assert seen
+    guest.client.post("/api/local/dm/blocks", json={"blocked_id": host.id}, headers=guest.headers)
+    for person in (host, guest):
+        assert mark_read(person, room).json() == {"recorded": False}
+    # hiding the kept time would tell the host about the block, so it stays as it was, without moving
+    assert partner_read(host, room).json() == {"partner_read_at": seen}
+    assert partner_read(guest, room).json() == {"partner_read_at": None}     # the host's try was refused
+    guest.client.delete(f"/api/local/dm/blocks/{host.id}", headers=guest.headers)
+    assert partner_read(host, room).json() == {"partner_read_at": seen}
+    assert partner_read(guest, room).json() == {"partner_read_at": None}
+
+
+def test_read_routes_need_login(matched, fresh_client):
+    *_, room = matched
+    assert fresh_client.post(f"/api/local/dm/{room}/read").status_code == 401
+    assert fresh_client.get(f"/api/local/dm/{room}/read").status_code == 401

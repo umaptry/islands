@@ -44,7 +44,10 @@ import { takePendingPost } from '../return-post.js';
 import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
 import { communityNameIn, postingTarget, shareOn, shareTargets } from '../community-rules.js';
 import { sharePost } from '../share.js';
-import { bodyLength, followPromptTag, splitOverflow, stepBefore } from '../compose-rules.js';
+import {
+  bodyLength, composeFloor, counterLabel, floorLength, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore,
+  topicHeading, topicPlan, usableTopics,
+} from '../compose-rules.js';
 import { primeKeyboard, releaseKeyboard } from '../keyboard.js';
 
 let editing = null;       // the post being edited, or null for a new one
@@ -66,6 +69,11 @@ let postBlocked = false;     // communities are on and I am in none: there is no
 let shareChosen = new Set(); // ほかのコミュニティにも出す: the communities ticked (not those that have the post already)
 let step = 1;                // ① words, ② how serious, ③ tags and other communities
 let nudged = false;          // 次へ was pressed on ② before the bar was moved: say how to answer
+let asking = false;          // 次へ on ① is waiting for the topic check (the button says so and cannot be pressed)
+let topicMemory = null;      // the last text the server was asked about: { body, topics, accepted } (compose-rules topicPlan)
+let visit = 0;               // goes up each time the screen opens: an answer asked for on an earlier visit is no answer
+
+const TOPIC_WAIT_MS = 4000;  // the browser gives the topic check this long, then goes on to ② as if nothing came back
 
 // The prompts and the recruit fields exist only once the database has the columns.
 const extrasOn = () => Boolean(config().features?.post_extras);
@@ -109,9 +117,83 @@ function goStep(next) {
   if (next === 2 && heat) paintMotivation();
 }
 
-/** ① → ②, once the words are there and within the limit (the button is disabled otherwise). */
-function nextFromWords() {
+/** ① → ②, once the words are there and within the limit (the button is disabled otherwise).
+ * A new post is first checked for how many topics it holds (the check never holds the post up). */
+async function nextFromWords() {
   if ($('composeNext').disabled) return;
+  const text = $('composeBody').value.trim();
+  const plan = editing ? 'go' : topicPlan({ last: topicMemory, body: text });
+  if (plan === 'sheet') {
+    openTopicSheet(topicMemory.topics);
+    return;
+  }
+  if (plan === 'ask') {
+    const asked = visit;
+    asking = true;
+    paintCounter();
+    const topics = await askTopics(text);
+    // The person may have left (and come back to the same words), or gone on typing, while the answer
+    // was on its way: then it is no answer. Another visit has its own asking and button.
+    if (asked !== visit) return;
+    asking = false;
+    const stale = !$('compose').classList.contains('active') || step !== 1 || $('composeBody').value.trim() !== text;
+    paintCounter();
+    if (stale) return;
+    topicMemory = { body: text, topics, accepted: false };
+    if (topics.length >= 2) {
+      openTopicSheet(topics);
+      return;
+    }
+  }
+  goStep(2);
+  buzz('tap');
+}
+
+/** The topic names of a text from the server: 2 or more, or [] for anything else (no AI, a failure, a
+ * slow answer, too many asks). Never throws: 次へ goes on to ② without a word then. */
+async function askTopics(text) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TOPIC_WAIT_MS);
+  try {
+    const result = await api.post('/api/posts/topic-check', { body: text }, { signal: controller.signal });
+    return usableTopics(result?.topics);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------- the topic sheet
+
+function openTopicSheet(topics) {
+  $('topicHeading').textContent = topicHeading(topics.length);
+  const chips = clear($('topicChips'));
+  topics.forEach((name) => chips.append(el('span', { className: 'topic-chip', text: name })));
+  $('topicScrim').hidden = false;
+  $('topicSheet').hidden = false;
+  buzz('tap');
+  $('topicRewrite').focus({ preventScroll: true });
+}
+
+function closeTopicSheet() {
+  $('topicScrim').hidden = true;
+  $('topicSheet').hidden = true;
+}
+
+/** 1つに絞って書き直す, the scrim and Esc: only close; the cursor goes to the end of the words. */
+function rewriteFromSheet() {
+  closeTopicSheet();
+  const body = $('composeBody');
+  body.focus();
+  const end = body.value.length;
+  body.setSelectionRange(end, end);
+}
+
+/** このまま次へ: the sheet closes and ② opens, and this text is not asked about again. */
+function keepFromSheet() {
+  closeTopicSheet();
+  if (topicMemory) topicMemory.accepted = true;
   goStep(2);
   buzz('tap');
 }
@@ -161,18 +243,26 @@ function paintOverflow(value, max) {
 }
 
 function paintCounter() {
-  const { body_min: min, body_max: max } = config().limits;
+  const limits = config().limits;
+  const max = limits.body_max;
+  // A new post needs 15 characters (screen only, see COMPOSE_MIN_LENGTH); an edit keeps the server's 1.
+  const floor = composeFloor({ editing: Boolean(editing), limits });
   const value = $('composeBody').value;
   const length = bodyLength(value);
-  // No floor to reach any more (Q36), so the ring fills towards the cap.
-  const ratio = Math.min(1, length / (min > 1 ? min : max));
+  // The floor counts a run of blanks as one, as the server saves it; the counter and the 60 do not.
+  const counted = floorLength(value);
+  const ratio = Math.min(1, (floor > 1 ? counted : length) / (floor > 1 ? floor : max));
   const ring = $('composeCounter').querySelector('.value');
   ring.style.strokeDashoffset = String(56.5 * (1 - ratio));
-  $('composeCounter').classList.toggle('done', length >= min);
+  $('composeCounter').classList.toggle('done', counted >= floor);
   $('composeCounter').classList.toggle('over', length > max);
-  $('composeCounterText').textContent = `${length}/${max}${min > 1 && length < min ? `（${min}文字から）` : ''}`;
-  const invalid = submitting || postBlocked || length < min || length > max;
-  $('composeNext').disabled = invalid;
+  $('composeCounterText').textContent = counterLabel(length, max);
+  const invalid = submitting || postBlocked || counted < floor || length > max;
+  $('composeNext').disabled = invalid || asking;
+  $('composeNext').textContent = asking ? '確かめています…' : nextLabel({ length: counted, floor });
+  const note = editing ? null : shortNote({ length: counted, floor });
+  $('composeShortNote').hidden = !note;
+  $('composeShortNote').textContent = note || '';
   // The buttons are not held back by the slider: 次へ on ② points at the slider instead (see nudgeSlider).
   $('composeSubmit').disabled = invalid;
   $('composeHint').hidden = Boolean(editing) || touched || !nudged;
@@ -452,6 +542,12 @@ export function setupCompose() {
   body.addEventListener('input', paintCounter);
   $('composeNext').addEventListener('click', nextFromWords);
   $('composeNext2').addEventListener('click', nextFromHeat);
+  $('topicRewrite').addEventListener('click', rewriteFromSheet);
+  $('topicScrim').addEventListener('click', rewriteFromSheet);
+  $('topicKeep').addEventListener('click', keepFromSheet);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('topicSheet').hidden) rewriteFromSheet();
+  });
   window.visualViewport?.addEventListener('resize', fitToViewport);
   window.visualViewport?.addEventListener('scroll', fitToViewport);
   // Turning the phone or resizing the window changes where the words wrap; the keyboard going away can
@@ -555,6 +651,7 @@ export function setupCompose() {
 
   screen('compose', {
     leave() {
+      closeTopicSheet();
       if (document.activeElement === body) body.blur();
       $('compose').style.top = '';
       $('compose').style.bottom = '';
@@ -564,6 +661,7 @@ export function setupCompose() {
         share: [...shareChosen] });
     },
     enter: async (params, query) => {
+      visit += 1;
       const first = query && query.get('first') === '1';
       firstPost = Boolean(first);
       $('compose').classList.toggle('first-post', firstPost);
@@ -573,6 +671,9 @@ export function setupCompose() {
       submitting = false;
       touched = false;
       nudged = false;
+      asking = false;
+      topicMemory = null;
+      closeTopicSheet();
       // Nothing of the last visit carries over until this one says so: leaving early (a post that cannot be
       // edited, a first post with nowhere to go) must not save this screen over another draft.
       draftKey = '';

@@ -18,7 +18,7 @@ import { config, isLocal } from './config.js';
 import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
-import { readPress, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
+import { dmReadMissing, readPress, readReact, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
 import { communitiesOn, shareOn } from './community-rules.js';
 import { imageExtension } from './image.js';
 
@@ -31,7 +31,7 @@ export class ApiError extends Error {
 
 // keepalive lets a request outlive the page: "no longer on screen" is said as
 // the tab closes, and without it the browser would drop it on the floor.
-async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive, cache } = {}) {
+async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive, cache, signal } = {}) {
   const merged = { accept: 'application/json', ...headers };
   if (auth) {
     const token = await session.accessToken();
@@ -47,6 +47,7 @@ async function request(url, { method = 'GET', body, headers = {}, auth = true, r
       body: raw ? body : (body === undefined ? undefined : JSON.stringify(body)),
       ...(keepalive ? { keepalive: true } : {}),
       ...(cache ? { cache } : {}),
+      ...(signal ? { signal } : {}),
     });
   } catch {
     throw new ApiError('接続できませんでした。通信環境をご確認ください。', 0);
@@ -97,6 +98,10 @@ async function restCall(path, { params, method = 'GET', body, prefer, keepalive 
 
 const rpc = (name, args, options) =>
   restCall(`rpc/${name}`, { method: 'POST', body: args, ...options });
+
+// 2026-10-31: the read marks of a DM. Once the functions turn out to be missing (the SQL has not been run),
+// nothing is asked again until the page is loaded anew.
+let dmReadGone = false;
 
 const ACCOUNT_EMBED = 'accounts(id,display_name,icon_id,avatar_path)';
 // Posts also reach accounts through reactions and comments, so name the key.
@@ -352,6 +357,42 @@ const supabaseBackend = {
       throw talkError(error, 'dm');
     }
   },
+  /** Everybody's reactions in one room (the table is small); only the two in the room can read it. */
+  async dmReactions(roomId) {
+    return restCall('dm_reactions', {
+      params: { select: 'message_id,account_id,kind', room_id: `eq.${roomId}`, limit: '2000' },
+    });
+  },
+  /** Add, swap or take off my one reaction to a message; answers the kind now on it (null = taken off). */
+  async reactDm(messageId, kind) {
+    try {
+      return readReact(await rpc('react_dm', { msg_id: messageId, new_kind: kind }));
+    } catch (error) {
+      throw talkError(error, 'dm');
+    }
+  },
+  /** I have read this room just now. Nothing is thrown when the database has no such function yet. */
+  async markDmRead(roomId) {
+    if (dmReadGone) return null;
+    try {
+      await rpc('mark_dm_read', { room: roomId });
+      return true;
+    } catch (error) {
+      if (dmReadMissing(error)) { dmReadGone = true; return null; }
+      throw error;
+    }
+  },
+  /** { partner_read_at } (ISO text or null), or null when the database cannot say yet. */
+  async dmReadState(roomId) {
+    if (dmReadGone) return null;
+    try {
+      const value = await rpc('dm_partner_read_at', { room: roomId });
+      return { partner_read_at: typeof value === 'string' && value ? value : null };
+    } catch (error) {
+      if (dmReadMissing(error)) { dmReadGone = true; return null; }
+      throw error;
+    }
+  },
   async block(blockedId) {
     await restCall('dm_blocks', {
       method: 'POST',
@@ -525,6 +566,23 @@ const localBackend = {
     } catch (error) {
       throw talkError(error, 'dm');
     }
+  },
+  dmReactions: async (roomId) =>
+    (await api.get(`/api/local/dm/rooms/${encodeURIComponent(roomId)}/reactions`)).reactions || [],
+  reactDm: async (messageId, kind) => {
+    try {
+      return readReact(await api.post(`/api/local/dm/messages/${encodeURIComponent(messageId)}/reaction`, { kind }));
+    } catch (error) {
+      throw talkError(error, 'dm');
+    }
+  },
+  markDmRead: async (roomId) => {
+    await api.post(`/api/local/dm/${encodeURIComponent(roomId)}/read`, {});
+    return true;
+  },
+  dmReadState: async (roomId) => {
+    const answer = await api.get(`/api/local/dm/${encodeURIComponent(roomId)}/read`);
+    return { partner_read_at: answer.partner_read_at || null };
   },
   block: async (blockedId) => {
     await api.post('/api/local/dm/blocks', { blocked_id: blockedId });

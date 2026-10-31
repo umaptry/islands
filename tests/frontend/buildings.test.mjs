@@ -6,7 +6,14 @@ import { readFile } from 'node:fs/promises';
 const palette = (await readFile(new URL('../../web/js/map/palette.js', import.meta.url), 'utf8'))
   .replace(/export const /g, 'const ').replace(/export function /g, 'function ');
 let source = await readFile(new URL('../../web/js/map/buildings.js', import.meta.url), 'utf8');
+const meshSource = await readFile(new URL('../../web/js/map/mesh.js', import.meta.url), 'utf8');
+const meshUrl = `data:text/javascript;base64,${Buffer.from(meshSource).toString('base64')}`;
+const marksSource = (await readFile(new URL('../../web/js/map/landmarks.js', import.meta.url), 'utf8'))
+  .replace("'./mesh.js'", () => `'${meshUrl}'`);
+const marksUrl = `data:text/javascript;base64,${Buffer.from(marksSource).toString('base64')}`;
 source = source.replace("import { PALETTE, mixHex } from './palette.js';", () => palette);
+source = source.replace("'./mesh.js'", () => `'${meshUrl}'`);
+source = source.replace("'./landmarks.js'", () => `'${marksUrl}'`);
 const B = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const CANDIDATES = ['灯台', '風車', '時計塔', '図書館', '工房', '温室', '天文台', '市場', '港の桟橋', '鍛冶場', '学び舎', '茶屋',
