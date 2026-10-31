@@ -51,6 +51,8 @@ test('手伝えるかも: タグなしの他人の投稿には無く、助けて
   const plain = await makePost(other, '週末は川沿いを走っています。', cid);
   const asking = await makePost(other, 'ミニトマトがうまく育ちません。', cid, ['助けてほしい']);
   await me.page.reload();
+  // The account is read a moment after the page loads; going to '#/post' before then sends the page to the sign-in.
+  await me.page.waitForFunction(async () => Boolean((await import('/static/js/state.js')).state.account), null, { timeout: 20000 });
   await openPost(me.page, plain);
   await expect(me.page.locator('#sheet [data-reaction="like"]')).toBeVisible();
   await expect(me.page.locator('#sheet [data-reaction="help"]')).toHaveCount(0);
@@ -65,6 +67,8 @@ test('2回目の投稿でもお題チップは4つ、困ってることで助け
   const { me, cid } = await pair(browser, testInfo);
   await makePost(me, '最初の投稿です。', cid);
   await me.page.reload();
+  // The account is read a moment after the page loads; going to '#/post' before then sends the page to the sign-in.
+  await me.page.waitForFunction(async () => Boolean((await import('/static/js/state.js')).state.account), null, { timeout: 20000 });
   await me.page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post'));
   const chips = me.page.locator('#composeExtraPromptList .extra-chip');
   await expect(chips).toHaveText(['昔がんばってたこと', '最近やってること', '今度やってみたいこと', '困ってること']);

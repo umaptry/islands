@@ -27,3 +27,29 @@ test('the shadow falls to the bottom right and the window is on the front', () =
   assert.ok(mid[0] > 0 && mid[1] > 0);
   assert.ok(houseWindow(0)[1] > -1);
 });
+
+test('every landmark gives faces, a shadow size and lights, and nothing is NaN', async () => {
+  const { landmarkLights, landmarkMesh, landmarkSize } = await import('../../web/js/map/landmarks.js');
+  const forms = [
+    ['lighthouse', ''], ['tower', 'clock'], ['tower', 'watch'], ['dome', 'observatory'], ['dome', 'music'],
+    ['manor', 'library'], ['manor', 'school'], ['manor', 'gallery'], ['manor', 'theater'], ['manor', 'default'],
+    ['workshop', 'workshop'], ['workshop', 'smithy'], ['clinic', 'lab'], ['clinic', 'clinic'], ['greenhouse', ''],
+    ['windmill', ''], ['market', ''], ['pier', 'pier'], ['pier', 'fishhut'],
+    ['flat', 'plaza'], ['flat', 'farm'], ['flat', 'field'], ['flat', 'garden'], ['shop', 'teahouse'], ['shop', 'bakery'],
+  ];
+  for (const [type, variant] of forms) {
+    const faces = facesOf(landmarkMesh(type, variant));
+    assert.ok(faces.length > 6, `${type}:${variant}`);
+    faces.forEach((f) => {
+      assert.match(f.fill, /^#[0-9a-f]{6}$/);
+      f.pts.flat().forEach((v) => assert.ok(Number.isFinite(v)));
+    });
+    const { h, rr } = landmarkSize(type, variant);
+    assert.ok(h > 0 && rr > 0);
+    const lights = landmarkLights(type, variant);
+    assert.ok(lights.length > 0, `${type}:${variant} has a light for the night`);
+    lights.forEach((l) => [l.x, l.y, l.r, l.a].forEach((v) => assert.ok(Number.isFinite(v))));
+  }
+  // An unknown shape is a manor, and a name that is an object key is not a shape.
+  assert.equal(landmarkMesh('constructor').length, landmarkMesh('manor', 'default').length);
+});
