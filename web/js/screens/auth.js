@@ -26,7 +26,7 @@ import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
 import { browserStorage, refreshTalk } from '../talk.js';
 import { mapLinkFor, takePendingPost } from '../return-post.js';
-import { browseView, entryView, readPendingInvite } from '../community-rules.js';
+import { browseView, entryView, mustWait, readPendingInvite } from '../community-rules.js';
 import { settleSession } from './invite.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
 
@@ -283,6 +283,8 @@ export async function afterSignIn() {
         state.account = (await api.put('/api/account/me', {
           display_name: $('registerName').value.trim(),
           affiliation: $('registerAffiliation').value.trim(),
+          // The form asks for the full name, so a new account needs no separate #/fullname check.
+          name_confirmed: true,
           icon_id: PHOTO_ICON,
         })).account;
         setOnboardingStep('photo');
@@ -311,6 +313,11 @@ export async function afterSignIn() {
   ]);
   // Came here from a link to one post (#/map?post=...): straight back to it. A new
   // person is not here yet - theirs opens after the first post (compose.js).
+  // Somebody who is waiting for an admin keeps the link until they are let in (waiting.js opens it).
+  if (mustWait({ communities: state.communities, joinStatus: state.joinStatus })) {
+    navigate('#/waiting');
+    return;
+  }
   const waiting = onboardingStep() ? null : takePendingPost(browserStorage());
   navigate(waiting ? mapLinkFor(waiting) : '#/map');
 }
@@ -423,7 +430,8 @@ export function setupProfileSetup() {
   // which is right: an empty map is not something to be dropped into.
   const goOn = () => {
     setOnboardingStep('0');
-    navigate('#/guidance');
+    // An application that waits for an admin comes before the guidance: it starts when they are let in.
+    navigate(mustWait({ communities: state.communities, joinStatus: state.joinStatus }) ? '#/waiting' : '#/guidance');
   };
 
   save.addEventListener('click', async () => {
@@ -435,6 +443,7 @@ export function setupProfileSetup() {
         ...(needsName ? {
           display_name: name.value.trim(),
           affiliation: $('setupAffiliation').value.trim(),
+          name_confirmed: true,
         } : {}),
         ...(await field.commit()),
       });

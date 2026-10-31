@@ -47,7 +47,7 @@
 - people layer：つながりの線・似ている人・新しい住人の通知（`connection_lines`・`similar_people`・`notify_resident`）
 - Web Push：プッシュ通知の送信（`dispatch_pushes`）
 - API：`/api/config`・`/api/islands`・`/api/connections`・`/api/posts`（作成・プレビュー・編集・共有・削除）・`/api/matches` など
-- local mode：`/api/local/*`（Supabase の代役）
+- local mode：`/api/local/*`（Supabase の代役）。末尾に「join approval」の見出しで承認制の道（承認の切り替え・申し込み状況・取り消し・一覧・決める）
 - account：`/api/account/me`（両方のモード）
 - static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`
 
@@ -56,12 +56,13 @@
 - 島：clustering.py（島に分ける）、island_namer.py（Gemini で名前）、island_tracking.py（作り直しても同じ島として追う）、growth.py（島の育ち方）
 - 人のつながり：connections.py（線）、affinity.py（人どうしの似かた）、matching.py（新しい投稿が誰につながるか）、introductions.py（紹介の一文）、similarity.py（距離→似てる度%）
 - 投稿：post_extras.py（お題・募集）、prompts.py（今週のお題）、quiet.py（反応のない投稿をそっと見せる）、stopwords.py
-- 通知：notifications.py、webpush.py
+- 通知：notifications.py（`allows`。`ALWAYS_ON_NOTIFICATION_TYPES` の2種類は設定に関係なく常にオン）、webpush.py
+- 名前を出してよい人：visibility.py（`visible_ids`・`display_name_for`・`mask_person`。accounts を閉じたあとのブラウザと同じ見え方。サーバーが名前を返す所は通す：push の文・近い投稿のカード・島の住人の顔・人のカード・おかえり・手元の通知一覧。地図の中の線は今のメンバーに絞ってあるので通さない）
 - 土台：config.py（設定値はすべてここ）、auth.py（ログインの確認）、store.py（`MemoryStore` と `SupabaseStore`）
 
 ### web/（画面。ビルドなしの素の ES モジュール）
 - 入口：index.html（全画面のマークアップ）、style.css、js/app.js（起動）、js/router.js（画面の切り替えと下のナビ）、js/state.js、js/config.js
-- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）
+- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）、waiting.js（承認待ち・お断り・外された、#/waiting）、fullname.js（フルネームの確認、#/fullname。判断は fullname-rules.js）
 - 部品 js/components/：postcard.js、chat.js（投稿の下のメッセージ）、talk-button.js（もっと話してみたい）、image-viewer.js、heatobject.js
 - 地図の描画 js/map/：index.js（カメラ・操作・描画の中心）、terrain.js・terrain-worker.js（地面）、coast.js・land.js・landmass.js（陸と海）、buildings.js（家と町）、pins.js、lines.js（人の線）、kin.js（点線）、decor.js・surf.js・vehicles.js・sparkles.js（飾り）、palette.js（色）
 - 通信：net.js（`api` が Cloud Run、`data` が Supabase か手元）、session.js（ログイン）、realtime.js（通知をすぐ受け取る）、push.js・push-ask.js・sw.js（プッシュ）

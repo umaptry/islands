@@ -16,7 +16,7 @@
 
 import { config, isLocal } from './config.js';
 import { session } from './session.js';
-import { attachActors } from './notify-rules.js';
+import { OUTSIDE_NAME, attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
 import { dmReadMissing, readPress, readReact, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
 import { communitiesOn, shareOn } from './community-rules.js';
@@ -103,6 +103,50 @@ const rpc = (name, args, options) =>
 // nothing is asked again until the page is loaded anew.
 let dmReadGone = false;
 
+// 2026-11-01: the columns of a person's page. The last three exist only once the join-approval migration has
+// been run; before that the wide read is a 400, and the narrow one is used (and remembered) instead.
+const ACCOUNT_COLUMNS = 'id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at';
+const ACCOUNT_COLUMNS_NEW = ',age_band,job_title,name_confirmed_at';
+let accountColumnsNew = true;
+const accountColumns = () => (accountColumnsNew ? ACCOUNT_COLUMNS + ACCOUNT_COLUMNS_NEW : ACCOUNT_COLUMNS);
+
+// A function the database does not have yet (the SQL has not been run) answers 404 (PGRST202). For the join
+// approval calls that is "not known", never an error on screen: the caller gets null.
+const gone = (error) => Boolean(error) && error.status === 404;
+async function orUnknown(call) {
+  try {
+    return await call();
+  } catch (error) {
+    if (gone(error)) return null;
+    throw error;
+  }
+}
+
+/** A list from an answer that is either the rows themselves or an object holding them. */
+function rowsOf(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object') {
+    const found = Object.values(raw).find((value) => Array.isArray(value));
+    if (found) return found;
+  }
+  return [];
+}
+
+/** decide_join_request answers a word ('approved' / 'rejected' / 'already'). */
+function decisionOf(raw) {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') return raw.result || raw.status || raw.decision || null;
+  return null;
+}
+
+const consentVersion = () => {
+  try {
+    return config().consent_version || null;
+  } catch {
+    return null;
+  }
+};
+
 const ACCOUNT_EMBED = 'accounts(id,display_name,icon_id,avatar_path)';
 // Posts also reach accounts through reactions and comments, so name the key.
 const POST_AUTHOR_EMBED = 'accounts!posts_author_id_fkey(id,display_name,icon_id,avatar_path)';
@@ -157,17 +201,19 @@ async function withCommunities(rows) {
 /** PostgREST nests an embedded table; every screen wants it flat. */
 function flatten(row, into) {
   if (!row) return row;
+  // `accounts: null` is a person the database does not let me read (another community): named as such.
+  const hidden = row.accounts === null;
   const nested = row.accounts || {};
   delete row.accounts;
   if (into) {
     row[into] = {
-      id: nested.id,
-      display_name: nested.display_name || '',
+      id: nested.id || (hidden ? row[`${into}_id`] : undefined),
+      display_name: nested.display_name || (hidden ? OUTSIDE_NAME : ''),
       icon_id: nested.icon_id || '0',
       avatar_path: nested.avatar_path || null,
     };
   } else {
-    row.display_name = nested.display_name || '';
+    row.display_name = nested.display_name || (hidden ? OUTSIDE_NAME : '');
     row.icon_id = nested.icon_id || '0';
     row.avatar_path = nested.avatar_path || null;
   }
@@ -198,9 +244,34 @@ const supabaseBackend = {
     return rows.length ? rows[0] : null;
   },
   checkInvite: (code) => rpc('check_invite', { code }),
-  claimInvite: (code) => rpc('claim_invite', { code }),
-  createInvite: ({ community_id: community, minutes, until_end_of_day: untilEndOfDay }) =>
-    rpc('create_invite', { community, minutes, until_end_of_day: untilEndOfDay }),
+  /** `consent` is the version of the terms agreed to; an older database (one argument) is asked without it. */
+  async claimInvite(code, consent = consentVersion()) {
+    if (consent) {
+      try {
+        return await rpc('claim_invite', { code, consent });
+      } catch (error) {
+        if (!gone(error)) throw error;
+      }
+    }
+    return rpc('claim_invite', { code });
+  },
+  /** Only the arguments that are held are sent, so an older database (three arguments) still answers. */
+  async createInvite({ community_id: community, minutes, until_end_of_day: untilEndOfDay, needs_approval: needsApproval, post }) {
+    if (!needsApproval && !post) {
+      return rpc('create_invite', { community, minutes, until_end_of_day: untilEndOfDay });
+    }
+    try {
+      return await rpc('create_invite', {
+        community, minutes, until_end_of_day: untilEndOfDay,
+        ...(needsApproval ? { needs_approval: true } : {}), ...(post ? { post } : {}),
+      });
+    } catch (error) {
+      if (!gone(error)) throw error;
+      // A link that asked for approval is never made without it.
+      if (needsApproval) throw new ApiError('承認制のリンクはまだ作れません。しばらくしてからもう一度お試しください。', 404);
+      return rpc('create_invite', { community, minutes, until_end_of_day: untilEndOfDay });
+    }
+  },
   async listInvites(community) {
     return (await rpc('list_invites', { community })) || [];
   },
@@ -208,6 +279,21 @@ const supabaseBackend = {
     await rpc('revoke_invite', { invite });
     return true;
   },
+  // ---- join approval (2026-11-01). null: the database has no such function yet ("not known").
+  setInviteApproval: (invite, approval) => orUnknown(async () => {
+    await rpc('set_invite_approval', { invite, approval });
+    return true;
+  }),
+  /** [{ community_id, community_name, status, at }]; null when it cannot be known. */
+  myJoinStatus: () => orUnknown(async () => rowsOf(await rpc('my_join_status', {}))),
+  cancelJoinRequest: (community) => orUnknown(async () => {
+    await rpc('cancel_join_request', { community });
+    return true;
+  }),
+  listJoinRequests: (community) => orUnknown(async () => rowsOf(await rpc('list_join_requests', { community }))),
+  /** 'approved' / 'rejected' / 'already'; null when it cannot be known. */
+  decideJoinRequest: (community, person, approve) => orUnknown(async () =>
+    decisionOf(await rpc('decide_join_request', { community, person, approve }))),
   /** An admin renames the community; answers the name as saved (trimmed). */
   renameCommunity: (community, name) => rpc('rename_community', { community, new_name: name }),
   async mapCells({ minX, minY, maxX, maxY }) {
@@ -234,12 +320,17 @@ const supabaseBackend = {
     return rows.map((row) => flatten(row));
   },
   async getAccount(id) {
-    const rows = await restCall('accounts', {
-      params: {
-        select: 'id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at',
-        id: `eq.${id}`, limit: '1',
-      },
-    });
+    const read = () => restCall('accounts', { params: { select: accountColumns(), id: `eq.${id}`, limit: '1' } });
+    let rows;
+    try {
+      rows = await read();
+    } catch (error) {
+      // The new columns are not there yet (400): the narrow read, from now on.
+      if (!accountColumnsNew || !error || error.status !== 400) throw error;
+      accountColumnsNew = false;
+      rows = await read();
+    }
+    // No row is a person I may not read (or none at all): the caller says "not found".
     return rows.length ? rows[0] : null;
   },
   async listComments(postId) {
@@ -415,11 +506,14 @@ const supabaseBackend = {
     // Nobody is looked up for 「誰かが…」: the row's actor is not shown, whoever it names.
     const actorIds = [...new Set(rows.filter((row) => row.type !== 'talk_wish')
       .map((row) => row.actor_id).filter(Boolean))];
-    const accounts = actorIds.length
-      ? await restCall('accounts', {
+    // A person the database does not show me (another community) is simply not in the answer; a failed
+    // read leaves the list as it was, with no names.
+    let accounts = [];
+    if (actorIds.length) {
+      accounts = await restCall('accounts', {
         params: { select: 'id,display_name,icon_id,avatar_path', id: `in.(${actorIds.join(',')})` },
-      })
-      : [];
+      }).catch(() => undefined);
+    }
     return attachActors(await withCommunities(rows), accounts);
   },
   /** The app is on screen for `seconds` (0: it is not), so nothing is pushed meanwhile. */
@@ -490,15 +584,34 @@ const localBackend = {
   // Not part of the agreed routes: a development server may or may not have it.
   communityInfo: (id) => api.get(`/api/local/communities/${encodeURIComponent(id)}`)
     .catch(() => null),
-  checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`, { auth: false }),
-  claimInvite: (code) => api.post('/api/local/invites/claim', { code }),
-  createInvite: (body) => api.post('/api/local/invites', body),
+  // Signed in, the token goes along so a removed or refused person is told the link needs approval.
+  checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`),
+  claimInvite: (code, consent = consentVersion()) =>
+    api.post('/api/local/invites/claim', { code, ...(consent ? { consent } : {}) }),
+  createInvite: ({ post, ...body }) => api.post('/api/local/invites', { ...body, ...(post ? { post_id: post } : {}) }),
   listInvites: async (community) =>
     (await api.get(`/api/local/invites?${new URLSearchParams({ community_id: community })}`)).invites || [],
   revokeInvite: async (invite) => {
     await api.post(`/api/local/invites/${encodeURIComponent(invite)}/revoke`, {});
     return true;
   },
+  // ---- join approval (2026-11-01): the same names as the database side; null when the route is missing.
+  setInviteApproval: (invite, approval) => orUnknown(async () => {
+    await api.post(`/api/local/invites/${encodeURIComponent(invite)}/approval`, { approval: Boolean(approval) });
+    return true;
+  }),
+  myJoinStatus: () => orUnknown(async () => rowsOf(await api.get('/api/local/join/status'))),
+  cancelJoinRequest: (community) => orUnknown(async () => {
+    await api.post('/api/local/join/cancel', { community_id: community });
+    return true;
+  }),
+  listJoinRequests: (community) => orUnknown(async () =>
+    rowsOf(await api.get(`/api/local/communities/${encodeURIComponent(community)}/join-requests`))),
+  decideJoinRequest: (community, person, approve) => orUnknown(async () =>
+    decisionOf(await api.post(
+      `/api/local/communities/${encodeURIComponent(community)}/join-requests/${encodeURIComponent(person)}/decide`,
+      { approve: Boolean(approve) },
+    ))),
   renameCommunity: (community, name) =>
     api.post(`/api/local/communities/${encodeURIComponent(community)}/rename`, { name }),
   getPost: (id) => api.get(`/api/local/post/${id}`).catch((error) => {

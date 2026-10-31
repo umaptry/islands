@@ -14,7 +14,7 @@ async function person(browser, testInfo, name, { create = null, join = null } = 
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: '1' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: '1' });
     if (create) return api.post('/api/local/communities', { name: create, slug: `t-${Math.random().toString(36).slice(2, 9)}` }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
     if (join) await api.post('/api/local/invites/claim', { code: join });
     return null;

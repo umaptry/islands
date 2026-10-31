@@ -14,14 +14,14 @@ import { data } from '../net.js';
 import { session } from '../session.js';
 import { state } from '../state.js';
 import { navigate, screen } from '../router.js';
-import { $, clear, el, toast } from '../ui.js';
+import { $, avatar, clear, el, toast } from '../ui.js';
 import { browserStorage } from '../talk.js';
-import { mapLinkFor, saveInviteJoin, savePendingPost, validPostId } from '../return-post.js';
+import { WAITING_HOLD_MS, mapLinkFor, saveInviteJoin, savePendingPost, validPostId } from '../return-post.js';
 import { isRecruiting } from '../map/reads.js';
 import { recruitState } from '../recruit-rules.js';
-import { communitiesActive, dropCommunities, joinedCommunity, refreshCommunities } from '../communities.js';
+import { communitiesActive, dropCommunities, joinedCommunity, refreshCommunities, refreshJoinStatus } from '../communities.js';
 import {
-  NEW_ACCOUNT_NOTE, RETRY_LATER_NOTE, clearPendingInvite, inviteActions, inviteJoinNote, inviteView, readClaim,
+  ADMIN_SEES_BOX, CONSENT_AFTER_PRESS, NEW_ACCOUNT_NOTE, claimedIn, RETRY_LATER_NOTE, clearPendingInvite, inviteActions, inviteJoinNote, inviteView, readClaim,
   readInviteCheck, readPendingInvite, registrationBlocked, savePendingInvite, transientFailure,
   validInviteCode,
 } from '../community-rules.js';
@@ -36,14 +36,19 @@ const OAUTH_NAMES = {
 export async function claimInvite({ code, post = null }, { holdPost = true } = {}) {
   const claimed = readClaim(await data.claimInvite(code));
   if (!claimed) throw new Error('この招待は使えませんでした。');
-  joinedCommunity(claimed);
+  // An application that waits for an admin does not make me a member yet: nothing is joined, and the post and
+  // the 会 of the QR are kept for longer, until the admin has answered.
+  const waits = !claimedIn(claimed);
+  if (!waits) joinedCommunity(claimed);
+  const hold = waits ? WAITING_HOLD_MS : 0;
   // The post that came with the invite opens through the same road as a linked post.
-  if (post && holdPost) savePendingPost(browserStorage(), post);
+  if (post && holdPost) savePendingPost(browserStorage(), post, Date.now(), hold);
   // The 会 of the QR: joined on the map once the account is there (map.js joinFromInvite).
-  if (post) saveInviteJoin(browserStorage(), post);
+  if (post) saveInviteJoin(browserStorage(), post, Date.now(), hold);
   clearPendingInvite(browserStorage());
   // Roles and slugs come from the database; the name is already on screen.
   await refreshCommunities();
+  if (waits) await refreshJoinStatus();
   return claimed;
 }
 
@@ -64,7 +69,9 @@ export async function settleSession(account) {
     try {
       const community = await claimInvite(pending);
       claimed = true;
-      toast(`${community.name || 'コミュニティ'} に参加しました`);
+      toast(claimedIn(community)
+        ? `${community.name || 'コミュニティ'} に参加しました`
+        : `「${community.name || 'コミュニティ'}」に申し込みました`);
     } catch (error) {
       if (transientFailure(error)) {
         // The invite stays; the next load tries again. The database still refuses a new
@@ -101,10 +108,44 @@ export function setupInvite() {
   let shown = 0;
 
   const hideButtons = () => {
-    ['inviteJoin', 'inviteRegister', 'inviteLogin', 'inviteHome', 'inviteReturning', 'inviteLegal', 'inviteJoinNote']
+    ['inviteJoin', 'inviteRegister', 'inviteLogin', 'inviteHome', 'inviteReturning', 'inviteLegal', 'inviteJoinNote', 'inviteDisclose', 'inviteConsent']
       .forEach((id) => { $(id).hidden = true; });
     clear($('inviteOAuth'));
   };
+
+  // "What the admin sees": a box of words before the account is made; for somebody signed in, their own card.
+  function paintDisclosure(showCard) {
+    const box = clear($('inviteDisclose'));
+    if (showCard) {
+      const mail = session.email();
+      box.append(
+        el('p', { className: 'invite-disclose-label', text: '管理者に見える内容' }),
+        el('div', { className: 'waiting-card' },
+          avatar(state.account, 48),
+          el('div', { className: 'waiting-card-text' },
+            el('span', { className: 'waiting-card-name', text: state.account.display_name }),
+            el('span', { className: 'waiting-card-sub', text: state.account.affiliation || '' }),
+            mail ? el('span', { className: 'waiting-card-sub', text: mail }) : null)),
+        el('p', { className: 'waiting-fine', text: ADMIN_SEES_BOX.join('') }));
+    } else {
+      box.append(el('div', { className: 'invite-disclose-box' }, ADMIN_SEES_BOX[0], el('span', { text: ADMIN_SEES_BOX[1] })));
+    }
+    box.hidden = false;
+  }
+
+  // The words about agreeing (E 19): the new terms, at /terms/next and /privacy/next.
+  function paintConsent(signedIn) {
+    const note = clear($('inviteConsent'));
+    if (signedIn) {
+      note.textContent = CONSENT_AFTER_PRESS;
+    } else {
+      note.append('続けると、上のことと、',
+        el('a', { text: '利用規約', attrs: { href: '/terms/next', target: '_blank', rel: 'noopener' } }), 'と',
+        el('a', { text: 'プライバシーポリシー', attrs: { href: '/privacy/next', target: '_blank', rel: 'noopener' } }),
+        'に同意したことになります。');
+    }
+    note.hidden = false;
+  }
 
   async function render(params, query) {
     const turn = ++shown;
@@ -152,6 +193,8 @@ export function setupInvite() {
 
     const signedIn = session.signedIn();
     const hasAccount = Boolean(state.account);
+    const named = Boolean(state.account && state.account.display_name);
+    const approval = view.state === 'valid' && view.approval === true;
     const actions = inviteActions({
       valid: view.state === 'valid', signedIn, providers: config().oauth || [],
     });
@@ -168,12 +211,25 @@ export function setupInvite() {
       on: { click: () => { keep(); session.startOAuth(provider); } },
     })));
     $('inviteRegister').textContent = actions.providers.length ? 'メールアドレスで登録' : 'メールで登録';
+    $('inviteLogin').textContent = 'ログイン';
+    $('inviteJoin').textContent = 'このコミュニティに参加する';
+    if (approval) {
+      // A link that needs an admin's approval: say what the admin will see before anything is pressed.
+      $('inviteRegister').textContent = actions.providers.length ? 'メールアドレスで申し込む' : '参加を申し込む';
+      $('inviteLogin').textContent = 'ログインして申し込む';
+      $('inviteJoin').textContent = '参加を申し込む';
+      paintDisclosure(signedIn && named);
+    }
+    $('inviteRegister').classList.toggle('is-apply', approval);
+    $('inviteJoin').classList.toggle('is-apply', approval);
     $('inviteRegister').hidden = !actions.register;
     $('inviteReturning').hidden = !actions.login;
     $('inviteLogin').hidden = !actions.login;
-    $('inviteLegal').hidden = !actions.register;
+    $('inviteLegal').hidden = !actions.register || approval;
     $('inviteJoin').hidden = !actions.join;
-    $('inviteHome').hidden = view.state === 'valid';
+    // Signed in, the 申し込み page has a way back as well (the image): the first screen.
+    $('inviteHome').hidden = view.state === 'valid' && !(approval && signedIn);
+    if (approval) paintConsent(signedIn);
     $('inviteHome').onclick = () => navigate(signedIn && hasAccount ? '#/map' : '#/welcome');
     $('inviteRegister').onclick = () => { keep(); navigate('#/auth?intent=register'); };
     $('inviteLogin').onclick = () => { keep(); navigate('#/auth?intent=login'); };
@@ -184,6 +240,14 @@ export function setupInvite() {
         // Signed in but never finished the profile: join, then go on to name and photo (the post
         // that came with the invite waits and opens at the end, like for a new person).
         const community = await claimInvite({ code, post }, { holdPost: !hasAccount });
+        if (!claimedIn(community)) {
+          // Applied, not in yet: finish the name first if there is none; then wait (somebody who is in another
+          // community simply goes on to its map: the switcher says 「（承認待ち）」).
+          toast(`「${community.name || 'コミュニティ'}」に申し込みました`);
+          if (!named) navigate('#/setup');
+          else navigate(state.communities.length ? '#/map' : '#/waiting');
+          return;
+        }
         toast(`${community.name || 'コミュニティ'} に参加しました`);
         if (!hasAccount) navigate('#/setup');
         else navigate(post ? mapLinkFor(post) : '#/map');

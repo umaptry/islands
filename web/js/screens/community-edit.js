@@ -7,7 +7,7 @@
 import { data } from '../net.js';
 import { navigate, screen } from '../router.js';
 import { notify, state } from '../state.js';
-import { $, clear, confirmAction, el, toast } from '../ui.js';
+import { $, avatar, clear, confirmAction, el, toast } from '../ui.js';
 import { communitiesActive, refreshCommunities } from '../communities.js';
 import { icon } from '../icons.js';
 import { config } from '../config.js';
@@ -16,7 +16,7 @@ import { isRecruiting } from '../map/reads.js';
 import { recruitState } from '../recruit-rules.js';
 import {
   COMMUNITY_NAME_MAX, DEFAULT_EXPIRY, EXPIRY_CHOICES, activeInvites, checkCommunityName,
-  communityRefusal, createInviteBody, inviteImageLines, inviteImageName, inviteLineText, invitePostFor, inviteRowText,
+  communityRefusal, createInviteBody, rejectQuestion, requestTags, requestedText, inviteImageLines, inviteImageName, inviteLineText, invitePostFor, inviteRowText,
   inviteShareData, inviteUrlFor, postsOfCommunity, readRenamed,
   withRenamed,
 } from '../community-rules.js';
@@ -97,6 +97,7 @@ function invitePanel(entry) {
   let rows = [];            // the invites that still work, newest first
   let loaded = false;
   let step = 'idle';        // idle | choose (the first link) | renew (pick the time again)
+  let needsApproval = true; // the switch 「参加に承認が要る」: on to begin with, for a link made now (2026-11-01)
   let postOn = false;       // the switch 「会の投稿も一緒に開く」
   let postId = '';
   let busy = false;
@@ -156,6 +157,24 @@ function invitePanel(entry) {
 
   const linkOf = (row) => inviteUrlFor(window.location.origin, row.code, invitePostFor(postOn, postId));
 
+  // ---- 「参加に承認が要る」: before the link is made it is only a choice; afterwards it changes the link itself
+  // (setInviteApproval), so the link and the QR stay as they are.
+  function approvalSwitch(onChange, checked) {
+    const toggle = el('input', { className: 'invite-approval', type: 'checkbox', attrs: { role: 'switch' } });
+    toggle.checked = checked;
+    toggle.addEventListener('change', () => onChange(toggle));
+    return [
+      el('label', { className: 'invite-switch invite-approval-switch' },
+        el('span', { className: 'invite-switch-text', text: '参加に承認が要る' }),
+        toggle,
+        el('span', { className: 'invite-switch-track', attrs: { 'aria-hidden': 'true' } })),
+      el('p', {
+        className: 'invite-note invite-approval-note',
+        text: 'オンのとき、このリンクから登録した人は、管理者が承認するまで中を見られません。会場の QR のように大勢がその場で入るときはオフに。',
+      }),
+    ];
+  }
+
   // ---- 「会の投稿も一緒に開く」: the switch and the post picker. Shown with the expiry chips (before the link
   // is made) and above the QR (after); `onChange` is what the caller does when either changes.
   function postSwitch(onChange) {
@@ -206,7 +225,7 @@ function invitePanel(entry) {
     let message = '';
     paint();
     try {
-      const made = await data.createInvite(createInviteBody(entry.id, choice));
+      const made = await data.createInvite(createInviteBody(entry.id, choice, Date.now(), { needsApproval }));
       step = 'idle';           // the new link exists: a second press must not make a third
       choice = DEFAULT_EXPIRY;
       if (replacing) {
@@ -310,6 +329,7 @@ function invitePanel(entry) {
   function chooseView(renewing) {
     return el('div', { className: 'invite-form' },
       ...expiryPicker(),
+      ...approvalSwitch((toggle) => { needsApproval = toggle.checked; }, needsApproval),
       ...postSwitch(() => {}),   // the choice is kept in postOn / postId; the link made next carries it
       el('button', {
         className: 'btn btn-block invite-make', attrs: { type: 'button' }, disabled: busy,
@@ -351,14 +371,35 @@ function invitePanel(entry) {
       prepareImage(row);
     };
 
+    const warn = el('p', {
+      className: 'invite-venue-warn', attrs: { role: 'note' },
+      text: '承認オンのままです（会場で大勢が入るならオフに）。上のスイッチをオフにしたあとも、オンに戻せます。',
+    });
+    warn.hidden = !row.needs_approval;
     // The switch comes first: it changes the link and the QR below it.
     return el('div', { className: 'invite-live' },
+      ...approvalSwitch(async (toggle) => {
+        toggle.disabled = true;
+        try {
+          const done = await data.setInviteApproval(row.id, toggle.checked);
+          if (done === null) throw new Error('まだ切り替えられません。しばらくしてからもう一度お試しください。');
+          row.needs_approval = toggle.checked;
+          warn.hidden = !toggle.checked;
+          toast(toggle.checked ? '承認が要るようにしました' : '承認なしで入れるようにしました');
+        } catch (failure) {
+          toggle.checked = !toggle.checked;
+          error.textContent = failure.message || '切り替えられませんでした。';
+        } finally {
+          toggle.disabled = false;
+        }
+      }, Boolean(row.needs_approval)),
       ...postSwitch(swap),
       qrBox,
       qrBox.querySelector('svg') ? el('button', {
         className: 'btn btn-block btn-quiet invite-venue', attrs: { type: 'button' }, text: '会場で映す',
         on: { click: () => openVenueView(entry.name, linkOf(rows[0] || row)) },
       }) : null,
+      warn,
       el('p', { className: 'invite-line', attrs: { 'aria-label': inviteLineText(row) } },
         el('span', { className: 'invite-line-expiry', text: inviteRowText(row).expiry.replace(/ /g, ' ') }),
         el('span', { className: 'invite-line-dot', text: '・', attrs: { 'aria-hidden': 'true' } }),
@@ -376,7 +417,7 @@ function invitePanel(entry) {
       el('div', { className: 'invite-manage' },
         el('button', {
           className: 'btn btn-small btn-quiet invite-renew', attrs: { type: 'button' }, text: '更新', disabled: busy,
-          on: { click: () => { step = 'renew'; paint(); } },
+          on: { click: () => { needsApproval = Boolean(row.needs_approval); step = 'renew'; paint(); } },
         }),
         el('button', {
           className: 'btn btn-small btn-quiet invite-revoke', attrs: { type: 'button' }, text: '止める', disabled: busy,
@@ -397,6 +438,83 @@ function invitePanel(entry) {
   if (!mine.length && state.account) loadMine();
   refresh();
   return panel;
+}
+
+// ---------------------------------------------------------------- people waiting to join
+
+/**
+ * 参加を待っている人: the top of the page for an admin, when somebody applied to a link that needs approval.
+ * Name, 所属, the mail address (only while waiting), the time, and 断る / 承認する. Hidden while nobody waits,
+ * and silently when the database has no such function yet (listJoinRequests answers null) or cannot be read.
+ */
+function joinRequestsPanel(entry) {
+  const box = el('section', { className: 'join-requests', attrs: { id: 'joinRequests', 'data-community-id': entry.id } });
+  box.hidden = true;
+  let rows = [];
+  const settled = new Map();   // person -> a sentence, for a row somebody else answered a moment ago
+
+  async function load() {
+    try {
+      const list = await data.listJoinRequests(entry.id);
+      rows = list === null ? [] : list;
+    } catch { /* keep what is shown */ }
+    paint();
+  }
+
+  async function decide(row, approve) {
+    if (!approve) {
+      const question = rejectQuestion(row.display_name, entry.name);
+      if (!await confirmAction({ ...question, confirmLabel: '断る', danger: true })) return;
+    }
+    box.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    try {
+      const result = await data.decideJoinRequest(entry.id, row.account_id, approve);
+      if (result === 'already') settled.set(row.account_id, 'ほかの管理者が対応しました');
+      else if (result === 'approved') toast(`${row.display_name}さんの参加を承認しました`);
+      else if (result === 'rejected') toast(`${row.display_name}さんの参加を断りました`);
+    } catch (failure) {
+      toast(failure.message || 'できませんでした。もう一度お試しください。');
+    }
+    await load();
+    setTimeout(() => { settled.clear(); paint(); }, 4000);
+  }
+
+  function rowView(row) {
+    const tags = requestTags(row);
+    const mail = String(row.email || '').trim();
+    return el('div', { className: 'join-request', attrs: { 'data-person': row.account_id } },
+      el('div', { className: 'join-request-who' },
+        avatar(row, 44),
+        el('div', {},
+          el('div', { className: 'join-request-name', text: row.display_name }),
+          row.affiliation ? el('div', { className: 'join-request-affiliation', text: row.affiliation }) : null)),
+      ...tags.map((tag) => el('span', { className: `join-request-tag ${tag.key}`, text: tag.text })),
+      el('div', { className: `join-request-email${mail ? '' : ' none'}`, text: mail || 'メールアドレスなし（LINE で登録）' }),
+      el('p', { className: 'join-request-when', text: requestedText(row.requested_at) }),
+      !mail ? el('p', { className: 'join-request-note', text: '名前と所属だけで確かめてください。' }) : null,
+      el('div', { className: 'join-request-acts' },
+        el('button', { className: 'btn join-request-no', attrs: { type: 'button' }, text: '断る', on: { click: () => decide(row, false) } }),
+        el('button', { className: 'btn join-request-yes', attrs: { type: 'button' }, text: '承認する', on: { click: () => decide(row, true) } })));
+  }
+
+  function paint() {
+    clear(box);
+    const gone = [...settled.values()];
+    box.hidden = !rows.length && !gone.length;
+    if (box.hidden) return;
+    box.append(el('div', { className: 'join-requests-head', text: `参加を待っている人 ${rows.length}人` }));
+    gone.forEach((text) => box.append(el('p', { className: 'join-request-gone', text })));
+    rows.forEach((row) => box.append(rowView(row)));
+  }
+
+  // A new application is written as a notification: look again when the list of notifications was read.
+  const again = () => {
+    if (box.isConnected) load();
+    else document.removeEventListener('notifications:loaded', again);
+  };
+  document.addEventListener('notifications:loaded', again);
+  load();
+  return box;
 }
 
 // ---------------------------------------------------------------- the name
@@ -478,6 +596,7 @@ async function render(id) {
   const title = el('h3', { className: 'community-edit-name', attrs: { id: 'communityEditName' }, text: entry.name });
   clear(body).append(
     title,
+    joinRequestsPanel(entry),
     renameSection(entry, (name) => { title.textContent = name; }),
     el('section', { className: 'community-card community-invites', attrs: { 'data-community-id': entry.id } },
       el('div', { className: 'section-label', text: 'メンバーを招待する' }),

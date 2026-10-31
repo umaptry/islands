@@ -13,6 +13,7 @@ appears in the list; it just does not count towards the badge or pop up.
 from datetime import datetime, timedelta
 
 from core.config import (
+    ALWAYS_ON_NOTIFICATION_TYPES,
     CHAINED_NOTIFICATION_TYPES,
     NOTIFICATION_CATEGORIES,
     NOTIFICATION_CATEGORY_OF,
@@ -118,7 +119,12 @@ def allows(settings, kind, channel):
     quiet_post: in the app only (never pushed), and only while the island
     category's in_app switch is on and the person had not switched the old
     similar category's in_app off.
+
+    join_request / join_approved (ALWAYS_ON_NOTIFICATION_TYPES): always, on both channels,
+    whatever the settings say. Somebody is waiting to be let in, or has just been let in.
     """
+    if kind in ALWAYS_ON_NOTIFICATION_TYPES:
+        return True
     if kind == "quiet_post":
         if channel != "in_app":
             return False

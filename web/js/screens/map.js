@@ -37,7 +37,7 @@ import { clearInviteJoin, mapLinkFor, readInviteJoin, savePendingPost, validPost
 import { recruitState } from '../recruit-rules.js';
 import { chooseCurrent, communitiesActive, communityOfPost, currentScope, refreshCommunities } from '../communities.js';
 import {
-  canPostFromMap, canSwitch, headerTitle, islandsInScope, linkIsClosed, mapNotice, postsExtent,
+  canPostFromMap, canSwitch, headerTitle, islandsInScope, linkIsClosed, mapNotice, postsExtent, waitingLabel,
 } from '../community-rules.js';
 import { freshPostIds, loadSeen, markSeen } from '../fresh-rules.js';
 import { nearestPosts } from '../nearby-rules.js';
@@ -178,8 +178,27 @@ function openCommunitySheet() {
           text: '編集',
           on: { click: () => editCommunity(entry.id) },
         }) : null))),
+    waitingRows(),
     el('p', { className: 'community-hint', text: '新しいコミュニティには、招待リンクを開くと入れます。' }),
   );
+}
+
+/** 「○○（承認待ち）」: the communities I applied to and am not in yet. A tap opens the waiting page. */
+function waitingRows() {
+  const waiting = (Array.isArray(state.joinStatus) ? state.joinStatus : [])
+    .filter((entry) => entry.status === 'pending' && !state.communities.some((mine) => mine.id === entry.id));
+  if (!waiting.length) return null;
+  return el('div', { className: 'community-waiting' },
+    el('ul', { className: 'stack-list community-list community-waiting-list', attrs: { id: 'communityWaitingList' } },
+      waiting.map((entry) => el('li', { className: 'community-item' },
+        el('button', {
+          className: 'stack-row community-row waiting',
+          attrs: { type: 'button', 'data-community-id': entry.id },
+          on: { click: () => { closeSheet(); navigate(`#/waiting?c=${encodeURIComponent(entry.id)}`); } },
+        },
+        el('span', { className: 'stack-who', text: waitingLabel(entry) }),
+        el('span', { className: 'stack-go', text: '›', attrs: { 'aria-hidden': 'true' } }))))),
+    el('p', { className: 'community-hint', text: `「${waiting[0].name}」は、管理者の承認を待っています。押すと、待つ画面が開きます。` }));
 }
 
 function editCommunity(id) {

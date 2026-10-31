@@ -70,7 +70,7 @@
       <p class="invite-only-note" id="authInviteNote" hidden></p>
       <p class="lede" id="authLede">メールアドレスにパスコードを送ります。</p>
       <div id="registerFields" hidden>
-        <label class="field"><span class="label-text">名前</span><input class="input" id="registerName" maxlength="16" autocomplete="nickname" placeholder="名前"></label>
+        <label class="field"><span class="label-text">フルネーム<span class="hint-text">本名</span></span><input class="input" id="registerName" maxlength="24" autocomplete="name" placeholder="例：山田 花子"></label>
         <label class="field"><span class="label-text">所属組織<span class="hint-text">必須</span></span><input class="input" id="registerAffiliation" maxlength="32" placeholder="所属（例：コクヨ、〇〇大学、フリー）"></label>
       </div>
       <label class="field">
@@ -110,6 +110,7 @@
     <h2 class="screen-title" id="inviteTitle">招待を確認しています</h2>
     <p class="lede" id="inviteLede"></p>
     <p class="lede" id="inviteJoinNote" hidden></p>
+    <div id="inviteDisclose" class="invite-disclose" hidden></div>
     <div class="error" id="inviteError" role="alert"></div>
     <div id="inviteOAuth"></div>
     <button class="btn btn-block" id="inviteJoin" type="button" hidden>このコミュニティに参加する</button>
@@ -118,6 +119,44 @@
     <button class="btn btn-outline btn-block" id="inviteLogin" type="button" hidden>ログイン</button>
     <button class="btn btn-quiet btn-block" id="inviteHome" type="button" hidden>最初の画面へ</button>
     <p class="legal-note" id="inviteLegal" hidden>続けると、<a href="/terms" target="_blank" rel="noopener">利用規約</a>と<a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したことになります。</p>
+    <p class="legal-note" id="inviteConsent" hidden></p>
+  </div>
+</section>
+
+<!-- ============ 2c. waiting for approval / turned away / removed (#/waiting) ============ -->
+<section id="waiting" class="screen tinted">
+  <div class="scroller auth-scroll">
+    <h1 class="brand-inline">islands</h1>
+    <h2 class="screen-title" id="waitingTitle"></h2>
+    <p class="lede" id="waitingLede"></p>
+    <p class="lede" id="waitingNote" hidden></p>
+    <div id="waitingCard" hidden></div>
+    <form class="waiting-form" id="waitingForm" hidden>
+      <label class="field">
+        <span class="label-text">名前</span>
+        <input class="input" id="waitingName" autocomplete="name">
+      </label>
+      <label class="field">
+        <span class="label-text">所属</span>
+        <input class="input" id="waitingAffiliation" maxlength="32" autocomplete="organization">
+      </label>
+      <div class="waiting-form-row">
+        <button class="btn btn-quiet" id="waitingFormCancel" type="button">やめる</button>
+        <button class="btn" id="waitingFormSave" type="submit">保存</button>
+      </div>
+    </form>
+    <p class="waiting-fine" id="waitingSees" hidden></p>
+    <div class="error" id="waitingError" role="alert"></div>
+    <button class="btn btn-block waiting-push" id="waitingPush" type="button" hidden>承認されたら通知を受け取る</button>
+    <button class="btn btn-quiet btn-block" id="waitingEdit" type="button" hidden>名前・所属を直す</button>
+    <div class="waiting-row">
+      <button class="btn btn-outline btn-small" id="waitingCancel" type="button" hidden>申し込みを取り消す</button>
+      <button class="btn btn-outline btn-small" id="waitingLogout" type="button">ログアウト</button>
+    </div>
+    <div class="waiting-leave" id="waitingLeave" hidden>
+      <b>退会したいとき</b>
+      <p>今は画面からは退会できません。<a href="/terms" target="_blank" rel="noopener">利用規約 第16条</a>の連絡先に知らせてください。</p>
+    </div>
   </div>
 </section>
 
@@ -138,8 +177,8 @@
 
     <div id="setupNameFields" hidden>
       <label class="field">
-        <span class="label-text">名前<span class="hint-text">16字まで</span></span>
-        <input class="input" id="setupName" maxlength="16" placeholder="名前" autocomplete="nickname">
+        <span class="label-text">フルネーム<span class="hint-text">本名・24字まで</span></span>
+        <input class="input" id="setupName" maxlength="24" placeholder="例：山田 花子" autocomplete="name">
       </label>
       <label class="field">
         <span class="label-text">所属組織<span class="hint-text">必須</span></span>
@@ -167,6 +206,30 @@
   </div>
   <div class="form-footer">
     <button class="btn btn-block" id="affiliationSave" disabled>保存して続ける</button>
+  </div>
+</section>
+
+<!-- ============ 3a2. full name (existing members, 2026-11-01; #/fullname) ============ -->
+<section id="fullname" class="screen tinted">
+  <div class="scroller">
+    <span class="fullname-badge" id="fullnameBadge"></span>
+    <h2 class="screen-title" id="fullnameTitle">フルネームを教えてください</h2>
+    <p class="lede" id="fullnameLede"></p>
+    <label class="field field-line">
+      <span class="label-text" id="fullnameNameLabel">フルネーム</span>
+      <input class="input input-line" id="fullnameName" autocomplete="name">
+    </label>
+    <label class="field field-line">
+      <span class="label-text" id="fullnameAffiliationLabel">会社・所属</span>
+      <input class="input input-line" id="fullnameAffiliation" maxlength="32" autocomplete="organization">
+    </label>
+    <p class="fullname-note" id="fullnameNote"></p>
+    <div class="error" id="fullnameError" role="alert"></div>
+  </div>
+  <div class="form-footer fullname-foot">
+    <button class="btn btn-block fullname-save" id="fullnameSave" type="button">保存する</button>
+    <button class="fullname-later" id="fullnameLater" type="button">あとで</button>
+    <p class="fullname-stuck" id="fullnameStuck" hidden></p>
   </div>
 </section>
 
@@ -480,7 +543,7 @@
     </div>
     <label class="field">
       <span class="label-text">名前</span>
-      <input class="input" id="editName" maxlength="16" placeholder="名前">
+      <input class="input" id="editName" maxlength="24" placeholder="フルネーム">
     </label>
     <label class="field">
       <span class="label-text">所属組織</span>

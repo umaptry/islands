@@ -27,11 +27,13 @@ import { refreshNotifications, setupNotifications, paintBadge } from './screens/
 import { setupProfile } from './screens/profile.js';
 import { setupDm } from './screens/dm.js';
 import { setupCommunityEdit } from './screens/community-edit.js';
+import { fullnameHeld, markFullnameDue, rememberFullnameReturn, setupFullname } from './screens/fullname.js';
+import { setupWaiting } from './screens/waiting.js';
 import { browserStorage, clearDm, clearTalk, dmTabVisible, refreshDmRooms, refreshTalk, talkAvailable } from './talk.js';
-import { mapLinkFor, postIdFromHash, savePendingPost, takePendingPost } from './return-post.js';
+import { WAITING_HOLD_MS, mapLinkFor, postIdFromHash, savePendingPost, takePendingPost } from './return-post.js';
 import { setupInvite, settleSession } from './screens/invite.js';
-import { communitiesActive, dropCommunities, refreshCommunities } from './communities.js';
-import { parseInviteHash } from './community-rules.js';
+import { communitiesActive, dropCommunities, refreshCommunities, refreshJoinStatus } from './communities.js';
+import { mustWait, parseInviteHash } from './community-rules.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/welcome', 'welcome');
@@ -39,6 +41,8 @@ route('#/auth', 'auth');
 route('#/setup', 'setup');
 route('#/guidance', 'guidance');
 route('#/affiliation', 'affiliation');
+route('#/waiting', 'waiting');
+route('#/fullname', 'fullname');
 route('#/invite/:code', 'invite');
 route('#/map', 'map');
 route('#/post', 'compose');
@@ -64,18 +68,36 @@ setNavVisible((target) => (target === '#/dm' ? dmTabVisible() : true));
 // 2026-10-29: 所属組織 is required. A named account with none, outside the sign-up
 // steps, is held on #/affiliation until it has one. These screens are left alone:
 // the sign-up steps themselves, and an invite link (which asks first).
-const AFFILIATION_EXEMPT = new Set(['#/welcome', '#/auth', '#/setup', '#/guidance', '#/invite/:code', '#/affiliation']);
+const AFFILIATION_EXEMPT = new Set(['#/welcome', '#/auth', '#/setup', '#/guidance', '#/invite/:code', '#/affiliation', '#/waiting', '#/fullname']);
+// 2026-11-01: somebody who applied to a community that needs approval (and is in none) is held on #/waiting,
+// ahead of the onboarding. These screens are let through: the sign-up steps, the invite page, and the
+// full-name page.
+const WAIT_EXEMPT = new Set(['#/welcome', '#/auth', '#/setup', '#/affiliation', '#/invite/:code', '#/fullname', '#/waiting']);
+const mustWaitNow = () => mustWait({ communities: state.communities, joinStatus: state.joinStatus });
+// The full name page is for somebody who already has a name and 所属 (the 所属 request comes first).
+const FULLNAME_EXEMPT = new Set(['#/welcome', '#/auth', '#/setup', '#/guidance', '#/invite/:code', '#/affiliation', '#/waiting', '#/fullname']);
 const needsAffiliation = () => Boolean(state.account && state.account.display_name)
   && !String(state.account.affiliation || '').trim() && !onboardingStep();
 
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
   const onboarding = onboardingStep();
+  if (pattern === '#/waiting') {
+    // Open for anybody the status list says something about (a person in another community opens it from the switcher).
+    if (!session.signedIn()) return '#/welcome';
+    return Array.isArray(state.joinStatus) && state.joinStatus.length ? null : '#/map';
+  }
+  if (session.signedIn() && mustWaitNow() && !WAIT_EXEMPT.has(pattern)) return '#/waiting';
+  if (pattern === '#/fullname') return fullnameHeld() ? null : '#/map';
   if (pattern === '#/affiliation') return needsAffiliation() ? null : '#/map';
   if (needsAffiliation() && !AFFILIATION_EXEMPT.has(pattern)) {
     // Remember where they were going, so saving can take them there.
     rememberAffiliationReturn(window.location.hash || '#/map');
     return '#/affiliation';
+  }
+  if (signedIn && !needsAffiliation() && !FULLNAME_EXEMPT.has(pattern) && fullnameHeld()) {
+    rememberFullnameReturn(window.location.hash || '#/map');
+    return '#/fullname';
   }
   if (signedIn && pattern === '#/map' && onboarding) {
     if (onboarding === 'photo') return '#/setup';
@@ -130,6 +152,8 @@ async function boot() {
   setupProfile();
   setupDm();
   setupCommunityEdit();
+  setupWaiting();
+  setupFullname();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   setupPushAsk();
@@ -185,11 +209,16 @@ async function boot() {
     }
   }
 
+  // Where each community stands for me (waiting / turned away / removed): read before the router moves, so
+  // somebody who is waiting is sent to #/waiting at once. Then: is the full name still to be asked this time?
+  if (session.signedIn() && !invalidatedSession && accountRead && communitiesActive()) await refreshJoinStatus();
+  if (state.account) markFullnameDue();
+
   // Not signed in, or signed in but not yet through the first-post steps: the
   // link waits. (A finished account is simply taken to it by the router.)
   const settled = Boolean(state.account && state.account.display_name) && !onboardingStep()
     && Boolean(String(state.account.affiliation || '').trim());
-  if (linkedPost && (invalidatedSession || !settled)) savePendingPost(browserStorage(), linkedPost);
+  if (linkedPost && (invalidatedSession || !settled || mustWaitNow())) savePendingPost(browserStorage(), linkedPost, Date.now(), WAITING_HOLD_MS);
 
   // The first route is decided BEFORE the router starts, not after. Starting
   // the router and then navigating raced: the router's own apply() was still
