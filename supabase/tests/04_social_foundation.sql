@@ -30,10 +30,16 @@ select ('00000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
 -- -----------------------------------------------------------------------
 -- 1. Profile fields: readable words, hidden vectors, server-only writes
 -- -----------------------------------------------------------------------
-select ok(has_column_privilege('anon', 'public.accounts', 'topics', 'SELECT'),
-          'anyone can read the topics');
-select ok(has_column_privilege('anon', 'public.accounts', 'display_name', 'SELECT'),
-          'names stay readable after the switch to column grants');
+-- 2026-11-01: accounts は閉じた（20261101010000）。anon はどの列も読めない。読めるのはログインした人だけ
+-- （行は accounts_read が絞る。23_accounts_lockdown.sql）。
+select ok(not has_column_privilege('anon', 'public.accounts', 'topics', 'SELECT'),
+          'anon can no longer read the topics (accounts is closed)');
+select ok(not has_column_privilege('anon', 'public.accounts', 'display_name', 'SELECT'),
+          'nor the names');
+select ok(has_column_privilege('authenticated', 'public.accounts', 'topics', 'SELECT'),
+          'a signed-in browser reads the topics');
+select ok(has_column_privilege('authenticated', 'public.accounts', 'display_name', 'SELECT'),
+          'and the names (rows are filtered by accounts_read)');
 select ok(not has_column_privilege('anon', 'public.accounts', 'vec_topics', 'SELECT'),
           'anon cannot read a profile vector');
 select ok(not has_column_privilege('authenticated', 'public.accounts', 'vec_goal', 'SELECT'),
