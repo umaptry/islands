@@ -257,6 +257,9 @@
       </div>
     </div>
 
+    <!-- 15字に届くまでの案内（新しい投稿だけ。compose-rules.js shortNote）。 -->
+    <p class="compose-short-note" id="composeShortNote" role="status" hidden></p>
+
     <div class="notice" id="composeMoveNotice" hidden>
       本文を書き換えると、この投稿は地図の別の場所に移動します。
     </div>
@@ -333,6 +336,16 @@
         <span id="composeCounterText"></span>
       </div>
     </div>
+  </div>
+  <!-- ① で「次へ」を押したあと、話題が2つ以上入っていたら下から出るシート（2026-10-31）。 -->
+  <div class="topic-scrim" id="topicScrim" hidden></div>
+  <div class="topic-sheet" id="topicSheet" role="dialog" aria-modal="true" aria-labelledby="topicHeading" hidden>
+    <div class="topic-grip" aria-hidden="true"></div>
+    <h3 class="topic-heading" id="topicHeading"></h3>
+    <p class="topic-lede">1つに絞ると、同じことが好きな人とつながりやすくなります</p>
+    <div class="topic-chips" id="topicChips"></div>
+    <button class="btn btn-block topic-rewrite" id="topicRewrite" type="button">1つに絞って書き直す</button>
+    <button class="topic-keep" id="topicKeep" type="button">このまま次へ</button>
   </div>
   <!-- ③ の下：画面の下の真ん中に「投稿する」（編集では「保存」）。 -->
   <div class="compose-foot" id="composeFoot" hidden>

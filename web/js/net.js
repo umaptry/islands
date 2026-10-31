@@ -31,7 +31,7 @@ export class ApiError extends Error {
 
 // keepalive lets a request outlive the page: "no longer on screen" is said as
 // the tab closes, and without it the browser would drop it on the floor.
-async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive, cache } = {}) {
+async function request(url, { method = 'GET', body, headers = {}, auth = true, raw, keepalive, cache, signal } = {}) {
   const merged = { accept: 'application/json', ...headers };
   if (auth) {
     const token = await session.accessToken();
@@ -47,6 +47,7 @@ async function request(url, { method = 'GET', body, headers = {}, auth = true, r
       body: raw ? body : (body === undefined ? undefined : JSON.stringify(body)),
       ...(keepalive ? { keepalive: true } : {}),
       ...(cache ? { cache } : {}),
+      ...(signal ? { signal } : {}),
     });
   } catch {
     throw new ApiError('接続できませんでした。通信環境をご確認ください。', 0);

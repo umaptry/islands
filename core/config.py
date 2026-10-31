@@ -133,6 +133,10 @@ OVERLAP_EPSILON = 0.5
 # There is no MAX_USERS any more. It existed because anybody with the URL could
 # fill the map and the only brake was a number; accounts are the brake now.
 MIN_TEXT_LENGTH = 1
+# 2026-10-31: 新しい投稿は画面で15字から（BAR で「アプリ開発」のような短すぎる投稿が地図の置き場所とつながりを
+# 悪くした）。サーバーの下限は MIN_TEXT_LENGTH のまま：昔の短い投稿の編集やテスト・デモのデータを壊さないため、
+# 画面だけの決まりにしてある。/api/config の limits.compose_min で画面に渡す。
+COMPOSE_MIN_LENGTH = 15
 MAX_TEXT_LENGTH = 60
 MAX_NAME_LENGTH = 16
 MAX_COMMENT_LENGTH = 500
@@ -398,6 +402,14 @@ ISLAND_NAMING_KEEP_OVERLAP = 0.7   # 顔ぶれ（投稿ID）の重なりがこ�
 # 同じ島を（成功も失敗も）呼び直す最短の間隔。24時間だと、BAR の夜に島の中身が入れ替わっても
 # 名前が翌日まで古いままになるので 30分にした（2026-10-28）。呼ぶのは1回の追跡で MAX_PER_RUN まで。
 ISLAND_NAMING_RETRY_HOURS = 0.5
+
+# 投稿画面の ① で「次へ」を押したとき、本文に話題がいくつ入っているかを AI（Gemini）に聞く（2026-10-31）。
+# 鍵（GEMINI_API_KEY）が無いか TOPIC_CHECK_ENABLED=0 なら AI を呼ばず、画面はそのまま ② へ進む。
+TOPIC_CHECK_ENABLED = os.environ.get("TOPIC_CHECK_ENABLED", "1") == "1"
+TOPIC_CHECK_TIMEOUT = 3.0          # サーバー側の時間切れ（秒）。ブラウザ側は4秒で諦める
+TOPIC_CHECK_MAX_TOPICS = 4         # 画面に並べる話題の数の上限
+TOPIC_CHECK_TOPIC_MAX_LENGTH = 12  # 話題の名前の長さの上限
+TOPIC_CHECK_RATE_MAX = 10          # 1人あたりの回数（check_rate_limit の窓＝5分のあいだ）
 ISLAND_NAMING_NOTIFY_OVERLAP = 0.4  # AI名→AI名の改名を通知するのは、投稿の重なりがこれ未満のときだけ
 # すべての島（1人・1件でも）を AI で名付ける（2026-10-28 ユーザー決定）。一覧から選ぶ方式は、
 # 小さな島で票が同点になりやすく、地図 v7 で投稿の中身と関係ない「料理」が付いたため。

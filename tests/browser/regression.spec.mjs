@@ -406,9 +406,9 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   // nothing written: ① cannot go on
   await expect(page.locator('#composeNext')).toBeDisabled();
   // words the person wrote are never replaced
-  await page.locator('#composeBody').fill('ボードゲームです');
+  await page.locator('#composeBody').fill('ボードゲームです。週末は友だちと集まって遊んでいます');
   await chips.nth(0).click();
-  await expect(page.locator('#composeBody')).toHaveValue('ボードゲームです');
+  await expect(page.locator('#composeBody')).toHaveValue('ボードゲームです。週末は友だちと集まって遊んでいます');
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', /^例：学生時代はずっとバスケ部/);
   // a tap anywhere on the bar (on ②) sets the heat there
   await page.locator('#composeNext').click();
@@ -432,9 +432,9 @@ test('a post in three steps: the box has the focus, words past 60 are red, ← g
   // 61 characters: the last one is painted red, the counter says so, and ① cannot go on
   await page.locator('#composeBody').fill(`${'あ'.repeat(60)}い`);
   await expect(page.locator('#composeMirror mark')).toHaveText('い');
-  await expect(page.locator('#composeCounterText')).toHaveText('61/60');
+  await expect(page.locator('#composeCounterText')).toHaveText('61 / 60');
   await expect(page.locator('#composeNext')).toBeDisabled();
-  await page.locator('#composeBody').fill('週末は川沿いを走っています');
+  await page.locator('#composeBody').fill('週末は川沿いを走っています。朝が気持ちいいです');
   await expect(page.locator('#composeMirror mark')).toHaveCount(0);
   await page.locator('#composeNext').click();
   await expect(page.locator('#composeStep2')).toBeVisible();
@@ -448,7 +448,7 @@ test('a post in three steps: the box has the focus, words past 60 are red, ← g
   await expect(page.locator('#compose')).toHaveAttribute('data-step', '2');
   await page.locator('#composeBack').click();
   await expect(page.locator('#compose')).toHaveAttribute('data-step', '1');
-  await expect(page.locator('#composeBody')).toHaveValue('週末は川沿いを走っています');
+  await expect(page.locator('#composeBody')).toHaveValue('週末は川沿いを走っています。朝が気持ちいいです');
   await page.locator('#composeBack').click();
   await expect(page.locator('#map')).toHaveClass(/active/);
 });
