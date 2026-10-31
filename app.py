@@ -75,6 +75,18 @@ from core.clustering import assign_cluster, name_group
 from core.prompts import weekly_prompt
 from core import post_extras
 from core.config import (
+    POLICY_NOTICE_AFTER,
+    POLICY_NOTICE_BEFORE,
+    POLICY_NOTICE_END,
+    POLICY_NOTICE_START,
+    POLICY_REVISION_EFFECTIVE,
+    POLICY_REVISION_ID,
+    POLICY_NOTICE_AFTER,
+    POLICY_NOTICE_BEFORE,
+    POLICY_NOTICE_END,
+    POLICY_NOTICE_START,
+    POLICY_REVISION_EFFECTIVE,
+    POLICY_REVISION_ID,
     AWAY_DIGEST_COUNT,
     COMMUNITY_ERROR_POST,
     DM_BODY_MAX,
@@ -2226,6 +2238,8 @@ def config():
                      "share": share_on()},
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
+        # 2026-11: 規約改定のお知らせの帯 ({id, text, url}、期間の外は null)。
+        "notice": policy_notice(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
         "talk": {"label": TALK_LABEL},
         "island_colors": list(ISLAND_COLORS),
@@ -4249,14 +4263,46 @@ def docs_page():
     return FileResponse(WEB / "docs.html", headers=NO_CACHE)
 
 
+def policy_now():
+    """The clock the policy switch reads. A function so tests can set it to before or after the day."""
+    return datetime.now(timezone.utc)
+
+
+def policy_in_force():
+    """True from the moment the revised terms and privacy policy take effect (config.POLICY_REVISION_EFFECTIVE)."""
+    return policy_now() >= datetime.fromisoformat(POLICY_REVISION_EFFECTIVE)
+
+
+def policy_notice():
+    """The band shown on the everyday screens around the revision; None outside its period."""
+    now = policy_now()
+    if not (datetime.fromisoformat(POLICY_NOTICE_START) <= now <= datetime.fromisoformat(POLICY_NOTICE_END)):
+        return None
+    if policy_in_force():
+        return {"id": POLICY_REVISION_ID, "text": POLICY_NOTICE_AFTER, "url": "/terms#changes"}
+    return {"id": POLICY_REVISION_ID, "text": POLICY_NOTICE_BEFORE, "url": "/terms/next#changes"}
+
+
+# The page flips by itself at the effective time, so nobody has to ship a change on the day.
+# no-cache (revalidate every time) keeps an old page from outliving the moment it flips.
 @app.get("/privacy")
 def privacy():
-    return FileResponse(WEB / "privacy.html", headers=NO_CACHE)
+    return FileResponse(WEB / ("privacy-next.html" if policy_in_force() else "privacy.html"), headers=NO_CACHE)
+
+
+@app.get("/privacy/next")
+def privacy_next():
+    return FileResponse(WEB / "privacy-next.html", headers=NO_CACHE)
 
 
 @app.get("/terms")
 def terms():
-    return FileResponse(WEB / "terms.html", headers=NO_CACHE)
+    return FileResponse(WEB / ("terms-next.html" if policy_in_force() else "terms.html"), headers=NO_CACHE)
+
+
+@app.get("/terms/next")
+def terms_next():
+    return FileResponse(WEB / "terms-next.html", headers=NO_CACHE)
 
 
 @app.get("/sw.js")

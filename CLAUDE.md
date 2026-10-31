@@ -49,7 +49,7 @@
 - API：`/api/config`・`/api/islands`・`/api/connections`・`/api/posts`（作成・プレビュー・編集・共有・削除）・`/api/matches` など
 - local mode：`/api/local/*`（Supabase の代役）
 - account：`/api/account/me`（両方のモード）
-- static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`
+- static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`。`/privacy`・`/terms` は施行日（core/config.py の `POLICY_REVISION_EFFECTIVE`）の前は今の文、あとは `*-next.html` を自動で返す（`policy_now()` で時計を差し替えてテスト）。`/privacy/next`・`/terms/next` は新しい文。`/api/config` の `notice` が規約改定のお知らせ（期間の外は null）
 
 ### core/（サーバーの部品）
 - 地図の計算：features.py（文章→448次元）、embedder.py（E5 を ONNX で動かす）、encoder.py（→座標）、placement.py、geometry.py、energy.py・terrain.py（地形）
@@ -66,6 +66,7 @@
 - 地図の描画 js/map/：index.js（カメラ・操作・描画の中心）、terrain.js・terrain-worker.js（地面）、coast.js・land.js・landmass.js（陸と海）、buildings.js（家と町）、pins.js、lines.js（人の線）、kin.js（点線）、decor.js・surf.js・vehicles.js・sparkles.js（飾り）、palette.js（色）
 - 通信：net.js（`api` が Cloud Run、`data` が Supabase か手元）、session.js（ログイン）、realtime.js（通知をすぐ受け取る）、push.js・push-ask.js・sw.js（プッシュ）
 - 機能ごとのまとめ役：talk.js（もっと話してみたい・DM）、communities.js、share.js（ほかのコミュニティにも出す）、catchup.js（新しい住人）
+- お知らせの帯：notice.js（上に細く出す）、notice-rules.js（出すかの判断・閉じた id の記憶）
 - `*-rules.js`：画面に触らない判断だけを切り出したもの。tests/frontend/ でテストする。判断を足すならまずここ。
 
 ### テスト（直した場所 → 走らせるもの）

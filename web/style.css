@@ -858,6 +858,28 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
 /* An island: the photo, a ring of grass, then a ring of beach (2026-10-22). */
 .avatar.profile-avatar { border: 6px solid var(--grass); box-shadow: 0 0 0 6px var(--sand); }
 
+/* ---------------------------------------------------------------- notice band (規約・ポリシー改定) */
+
+/* A thin strip above everything on the everyday screens. The screens move down by its height
+ * (body.has-notice), so it never sits on the map's buttons. */
+:root { --notice-h: 40px; }   /* js/notice.js writes the band's real height here */
+.notice-band {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 46;
+  min-height: calc(40px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 calc(env(safe-area-inset-left) + 12px);
+  display: flex; align-items: center; gap: 4px;
+  background: var(--surface); color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px; line-height: 1.4;
+}
+.notice-text { flex: 1; min-width: 0; margin: 0; padding: 4px 0; }
+.notice-more { color: var(--sea-ink); font-weight: 700; white-space: nowrap; }
+.notice-close {
+  flex: none; width: 44px; height: 44px;
+  display: grid; place-items: center; color: var(--ink-3); font-size: 15px;
+}
+body.has-notice .screen { top: var(--notice-h); }
+
 /* ---------------------------------------------------------------- nav */
 
 .bottom-nav {
