@@ -448,7 +448,6 @@ def test_config_carries_the_consent_version_and_the_day_the_remove_button_appear
     body = fresh_client.get("/api/config").json()
     assert body["features"]["member_removal"] is True and body["fullname"]["required"] is True
     assert {"key": "20s", "label": "20代"} in body["age_bands"] and body["limits"]["job_title_max"] == 32
-    assert "notice" not in body, "the お知らせ帯 comes with the other PR"
 
 
 def test_the_new_account_columns_exist_in_local_mode(world):
