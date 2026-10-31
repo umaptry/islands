@@ -248,7 +248,7 @@ async function pressReaction(message, kind) {
   try {
     now = await data.reactDm(message.id, kind);
   } catch (error) {
-    if (reactionsMissing(error)) reactionsOn = false;   // the table went missing: quiet, like everywhere else
+    if (reactionsMissing(error, { rpc: true })) reactionsOn = false;   // the function went missing: quiet, like everywhere else
     else toast(error.message);
   } finally {
     reactPending -= 1;
@@ -324,12 +324,19 @@ async function poll({ first = false } = {}) {
   messages = mergeMessages(messages, rows);
   // Open on screen means seen: the tab's badge does not count what is in front of me.
   if (lastStamp(messages)) seeDmRoom(id, lastStamp(messages));
+  if (first) {
+    // The first paint never waits for reactions: draw the messages now, add the bubbles when they arrive.
+    paintMessages({ stick: true });
+    if (rows.some((row) => row.sender_id !== state.account?.id)) markDmNotificationsRead(room.other_id);
+    if (await refreshReactions(mine, id) && mine === request && room && room.room_id === id) paintMessages();
+    return;
+  }
   // Reactions can land on old messages, so they are fetched whole every time, after the messages
   // (a reaction to a message not yet on screen would have nothing to sit on).
   const reacted = await refreshReactions(mine, id);
   if (mine !== request || !room || room.room_id !== id) return;
-  if (!first && messages.length === before && !reacted) return;
-  paintMessages({ stick: first });
+  if (messages.length === before && !reacted) return;
+  paintMessages();
   if (rows.some((row) => row.sender_id !== state.account?.id)) markDmNotificationsRead(room.other_id);
 }
 

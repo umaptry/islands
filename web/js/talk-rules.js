@@ -304,10 +304,16 @@ export function readReact(result) {
   return row && reactionOf(row.kind) ? row.kind : null;
 }
 
-/** The table is not there yet (the migration has not been run): the feature stays quiet. */
-export function reactionsMissing(error) {
-  const text = String((error && error.message) || '');
-  return Boolean(error) && (error.status === 404 || /dm_reactions|PGRST205/.test(text));
+/**
+ * The table is not there yet (the migration has not been run): the feature stays quiet. A bare 404 is not
+ * enough on a read (local mode answers 404 for "no such room", and a 404 can be a passing hiccup); only
+ * the call to react_dm may take a bare 404 as "the function is missing".
+ */
+export function reactionsMissing(error, { rpc = false } = {}) {
+  if (!error) return false;
+  const text = String(error.message || '');
+  if (/dm_reactions|react_dm|PGRST205|PGRST202/.test(text)) return true;
+  return rpc && error.status === 404;
 }
 
 // ---------------------------------------------------------------- the first-time note

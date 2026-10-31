@@ -181,7 +181,7 @@ test('反応の表が無い間は、長押しでコピーだけが出て、エ�
   const { host, guest, roomId } = await matchedRoom(browser, testInfo);
   await say(guest, roomId, 'はじめまして');
   await host.page.route('**/api/local/dm/rooms/*/reactions', (route) =>
-    route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"not found"}' }));
+    route.fulfill({ status: 404, contentType: 'application/json', body: '{"code":"PGRST205","message":"Could not find the table public.dm_reactions in the schema cache"}' }));
   await openRoom(host, roomId);
   await expect(bubble(host, 'はじめまして')).toBeVisible({ timeout: 12000 });
   await host.page.waitForTimeout(300);

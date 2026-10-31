@@ -457,7 +457,10 @@ test('the answer of react_dm is read in either shape', () => {
 });
 
 test('a missing table is told from an ordinary failure', () => {
-  assert.equal(rules.reactionsMissing({ status: 404, message: 'x' }), true);
+  assert.equal(rules.reactionsMissing({ status: 404, message: 'x' }), false);
+  assert.equal(rules.reactionsMissing({ status: 404, message: 'x' }, { rpc: true }), true);
+  assert.equal(rules.reactionsMissing({ status: 404, message: 'PGRST205 relation public.dm_reactions' }), true);
+  assert.equal(rules.reactionsMissing({ status: 400, message: 'x' }, { rpc: true }), false);
   assert.equal(rules.reactionsMissing({ status: 400, message: 'Could not find the table public.dm_reactions' }), true);
   assert.equal(rules.reactionsMissing({ status: 0, message: '接続できませんでした。' }), false);
   assert.equal(rules.reactionsMissing({ status: 500, message: 'boom' }), false);
