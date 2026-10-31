@@ -12,6 +12,7 @@ const routes = [];
 let current = null;
 let guard = () => null;
 let navVisible = () => true;
+let chromeListener = () => {};
 
 /** Register a screen. `enter` may be async; `leave` is always sync. */
 export function screen(id, handlers = {}) {
@@ -38,6 +39,11 @@ export function route(pattern, target) {
 /** Runs before every navigation. Return a hash to redirect, or null to allow. */
 export function setGuard(handler) {
   guard = handler;
+}
+
+/** Called with true/false each time the everyday screens (the ones with the nav) come or go. */
+export function setChromeListener(listener) {
+  chromeListener = listener;
 }
 
 /** Which bottom-nav buttons exist right now: `visible(route)` for the button that goes to `route`
@@ -124,6 +130,7 @@ export function show(id) {
   $('bottomNav').hidden = !chrome;
   document.body.classList.toggle('has-nav', chrome);
   refreshNav();
+  chromeListener(chrome);
 }
 
 /** Show or hide each nav button as navVisible() says. */

@@ -75,15 +75,18 @@ export function composeFloor({ editing, limits }) {
   return Math.max(base, Number(limits?.compose_min) || 0);
 }
 
-/** The words on 次へ at ①: the floor named while the words are short of it. */
+/** The words on 次へ at ①: the floor named before anything is written, then how many more it takes
+ * (the button sits right on top of the keyboard, where the note under the words is out of sight). */
 export function nextLabel({ length, floor }) {
-  return floor > 1 && length < floor ? `${floor}字から投稿できます` : '次へ';
+  if (floor <= 1 || length >= floor) return '次へ';
+  return length < 1 ? `${floor}字から投稿できます` : `あと${floor - length}字で投稿できます`;
 }
 
-/** The small note under the words while 1 to floor-1 characters are written; null otherwise (nothing at 0). */
+/** The small note under the words while 1 to floor-1 characters are written; null otherwise (nothing at 0).
+ * The count itself is on 次へ. */
 export function shortNote({ length, floor }) {
   if (floor <= 1 || length < 1 || length >= floor) return null;
-  return `あと${floor - length}字。どんなことを・どうして を足すと、近い人が見つけやすくなります`;
+  return 'どんなことを・どうして を足すと、近い人が見つけやすくなります';
 }
 
 /** The counter beside the words: "5 / 60". */
