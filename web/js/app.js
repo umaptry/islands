@@ -39,6 +39,9 @@ import { setupEventApply } from './screens/event-apply.js';
 import { setupEventMe } from './screens/event-me.js';
 import { forgetEventGuest, guestHome, refreshEventGuest } from './event-guest.js';
 import { eventHashFor, isEventPattern, parseEventPath, peekApplyReturn } from './event-rules.js';
+// ---- 会：主催者とメンバー（第2回a） ----
+import { setupEventHost } from './screens/event-host.js';
+import { setupEventCompose } from './screens/event-compose.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/welcome', 'welcome');
@@ -62,12 +65,15 @@ route('#/community/:id', 'communityEdit');
 // ---- 会：公開側（第2回a） ----
 route('#/e/:code', 'eventApply');
 route('#/e/:code/me', 'eventMe');
+// ---- 会：主催者とメンバー（第2回a） ----
+route('#/e/:code/host', 'eventHost');
 
 // Signed out, you can look at the map and read a post; you cannot write, react
 // or have an inbox. Sending somebody to the sign-in screen is a redirect and
 // not an error page, so the address they typed is the one they come back to.
 const NEEDS_ACCOUNT = new Set([
   '#/post', '#/post/:id/edit', '#/notifications', '#/me', '#/me/edit', '#/dm', '#/dm/:id', '#/community/:id',
+  '#/e/:code/host',   // 会：主催者とメンバー（第2回a）
 ]);
 
 // The bottom bar is マップ／DM／通知／マイページ. The DM tab exists only when signed in and 「話してみたい」 is on.
@@ -91,7 +97,8 @@ setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
   const onboarding = onboardingStep();
   // ---- 会：公開側（第2回a） ---- the pages of a 会 are open to anybody (the page itself asks for a sign-in where it needs one)
-  if (isEventPattern(pattern)) return null;
+  // (the host menu is not one of them: it needs an account, NEEDS_ACCOUNT below)
+  if (isEventPattern(pattern) && pattern !== '#/e/:code/host') return null;
   if (pattern === '#/waiting') {
     // Open for anybody the status list says something about (a person in another community opens it from the switcher).
     if (!session.signedIn()) return '#/welcome';
@@ -169,6 +176,9 @@ async function boot() {
   setupFullname();
   setupEventApply();   // ---- 会：公開側（第2回a） ----
   setupEventMe();
+  // ---- 会：主催者とメンバー（第2回a） ----
+  setupEventHost();
+  setupEventCompose();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   setupPushAsk();

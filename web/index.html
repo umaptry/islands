@@ -370,6 +370,10 @@
               <span class="recruit-unit">人</span>
             </span>
           </label>
+          <label class="recruit-row recruit-event" id="composeEventRow" for="composeEventOn" hidden>
+            <span class="recruit-label">申し込みのある「会」にする<span class="recruit-opt">申し込みページと名簿ができます。先着人数が必要で、ほかのコミュニティには出せません</span></span>
+            <input class="recruit-event-switch" type="checkbox" id="composeEventOn" role="switch">
+          </label>
         </div>
       </div>
     </div>
@@ -700,6 +704,67 @@
   <div class="form-footer ev-foot" id="eventMeFoot" hidden></div>
 </section>
 <!-- ---- 会：公開側 ここまで ---- -->
+<!-- ============ 会：主催者とメンバー（第2回a） ============ -->
+<!-- 会の中身（投稿画面から。route ではなく、compose の上に重なる） -->
+<section id="eventCompose" class="screen tinted">
+  <div class="topbar-inline">
+    <button class="icon-button" id="eventComposeBack" aria-label="戻る">←</button>
+    <h2 class="screen-title" id="eventComposeTitle">会の中身</h2>
+  </div>
+  <div class="compose-progress ev-progress" id="eventComposeProgress" role="progressbar" aria-label="会を作るステップ"
+       aria-valuemin="1" aria-valuemax="2" aria-valuenow="1"><i></i><i></i></div>
+  <div class="scroller" id="eventComposeScroller">
+    <div id="eventComposeStep1">
+      <h2 class="screen-title">いつ、どこでやる会？</h2>
+      <p class="lede">申し込みページに、そのまま載ります。</p>
+      <label class="ev-field">
+        <span class="ev-label">会の名前</span>
+        <input class="ev-input" id="eventComposeName" type="text" placeholder="例：The Night Office BAR #2" autocomplete="off">
+      </label>
+      <label class="ev-field">
+        <span class="ev-label">開始</span>
+        <input class="ev-input" id="eventComposeStart" type="datetime-local">
+      </label>
+      <label class="ev-field">
+        <span class="ev-label">終了</span>
+        <input class="ev-input" id="eventComposeEnd" type="datetime-local">
+      </label>
+      <label class="ev-field">
+        <span class="ev-label">場所</span>
+        <input class="ev-input" id="eventComposePlace" type="text" placeholder="例：渋谷 ○○ビル 3F" autocomplete="off">
+      </label>
+      <p class="ev-fixed" id="eventComposeCapacity"></p>
+      <h3 class="ev-ask">だれが申し込める？</h3>
+      <div class="ev-choices" role="radiogroup" aria-label="だれが申し込めるか">
+        <button class="ev-choice" id="eventComposePublic" type="button" role="radio" aria-checked="false">
+          <b>公開</b><span>リンクを知っている人は誰でも申し込める</span><small>管理者だけが選べます</small>
+        </button>
+        <button class="ev-choice on" id="eventComposeCommunity" type="button" role="radio" aria-checked="true">
+          <b>コミュニティの中だけ</b><span>メンバーだけが申し込める</span>
+        </button>
+      </div>
+    </div>
+    <div id="eventComposeStep2" hidden>
+      <h2 class="screen-title">申し込む人に聞きたいことは？</h2>
+      <p class="lede" id="eventComposeQLede">申し込む人は2つ以上答えます。メンバーは質問なしで申し込めます。</p>
+      <ul class="ev-questions" id="eventComposeQuestions"></ul>
+      <p class="ev-consent" id="eventComposeConsent">作ると、<a href="/terms/next" target="_blank" rel="noopener">新しい利用規約</a>と<a href="/privacy/next" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したことになります。</p>
+    </div>
+    <div class="error ev-error" id="eventComposeError" role="alert"></div>
+  </div>
+  <div class="form-footer">
+    <button class="btn btn-block" id="eventComposeNext" type="button">次へ</button>
+  </div>
+</section>
+
+<!-- 主催者メニューと名簿（#/e/:code/host） -->
+<section id="eventHost" class="screen tinted">
+  <div class="topbar-inline">
+    <button class="icon-button" id="eventHostBack" aria-label="戻る">←</button>
+    <h2 class="screen-title">主催者メニュー</h2>
+  </div>
+  <div class="scroller" id="eventHostBody"></div>
+</section>
 
 <script type="module" src="/static/js/app.js"></script>
 </body>
