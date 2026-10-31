@@ -114,10 +114,15 @@ export const HOUSE_WIDTH = [2.4, 3, 4.2, 5.6];
 
 const count = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
 
+/** Reactions and messages a post has gathered: like + help + join + comment counts. */
+export function houseScore(post) {
+  const p = post || {};
+  return count(p.like_count) + count(p.help_count) + count(p.join_count) + count(p.comment_count);
+}
+
 /** 0..3 (hut, house, manor, castle) from like + help + join + comment counts. */
 export function houseTier(post) {
-  const p = post || {};
-  const n = count(p.like_count) + count(p.help_count) + count(p.join_count) + count(p.comment_count);
+  const n = houseScore(post);
   return HOUSE_TIER_FROM.filter((from) => n >= from).length;
 }
 

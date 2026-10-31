@@ -36,7 +36,8 @@ import { groundOf } from './coast.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
-import { HOUSE_WIDTH, houseTier } from './mesh.js';
+import { HOUSE_WIDTH, houseScore, houseTier } from './mesh.js';
+import { thinHouses } from './house-thin.js';
 import { PALETTE, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
 
 let canvas = null;
@@ -1265,7 +1266,7 @@ function renderMap(time) {
   // map, so the house's nearest corner keeps whatever the face - its unread dot
   // included - or, before faces show, the dot takes up, off to the north east.
   const houseSize = scale * HOUSE_UNITS;
-  const houses = [];
+  let houses = [];
   // The smallest tier is drawn from HOUSE_MIN px wide; a bigger one is wider, so it shows no later.
   if (scale * HOUSE_WIDTH[0] >= HOUSE_MIN) {
     const islandOf = new Map();
@@ -1287,10 +1288,16 @@ function renderMap(time) {
       const place = islandOf.get(post.id);
       const own = stage && post.id === reveal.id ? stage.land : 1;
       houses.push({
+        id: post.id, score: houseScore(post),
+        // The open post and the one landing keep their house when houses crowd.
+        keep: (state.selected != null && post.id === state.selected.id) || (stage != null && post.id === reveal.id),
         x, foot, size: houseSize, tier, seed, calm: Boolean(place && place.island.quiet),
         alpha: own * (place ? place.fade : 1), wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
       });
     });
+    // Houses standing on each other are thinned the way the pins are: one stays
+    // (see house-thin.js). Trees and night lights below use what is left.
+    houses = thinHouses(houses);
   }
 
   if (terrain && terrain.trees) {
