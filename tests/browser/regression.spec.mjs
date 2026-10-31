@@ -412,6 +412,8 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', /^例：学生時代はずっとバスケ部/);
   // a tap anywhere on the bar (on ②) sets the heat there
   await page.locator('#composeNext').click();
+  // 次へ waits for the topic check before ② shows, and boundingBox does not wait (null while hidden)
+  await expect(page.locator('#composeMotivation')).toBeVisible();
   const bar = await page.locator('#composeMotivation').boundingBox();
   await page.mouse.click(bar.x + bar.width * 0.8, bar.y + bar.height / 2);
   const tapped = Number(await page.locator('#composeMotivation').inputValue());
