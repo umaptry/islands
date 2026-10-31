@@ -487,9 +487,9 @@ def test_the_person_card_shows_only_what_the_viewer_shares_with_the_person(world
     # a viewer in B only sees the B side of the same person
     card_b = get(world.member_b, f"/api/people/{world.both.id}/card").json()
     assert card_b["latest_post"]["id"] == world.pb2["id"] and card_b["post_count"] == 1
-    # no community in common: the profile alone
+    # no community in common: a card with no name or profile (accounts are closed to outsiders, 2026-11-01)
     alone = get(world.member_b, f"/api/people/{world.member_a.id}/card").json()
-    assert alone["person"]["display_name"] == world.member_a.account["display_name"]
+    assert alone["person"]["display_name"] == "（このコミュニティの外の人）"
     assert alone["post_count"] == 0 and alone["latest_post"] is None and alone["connections"] == []
     assert alone["island"] is None
     # your own card shows all of your own posts
