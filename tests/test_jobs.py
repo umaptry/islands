@@ -102,7 +102,7 @@ def test_apply_makes_the_same_reminders_as_schedule_times(world):
         account = people(f"x{days_before}@example.test", f"メンバー{days_before}")
         add_member(account, cid)
         now = start - timedelta(days=days_before)
-        store().event_apply(event=event["post_id"], account=account.id, now=now)
+        store().event_apply(event=event["post_id"], account=account.id, channel="line", now=now)
         made = {row["kind"]: datetime.fromisoformat(row["scheduled_at"])
                 for row in store()._outbound.values() if row["account_id"] == account.id}
         assert made == jobs.schedule_times(event, now)
@@ -112,10 +112,10 @@ def test_tick_sends_each_message_once_at_its_time(world):
     admin, cid, people = world
     code = create_event(admin, cid, visibility="public")["event"]["public_code"]
     guest = people("g@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     friend(guest)
     nobody = people("n@example.test", "友だちでない人")
-    apply(nobody, code)                                                    # 友だちでない人には送らない
+    apply(nobody, code, line=True)                                         # 友だちでない人には送らない
     start, end = start_of(code)
     sent_before = lambda: [m["kind"] for m in store().sent_messages()]
 
@@ -138,7 +138,7 @@ def test_old_reminders_are_not_sent_late(world):
     admin, cid, people = world
     code = create_event(admin, cid, visibility="public")["event"]["public_code"]
     guest = people("g2@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     friend(guest)
     start, _ = start_of(code)
     # 予定から24時間たったものは取らない
@@ -151,7 +151,7 @@ def test_declined_and_cancelled_messages_go_out_at_once(world):
     made = create_event(admin, cid, visibility="public")
     code = made["event"]["public_code"]
     guest = people("g3@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     friend(guest)
     declined = admin.client.post(f"/api/events/{code}/registrations/{guest.id}/decline", json={}, headers=admin.headers)
     assert declined.status_code == 200
@@ -163,7 +163,7 @@ def test_results_of_the_sender_decide_what_happens(world):
     admin, cid, people = world
     code = create_event(admin, cid, visibility="public")["event"]["public_code"]
     guest = people("g4@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     friend(guest, "U-one")
     start, _ = start_of(code)
     now = start - timedelta(days=7) + timedelta(minutes=1)
@@ -210,7 +210,7 @@ def test_without_line_nothing_is_claimed_in_production_shape(world, monkeypatch)
     monkeypatch.setattr(jobs, "default_sender", lambda s: None)
     code = create_event(admin, cid, visibility="public")["event"]["public_code"]
     guest = people("g5@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     friend(guest)
     start, _ = start_of(code)
     result = jobs.run_tick(store(), now=start - timedelta(days=7) + timedelta(minutes=1), cleanup=False)
@@ -233,7 +233,18 @@ def test_friend_added_before_login_is_attached_later(world):
     assert store().line_link_attach(guest.id, "U-unknown") is False
     store().line_link_save(None, "U-gone", True)
     store().line_link_unfollow("U-gone")                                # 解除も記録され、結ぶと友だちではない
-    assert store().line_link_attach(people("l2@example.test", "ふたり").id, "U-gone") is True
+    # 解除の記録を結ぶと、友だちではないまま結ばれる（DB の line_link_attach と同じ。次の follow で友だちになる）
+    two = people("l2@example.test", "ふたり")
+    assert store().line_link_attach(two.id, "U-gone") is False
+    assert store().line_link_of(two.id)["is_friend"] is False
+    # 記録が無くても結ぶ（友だちかどうか分からないので false）。同じ結びつきをもう一度結べば、今の状態のまま
+    three = people("l3@example.test", "さんにん")
+    assert store().line_link_attach(three.id, "U-never") is False and store().line_link_of(three.id)["line_user_id"] == "U-never"
+    store().line_link_save(three.id, "U-never", True)
+    assert store().line_link_attach(three.id, "U-never") is True
+    # 同じ LINE の人が別のアカウントに付いていたら、そちらを外す
+    store().line_link_save(two.id, "U-never", True)
+    assert store().line_link_of(three.id) is None and store().line_link_of(two.id)["line_user_id"] == "U-never"
     # LINE の sub から人を探す／webhook の二重除け
     store().set_line_sub(guest.id, "U-early")
     assert store().account_by_line_sub("U-early") == guest.id and store().account_by_line_sub("nobody") is None
@@ -271,7 +282,7 @@ def test_cleanup_keeps_to_the_retention_periods(world):
     event_id = made["id"]
     start, end = start_of(code)
     attended = people("att@example.test", "きた人")
-    apply(attended, code)
+    apply(attended, code, line=True)
     friend(attended)
     kept_member = people("km@example.test", "メンバー")
     add_member(kept_member, cid)
@@ -285,7 +296,7 @@ def test_cleanup_keeps_to_the_retention_periods(world):
                {"prompt": "future", "body": "い", "x": 1.0, "y": 1.0, "cluster_id": 0, "terms": [], "vec": [1.0],
                 "vec_c": [1.0]}]
         store().event_apply(event=event_id, account=account, profile={"display_name": f"新しい人{i} 名前", "affiliation": "x"},
-                            answers=ans, consent="2026-11-16")
+                            answers=ans, channel="line", consent="2026-11-16")
     joined = fresh_ids[1]
     store()._members[(cid, joined)] = {"role": "member", "joined_at": "2026-11-01T00:00:00+00:00",
                                        "joined_via": "event", "invite_id": None, "event_post_id": event_id}
@@ -330,3 +341,71 @@ def test_cleanup_runs_inside_a_tick(world):
     _, end = start_of(code)
     result = jobs.run_tick(store(), now=end + timedelta(days=8))
     assert result["cleaned"]["registrations"] == 1 and result["cleaned"]["deleted_accounts"] == 0
+
+
+# --------------------------------------------------------------------------
+# 通し：会を作る → 申し込み（ゲスト）→ 名簿 → お断り → LINE の予定 → /api/jobs/tick で送られる（偽の LINE）
+# --------------------------------------------------------------------------
+
+def test_whole_flow_in_local_mode(world, monkeypatch):
+    admin, cid, people = world
+    monkeypatch.setenv("ISLANDS_JOBS_SECRET", "s3cret")
+    monkeypatch.setenv("ISLANDS_LINE_FAKE", "1")                        # 本物の LINE には送らない
+    made = create_event(admin, cid, visibility="public", capacity=5)
+    code = made["event"]["public_code"]
+    guest, banned, mail = people("w1@example.test", "ゲスト"), people("w2@example.test", "お断り"), people("w3@example.test", "メール")
+    apply(guest, code, line=True)
+    apply(banned, code, line=True)
+    apply(mail, code)
+    friend(guest, "U-guest")
+    friend(banned, "U-banned")
+    roster = admin.client.get(f"/api/events/{code}/roster", headers=admin.headers).json()
+    assert roster["counts"]["applied"] == 3
+    by_channel = {person["channel"] for person in roster["people"]}
+    assert by_channel == {"line", "email"}
+    # お断り：LINE の人にだけ declined が予約され、メールの人には予約が無い
+    assert admin.client.post(f"/api/events/{code}/registrations/{banned.id}/decline", json={},
+                             headers=admin.headers).status_code == 200
+    assert {(row["account_id"], row["kind"]) for row in outbound(code) if row["sent_at"] is None} >= {
+        (banned.id, "declined"), (guest.id, "week_before"), (guest.id, "day_of"), (guest.id, "after")}
+    assert [row for row in outbound(code) if row["account_id"] == mail.id] == []
+    # tick：お断りはすぐ、1週間前は時刻が来たとき、偽の LINE に積まれる
+    assert application_tick(store(), datetime.now(timezone.utc))["sent"] == 1
+    start, _ = start_of(code)
+    assert application_tick(store(), start - timedelta(days=7) + timedelta(minutes=1))["sent"] == 1
+    sent = store().sent_messages()
+    assert {(m["line_user_id"], m["kind"]) for m in sent} == {("U-banned", "declined"), ("U-guest", "week_before")}
+    # HTTP の道も通る（秘密のヘッダーあり）
+    response = admin.client.post("/api/jobs/tick", json={}, headers={"X-Jobs-Secret": "s3cret"})
+    assert response.status_code == 200 and {"sent", "failed", "skipped", "cleaned"} <= set(response.json())
+
+
+def application_tick(store_, now):
+    return jobs.run_tick(store_, now=now, cleanup=False)
+
+
+def test_week_before_gets_the_near_count_from_the_jobs(world):
+    """DB の outbound_claim は near_count を出せない（null）。week_before のときだけ jobs が埋める。"""
+    admin, cid, people = world
+    code = create_event(admin, cid, visibility="public")["event"]["public_code"]
+    event_id = store().event_by_code(code)["post_id"]
+    one, two, far = (people(f"nc{i}@example.test", f"人{i}") for i in range(3))
+    for person, vec in ((one, [1.0, 0.0]), (two, [0.9, 0.1]), (far, [0.0, 1.0])):
+        answers = [{"prompt": p, "body": "あ", "x": 1.0, "y": 1.0, "cluster_id": 0, "terms": [], "vec": vec, "vec_c": vec}
+                   for p in ("now", "future")]
+        store().event_apply(event=event_id, account=person.id, profile={"display_name": "山田 太郎", "affiliation": "x"},
+                            answers=answers, channel="line")
+        friend(person)
+    start, _ = start_of(code)
+    now = start - timedelta(days=7) + timedelta(minutes=1)
+    seen = {}
+
+    def spy(row, base_url=""):
+        seen[row["account_id"]] = row["near_count"]
+        return "ok"
+    jobs.run_tick(store(), now=now, sender=spy, cleanup=False)
+    assert seen == {one.id: 1, two.id: 1, far.id: None}        # 近い人がいなければ None（LINE の文はその行を出さない）
+    # day_of には埋めない（DB の形のまま null）
+    seen.clear()
+    jobs.run_tick(store(), now=start - timedelta(hours=3) + timedelta(minutes=1), sender=spy, cleanup=False)
+    assert set(seen.values()) == {None}

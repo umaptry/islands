@@ -8,9 +8,13 @@
   案内の種類は 1週間前・開始3時間前・終了時・お断り・中止・変更だけ。
 - 返事（reply）は通数に数えない。遅れる・キャンセルの自動の返事はこちらを使う。
 
-ストア（core/store_events.py）はまだ無いので、webhook の関数は `store` を引数で受け取る。
-使うメソッドは D 3-6 の名前どおり：account_by_line_sub / line_link_save / line_link_unfollow /
-line_webhook_seen / my_event_registrations / event_set_late / event_cancel_registration。
+webhook の関数は `store`（core/store_events.py のストア）を引数で受け取る。使うメソッドは D 3-6 の名前どおり：
+account_by_line_sub / line_link_save / line_link_unfollow / line_webhook_seen / my_event_registrations /
+event_set_late / event_cancel_registration。
+
+LINE の結びつき：follow の userId を account_by_line_sub で引く。見つかれば line_link_save(account, userId, True)、
+見つからなければ line_link_save(None, userId, True)（line_pending_friends に記録。あとで申し込み・ログインのときに
+core/events.py が line_link_attach で結ぶ）。userId ＝ ログインの sub という前提は未確認（D の 7 章 23・24）。
 """
 
 import base64
@@ -27,18 +31,17 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-log = logging.getLogger("islands.line")
+from core.config import (
+    LATE_CHOICES,
+    LINE_API_BASE,
+    LINE_DATA_API_BASE,
+    LINE_TEXT_LIMIT as TEXT_LIMIT,
+    LINE_TIMEOUT_SECONDS,
+    LINE_WEBHOOK_MAX_BYTES,
+    OUTBOUND_KINDS as KINDS,
+)
 
-# ---------------------------------------------------------------------------
-# 設定値（config.py に移す予定。いまは担当どうしでぶつからないよう、ここに置く）
-# ---------------------------------------------------------------------------
-LINE_API_BASE = "https://api.line.me"
-LINE_DATA_API_BASE = "https://api-data.line.me"
-LINE_TIMEOUT_SECONDS = 10.0
-LINE_WEBHOOK_MAX_BYTES = 1_000_000
-LATE_CHOICES = (10, 30, 60)  # 遅れる（分）。config.py の late_choices と同じ
-TEXT_LIMIT = 160  # buttons テンプレートの本文の上限
-KINDS = ("week_before", "day_of", "after", "declined", "event_cancelled", "event_changed")
+log = logging.getLogger("islands.line")
 
 JST = timezone(timedelta(hours=9))
 WEEKDAYS = "月火水木金土日"
@@ -429,14 +432,16 @@ def handle_postback(event, store, *, now=None, client=None):
 # follow / unfollow
 # ---------------------------------------------------------------------------
 def handle_follow(event, store):
-    """友だち追加。LINE の userId を、ログインの sub と同じとみて islands のアカウントに結ぶ。
-    結べなければ（まだログインしていない人）記録だけして True/False で伝える。"""
+    """友だち追加。LINE の userId を、ログインの sub と同じとみて islands のアカウントに結ぶ（True）。
+    結べなければ（まだログインしていない人）、記録だけして False。"""
     user_id = (event.get("source") or {}).get("userId")
     if not user_id:
         return False
     account = store.account_by_line_sub(user_id)
     if not account:
+        # まだログインしていない友だち：userId と友だちの状態だけ記録する（あとで line_link_attach が結ぶ）
         log.info("LINE follow: no matching account")
+        store.line_link_save(None, user_id, True)
         return False
     store.line_link_save(account, user_id, True)
     return True

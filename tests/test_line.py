@@ -158,7 +158,8 @@ def test_follow_unfollow_dispatch(configured):
 def test_follow_without_account_links_nothing(configured):
     store = FakeStore(account=None)
     assert line.handle_follow({"source": {"userId": "U1"}}, store) is False
-    assert not [c for c in store.calls if c[0] == "link_save"]
+    # 結べない友だちは、アカウント無し（None）で記録だけする（DB の line_pending_friends。あとで line_link_attach が結ぶ）
+    assert [c for c in store.calls if c[0] == "link_save"] == [("link_save", None, "U1", True)]
 
 
 def test_postback_late_cancel_flow(configured):

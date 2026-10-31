@@ -69,6 +69,7 @@ from core import topic_check
 from core import visibility
 from core import events
 from core import jobs
+from core import line
 from core import matching
 from core import island_tracking
 from core import notifications as notices
@@ -431,14 +432,9 @@ app = FastAPI(title="islands", lifespan=lifespan, docs_url=None, redoc_url=None)
 # 2026-11-01 第2回a：会（イベント申し込み）と予約送信。/e/{code}・/c/{code} もここ。
 app.include_router(events.router)
 app.include_router(jobs.router)
-try:
-    # LINE の受け口（core/line.py。別の枝で作っている）。まだ無くても動く。
-    # 配線：from core import line; app.include_router(line.router); 起動時に line.configure(lambda: state["store"])
-    from core import line as line_module
-except ImportError:
-    line_module = None
-else:
-    app.include_router(line_module.router)
+# LINE の受け口（POST /api/line/webhook）。ストアは呼ばれたときに state["store"] を引く（起動前に配線できる）。
+line.configure(lambda: state["store"])
+app.include_router(line.router)
 
 # The free egress allowance on the deploy target is 1GiB/month, and the web
 # assets are highly compressible text. minimum_size skips the small JSON

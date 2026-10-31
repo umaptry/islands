@@ -7,6 +7,7 @@
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -53,7 +54,8 @@ def add_member(person, cid, role="member"):
     store()._members[(cid, person.id)] = {
         "role": role, "joined_at": datetime.now(timezone.utc).isoformat(), "joined_via": "invite",
         "invite_id": None, "event_post_id": None}
-    store().upsert_account(person.id, {"affiliation": "コクヨ"})
+    # フルネームの確認が済んでいるメンバー（確認がまだの人は、申し込みで名前と所属を聞く＝DB の event_apply と同じ）
+    store().upsert_account(person.id, {"affiliation": "コクヨ", "name_confirmed_at": datetime.now(timezone.utc).isoformat()})
 
 
 def create_event(admin, cid, *, visibility="community", capacity=5, questions=None, title="The Night Office BAR #2",
@@ -70,7 +72,11 @@ def create_event(admin, cid, *, visibility="community", capacity=5, questions=No
     return response.json()
 
 
-def apply(person, code, *, answers=ANSWERS, profile=None, expect=200, **extra):
+def apply(person, code, *, answers=ANSWERS, profile=None, expect=200, line=False, **extra):
+    """line=True なら LINE ログインの人として申し込む（案内の予定ができる）。ふつうはメールの人。"""
+    if line:
+        with patch.object(events, "channel_and_sub", lambda claims: ("line", f"U-{person.id[:8]}")):
+            return apply(person, code, answers=answers, profile=profile, expect=expect, **extra)
     body = {"agree_terms": True, **extra}
     if profile is not False:
         body["profile"] = profile or {"display_name": f"{person.account['display_name']} 太郎", "affiliation": "○○株式会社",
@@ -344,7 +350,7 @@ def test_declined_removed_and_rejected_people_cannot_apply(world):
     made = create_event(admin, cid, visibility="public")
     code = made["event"]["public_code"]
     guest = people("g6@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     # 主催者だけが断れる
     r = post(guest, f"/api/events/{code}/registrations/{guest.id}/decline")
     assert r.status_code == 403 and r.json()["detail"] == EVENT_ERROR_TEXT["event_not_host"]
@@ -412,11 +418,14 @@ def test_update_event_notifies_and_reschedules(world):
     made = create_event(admin, cid, visibility="public")
     code = made["event"]["public_code"]
     guest = people("g11@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
+    mail = people("g11b@example.test", "メールの人")
+    apply(mail, code)                                   # メールの人には案内の予定を作らない（E の 14）
     kinds = sorted(row["kind"] for row in store()._outbound.values())
     assert kinds == ["after", "day_of", "week_before"]
+    assert {row["account_id"] for row in store()._outbound.values()} == {guest.id}
     r = post(guest, f"/api/events/{code}/cancel")      # 取り消しで予約は消える
-    apply(guest, code)
+    apply(guest, code, line=True)
     other = people("g12@example.test", "ゲスト2")
     assert other.client.patch(f"/api/events/{code}", json={"place": "新宿"}, headers=other.headers).status_code == 403
     changed = admin.client.patch(f"/api/events/{code}", json={"place": "新宿 △△ビル", "title": "BAR #3"},
@@ -462,7 +471,7 @@ def test_deleting_the_post_calls_the_event_off(world):
     made = create_event(admin, cid, visibility="public")
     code = made["event"]["public_code"]
     guest = people("g13@example.test", "ゲスト")
-    apply(guest, code)
+    apply(guest, code, line=True)
     member = people("m4@example.test", "メンバー")
     add_member(member, cid)
     # ゲストが LINE の友だちなら、中止の LINE が予約される
@@ -472,7 +481,8 @@ def test_deleting_the_post_calls_the_event_off(world):
     assert admin.client.delete(f"/api/posts/{made['id']}", headers=admin.headers).status_code == 200
     assert store().event_by_code(code)["cancelled_at"]
     kinds = {(row["account_id"], row["kind"]) for row in store()._outbound.values()}
-    assert kinds == {(guest.id, "event_cancelled"), (member.id, "event_cancelled")}   # 週前などの未送信は消えた
+    # 週前などの未送信は消えた。中止の LINE は LINE で申し込んだ人だけ（メールのメンバーにはアプリの中の通知）
+    assert kinds == {(guest.id, "event_cancelled")}
     # メンバーにはアプリの中の通知
     notices = member.unread(["event_cancelled"])
     assert len(notices) == 1 and notices[0]["payload"]["title"] == "The Night Office BAR #2"
@@ -697,3 +707,71 @@ def test_map_runtime_guard_leaves_public_jobs_and_line_alone(monkeypatch):
         assert client.get("/api/events/mine").status_code == 503
         assert client.get("/api/public/events/zzz").status_code == 404
         assert client.post("/api/jobs/tick").status_code in (401, 404)
+
+
+# --------------------------------------------------------------------------
+# DB の event_apply・event_cancel_registration などと同じ動き（pgTAP 24_events.sql と見比べる）
+# --------------------------------------------------------------------------
+
+def test_member_who_has_not_confirmed_the_full_name_must_give_it(world):
+    admin, cid, people = world
+    code = create_event(admin, cid, visibility="community")["event"]["public_code"]
+    member = people("m6@example.test", "メンバー")
+    add_member(member, cid)
+    store().upsert_account(member.id, {"name_confirmed_at": None})          # フルネームの確認がまだ
+    assert apply(member, code, answers=None, profile=False, expect=422)["detail"] == EVENT_ERROR_TEXT["name_required"]
+    done = apply(member, code, answers=None, profile={"display_name": "山田 花子", "affiliation": "コクヨ"})
+    assert done["status"] == "applied"
+    account = store().get_account(member.id)
+    assert account["display_name"] == "山田 花子" and account["name_confirmed_at"]
+
+
+def test_only_line_applications_get_reminders(world):
+    admin, cid, people = world
+    code = create_event(admin, cid, visibility="public")["event"]["public_code"]
+    mail, via_line = people("e1@example.test", "メール"), people("e2@example.test", "ライン")
+    apply(mail, code)
+    assert store()._outbound == {}
+    apply(via_line, code, line=True)
+    assert sorted(row["kind"] for row in store()._outbound.values()) == ["after", "day_of", "week_before"]
+
+
+def test_event_with_one_question_needs_one_answer(world):
+    admin, cid, people = world
+    made = create_event(admin, cid, visibility="public")
+    code = made["event"]["public_code"]
+    store()._events[made["id"]]["questions"] = QUESTIONS[:1]          # 作るときは公開の会に2問以上いる。ここで1問にして確かめる
+    guest = people("e3@example.test", "ゲスト")
+    assert apply(guest, code, answers=ANSWERS[:1])["status"] == "applied"
+    store()._events[made["id"]]["questions"] = []
+    assert apply(people("e4@example.test", "ゲスト"), code, answers=None)["status"] == "applied"
+
+
+def test_waiting_cancel_keeps_the_row_as_cancelled(world):
+    """DB の event_cancel_registration：受付待ちの本人の取り下げも cancelled にして行を残す（通知は出さない）。"""
+    admin, cid, people = world
+    made = create_event(admin, cid, visibility="public")
+    guest = people("e5@example.test", "ゲスト")
+    store().upsert_account(guest.id, {"affiliation": "x", "name_confirmed_at": datetime.now(timezone.utc).isoformat()})
+    store()._event_regs[(made["id"], guest.id)] = {
+        "event_id": made["id"], "account_id": guest.id, "status": "waiting", "consent_version": None,
+        "was_guest": True, "created_account": False, "channel": "walkin", "referral": None, "late_minutes": None,
+        "late_at": None, "applied_at": datetime.now(timezone.utc).isoformat(), "checked_in_at": None,
+        "cancelled_at": None, "declined_at": None, "declined_by": None, "walkin_rejects": 2}
+    r = post(guest, f"/api/events/{made['event']['public_code']}/cancel")
+    assert r.status_code == 200 and r.json() == {"status": "cancelled"}
+    row = store()._event_regs[(made["id"], guest.id)]
+    assert row["status"] == "cancelled" and row["walkin_rejects"] == 2 and row["cancelled_at"]
+    assert admin.unread(["event_cancel"]) == []
+
+
+def test_declining_twice_sends_one_notice(world):
+    admin, cid, people = world
+    made = create_event(admin, cid, visibility="public")
+    code = made["event"]["public_code"]
+    guest, mail = people("e6@example.test", "ゲスト"), people("e7@example.test", "メール")
+    apply(guest, code, line=True)
+    apply(mail, code)
+    for person in (guest, mail, guest):
+        post(admin, f"/api/events/{code}/registrations/{person.id}/decline")
+    assert [(row["account_id"], row["kind"]) for row in store()._outbound.values()] == [(guest.id, "declined")]

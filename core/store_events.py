@@ -23,12 +23,15 @@ from core.config import (
     EVENT_ERROR_TEXT,
     EVENT_LIVE_STATUSES,
     EVENT_STATUS_OF,
+    JOB_TITLE_MAX,
     LATE_CHOICES,
+    MAX_AFFILIATION_LENGTH,
+    MAX_NAME_LENGTH,
     LINE_WEBHOOK_KEEP_DAYS,
     EVENT_ANSWERS_MIN,
+    AGE_BANDS,
     EVENT_CLEANUP_DAYS,
     EVENT_PLACE_MAX,
-    EVENT_QUESTION_PROMPTS,
     EVENT_QUESTIONS_MAX,
     EVENT_TITLE_MAX,
     MATCH_COSINE_SAME,
@@ -179,11 +182,14 @@ class EventsMemoryMixin:
             return rows
 
     def _event_banned(self, event, account, reg):
-        """前に外された人・断られた人（設計 A の記録）と、この会でお断りされた人。"""
+        """この会でお断りされた人。メンバーでない人は、前に外された人・断られた人（設計 A の記録）も。
+        DB の event_apply と同じ（メンバーに戻った人は、外された記録があっても申し込める）。"""
         key = (event["community_id"], account)
         request = self._join_requests.get(key)
-        return (key in self._removals or bool(request and request["status"] == "rejected")
-                or bool(reg and reg["status"] == "declined"))
+        if reg and reg["status"] == "declined":
+            return True
+        return key not in self._members and (key in self._removals
+                                             or bool(request and request["status"] == "rejected"))
 
     def _event_live(self, event_id, allow_cancelled=False):
         event = self._events.get(event_id)
@@ -216,25 +222,10 @@ class EventsMemoryMixin:
             del self._outbound[oid]
 
     def _event_schedule(self, event, account, now):
+        """案内の予定（週前・当日・終了時）。DB の event_queue_reminders と同じ。呼ぶのは channel='line' の人だけ。"""
         from core.jobs import schedule_times
         for kind, when in schedule_times(event, now).items():
             self._outbound_put(event["post_id"], account, kind, when)
-
-    def _near_count(self, event_id, account):
-        """day_of の文に入れる「近い人が N 人来ます」。回答のある人どうしだけ（メンバーは 0）。"""
-        mine = [row["vec_c"] for (eid, acc, _p), row in self._event_answers.items()
-                if eid == event_id and acc == account]
-        if not mine:
-            return None
-        count = 0
-        for (eid, other), reg in self._event_regs.items():
-            if eid != event_id or other == account or reg["status"] not in ("applied", "attended"):
-                continue
-            theirs = [row["vec_c"] for (e2, a2, _p), row in self._event_answers.items()
-                      if e2 == event_id and a2 == other]
-            if any(_cosine(a, b) >= MATCH_COSINE_SAME for a in mine for b in theirs):
-                count += 1
-        return count or None
 
     def outbound_claim(self, limit=OUTBOUND_BATCH, lease_seconds=OUTBOUND_LEASE_SECONDS, now=None):
         """送る時刻が来ていて、まだ送っていない友だち宛ての予約を取り出す（for update skip locked の代わり）。"""
@@ -262,8 +253,7 @@ class EventsMemoryMixin:
                     "kind": row["kind"], "line_user_id": link["line_user_id"], "title": event["title"],
                     "starts_at": event["starts_at"], "ends_at": event["ends_at"], "place": event["place"],
                     "public_code": event["public_code"],
-                    "near_count": self._near_count(row["event_id"], row["account_id"])
-                    if row["kind"] == "day_of" else None,
+                    "near_count": None,      # DB の outbound_claim と同じ：常に null。core/jobs.py が week_before のときだけ埋める
                 })
         return out
 
@@ -343,8 +333,8 @@ class EventsMemoryMixin:
             if moved:
                 now = _utc()
                 applied = [account for (eid, account), reg in self._event_regs.items()
-                           if eid == post and reg["status"] == "applied"]
-                self._outbound_drop_unsent(post, kinds=("week_before", "day_of", "after", "event_changed"))
+                           if eid == post and reg["status"] == "applied" and reg["channel"] == "line"]
+                self._outbound_drop_unsent(post, kinds=("week_before", "day_of", "after"))
                 for account in applied:
                     self._event_schedule(event, account, now)
                     self._outbound_put(post, account, "event_changed", now)
@@ -371,6 +361,7 @@ class EventsMemoryMixin:
                     answers=None, consent=None, now=None):
         now = _utc(now)
         profile = profile or {}
+        channel = channel if channel in ("line", "email") else "email"
         with self._lock:
             ev, post = self._event_live(event)
             key = (event, account)
@@ -382,18 +373,26 @@ class EventsMemoryMixin:
                 refuse("event_members_only")
             if reg and reg["status"] in ("applied", "attended", "waiting"):
                 return self._event_state(event, account, post, "already", reg["was_guest"], reg["created_account"])
+            # アカウントが無い人、またはフルネームの確認（name_confirmed_at）がまだの人は、名前と所属が要る（DB と同じ）
             current = self._accounts.get(account)
-            name = str(profile.get("display_name") or (current or {}).get("display_name") or "").strip()
-            affiliation = str(profile.get("affiliation") or (current or {}).get("affiliation") or "").strip()
-            if not name or not affiliation:
+            confirmed = bool(current and current.get("name_confirmed_at"))
+            name = str(profile.get("display_name") or "").strip()
+            affiliation = str(profile.get("affiliation") or "").strip()
+            if (current is None or not confirmed) and (
+                    not name or len(name) > MAX_NAME_LENGTH
+                    or not affiliation or len(affiliation) > MAX_AFFILIATION_LENGTH):
                 refuse("name_required")
+            age_band = profile.get("age_band") if profile.get("age_band") in dict(AGE_BANDS) else None
+            job_title = str(profile.get("job_title") or "").strip()[:JOB_TITLE_MAX] or None
+            # 回答：会の質問にある prompt だけ。同じ prompt は1回。メンバーでない人は質問のうち2つ（質問が1つなら1つ）
+            asked = {item.get("prompt") for item in ev.get("questions") or []}
             kept = {}
             if not is_member:
                 for item in answers or []:
                     prompt, body = item.get("prompt"), str(item.get("body") or "").strip()
-                    if prompt in EVENT_QUESTION_PROMPTS and body and prompt not in kept:
+                    if prompt in asked and 1 <= len(body) <= 60 and prompt not in kept:
                         kept[prompt] = {**item, "body": body}
-                if len(kept) < EVENT_ANSWERS_MIN:
+                if len(kept) < min(EVENT_ANSWERS_MIN, len(asked)):
                     refuse("answers_required")
             # 定員・期限は join の安全装置が決める（recruit_closed / recruit_full がそのまま上がる）
             closed = closed_state(post.get("recruit_deadline"), post.get("recruit_capacity"),
@@ -404,18 +403,23 @@ class EventsMemoryMixin:
             self._event_regs[key] = {
                 "event_id": event, "account_id": account, "status": "applied",
                 "consent_version": consent, "was_guest": not is_member, "created_account": created,
-                "channel": channel if channel in ("line", "email") else "email",
+                "channel": channel,
                 "referral": clean_referral(referral), "late_minutes": None, "late_at": None,
                 "applied_at": now.isoformat(), "checked_in_at": None, "cancelled_at": None,
                 "declined_at": None, "declined_by": None, "walkin_rejects": (reg or {}).get("walkin_rejects", 0),
             }
-            fields = {"display_name": name, "affiliation": affiliation}
-            for column in ("age_band", "job_title"):
-                if profile.get(column):
-                    fields[column] = profile[column]
-            if profile.get("display_name"):
-                fields["name_confirmed_at"] = now.isoformat()
-            self.upsert_account(account, fields)
+            if current is None or not confirmed:
+                fields = {"display_name": name, "affiliation": affiliation, "name_confirmed_at": now.isoformat()}
+                for column, value in (("age_band", age_band), ("job_title", job_title)):
+                    if value:
+                        fields[column] = value
+                self.upsert_account(account, fields)
+            else:
+                # 確認済みの人の名前・所属は変えない。年代・職種は空のときだけ入れる
+                fields = {column: value for column, value in (("age_band", age_band), ("job_title", job_title))
+                          if value and not current.get(column)}
+                if fields:
+                    self.upsert_account(account, fields)
             # reactions に join を1行（数・主催者への通知は add_reaction と同じ）
             if (event, account, "join") not in self._reactions:
                 self._reactions[(event, account, "join")] = now.isoformat()
@@ -431,7 +435,8 @@ class EventsMemoryMixin:
                     "vec": item.get("vec"), "vec_c": item.get("vec_c"), "x": item.get("x"), "y": item.get("y"),
                     "cluster_id": item.get("cluster_id"), "terms": item.get("terms") or [],
                     "created_at": now.isoformat()}
-            self._event_schedule(ev, account, now)
+            if channel == "line":       # 案内の予定は LINE で申し込んだ人にだけ（E の 14）
+                self._event_schedule(ev, account, now)
             return self._event_state(event, account, post, "applied", not is_member, created)
 
     def _event_remove_join(self, event, account):
@@ -447,13 +452,14 @@ class EventsMemoryMixin:
                 refuse("event_attended")
             if not reg or reg["status"] not in ("applied", "waiting"):
                 refuse("event_not_applied")
-            if reg["status"] == "waiting":
-                del self._event_regs[(event, account)]       # 受付待ちの本人の取り下げは行を消す
-                return {"status": "cancelled"}
+            # 受付待ち（waiting）の本人の取り下げも cancelled にして行を残す（飛び入りのやり直し3回の数えを消さない）
+            was = reg["status"]
             reg.update({"status": "cancelled", "cancelled_at": now.isoformat()})
             self._event_remove_join(event, account)
             self._outbound_drop_unsent(event, account)
-            if post and post["author_id"] != account:
+            for key_ in [k for k in self._event_answers if k[0] == event and k[1] == account]:
+                del self._event_answers[key_]
+            if was == "applied" and post and post["author_id"] != account:
                 self._notify(post["author_id"], account, event, None, "event_cancel", payload={})
             return {"status": "cancelled"}
 
@@ -485,12 +491,17 @@ class EventsMemoryMixin:
             reg = self._event_regs.get((event, account))
             if not reg:
                 refuse("event_not_applied")
+            if reg["status"] == "declined":
+                return {"status": "declined"}
             if reg["status"] == "attended":
                 refuse("event_attended")
             reg.update({"status": "declined", "declined_at": now.isoformat(), "declined_by": host})
             self._event_remove_join(event, account)
             self._outbound_drop_unsent(event, account)
-            self._outbound_put(event, account, "declined", now)
+            for key_ in [k for k in self._event_answers if k[0] == event and k[1] == account]:
+                del self._event_answers[key_]
+            if reg["channel"] == "line":     # お断りの LINE は LINE で申し込んだ人にだけ
+                self._outbound_put(event, account, "declined", now)
             return {"status": "declined"}
 
     def _event_on_post_deleted(self, post_id):
@@ -507,7 +518,8 @@ class EventsMemoryMixin:
             for (eid, account), reg in sorted(self._event_regs.items()):
                 if eid != post_id or reg["status"] != "applied":
                     continue
-                self._outbound_put(post_id, account, "event_cancelled", now)
+                if reg["channel"] == "line":
+                    self._outbound_put(post_id, account, "event_cancelled", now)
                 if (event["community_id"], account) in self._members and account != host:
                     self._notify(account, host, post_id, None, "event_cancelled",
                                  payload={"title": event["title"]}, community_id=event["community_id"])
@@ -575,47 +587,83 @@ class EventsMemoryMixin:
             return self._line_subs.get(sub)
 
     def line_link_save(self, account, line_user_id, is_friend=True):
-        """account が None（まだログインしていない友だち）なら、userId と友だちの状態だけ記録しておく。"""
+        """DB の line_link_save と同じ。account が None（まだ結べない友だち）なら、userId と友だちの状態だけ記録する。"""
         now = _utc().isoformat()
+        friend = True if is_friend is None else bool(is_friend)
         with self._lock:
             if not account:
-                row = self._line_orphans.setdefault(line_user_id, {"line_user_id": line_user_id,
-                                                                    "followed_at": now, "unfollowed_at": None})
-                row["is_friend"] = bool(is_friend)
-                row["unfollowed_at"] = None if is_friend else now
+                row = self._line_orphans.get(line_user_id)
+                if row is None:
+                    self._line_orphans[line_user_id] = {
+                        "line_user_id": line_user_id, "is_friend": friend,
+                        "followed_at": now if friend else None, "unfollowed_at": None if friend else now}
+                    return
+                if friend and not row["is_friend"]:
+                    row["followed_at"] = now
+                if friend:
+                    row["unfollowed_at"] = None
+                elif row["is_friend"]:
+                    row["unfollowed_at"] = now
+                row["is_friend"] = friend
                 return
+            for other in [a for a, r in self._line_links.items() if r["line_user_id"] == line_user_id and a != account]:
+                del self._line_links[other]          # 同じ LINE の人が別のアカウントに付いていたら、そちらを外す
             self._line_orphans.pop(line_user_id, None)
-            row = self._line_links.setdefault(account, {"account_id": account, "created_at": now,
-                                                        "followed_at": None, "unfollowed_at": None})
-            row.update({"line_user_id": line_user_id, "is_friend": bool(is_friend)})
-            if is_friend:
-                row["followed_at"], row["unfollowed_at"] = now, None
-            else:
+            row = self._line_links.get(account)
+            if row is None:
+                self._line_links[account] = {
+                    "account_id": account, "line_user_id": line_user_id, "is_friend": friend, "created_at": now,
+                    "followed_at": now if friend else None, "unfollowed_at": None if friend else now}
+                return
+            if friend and (not row["is_friend"] or row["line_user_id"] != line_user_id or row["followed_at"] is None):
+                row["followed_at"] = now
+            if friend:
+                row["unfollowed_at"] = None
+            elif row["is_friend"]:
                 row["unfollowed_at"] = now
+            row.update({"line_user_id": line_user_id, "is_friend": friend})
 
     def line_link_attach(self, account, line_user_id):
-        """先に友だち追加してあとからログインした人：記録済みの userId をアカウントに結ぶ。結べたら True。"""
-        with self._lock:
-            orphan = self._line_orphans.pop(line_user_id, None)
-            existing = self._line_links.get(account)
-            if not orphan:
-                if existing and existing["line_user_id"] == line_user_id:
-                    return True
-                return False
-            self._line_links[account] = {
-                "account_id": account, "line_user_id": line_user_id, "is_friend": orphan["is_friend"],
-                "followed_at": orphan["followed_at"], "unfollowed_at": orphan["unfollowed_at"],
-                "created_at": _utc().isoformat()}
-            return True
-
-    def line_link_unfollow(self, line_user_id):
+        """DB の line_link_attach と同じ。先に友だち追加していた人の記録（なければ今の結びつき、なければ「友だちではない」）を
+        アカウントに結ぶ。結んだあとの is_friend を返す。"""
+        if not account or not line_user_id:
+            return False
         now = _utc().isoformat()
         with self._lock:
+            pending = self._line_orphans.get(line_user_id)
+            current = self._line_links.get(account)
+            if pending is not None:
+                friend = bool(pending["is_friend"])
+            elif current is not None and current["line_user_id"] == line_user_id:
+                friend = bool(current["is_friend"])
+            else:
+                friend = False
+            for other in [a for a, r in self._line_links.items() if r["line_user_id"] == line_user_id and a != account]:
+                del self._line_links[other]
+            self._line_orphans.pop(line_user_id, None)
+            followed = (((pending or {}).get("followed_at") or (current or {}).get("followed_at") or now)
+                        if friend else None)
+            unfollowed = None if friend else ((pending or {}).get("unfollowed_at")
+                                              or (current or {}).get("unfollowed_at"))
+            self._line_links[account] = {
+                "account_id": account, "line_user_id": line_user_id, "is_friend": friend,
+                "followed_at": followed, "unfollowed_at": unfollowed,
+                "created_at": (current or {}).get("created_at") or now}
+            return friend
+
+    def line_link_unfollow(self, line_user_id):
+        """DB の line_link_unfollow と同じ。結びついていない人は、友だちではないと記録する。"""
+        now = _utc().isoformat()
+        with self._lock:
+            linked = False
             for row in self._line_links.values():
                 if row["line_user_id"] == line_user_id:
-                    row.update({"is_friend": False, "unfollowed_at": now})
-            if line_user_id in self._line_orphans:
-                self._line_orphans[line_user_id].update({"is_friend": False, "unfollowed_at": now})
+                    linked = True
+                    if row["is_friend"]:
+                        row.update({"is_friend": False, "unfollowed_at": now})
+            if not linked:
+                row = self._line_orphans.setdefault(line_user_id, {"line_user_id": line_user_id, "followed_at": None})
+                row.update({"is_friend": False, "unfollowed_at": now})
 
     def line_link_of(self, account_id):
         with self._lock:

@@ -686,11 +686,15 @@ class EventApply(BaseModel):
 
 
 def channel_and_sub(claims):
-    """("line"|"email", LINE の sub または None)：サーバーが JWT から決める（画面からは受け取らない）。"""
+    """("line"|"email", LINE の sub または None)：サーバーが JWT から決める（画面からは受け取らない）。
+
+    sub は JWT の user_metadata.sub（なければ provider_id＝同じ値）。DB の account_by_line_sub と同じ前提：
+    auth.identities の identity_data->>'sub' ＝ LINE の userId。この前提は未確認（D の 7 章 23・24。
+    LINE_実機確認の手順で、検証用のチャネルで確かめる）。違っていたらここと DB 関数だけ直す。"""
     app_meta = (claims or {}).get("app_metadata") or {}
     user_meta = (claims or {}).get("user_metadata") or {}
     if "line" in str(app_meta.get("provider") or "").lower():
-        return "line", user_meta.get("provider_id") or user_meta.get("sub")
+        return "line", user_meta.get("sub") or user_meta.get("provider_id")
     return "email", None
 
 
@@ -725,9 +729,10 @@ def apply(code: str, payload: EventApply, request: Request):
     with guarded():
         account = store.get_account(user_id)
         is_member = _is_member(store, event, user_id)
-    # フルネームと所属：確かめ済みの人（と、名前と所属のあるメンバー）は省いてよい
+    # フルネームと所属：確認済み（name_confirmed_at がある）人だけ省いてよい。メンバーでも、確認がまだなら要る
+    # （DB の event_apply と同じ。要らないのに送らないと name_required で断られる）
     settled = bool(account and account.get("display_name") and account.get("affiliation")
-                   and (is_member or account.get("name_confirmed_at")))
+                   and account.get("name_confirmed_at"))
     profile = None
     if payload.profile or not settled:
         try:
@@ -737,7 +742,8 @@ def apply(code: str, payload: EventApply, request: Request):
     answers = []
     if not is_member:
         answers = prepare_answers(payload.answers, event)
-        if len(answers) < EVENT_ANSWERS_MIN:
+        # 質問が1つしか無い会は1つ、無い会は0（DB の event_apply と同じ）
+        if len(answers) < min(EVENT_ANSWERS_MIN, len(event.get("questions") or [])):
             raise _fail("answers_required")
     _auth_user, claims = host.auth.identify(request)
     channel, sub = channel_and_sub(claims)

@@ -23,9 +23,11 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
+from core import line
 from core.config import (
     EVENT_REMIND_DAY_HOURS,
     EVENT_REMIND_WEEK_DAYS,
+    MATCH_COSINE_SAME,
     OUTBOUND_BATCH,
 )
 
@@ -66,33 +68,56 @@ def verify_secret(header, secret):
     return hmac.compare_digest(str(header).encode("utf-8"), str(secret).encode("utf-8"))
 
 
-def _line_module():
-    try:
-        from core import line
-        return line
-    except ImportError:
+def _cosine(a, b):
+    import numpy as np
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(a @ b) / denominator if denominator else 0.0
+
+
+def near_count(store, event_id, account):
+    """week_before の「あなたに近い人が N 人来ます」。DB の outbound_claim は near_count を出せない（常に null）ので、
+    ここで埋める。回答（event_answers）のある人どうしだけ：自分の回答が無い人（メンバー）は None。0 人も None
+    （LINE の文はその行を出さない）。"""
+    rows = store.event_answer_vectors(event_id)
+    mine = [row["vec_c"] for row in rows if row["account_id"] == account and row.get("vec_c") is not None]
+    if not mine:
         return None
+    others = {}
+    for row in rows:
+        if row["account_id"] != account and row.get("vec_c") is not None:
+            others.setdefault(row["account_id"], []).append(row["vec_c"])
+    count = sum(1 for theirs in others.values()
+                if any(_cosine(a, b) >= MATCH_COSINE_SAME for a in mine for b in theirs))
+    return count or None
 
 
-def _fake_sender(store, line):
+def _with_near(store, row):
+    """week_before の行に near_count を足す（失敗しても送る＝その行を出さないだけ）。"""
+    if row.get("kind") != "week_before" or row.get("near_count") is not None:
+        return row
+    try:
+        count = near_count(store, row["event_id"], row["account_id"])
+    except Exception:
+        log.exception("could not count the people near")
+        return row
+    return {**row, "near_count": count}
+
+
+def _fake_sender(store):
     def send(row, *, base_url="", client=None):
-        if line is not None and hasattr(line, "build_message"):
-            messages = line.build_message(row["kind"], row, base_url)
-        else:
-            messages = [{"type": "text", "text": f"{row.get('title') or '会'}（{row['kind']}）"}]
-        store.record_sent(row, messages)
+        store.record_sent(row, line.build_message(row["kind"], row, base_url))
         return "ok"
     return send
 
 
 def default_sender(store):
     """送る関数。使えないとき（LINE の設定も代役も無い）は None。"""
-    line = _line_module()
-    configured = bool(line is not None and getattr(line, "configured", lambda: False)())
+    configured = line.configured()
     if os.environ.get("ISLANDS_LINE_FAKE") == "1" or (
             getattr(store, "backend", "") == "memory" and not configured and hasattr(store, "record_sent")):
-        return _fake_sender(store, line)
-    if line is None or not configured:
+        return _fake_sender(store)
+    if not configured:
         return None
     return line.send_outbound
 
@@ -123,6 +148,7 @@ def run_tick(store, *, now=None, sender=None, base_url="", budget_seconds=20, cl
         for row in store.outbound_claim(OUTBOUND_BATCH, **kwargs):
             if time.monotonic() - started > budget_seconds:
                 break      # 残りは貸し出しの期限（5分）がすぎたら次の tick が取り戻す
+            row = _with_near(store, row)
             try:
                 result = sender(row, base_url=base_url)
             except Exception as error:

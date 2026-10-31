@@ -15,7 +15,7 @@
 --               account_visible … 「自分が主催者の会に、申し込み中・受付済み・受付待ちで登録している人」を足す。
 --   * 関数（サーバーだけ。service_role）  event_create / event_update / event_apply / event_cancel_registration /
 --               event_set_late / event_decline / event_answer_vectors / account_by_line_sub / line_link_save /
---               line_link_attach / my_event_registrations / line_link_unfollow / line_webhook_seen / outbound_claim / outbound_done / event_probe_hit。
+--               line_link_attach / line_link_unfollow / line_webhook_seen / outbound_claim / outbound_done / event_probe_hit / event_cleanup。
 --   * 関数（中だけ）  has_live_registration / event_questions_valid / event_queue_reminders / トリガー関数。
 --   * 予約送信（jobs_poke と pg_cron）は、この SQL には入れない。pg_cron・pg_net・Vault が要るので、
 --     相方が拡張を有効にしたあとに流す別ファイル（本番SQL_第2回a… の 4_予約送信_pg_cron.sql）に分けた。
@@ -830,20 +830,10 @@ language sql stable security definer set search_path = public as $$
    order by a.created_at, a.account_id, a.prompt
 $$;
 
--- 自分の申し込みの一覧（LINE のメニュー・マイページ用）。中止された会も cancelled_at 付きで返す。
-create or replace function public.my_event_registrations(p_account uuid)
-returns table (event_id uuid, status text, public_code text, title text,
-               starts_at timestamptz, ends_at timestamptz, cancelled_at timestamptz)
-language sql stable security definer set search_path = public as $$
-  select r.event_id, r.status, e.public_code, e.title, e.starts_at, e.ends_at, e.cancelled_at
-    from public.event_registrations r
-    join public.events e on e.post_id = r.event_id
-   where r.account_id = p_account
-   order by e.starts_at desc, r.event_id
-$$;
-
 -- LINE ログイン（custom:line）の sub から、アカウントの id を引く。見つからなければ null。
--- 未確認: identity_data のキー名は 'sub'（本番の前に、検証用のチャネルで確かめる。D の 7 章 23）。
+-- 未確認（D の 7 章 23・24）: identity_data のキー名が 'sub' であること、その値が Messaging API の userId と同じであること。
+-- Python も同じ前提（JWT の user_metadata.sub。なければ provider_id＝同じ値）。本番の前に検証用のチャネルで確かめる
+-- （LINE_実機確認の手順）。違っていたらここ（と core/events.py の channel_and_sub）だけ直す。
 create or replace function public.account_by_line_sub(p_sub text)
 returns uuid
 language plpgsql stable security definer set search_path = public as $$
@@ -1009,7 +999,8 @@ $$;
 
 -- 「近い人が来るか見てみる」の回数の数え。同じ cookie・同じ IP は1つの会につき1日 p_limit 回（既定5）、
 -- 会全体で1日 p_total 回（既定300）。日は日本時間。上限を超えるときは数えずに ok=false を返す。
--- IP は md5 にして 'ip:' を付けて持つ。記録は翌日には消す（片付け）。
+-- p_device・p_ip は呼ぶ側（Python）がハッシュしたものを渡す。IP のほうは 'ip:' を付けて持つ
+-- （ここで二重にハッシュしない。生の IP を渡さないこと）。記録は翌日には消す（event_cleanup）。
 -- 返り値 {"ok": boolean, "remaining": その人があと何回できるか}。
 create or replace function public.event_probe_hit(
   p_event uuid, p_device text, p_ip text, p_limit integer default 5, p_total integer default 300
@@ -1019,7 +1010,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   today  date := (now() at time zone 'Asia/Tokyo')::date;
   dev    text := coalesce(nullif(p_device, ''), '-');
-  ipk    text := 'ip:' || md5(coalesce(p_ip, ''));
+  ipk    text := 'ip:' || coalesce(p_ip, '');
   n_dev  integer;
   n_ip   integer;
   n_all  integer;
@@ -1042,6 +1033,51 @@ begin
   return jsonb_build_object('ok', true, 'remaining', greatest(left_n, 0));
 end $$;
 
+-- 保存期間の片付け（E の 4・5・6・18）。終了から 7 日（EVENT_CLEANUP_DAYS）たった会の、受付をしていない申し込みと回答、
+-- 受付した人も含めた予約送信を全部消す。30 日より古い webhook の記録、前日以前の probe の回数も消す。
+-- この申し込みで作られたアカウントのうち、どのコミュニティにも入らず、ほかの申し込みも承認待ちも無い人の id を返す
+-- （アカウントの削除は Python が管理 API で行う＝auth.users を消すとここの表も連鎖で消える）。
+-- 返り値 {"registrations","answers","outbound","webhook_events","probe_hits","account_ids":[uuid…]}。
+create or replace function public.event_cleanup(p_now timestamptz default now())
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  old_events uuid[];
+  n_reg      integer;
+  n_ans      integer;
+  n_out      integer;
+  n_web      integer;
+  n_probe    integer;
+  gone       uuid[];
+  ids        uuid[];
+begin
+  select coalesce(array_agg(e.post_id), '{}') into old_events
+    from public.events e
+   where e.ends_at + interval '7 days' <= p_now;
+  delete from public.event_answers a where a.event_id = any (old_events);
+  get diagnostics n_ans = row_count;
+  delete from public.outbound_messages o where o.event_id = any (old_events);
+  get diagnostics n_out = row_count;
+  with d as (
+    delete from public.event_registrations r
+     where r.event_id = any (old_events) and r.status <> 'attended'
+    returning r.account_id, r.created_account
+  )
+  select count(*)::integer, coalesce(array_agg(distinct d.account_id) filter (where d.created_account), '{}')
+    into n_reg, gone from d;
+  delete from public.line_webhook_events w where w.received_at < p_now - interval '30 days';
+  get diagnostics n_web = row_count;
+  delete from public.event_probe_hits h where h.day < (p_now at time zone 'Asia/Tokyo')::date;
+  get diagnostics n_probe = row_count;
+  select coalesce(array_agg(g order by g), '{}') into ids
+    from unnest(gone) g
+   where not exists (select 1 from public.community_members m where m.account_id = g)
+     and not exists (select 1 from public.event_registrations r where r.account_id = g)
+     and not exists (select 1 from public.community_join_requests q where q.account_id = g and q.status = 'pending');
+  return jsonb_build_object('registrations', n_reg, 'answers', n_ans, 'outbound', n_out,
+                            'webhook_events', n_web, 'probe_hits', n_probe, 'account_ids', to_jsonb(ids));
+end $$;
+
 -- ===========================================================================
 -- 10. 権限（必ず先に revoke。Supabase は新しい関数に全員の実行権を自動で付けるため）
 -- ===========================================================================
@@ -1056,12 +1092,12 @@ revoke all on function public.event_answer_vectors(uuid)                        
 revoke all on function public.account_by_line_sub(text)                                from public, anon, authenticated;
 revoke all on function public.line_link_save(uuid, text, boolean)                      from public, anon, authenticated;
 revoke all on function public.line_link_attach(uuid, text)                             from public, anon, authenticated;
-revoke all on function public.my_event_registrations(uuid)                             from public, anon, authenticated;
 revoke all on function public.line_link_unfollow(text)                                 from public, anon, authenticated;
 revoke all on function public.line_webhook_seen(text)                                  from public, anon, authenticated;
 revoke all on function public.outbound_claim(integer, integer)                         from public, anon, authenticated;
 revoke all on function public.outbound_done(uuid, boolean, text)                       from public, anon, authenticated;
 revoke all on function public.event_probe_hit(uuid, text, text, integer, integer)      from public, anon, authenticated;
+revoke all on function public.event_cleanup(timestamptz)                               from public, anon, authenticated;
 grant execute on function public.event_create(uuid, uuid, text, timestamptz, timestamptz, text, text, jsonb) to service_role;
 grant execute on function public.event_update(uuid, uuid, jsonb)                          to service_role;
 grant execute on function public.event_apply(uuid, uuid, jsonb, text, text, jsonb, text)  to service_role;
@@ -1072,11 +1108,11 @@ grant execute on function public.event_answer_vectors(uuid)                     
 grant execute on function public.account_by_line_sub(text)                                to service_role;
 grant execute on function public.line_link_save(uuid, text, boolean)                      to service_role;
 grant execute on function public.line_link_attach(uuid, text)                             to service_role;
-grant execute on function public.my_event_registrations(uuid)                             to service_role;
 grant execute on function public.line_link_unfollow(text)                                 to service_role;
 grant execute on function public.line_webhook_seen(text)                                  to service_role;
 grant execute on function public.outbound_claim(integer, integer)                         to service_role;
 grant execute on function public.outbound_done(uuid, boolean, text)                       to service_role;
 grant execute on function public.event_probe_hit(uuid, text, text, integer, integer)      to service_role;
+grant execute on function public.event_cleanup(timestamptz)                               to service_role;
 
 commit;

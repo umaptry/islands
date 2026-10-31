@@ -107,14 +107,14 @@ select is((select array_agg(p.proname::text order by p.proname) from pg_proc p
             where p.pronamespace = 'public'::regnamespace
               and p.proname in ('event_create', 'event_update', 'event_apply', 'event_cancel_registration', 'event_set_late', 'event_decline',
                                 'event_answer_vectors', 'account_by_line_sub', 'line_link_save', 'line_link_attach', 'line_link_unfollow',
-                                'line_webhook_seen', 'outbound_claim', 'outbound_done', 'event_probe_hit', 'my_event_registrations')
+                                'line_webhook_seen', 'outbound_claim', 'outbound_done', 'event_probe_hit', 'event_cleanup')
               and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))),
           null::text[], 'the server-only functions cannot be run by anon or signed-in people');
 select is((select count(*)::int from pg_proc p
             where p.pronamespace = 'public'::regnamespace
               and p.proname in ('event_create', 'event_update', 'event_apply', 'event_cancel_registration', 'event_set_late', 'event_decline',
                                 'event_answer_vectors', 'account_by_line_sub', 'line_link_save', 'line_link_attach', 'line_link_unfollow',
-                                'line_webhook_seen', 'outbound_claim', 'outbound_done', 'event_probe_hit', 'my_event_registrations')
+                                'line_webhook_seen', 'outbound_claim', 'outbound_done', 'event_probe_hit', 'event_cleanup')
               and has_function_privilege('service_role', p.oid, 'execute')), 16, 'the server key can run all 16');
 select is((select array_agg(p.proname::text order by p.proname) from pg_proc p
             where p.pronamespace = 'public'::regnamespace
@@ -335,8 +335,6 @@ select is((select is_friend from public.line_pending_friends where line_user_id 
 select is(public.line_link_attach('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a412', 'U-early-2'), false, 'and attaching keeps them as not a friend');
 select public.line_link_save('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a411', 'U-g1', true);
 select is(public.line_link_attach('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a411', 'U-g1'), true, 're-attaching the same link keeps the state');
-select is((select count(*)::int from public.my_event_registrations('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a411')), 1, 'my_event_registrations lists the person''s events');
-select is((select public_code from public.my_event_registrations('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a411')), (select public_code from public.events where post_id = '00000000-0000-4000-8000-0000000a4002'), 'with the public code');
 
 -- -----------------------------------------------------------------------
 -- 6. 会を変える
@@ -417,7 +415,7 @@ select is((select public.event_probe_hit('00000000-0000-4000-8000-0000000a4005',
 select is((select public.event_probe_hit('00000000-0000-4000-8000-0000000a4005', 'dev-b', '9.9.9.9') ->> 'ok'), 'true', 'a different cookie and IP is fine');
 select is((select public.event_probe_hit('00000000-0000-4000-8000-0000000a4005', 'dev-c', '8.8.8.8', 5, 3) ->> 'ok'), 'false', 'the whole-event limit (here 3) stops everyone');
 select is((select n from public.event_probe_hits where event_id = '00000000-0000-4000-8000-0000000a4005' and device = '*'), 6, 'denied tries are not counted');
-select ok(not exists (select 1 from public.event_probe_hits where device like '%1.2.3.4%'), 'the raw IP is never stored');
+select is((select count(*)::int from public.event_probe_hits where device = 'ip:1.2.3.4'), 1, 'the caller''s already-hashed IP is stored once with only the ip: prefix (not hashed a second time)');
 -- フルネームの確認がまだの人（om）
 select is(pg_temp.hint_of($$select public.event_apply('00000000-0000-4000-8000-0000000a4005', 'a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a406', '{}', 'email', null, pg_temp.ans(array['now', 'past']), null)$$),
           'name_required', 'a person who has not confirmed their full name has to give it');
@@ -429,6 +427,32 @@ select is(public.has_live_registration('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a411'), 
 select is(public.has_live_registration('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a414'), false, 'a declined person does not');
 select is(public.has_live_registration('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a418'), false, 'nor does someone whose event was cancelled');
 select is(public.has_live_registration('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a421'), false, 'nor someone who never applied');
+
+-- -----------------------------------------------------------------------
+-- 10. 片付け（event_cleanup）
+-- -----------------------------------------------------------------------
+create temp table cl_before as
+  select (select count(*)::int from public.event_registrations where event_id = '00000000-0000-4000-8000-0000000a4005' and status <> 'attended') as n,
+         (select coalesce(jsonb_agg(r.account_id order by r.account_id), '[]'::jsonb) from public.event_registrations r
+           where r.event_id = '00000000-0000-4000-8000-0000000a4005' and r.status <> 'attended' and r.created_account
+             and not exists (select 1 from public.community_members m where m.account_id = r.account_id)
+             and not exists (select 1 from public.event_registrations r2 where r2.account_id = r.account_id and r2.event_id <> r.event_id)) as ids;
+grant select on cl_before to anon, authenticated, service_role;
+insert into public.line_webhook_events(webhook_event_id, received_at) values ('old-hook', now() - interval '40 days'), ('new-hook', now() - interval '2 days');
+insert into public.event_probe_hits(event_id, device, day, n)
+  values ('00000000-0000-4000-8000-0000000a4005', 'yesterday', ((now() at time zone 'Asia/Tokyo')::date - 1), 1);
+select is((select public.event_cleanup(now()) ->> 'registrations'), '0', 'nothing is cleaned while the event is not over');
+update public.events set starts_at = now() - interval '9 days', ends_at = now() - interval '8 days' where post_id = '00000000-0000-4000-8000-0000000a4005';
+create temp table cl_out as select public.event_cleanup(now()) as j;
+grant select on cl_out to anon, authenticated, service_role;
+select is((select (j ->> 'registrations')::int from cl_out), (select n from cl_before), 'a week after the event, the registrations that did not attend are removed');
+select is((select count(*)::int from public.event_registrations where event_id = '00000000-0000-4000-8000-0000000a4005' and status <> 'attended'), 0, 'none are left');
+select is((select count(*)::int from public.outbound_messages where event_id = '00000000-0000-4000-8000-0000000a4005')
+          + (select count(*)::int from public.event_answers where event_id = '00000000-0000-4000-8000-0000000a4005'), 0, 'and the notices and answers are gone');
+select is((select j -> 'account_ids' from cl_out), (select ids from cl_before), 'it reports the accounts the event made that can now be deleted (Python deletes them)');
+select is((select count(*)::int from public.line_webhook_events where webhook_event_id in ('old-hook', 'new-hook')), 1, 'webhook records older than 30 days are removed');
+select is((select count(*)::int from public.event_probe_hits where device = 'yesterday'), 0, 'probe counts from before today are removed');
+select is(pg_temp.state_of($$select public.event_cleanup(now())$$), 'none', 'running it again is harmless');
 
 select * from finish();
 rollback;

@@ -47,6 +47,7 @@ drop function if exists public.line_webhook_seen(text);
 drop function if exists public.outbound_claim(integer, integer);
 drop function if exists public.outbound_done(uuid, boolean, text);
 drop function if exists public.event_probe_hit(uuid, text, text, integer, integer);
+drop function if exists public.event_cleanup(timestamptz);
 drop function if exists public.event_queue_reminders(uuid, uuid);
 drop function if exists public.has_live_registration(uuid);
 -- jobs_poke は別ファイル（4_予約送信_pg_cron.sql）で作る。入っていれば消す
