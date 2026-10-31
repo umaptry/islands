@@ -129,7 +129,56 @@ export function dashStrength(scale) {
 /** The strokes kept when zoomed out: every other row, staggered, every other one along it. */
 const keptOut = (c, r) => (r & 1) === 0 && ((c + (r >> 1)) & 1) === 0;
 
+// Map B: the sea's strokes are laid on a grid in world units (the prototype's 24 x 20 times 2.5), so they
+// grow and shrink with the map like the trees, and only where the sea is open (further out than 9 x 2.5
+// from the shore). The ground covers the rest.
+const DASH_B_GAP = [60, 50];
+const DASH_B_JITTER = [22.5, 17.5];
+const DASH_B_RADII = [4.75, 1.6];   // world units: the ellipse's half-length and half-width
+const DASH_B_OFFSHORE = 22.5;       // world units from the shore
+
+/** The sea strokes of map B inside a world box, [[x, y], ...]. `coast(x, y)` is the signed distance
+ * from the shore (land positive). Pure, for tests. */
+export function seaDashesB(box, coast) {
+  const out = [];
+  const [gx, gy] = DASH_B_GAP;
+  const r0 = Math.floor(box.minY / gy) - 1;
+  const r1 = Math.ceil(box.maxY / gy) + 1;
+  const c0 = Math.floor(box.minX / gx) - 1;
+  const c1 = Math.ceil(box.maxX / gx) + 1;
+  for (let r = r0; r <= r1; r += 1) {
+    for (let c = c0; c <= c1; c += 1) {
+      const x = c * gx + (r & 1) * gx / 2 + (dashHash(c, r) - 0.5) * DASH_B_JITTER[0];
+      const y = r * gy + (dashHash(r + 7, c) - 0.5) * DASH_B_JITTER[1];
+      if (coast(x, y) > -DASH_B_OFFSHORE) continue;
+      out.push([x, y]);
+    }
+  }
+  return out;
+}
+
+function drawDashesB(ctx, view) {
+  const { toScreen, width, height, b } = view;
+  const origin = toScreen(0, 0);
+  const scale = toScreen(1, 0).x - origin.x;
+  if (!(scale > 0)) return;
+  const box = {
+    minX: -origin.x / scale, minY: -origin.y / scale,
+    maxX: (width - origin.x) / scale, maxY: (height - origin.y) / scale,
+  };
+  ctx.fillStyle = DASH_FILL;
+  ctx.beginPath();
+  seaDashesB(box, b.coastAt).forEach(([x, y]) => {
+    const px = origin.x + x * scale;
+    const py = origin.y + y * scale;
+    ctx.moveTo(px + DASH_B_RADII[0] * scale, py);
+    ctx.ellipse(px, py, DASH_B_RADII[0] * scale, DASH_B_RADII[1] * scale, 1.05, 0, Math.PI * 2);
+  });
+  ctx.fill();
+}
+
 function drawDashes(ctx, view) {
+  if (view.b) { drawDashesB(ctx, view); return; }
   const { toScreen, width, height } = view;
   const origin = toScreen(0, 0);
   const scale = toScreen(1, 0).x - origin.x;   // screen px per world unit
@@ -214,6 +263,14 @@ const SHORE_FADE = 6;
 
 /** How much of a boat at world (x, y) shows: 1 on the water, 0 on land. */
 function seaShare(view, x, y) {
+  if (view.b) {
+    const reachB = SHORE_FADE / Math.max(view.scale || 1, 1e-6);
+    let wetB = 0;
+    [[0, 0], [reachB, 0], [-reachB, 0], [0, reachB], [0, -reachB]].forEach(([dx, dy]) => {
+      if (!view.b.isLand(x + dx, y + dy)) wetB += 1;
+    });
+    return wetB / 5;
+  }
   const { posts, cells, scale } = view;
   if (!posts) return 1;
   const reach = SHORE_FADE / Math.max(scale || 1, 1e-6);

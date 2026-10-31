@@ -64,6 +64,7 @@ from core import auth
 from core import connections as lines
 from core import growth
 from core import introductions
+from core import island_b
 from core import island_namer
 from core import topic_check
 from core import matching
@@ -75,6 +76,7 @@ from core.clustering import assign_cluster, name_group
 from core.prompts import weekly_prompt
 from core import post_extras
 from core.config import (
+    MAP_B_ENABLED,
     AWAY_DIGEST_COUNT,
     COMMUNITY_ERROR_POST,
     DM_BODY_MAX,
@@ -338,6 +340,9 @@ async def lifespan(_app):
     state.update(load_artifacts())
     _gemini = os.environ.get("EMBEDDING_PROVIDER", "onnx") == "gemini"
     _label = f"Gemini API ({GEMINI_MODEL_NAME})" if _gemini else "ONNX (multilingual-e5-small)"
+    # 地図B案の土台：旗がオンのときだけ起動時に作る。オフのときは最初に使われたとき（ensure_map_b_base）。
+    if MAP_B_ENABLED:
+        ensure_map_b_base()
     print(f"埋め込みモデルを読み込み中: {_label}", flush=True)
     state["model"] = load_embedder()
     state["store"] = create_store()
@@ -2223,7 +2228,7 @@ def config():
         # share: a post can be put on other communities' maps too (posts.share_group, 2026-10-29).
         "features": {"post_extras": post_extras_on(), "talk": talk_on(),
                      "communities": communities_on(), "members_only": members_only_quiet(),
-                     "share": share_on()},
+                     "share": share_on(), "map_b": MAP_B_ENABLED},
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
@@ -2335,8 +2340,53 @@ def health():
     }
 
 
+_map_b_lock = threading.Lock()
+
+
+def ensure_map_b_base():
+    """地図B案の土台を（まだなければ）作る。同時に呼ばれたら2回目は待つ。作れなければ False（起動は止めない）。"""
+    if island_b.base() is not None:
+        return True
+    with _map_b_lock:
+        if island_b.base() is not None:
+            return True
+        try:
+            island_b.build(state["seed_map"]["seed"])
+        except Exception as error:  # noqa: BLE001
+            logging.getLogger(__name__).warning("地図B案の土台を作れませんでした: %s", error)
+            return False
+    return True
+
+
+def as_map_b(islands_list):
+    """地図B案：島は「開拓村」。地方の名前とぶつかるので、島の中の地方（regions）は空にする。"""
+    out = []
+    ensure_map_b_base()
+    for island in islands_list:
+        island = dict(island)
+        rid = island_b.region_of(island.get("cx", 0), island.get("cy", 0))
+        island["region_id"] = rid
+        island["region_name"] = island_b.region_name(rid) if rid is not None else None
+        island["regions"] = []
+        if island.get("name"):
+            island["label"] = island["name"] if island["name"].endswith("村") else f"{island['name']}村"
+        out.append(island)
+    return out
+
+
+@app.get("/api/map-b/base")
+def map_b_base(response: Response):
+    """地図B案の島の土台（外形・地方・お手本の近く）。誰でも同じ答え。"""
+    data = island_b.payload() if ensure_map_b_base() else None
+    if data is None:
+        raise HTTPException(status_code=503, detail="地図の土台がまだありません。")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return data
+
+
 @app.get("/api/islands")
-def islands(response: Response, request: Request, community: str = ""):
+def islands(response: Response, request: Request, community: str = "", map: str = ""):
+    map_b = MAP_B_ENABLED or map == "b"
     if members_only_on():
         # Islands are made from, and shown to, the members of ONE community.
         user_id = current_user(request)
@@ -2347,12 +2397,16 @@ def islands(response: Response, request: Request, community: str = ""):
         except StoreError:
             raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
         response.headers["Cache-Control"] = "private, no-store"
+        if map_b:
+            payload = as_map_b(payload)
         return {"islands": payload, "radius_factor": current_reach_factor(cid)}
     maybe_track_islands()
     payload = with_tracked_state(live_islands())
     # Everyone looking at the map wants the same answer, and it changes on a
     # timer rather than per viewer. Worth a CDN hop if one is ever put in front.
     response.headers["Cache-Control"] = "public, max-age=30"
+    if map_b:
+        payload = as_map_b(payload)
     # The browser's ground follows the map's reach factor, which moves as the map
     # fills: a page open for hours picks it up here (web/js/config.js).
     return {"islands": payload, "radius_factor": current_reach_factor()}

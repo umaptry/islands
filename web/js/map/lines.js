@@ -33,7 +33,7 @@
 import { REDUCED_MOTION, hashId } from './decor.js';
 import { drawBoat, drawCar, drawPlane } from './vehicles.js';
 import { config, energyOf } from '../config.js';
-import { blockedBy, isLandAt, mixAt, runsOf, sampleLand } from './land.js';
+import { bActive, blockedBy, isLandAt, mixAt, runsOf, sampleLand } from './land.js';
 
 const ROUTE = '#ffffff';
 const PATH = '#f1deb3';
@@ -205,7 +205,11 @@ let membershipCache = { islands: null, byPost: new Map() };
 
 /** The island a line end stands on: the one listing its post, else the
  * nearest centre (a post newer than the island list). */
+// Map B: the whole map is one island, so every end stands on this one.
+const ONE_ISLAND = Object.freeze({ island_id: 'map-b' });
+
 export function islandFinder(islands) {
+  if (bActive()) return () => ONE_ISLAND;
   if (membershipCache.islands !== islands) {
     const byPost = new Map();
     islands.forEach((island) => (island.post_ids || []).forEach((id) => byPost.set(id, island)));
@@ -305,6 +309,8 @@ const NO_CELLS = [];
  * `world` is { islands, posts, cells, landOf, print }; `islandOf` is islandFinder(world.islands).
  * Returns { sameIsland, hasRoute, kind, runs, final } where `final` is false while an end's land is unknown. */
 export function decideLink(world, row, islandOf = islandFinder(world.islands)) {
+  // Map B: one island, so every line is a road.
+  if (bActive()) return { sameIsland: true, hasRoute: false, kind: 'road', runs: null, final: true };
   const { posts, cells = NO_CELLS, landOf } = world;
   const a = islandOf(row.a_post, row.a_at);
   const b = islandOf(row.b_post, row.b_at);

@@ -62,7 +62,7 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     ]
     assert data["extra_prompts"] == [dict(item) for item in EXTRA_PROMPTS]
     assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
-                                "share": False}
+                                "share": False, "map_b": False}
 
 
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):

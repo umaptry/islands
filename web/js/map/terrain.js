@@ -21,6 +21,13 @@
 import { config, energyOf, radiusOf } from '../config.js';
 import { coastOf, reachFrom, reachTable } from './coast.js';
 import { coastLines } from './surf.js';
+import { islandBKey, mapBOn } from './island-b.js';
+import { computeB, scatterTreesB } from './terrain-b.js';
+
+// Map plan B (island-b.js, terrain-b.js): with the flag on and the island held,
+// the whole ground is computeB's. With it off nothing below changes.
+const planB = () => mapBOn(config());
+const keyB = () => (planB() ? islandBKey() : '');
 
 // Texture resolution, in device pixels per world unit, and the ceiling on the
 // texture itself. 1400 covers a phone at 3x without ever allocating something a
@@ -320,13 +327,15 @@ function smoothEdges(pixels, width, height) {
 
 /** A stable key for "would this produce the same texture". */
 function signature(posts, cells, region, unit) {
-  return JSON.stringify([posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2),
-    config().energy.radius_factor ?? 1]);
+  const key = [posts.map(p => [p.x, p.y, energyOf(p)]), cells, region, unit.toFixed(2),
+    config().energy.radius_factor ?? 1];
+  if (planB()) key.push(islandBKey());
+  return JSON.stringify(key);
 }
 
 let gridCache = null;
 export function gridTerrain(grid) {
-  if (!grid) return null;
+  if (!grid || planB()) return null;
   if (gridCache?.key === grid.revision) return gridCache;
   const canvas = document.createElement('canvas');
   canvas.width = grid.width; canvas.height = grid.height;
@@ -352,8 +361,9 @@ export function gridTerrain(grid) {
 export function buildTerrain({ posts, cells = [], region, scale, revision = null, elsewhere = null }) {
   const unit = groundUnit(scale);
   const factor = config().energy.radius_factor ?? 1;
+  const planKey = keyB();
   const same = (entry) => Boolean(entry) && entry.revision === revision && entry.unit === unit
-    && entry.factor === factor && entry.cells === cells && sameRegion(entry.region, region);
+    && entry.factor === factor && entry.planKey === planKey && entry.cells === cells && sameRegion(entry.region, region);
   // Asked every frame: when the caller's revision says nothing changed, skip
   // serialising every post into the key (most of a millisecond on a phone).
   if (revision !== null && cache && (same(cache) || same(pending))) return cache;
@@ -361,7 +371,7 @@ export function buildTerrain({ posts, cells = [], region, scale, revision = null
   if (cache && cache.key === key) {
     pending = null;
     // In place: the map keeps its sharp close-up while the ground is this one.
-    Object.assign(cache, { revision, unit, factor, cells, region });
+    Object.assign(cache, { revision, unit, factor, planKey, cells, region });
     return cache;
   }
   // With a ground already on screen and somewhere else to build (index.js hands
@@ -369,7 +379,7 @@ export function buildTerrain({ posts, cells = [], region, scale, revision = null
   // stretched, until it arrives: the stop after a pinch, or a poll bringing new
   // posts, no longer stalls the map for 0.2 s (2026-10-16).
   if (elsewhere && cache && revision !== null) {
-    const wanted = { revision, unit, factor, cells, region };
+    const wanted = { revision, unit, factor, planKey, cells, region };
     const sent = elsewhere({ posts, cells, region, scale }, (built, ok) => {
       if (pending !== wanted) return;   // a newer ground was asked for meanwhile
       pending = null;
@@ -382,7 +392,7 @@ export function buildTerrain({ posts, cells = [], region, scale, revision = null
   }
   pending = null;
   const built = render({ posts, cells, region, scale, unit, padding: PADDING, limit: MAX_TEXTURE, trees: true });
-  if (built) cache = { ...built, key, revision, unit, factor, cells, region };
+  if (built) cache = { ...built, key, revision, unit, factor, planKey, cells, region };
   return built ? cache : null;
 }
 
@@ -391,7 +401,7 @@ export function groundPixels({ posts, cells = [], region, scale }) {
   const built = compute({ posts, cells, region, scale, unit: groundUnit(scale), padding: PADDING, limit: MAX_TEXTURE });
   if (!built) return null;
   const { field, ...pixels } = built;
-  return { ...pixels, trees: scatterTrees(field, built.width, built.height, built.minX, built.minY, built.scale) };
+  return { ...pixels, trees: treesOf(built, field) };
 }
 
 // Quarter-octave steps: a pinch crosses a step every ~19% of zoom instead of
@@ -477,12 +487,13 @@ function render({ trees, ...options }) {
   if (!built) return null;
   return {
     ...toCanvas(built),
-    trees: trees ? scatterTrees(built.field, built.width, built.height, built.minX, built.minY, built.scale) : [],
+    trees: trees ? treesOf(built, built.field) : [],
   };
 }
 
 /** The field and its painted pixels; no canvas, no DOM. */
 function compute({ posts, cells, region, scale, unit, padding, limit, smooth = false, surf = false }) {
+  if (planB()) return computeB({ posts, cells, region, scale, unit, padding, limit, smooth, surf });
   const minX = region.minX - padding;
   const minY = region.minY - padding;
   const spanX = (region.maxX - region.minX) + padding * 2;
@@ -595,6 +606,11 @@ function cellNoise(gx, gy, salt) {
   h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0;
   h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0;
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** Trees for what compute() returned: plan B's own, or the old ones. */
+function treesOf(built, field) {
+  return scatterTreesB(built) || scatterTrees(field, built.width, built.height, built.minX, built.minY, built.scale);
 }
 
 function scatterTrees(field, width, height, minX, minY, scaled) {

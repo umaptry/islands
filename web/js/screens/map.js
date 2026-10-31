@@ -5,7 +5,7 @@
 // full height where the message thread appears with the input pinned to the
 // bottom. The half state is what lets you read a card without losing the map.
 
-import { config, isLocal, islandColor, membersOnly, radiusOf, setReachFactor } from '../config.js';
+import { config, isLocal, islandColor, mapB, membersOnly, radiusOf, setReachFactor } from '../config.js';
 import { api, data } from '../net.js';
 import { navigate, screen, activeScreen } from '../router.js';
 import { primeKeyboard } from '../keyboard.js';
@@ -27,6 +27,9 @@ import {
   resize, ripple, setFreshPosts, setParticipantView, showAll, startMap, stopMap, viewport, zoomTo,
 } from '../map/index.js';
 import { noteLinks } from '../map/lines.js';
+import { bActive } from '../map/land.js';
+import * as islandMod from '../map/island-b.js';
+import { islandB, setIslandB, setIslandBView } from '../map/island-b.js';
 import { isRecruiting, markRead } from '../map/reads.js';
 import { buzz, feedbackSettings, viewerKey } from '../feedback.js';
 import { SWITCH_FX_MS } from '../feedback-rules.js';
@@ -601,8 +604,65 @@ function closeInFlat() {
 
 // ---------------------------------------------------------------- data
 
+// Map B (one big island): its shape comes once from /api/map-b/base. If it cannot be read the map stays
+// the one it was.
+let mapBRequest = null;
+let postsPrint = null;
+
+/** The page's ?map= (kept by island-b.js once seen, so a route change that drops it does not turn map B off). */
+function mapParamHere() {
+  if (typeof islandMod.mapParamNow === 'function') return islandMod.mapParamNow();
+  const where = typeof location !== 'undefined' ? location : null;
+  if (!where) return null;
+  const find = (text) => new URLSearchParams(text).get('map');
+  const hash = String(where.hash || '');
+  return find(where.search || '') ?? (hash.includes('?') ? find(hash.slice(hash.indexOf('?') + 1)) : null);
+}
+
+function mapBAsked() {
+  if (mapB()) return true;
+  if (mapParamHere() === 'b') return true;
+  const where = typeof location !== 'undefined' ? location : null;
+  if (!where) return false;
+  const find = (text) => new URLSearchParams(text).get('map');
+  const hash = String(where.hash || '');
+  return find(where.search || '') === 'b' || (hash.includes('?') && find(hash.slice(hash.indexOf('?') + 1)) === 'b');
+}
+
+async function loadMapB() {
+  if (!mapBAsked() || islandB()) return;
+  if (!mapBRequest) {
+    mapBRequest = api.get('/api/map-b/base').then((payload) => {
+      setIslandB(payload);
+      // The islands may have been read before the island's shape came: read them again, now asking for map B.
+      if (rawIslands.length) refreshIslands();
+    }).catch(() => {}).finally(() => { mapBRequest = null; });
+  }
+  await mapBRequest;
+}
+
+/** What the island's ground depends on besides its shape: which map, and how many posts it holds. */
+function paintMapBView() {
+  if (!islandB()) return;
+  const total = Math.max(Number(worldCount) || 0, state.worldPosts ? state.worldPosts.length : 0, state.posts.length);
+  // ?forest=mass|grove previews the other way of drawing the forest (the server's MAP_B_FOREST otherwise).
+  const forest = typeof islandMod.previewParam === 'function' ? islandMod.previewParam('forest') : null;
+  setIslandBView({ communityKey: scoped() ? scope.id : 'all', postTotal: total, forest, mapParam: mapParamHere() });
+  // Where this map's posts stand, so none falls into the sea (island-b.js keeps them on land).
+  if (typeof islandMod.setIslandBPosts === 'function') {
+    const all = state.worldPosts && state.worldPosts.length ? state.worldPosts : state.posts;
+    const points = all.filter((post) => Number.isFinite(post.x) && Number.isFinite(post.y)).map((post) => ({ x: post.x, y: post.y }));
+    const print = `${scopeKey()}|${points.length}|${points.reduce((sum, p) => sum + p.x * 3 + p.y, 0).toFixed(1)}`;
+    if (print !== postsPrint) {
+      postsPrint = print;
+      islandMod.setIslandBPosts(points);
+    }
+  }
+}
+
 export async function refreshMap({ fitFirst = false } = {}) {
   const generation = ++mapRequest;
+  if (fitFirst) await loadMapB();
   if (scope.mode === 'none') {
     // Nothing to read: a notice stands where the map would be.
     if (state.posts.length) setPosts([], { saturated: false, bounds: null });
@@ -632,6 +692,7 @@ export async function refreshMap({ fitFirst = false } = {}) {
         fitCamera([], result.bounds);
       }
     } catch { fitCamera(); }
+    paintMapBView();
   }
   const bounds = viewport();
   const limit = config().limits.map_post_limit;
@@ -641,11 +702,12 @@ export async function refreshMap({ fitFirst = false } = {}) {
     mapError = false;
     const saturated = posts.length >= limit;
     setPosts(posts, { saturated, bounds });
+    paintMapBView();
     if (scoped()) applyIslands();
     // A refresh that was asked for before the post existed must not take it
     // away while it is being introduced.
     if (landing && !state.postsById.has(landing.id)) upsertPost(landing);
-    if (saturated) {
+    if (saturated && !bActive()) {
       // Only then: the coarse layer exists so distant land does not vanish when
       // the viewport holds more posts than we asked for. Fetching it always
       // would be a second query on every pan for nothing.
@@ -681,8 +743,10 @@ export async function refreshIslands() {
     // Islands are made from, and shown to, one community's members: say which one.
     const asked = scopeKey();
     // (While the switch is off the address stays the one it always was: the server ignores the community there.)
-    const result = await api.get(scoped() && membersOnly()
-      ? `/api/islands?${new URLSearchParams({ community: scope.id })}` : '/api/islands');
+    const path = scoped() && membersOnly()
+      ? `/api/islands?${new URLSearchParams({ community: scope.id })}` : '/api/islands';
+    // On map B the islands are 開拓村 (the server names them so when asked).
+    const result = await api.get(bActive() ? `${path}${path.includes('?') ? '&' : '?'}map=b` : path);
     // The map was switched while this was on its way: these islands belong to the other one.
     if (asked !== scopeKey()) return;
     rawIslands = result.islands || [];

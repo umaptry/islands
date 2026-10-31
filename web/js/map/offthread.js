@@ -7,6 +7,7 @@
 // every caller builds on the page as before.
 
 import { config } from '../config.js';
+import { islandBForWorker } from './island-b.js';
 
 // No answer by then: give up on the worker for good. Jobs go to the worker one
 // at a time (below), so this counts only the time a job is actually being made:
@@ -16,6 +17,7 @@ const PATIENCE_MS = 5000;
 let worker = null;
 let broken = false;
 let given = null;           // the config object the worker was last handed
+let givenB = null;          // the island payload object, and the view's text, the worker was last handed
 let next = 0;
 const waiting = new Map();  // job id -> answer(built, ok)
 let queue = [];             // jobs not yet posted: { id, kind, job }
@@ -31,7 +33,18 @@ function pump() {
   busy = id;
   setTimeout(() => { if (busy === id) giveUp(); }, PATIENCE_MS);
   const current = config();
-  worker.postMessage({ id, kind, config: current === given ? null : current, job });
+  // Map plan B: the island goes once (when its payload object changes), the view
+  // whenever its text changes; nothing at all when plan B is not in use.
+  const shared = islandBForWorker();
+  let islandB = null;
+  if (shared) {
+    const text = JSON.stringify(shared.view);
+    if (!givenB || givenB.payload !== shared.payload || givenB.text !== text) {
+      islandB = { payload: givenB && givenB.payload === shared.payload ? null : shared.payload, view: shared.view };
+      givenB = { payload: shared.payload, text };
+    }
+  }
+  worker.postMessage({ id, kind, config: current === given ? null : current, job, islandB });
   given = current;
 }
 
@@ -63,6 +76,7 @@ function start() {
     pump();   // after the answer, which may ask for the next job
   };
   given = null;
+  givenB = null;
 }
 
 /** Only what the ground is made of: energyOf, radiusOf and coastOf read these. */
