@@ -20,7 +20,8 @@ import { refreshTalk, seeDmRoom, talkLabel, unreadRoomIds, useDmRooms } from '..
 import { markDmNotificationsRead } from './notifications.js';
 import {
   DM_MAX, DM_POLL_MS, REACTIONS, dmEventLine, dmIntro, dmPreview, lastStamp, liftLayout, mergeMessages,
-  myReaction, reactionChips, reactionSignature, reactionsMissing, setMyReaction, sortRooms, withMyReaction,
+  myReaction, reactionChips, reactionSignature, reactionsMissing, readToRecord, setMyReaction, sortRooms, threadRows,
+  withMyReaction,
 } from '../talk-rules.js';
 
 const faceOf = (room) => ({ icon_id: room.other_icon_id, avatar_path: room.other_avatar_path });
@@ -89,6 +90,15 @@ let reactions = [];
 let reactionsOn = true;
 let reactEpoch = 0;
 let reactPending = 0;
+// Read marks (2026-10-31): `partnerReadAt` is when the other person last read this room (null: unknown, so no
+// 「既読」 is drawn); `marked` is what I have told the database I read (null: not yet, see readToRecord).
+// The two calls live on `data` (net.js) and are used only when they exist and work: a failure draws nothing.
+// (Tests swap data.markDmRead / data.dmReadState, as they do for the other calls.)
+let partnerReadAt = null;
+let marked = null;
+let markFailures = 0;
+let readStateOn = true;
+const READ_FAILURES_MAX = 3;
 
 function stopRoom() {
   closeMenu();
@@ -100,6 +110,10 @@ function stopRoom() {
   reactions = [];
   reactionsOn = true;
   reactPending = 0;
+  partnerReadAt = null;
+  marked = null;
+  markFailures = 0;
+  readStateOn = true;
   input = null;
 }
 
@@ -127,22 +141,31 @@ function paintMessages({ stick = false } = {}) {
     text: dmIntro(room, talkLabel(), (text) => clip(text, 24)),
   }));
   const list = el('div', { className: 'dm-list' });
-  messages.forEach((message) => {
-    const mine = message.sender_id === me;
+  threadRows(messages, { me, partnerReadAt }).forEach((row) => {
+    if (row.type === 'day') {
+      list.append(el('div', { className: 'dm-day' }, el('span', { className: 'dm-day-label', text: row.label })));
+      return;
+    }
+    const { message, mine } = row;
     const chips = reactionChips(reactions, message.id, me);
     const bubble = el('p', { className: 'dm-bubble', text: message.body });
     attachLongPress(bubble, { onHold: () => openMenu(message, bubble, mine) });
-    list.append(el('div', { className: `dm-line${mine ? ' mine' : ''}${chips.length ? ' has-reactions' : ''}` },
-      el('div', { className: 'dm-bubble-wrap' },
-        bubble,
-        chips.length ? el('div', { className: 'dm-chips' }, ...chips.map((chip) => el('span', {
-          className: 'dm-chip', attrs: {
-            'data-kind': chip.kind, 'data-mine': chip.mine ? '1' : '0',
-            'aria-label': `${chip.label}${chip.count > 1 ? ` ${chip.count}人` : ''}`,
-          },
-        }, el('span', { className: 'dm-chip-emoji', text: chip.emoji }),
-        chip.count > 1 ? el('span', { className: 'dm-chip-count', text: String(chip.count) }) : null))) : null),
-      el('span', { className: 'dm-time', text: timeAgo(message.created_at) })));
+    // LINE's shape: the time (and 「既読」 above it, on mine) sits beside the bubble, on its bottom edge.
+    const stamp = el('div', { className: 'dm-stamp' },
+      row.read ? el('span', { className: 'dm-read', text: '既読' }) : null,
+      row.time ? el('span', { className: 'dm-time', text: row.time }) : null);
+    const wrap = el('div', { className: 'dm-bubble-wrap' },
+      bubble,
+      chips.length ? el('div', { className: 'dm-chips' }, ...chips.map((chip) => el('span', {
+        className: 'dm-chip', attrs: {
+          'data-kind': chip.kind, 'data-mine': chip.mine ? '1' : '0',
+          'aria-label': `${chip.label}${chip.count > 1 ? ` ${chip.count}人` : ''}`,
+        },
+      }, el('span', { className: 'dm-chip-emoji', text: chip.emoji }),
+      chip.count > 1 ? el('span', { className: 'dm-chip-count', text: String(chip.count) }) : null))) : null);
+    list.append(el('div', {
+      className: `dm-line${mine ? ' mine' : ''}${chips.length ? ' has-reactions' : ''}${row.cont ? ' cont' : ''}`,
+    }, ...(mine ? [stamp, wrap] : [wrap, stamp])));
   });
   thread.append(list);
   if (stick || atBottom) requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
@@ -305,6 +328,42 @@ function paintFoot() {
   foot.append(input.node);
 }
 
+/** Tell the database I have read up to here (only while the screen is visible, and only what is new). */
+async function recordRead(mine, id) {
+  if (typeof data.markDmRead !== 'function' || markFailures >= READ_FAILURES_MAX) return;
+  const stamp = readToRecord({
+    messages, me: state.account?.id, marked, visible: document.visibilityState === 'visible',
+  });
+  if (stamp === null) return;
+  const before = marked;
+  marked = stamp;
+  try {
+    await data.markDmRead(id);
+    markFailures = 0;
+  } catch {
+    if (mine === request) {   // quiet: try again at the next poll, a few times
+      marked = before;
+      markFailures += 1;
+    }
+  }
+}
+
+/** When the other person last read this room. True when what is on screen changed. */
+async function refreshPartnerRead(mine, id) {
+  if (!readStateOn || typeof data.dmReadState !== 'function') return false;
+  let result = null;
+  try {
+    result = await data.dmReadState(id);
+  } catch {
+    return false;   // no read marks: draw none
+  }
+  if (mine !== request || !room || room.room_id !== id) return false;
+  const next = (result && result.partner_read_at) || null;
+  if (next === partnerReadAt) return false;
+  partnerReadAt = next;
+  return true;
+}
+
 /** Ask for what came after the newest message shown. */
 async function poll({ first = false } = {}) {
   if (!room || (document.hidden && !first)) return;
@@ -324,20 +383,24 @@ async function poll({ first = false } = {}) {
   messages = mergeMessages(messages, rows);
   // Open on screen means seen: the tab's badge does not count what is in front of me.
   if (lastStamp(messages)) seeDmRoom(id, lastStamp(messages));
+  const fromThem = rows.some((row) => row.sender_id !== state.account?.id);
   if (first) {
-    // The first paint never waits for reactions: draw the messages now, add the bubbles when they arrive.
+    // The first paint never waits for reactions or read marks: draw the messages now, add the rest when it arrives.
     paintMessages({ stick: true });
-    if (rows.some((row) => row.sender_id !== state.account?.id)) markDmNotificationsRead(room.other_id);
-    if (await refreshReactions(mine, id) && mine === request && room && room.room_id === id) paintMessages();
+    if (fromThem) markDmNotificationsRead(room.other_id);
+    const [reacted, readChanged] = await Promise.all([
+      refreshReactions(mine, id), refreshPartnerRead(mine, id), recordRead(mine, id)]);
+    if ((reacted || readChanged) && mine === request && room && room.room_id === id) paintMessages();
     return;
   }
   // Reactions can land on old messages, so they are fetched whole every time, after the messages
   // (a reaction to a message not yet on screen would have nothing to sit on).
-  const reacted = await refreshReactions(mine, id);
+  const [reacted, readChanged] = await Promise.all([
+    refreshReactions(mine, id), refreshPartnerRead(mine, id), recordRead(mine, id)]);
   if (mine !== request || !room || room.room_id !== id) return;
-  if (messages.length === before && !reacted) return;
+  if (messages.length === before && !reacted && !readChanged) return;
   paintMessages();
-  if (rows.some((row) => row.sender_id !== state.account?.id)) markDmNotificationsRead(room.other_id);
+  if (fromThem) markDmNotificationsRead(room.other_id);
 }
 
 async function openRoom(id) {

@@ -10,11 +10,11 @@ const { seaFor, pageSeaFor, whiteContrast } = await import(dataUrl(tone));
 const { searchClosesOnTouch } = await import(dataUrl(await load('web/js/screens/map-extras-logic.js')));
 
 test('the day sea is the plain sea; night is darker, every time reads white text', () => {
-  assert.equal(seaFor('day'), '#46AEE6');
+  assert.equal(seaFor('day'), '#1D88C7');
   assert.ok(whiteContrast(seaFor('night')) > whiteContrast(seaFor('day')));
   for (const t of ['morning', 'day', 'evening', 'night']) {
     assert.match(pageSeaFor(t), /^#[0-9A-F]{6}$/);
-    assert.ok(whiteContrast(pageSeaFor(t)) >= whiteContrast('#46AEE6') - 0.01, t);
+    assert.ok(whiteContrast(pageSeaFor(t)) >= whiteContrast('#1D88C7') - 0.01, t);
   }
   assert.notEqual(pageSeaFor('night'), pageSeaFor('morning'));
 });

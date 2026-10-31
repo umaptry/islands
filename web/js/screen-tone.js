@@ -43,7 +43,7 @@ export function whiteContrast(color) {
 /**
  * The page background for a time of day. White text sits on it, so a sea that the
  * time of day makes too light is deepened until the text reads (the day sea
- * #46AEE6 is the long-standing look and is kept as it is).
+ * #1D88C7, the map's own sea, is kept as it is).
  */
 export function pageSeaFor(tod) {
   const sea = seaFor(tod);

@@ -221,6 +221,85 @@ export function readSent(result) {
   return row && row.message ? row.message : row || null;
 }
 
+// ---------------------------------------------------------------- the thread: times, days, read marks (2026-10-31)
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+const dateOf = (stamp) => {
+  if (stamp === null || stamp === undefined || stamp === '') return null;
+  const at = new Date(stamp);
+  return Number.isFinite(at.getTime()) ? at : null;
+};
+const dayNumber = (at) => Math.round(Date.UTC(at.getFullYear(), at.getMonth(), at.getDate()) / 86400000);
+
+/** The clock time of a message on this phone's clock, 24 hours, no zero before the hour: 0:53, 22:41. */
+export function clockText(stamp) {
+  const at = dateOf(stamp);
+  return at ? `${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}` : '';
+}
+
+/** The day mark between messages: 今日, 昨日, 10/30(木), and 2025/10/30(木) when the year is not this one. */
+export function dayLabel(stamp, now = Date.now()) {
+  const at = dateOf(stamp);
+  const today = dateOf(now);
+  if (!at || !today) return '';
+  const apart = dayNumber(today) - dayNumber(at);
+  if (apart === 0) return '今日';
+  if (apart === 1) return '昨日';
+  const date = `${at.getMonth() + 1}/${at.getDate()}(${WEEKDAYS[at.getDay()]})`;
+  return at.getFullYear() === today.getFullYear() ? date : `${at.getFullYear()}/${date}`;
+}
+
+/** True when the other person has read up to (and including) this message. */
+export function readByPartner(message, partnerReadAt) {
+  const read = dateOf(partnerReadAt);
+  const sent = dateOf(message && message.created_at);
+  return Boolean(read && sent && sent.getTime() <= read.getTime());
+}
+
+/**
+ * The thread as rows to draw, oldest first: a { type: 'day', label } before the first message and wherever the
+ * day (on this phone's clock) changes, and a { type: 'message' } for each message with its clock time, whether
+ * it is mine, whether the other person has read it (mine only), and `cont` (the same person as the line
+ * above, the same day: these sit close together).
+ */
+export function threadRows(messages, { me, now = Date.now(), partnerReadAt = null } = {}) {
+  const rows = [];
+  let lastDay = null;
+  let lastSender = null;
+  (messages || []).forEach((message) => {
+    const at = dateOf(message.created_at);
+    const day = at ? dayNumber(at) : null;
+    const newDay = day !== null && day !== lastDay;
+    if (newDay) {
+      rows.push({ type: 'day', key: `day-${day}`, label: dayLabel(message.created_at, now) });
+      lastDay = day;
+      lastSender = null;
+    }
+    const mine = message.sender_id === me;
+    rows.push({
+      type: 'message', message, mine, time: clockText(message.created_at),
+      read: mine && readByPartner(message, partnerReadAt),
+      cont: lastSender !== null && lastSender === message.sender_id,
+    });
+    lastSender = message.sender_id;
+  });
+  return rows;
+}
+
+/**
+ * Whether to tell the database "I have read up to here" now. `marked` is what was recorded earlier in this
+ * room: null before the first time (the first time always goes, even into an empty room), else the
+ * created_at of the newest message of the other person that was recorded ('' when there was none).
+ * Returns the stamp to remember ('' when there is no message of theirs), or null for "do nothing".
+ */
+export function readToRecord({ messages, me, marked = null, visible = true }) {
+  if (!visible) return null;
+  const theirs = (messages || []).filter((message) => message.sender_id !== me && message.created_at);
+  const newest = theirs.length ? theirs[theirs.length - 1].created_at : '';
+  if (marked === null) return newest;
+  return newest && newest !== marked ? newest : null;
+}
+
 // ---------------------------------------------------------------- reactions to a message
 
 // What the database stores is the KEY (dm_reactions.kind); the emoji is only how the screen draws it,
