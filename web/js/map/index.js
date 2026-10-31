@@ -1255,12 +1255,14 @@ function renderMap(time) {
     }
     return { island, members, tier, size, span, seed, x: at.x, foot: at.y, fade, show, town: true, home };
   }).filter(Boolean);
-  // One house for every post that has a face on the map, a little to the south
-  // east of it (so the pin does not hide it), as big as a length in the world.
-  // It also stands clear of its pin on the screen (2026-10-31, the user: all the
-  // way in, the face stood on the house's roof). A face keeps one size in px at
-  // every zoom while the house grows with the map, so the house steps right by
-  // whatever the face - or, before faces show, the dot - takes up.
+  // One house for every post that has a face on the map, as big as a length in
+  // the world, up and to the right of it - the person stands in front of their
+  // door (2026-11-01, the user: south east of the face, the person looked to be
+  // behind the house). It also stands clear of its pin on the screen
+  // (2026-10-31, the user: all the way in, the face stood on the house's roof).
+  // A face keeps one size in px at every zoom while the house grows with the
+  // map, so the house's nearest corner keeps whatever the face - its unread dot
+  // included - or, before faces show, the dot takes up, off to the north east.
   const houseSize = scale * HOUSE_UNITS;
   const houses = [];
   if (houseSize >= HOUSE_MIN) {
@@ -1269,16 +1271,15 @@ function renderMap(time) {
     const faces = scale >= faceScale();
     const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
     visible.forEach(({ post, point }) => {
-      const clear = faces ? pinGeometry(pinSize, post.motivation).headR : HOUSE_DOT_CLEAR;
-      const shift = Math.max(HOUSE_SHIFT[0] * scale, clear + HOUSE_GAP + houseSize * HOUSE_HALF);
-      const x = point.x + shift;
-      const foot = point.y + HOUSE_SHIFT[1] * scale;
+      const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
+      const x = point.x + clear * Math.SQRT1_2 + houseSize * HOUSE_BODY[0];
+      const foot = point.y - clear * Math.SQRT1_2 - houseSize * HOUSE_BODY[1];
       if (x < -houseSize || x > width + houseSize || foot < -houseSize || foot > height + houseSize * 2) return;
       const place = islandOf.get(post.id);
       const own = stage && post.id === reveal.id ? stage.land : 1;
       houses.push({
         x, foot, size: houseSize, seed: hashId(post.id), calm: Boolean(place && place.island.quiet),
-        alpha: own * (place ? place.fade : 1), wx: post.x + shift / scale, wy: post.y + HOUSE_SHIFT[1],
+        alpha: own * (place ? place.fade : 1), wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
       });
     });
   }
@@ -1878,9 +1879,10 @@ const TREE_MIN = 3;       // px: smaller than this is not drawn
 const TREE_MAX = 400;     // px: a ceiling for the largest zoom
 const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
 const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
-const HOUSE_SHIFT = [2.0, 1.6];   // world units from its post to its house (at least; see HOUSE_GAP)
-const HOUSE_HALF = 0.7;   // of a house's size: how far its roof reaches left of where it stands
-const HOUSE_GAP = 6;      // px between a pin and the left of its house
+// Of a house's size: how far its walls and roof reach left of where it stands,
+// and below its foot (its shadow falls further, down and to the right).
+const HOUSE_BODY = [0.7, 0.44];
+const HOUSE_GAP = 3;      // px between a pin and its house's nearest corner
 const HOUSE_DOT_CLEAR = 6;   // px a dot pin takes up, its unread ring included
 const HOUSE_CLEAR = 1.9;  // world units a tree keeps from a house's foot
 const REEF_RING = 'rgba(225,246,252,0.45)';
@@ -2523,7 +2525,7 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     // Not opened yet on this device (2026-10-31, the user: inside an island there
     // was no telling which posts were new): a dot on the head's top right corner,
     // the top left when a "+N" is there.
-    if (!mine && !dim && freshIds.has(post.id)) unreadDot(point.x + (stack ? -1 : 1) * r * 0.74, headY - r * 0.74, r);
+    if (!mine && !dim && freshIds.has(post.id)) unreadDot(point.x + (stack ? -1 : 1) * r * UNREAD_AT, headY - r * UNREAD_AT, r);
 
     if (name) {
       ctx.save();
@@ -2552,11 +2554,17 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
 // the reds of the heat and of yours.
 const UNREAD = '#FF7A2F';
 
+const UNREAD_AT = 0.74;   // of the head's radius: the unread dot's centre, right and up
+const UNREAD_RIM = 1.6;   // px of white round the dot
+const unreadRadius = (headR) => Math.max(3.6, headR * 0.26);
+/** px from a face's centre to the far side of its unread dot. */
+const unreadReach = (headR) => headR * UNREAD_AT * Math.SQRT2 + unreadRadius(headR) + UNREAD_RIM;
+
 function unreadDot(x, y, headR) {
-  const r = Math.max(3.6, headR * 0.26);
+  const r = unreadRadius(headR);
   ctx.save();
   ctx.beginPath();
-  ctx.arc(x, y, r + 1.6, 0, Math.PI * 2);
+  ctx.arc(x, y, r + UNREAD_RIM, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff';
   ctx.fill();
   ctx.beginPath();
