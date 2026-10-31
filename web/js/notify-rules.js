@@ -220,6 +220,9 @@ export function bodyText(entry, talkLabel = '') {
   if (entry.type === 'quiet_post') return payload.message || KIND_TEXT.quiet_post;
   // The reason is written for the reader by the server (payload.reason).
   if (entry.type === 'match') return String(payload.reason || '').trim() || KIND_TEXT.match;
+  // 会 (第2回a): {minutes} と {title} は payload から（サーバーの push_message と同じ文）。
+  if (entry.type === 'event_late') return fill(KIND_TEXT.event_late, { minutes: payload.minutes });
+  if (entry.type === 'event_cancelled') return fill(KIND_TEXT.event_cancelled, { title: String(payload.title || '').trim() || '会' });
   if (entry.others) return GROUP_TEXT;
   return KIND_TEXT[entry.type] || GROUP_TEXT;
 }

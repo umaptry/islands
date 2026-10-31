@@ -34,6 +34,9 @@ import { WAITING_HOLD_MS, mapLinkFor, postIdFromHash, savePendingPost, takePendi
 import { setupInvite, settleSession } from './screens/invite.js';
 import { communitiesActive, dropCommunities, refreshCommunities, refreshJoinStatus } from './communities.js';
 import { mustWait, parseInviteHash } from './community-rules.js';
+// ---- 会：主催者とメンバー（第2回a） ----
+import { setupEventHost } from './screens/event-host.js';
+import { setupEventCompose } from './screens/event-compose.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/welcome', 'welcome');
@@ -54,12 +57,15 @@ route('#/u/:id', 'user');
 route('#/dm', 'dmList');
 route('#/dm/:id', 'dmRoom');
 route('#/community/:id', 'communityEdit');
+// ---- 会：主催者とメンバー（第2回a） ----
+route('#/e/:code/host', 'eventHost');
 
 // Signed out, you can look at the map and read a post; you cannot write, react
 // or have an inbox. Sending somebody to the sign-in screen is a redirect and
 // not an error page, so the address they typed is the one they come back to.
 const NEEDS_ACCOUNT = new Set([
   '#/post', '#/post/:id/edit', '#/notifications', '#/me', '#/me/edit', '#/dm', '#/dm/:id', '#/community/:id',
+  '#/e/:code/host',   // 会：主催者とメンバー（第2回a）
 ]);
 
 // The bottom bar is マップ／DM／通知／マイページ. The DM tab exists only when signed in and 「話してみたい」 is on.
@@ -154,6 +160,9 @@ async function boot() {
   setupCommunityEdit();
   setupWaiting();
   setupFullname();
+  // ---- 会：主催者とメンバー（第2回a） ----
+  setupEventHost();
+  setupEventCompose();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   setupPushAsk();

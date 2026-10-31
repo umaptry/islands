@@ -19,6 +19,9 @@ import { membersOnly } from '../config.js';
 import { chooseCurrent, communityIdOfPost, communityNameFor, refreshCommunities } from '../communities.js';
 import { communityNameIn } from '../community-rules.js';
 import { openOnMap } from './map.js';
+// ---- 会：主催者とメンバー（第2回a） ----
+import { eventHostApi } from '../event-host-api.js';
+import { hostHash, noticeTarget } from '../event-host-rules.js';
 import {
   openDmForNotification, recomputeDmUnread, refreshDmRooms, refreshTalk, talkAvailable, talkLabel,
 } from '../talk.js';
@@ -56,6 +59,11 @@ const ICONS = { like: 'heart', help: 'help', join: 'hand', comment: 'message', r
   connection: 'hand', similar: 'user', island: 'pin', quiet_post: 'user',
   talk_wish: 'user', talk_match: 'message', dm: 'message', match: 'link',
   join_request: 'user', join_approved: 'hand' };
+// ---- 会：主催者とメンバー（第2回a） ----
+// 遅れる・取り消し（主催者へ）と中止（申し込んだメンバーへ）。文は notify-rules.js の KIND_TEXT。
+Object.assign(TONES, { event_late: 'join', event_cancel: 'join', event_cancelled: 'help' });
+Object.assign(BAND_ICONS, { event_late: '⏰', event_cancel: '➖', event_cancelled: '🚫' });
+Object.assign(ICONS, { event_late: 'pin', event_cancel: 'user', event_cancelled: 'bell' });
 let matchSeen = null;      // the 「お互いに」 rows known, so the buttons re-read when a new one arrives
 
 /**
@@ -380,6 +388,19 @@ async function open(entry) {
     if (community) {
       if (!state.communities.some((item) => item.id === community)) await refreshCommunities();
       chooseCurrent(community);
+    }
+    await navigate('#/map');
+    return;
+  }
+  // 会：遅れる・取り消しは主催者の名簿へ。中止は会の投稿が消えているので地図へ（中止の知らせはここが行き先）。
+  if (entry.type === 'event_late' || entry.type === 'event_cancel' || entry.type === 'event_cancelled') {
+    const target = noticeTarget(entry);
+    if (target.kind === 'host') {
+      const found = await eventHostApi.byPost(target.postId).catch(() => null);
+      if (found && found.event) {
+        await navigate(hostHash(found.event.code));
+        return;
+      }
     }
     await navigate('#/map');
     return;
