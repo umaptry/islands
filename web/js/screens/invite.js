@@ -33,9 +33,12 @@ const OAUTH_NAMES = {
 };
 
 /** Use a code now (signed in). Throws with a sentence for a person when it fails. */
-export async function claimInvite({ code, post = null }, { holdPost = true } = {}) {
+export async function claimInvite({ code }, { holdPost = true } = {}) {
   const claimed = readClaim(await data.claimInvite(code));
   if (!claimed) throw new Error('この招待は使えませんでした。');
+  // The 会 of the link is the one the database saved with the invite (claim_invite's post_id). The ?post= of the
+  // address is never believed: anybody can write any id there (2026-11-01).
+  const post = claimed.post_id;
   // An application that waits for an admin does not make me a member yet: nothing is joined, and the post and
   // the 会 of the QR are kept for longer, until the admin has answered.
   const waits = !claimedIn(claimed);
@@ -155,6 +158,7 @@ export function setupInvite() {
     $('inviteError').textContent = '';
     $('inviteTitle').textContent = '招待を確認しています';
     $('inviteLede').textContent = '';
+    $('inviteJoinNote').hidden = true;
 
     if (!communitiesActive()) {
       // The code can ship before the tables exist; an invite means nothing then.
@@ -181,11 +185,13 @@ export function setupInvite() {
 
     // The 会 of the QR is joined too: say so before anything is pressed. Only a member can read the post;
     // anybody else is told without its name (community-rules inviteJoinNote).
-    if (view.state === 'valid' && validPostId(post)) {
-      const meeting = session.signedIn() ? await data.getPost(post).catch(() => null) : null;
+    // Shown from what the database saved with the invite (check_invite's post_id), not from ?post=.
+    const linkedPost = view.state === 'valid' && validPostId(check.post_id) ? check.post_id : null;
+    if (linkedPost) {
+      const meeting = session.signedIn() ? await data.getPost(linkedPost).catch(() => null) : null;
       if (turn !== shown) return;
       const note = inviteJoinNote({
-        post, meeting, open: !meeting || (isRecruiting(meeting) && !recruitState(meeting)),
+        post: linkedPost, meeting, open: !meeting || (isRecruiting(meeting) && !recruitState(meeting)),
       });
       $('inviteJoinNote').textContent = note || '';
       $('inviteJoinNote').hidden = !note;
@@ -239,7 +245,7 @@ export function setupInvite() {
       try {
         // Signed in but never finished the profile: join, then go on to name and photo (the post
         // that came with the invite waits and opens at the end, like for a new person).
-        const community = await claimInvite({ code, post }, { holdPost: !hasAccount });
+        const community = await claimInvite({ code }, { holdPost: !hasAccount });
         if (!claimedIn(community)) {
           // Applied, not in yet: finish the name first if there is none; then wait (somebody who is in another
           // community simply goes on to its map: the switcher says 「（承認待ち）」).
@@ -250,7 +256,7 @@ export function setupInvite() {
         }
         toast(`${community.name || 'コミュニティ'} に参加しました`);
         if (!hasAccount) navigate('#/setup');
-        else navigate(post ? mapLinkFor(post) : '#/map');
+        else navigate(community.post_id ? mapLinkFor(community.post_id) : '#/map');
       } catch (error) {
         $('inviteError').textContent = error.message;
       } finally {

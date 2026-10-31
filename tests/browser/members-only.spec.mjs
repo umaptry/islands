@@ -232,7 +232,7 @@ test.describe('スイッチ「入」のとき', () => {
     const admin = await person(browser, testInfo, 'しょうたいのあき');
     const bar = await makeCommunity(admin, `BAR ${unique()}`);
     const postId = await makePost(admin, bar.community_id, '土曜の夜、BAR でゆるく飲む会をひらきます', ['参加者募集中']);
-    const invite = await call(admin, 'post', '/api/local/invites', { community_id: bar.community_id, minutes: 60, until_end_of_day: false });
+    const invite = await call(admin, 'post', '/api/local/invites', { community_id: bar.community_id, minutes: 60, until_end_of_day: false, post: postId });
 
     const guest = await person(browser, testInfo, 'はいる人');
     // 入る前は読めない
@@ -254,7 +254,7 @@ test.describe('スイッチ「入」のとき', () => {
     const admin = await person(browser, testInfo, 'しんきのあき');
     const bar = await makeCommunity(admin, `BAR ${unique()}`);
     const postId = await makePost(admin, bar.community_id, '毎週水曜に朝の散歩をしています');
-    const invite = await call(admin, 'post', '/api/local/invites', { community_id: bar.community_id, minutes: 60, until_end_of_day: false });
+    const invite = await call(admin, 'post', '/api/local/invites', { community_id: bar.community_id, minutes: 60, until_end_of_day: false, post: postId });
 
     const guest = await openContext(browser, testInfo);
     await guest.page.goto(`/#/invite/${invite.code}?post=${postId}`);

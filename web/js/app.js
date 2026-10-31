@@ -11,13 +11,14 @@ import { state } from './state.js';
 import { onboardingStep } from './onboarding.js';
 import { setupKeyboardGuard } from './keyboard.js';
 import { setupZoomGuard } from './zoom-guard.js';
-import { navigate, refreshNav, route, screen, setGuard, setNavVisible, show, startRouter } from './router.js';
+import { navigate, refreshNav, route, screen, setChromeListener, setGuard, setNavVisible, show, startRouter } from './router.js';
 import { live as realtimeLive, setupRealtime, sync as syncRealtime } from './realtime.js';
 import { setupPush, syncPush } from './push.js';
 import { setupPushAsk } from './push-ask.js';
 import { $, toast } from './ui.js';
 import { setupIcons } from './icons.js';
 import { watchScreenTone } from './screen-tone.js';
+import { setupNotice, updateNotice } from './notice.js';
 import { setupFeedback } from './feedback.js';
 import { setupAudio } from './audio.js';
 import { rememberAffiliationReturn, setupAffiliation, setupAuth, setupGuidance, setupProfileSetup, setupWelcome } from './screens/auth.js';
@@ -78,6 +79,7 @@ const NEEDS_ACCOUNT = new Set([
 
 // The bottom bar is マップ／DM／通知／マイページ. The DM tab exists only when signed in and 「話してみたい」 is on.
 setNavVisible((target) => (target === '#/dm' ? dmTabVisible() : true));
+setChromeListener((chrome) => updateNotice(chrome));
 
 // 2026-10-29: 所属組織 is required. A named account with none, outside the sign-up
 // steps, is held on #/affiliation until it has one. These screens are left alone:
@@ -99,11 +101,16 @@ setGuard((pattern) => {
   // ---- 会：公開側（第2回a） ---- the pages of a 会 are open to anybody (the page itself asks for a sign-in where it needs one)
   // (the host menu is not one of them: it needs an account, NEEDS_ACCOUNT below)
   if (isEventPattern(pattern) && pattern !== '#/e/:code/host') return null;
+  // 2026-11-01: somebody who applied and closed the page before giving a name has no name to show the admin and no
+  // way to give one on the waiting screen: they finish the name first (#/setup), and the save carries on to #/waiting.
+  const unnamedAndWaiting = session.signedIn() && !signedIn && mustWaitNow();
   if (pattern === '#/waiting') {
     // Open for anybody the status list says something about (a person in another community opens it from the switcher).
     if (!session.signedIn()) return '#/welcome';
+    if (unnamedAndWaiting) return '#/setup';
     return Array.isArray(state.joinStatus) && state.joinStatus.length ? null : '#/map';
   }
+  if (unnamedAndWaiting && !WAIT_EXEMPT.has(pattern)) return '#/setup';
   if (session.signedIn() && mustWaitNow() && !WAIT_EXEMPT.has(pattern)) return '#/waiting';
   // ---- 会：公開側（第2回a） ---- a guest (applied to a 会, in no community) may open only the pages of that 会
   const guestAt = guestHome();
@@ -296,6 +303,8 @@ async function boot() {
   }
   paintBadge();
   refreshNav();
+  setupNotice();
+  updateNotice();
   syncRealtime();
   syncPush();
 
@@ -321,6 +330,7 @@ async function boot() {
       forgetMapData();
       forgetEventGuest();   // ---- 会：公開側（第2回a） ----
     }
+    updateNotice();
     // Also rings on every token refresh; both only act when the person changed.
     syncRealtime();
     syncPush();

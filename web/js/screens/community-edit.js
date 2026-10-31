@@ -155,7 +155,9 @@ function invitePanel(entry) {
     return [el('div', { className: 'invite-label', text: 'いつまで使えますか' }), chips, note];
   }
 
-  const linkOf = (row) => inviteUrlFor(window.location.origin, row.code, invitePostFor(postOn, postId));
+  // The 会 of a link is saved with the invite when it is made (post_id); the ?post= of the address only repeats it.
+  // It cannot be changed afterwards: 「更新」 makes a new link (and stops the old one) with the new choice.
+  const linkOf = (row) => inviteUrlFor(window.location.origin, row.code, row.post_id || null);
 
   // ---- 「参加に承認が要る」: before the link is made it is only a choice; afterwards it changes the link itself
   // (setInviteApproval), so the link and the QR stay as they are.
@@ -202,6 +204,19 @@ function invitePanel(entry) {
     ];
   }
 
+  // The 会 that travels with a made link is fixed (it is saved with the invite): say which, and how to change it.
+  function postFixedNote(row) {
+    if (!row.post_id) {
+      return el('p', { className: 'invite-note invite-post-fixed', text: '会の投稿は付いていません。付けるときは「更新」で作り直してください。' });
+    }
+    const post = mine.find((item) => item.id === row.post_id) || state.postsById?.get(row.post_id);
+    const name = post ? `（${clipBody(post.body)}）` : '';
+    return el('p', {
+      className: 'invite-note invite-post-fixed',
+      text: `この QR の会${name}にも参加した状態で始まります。変えるときは「更新」で作り直してください。`,
+    });
+  }
+
   // ---- the actions
   // Stops every given invite, carrying on past one that fails; returns how many could not be stopped.
   async function revokeAll(list) {
@@ -225,7 +240,7 @@ function invitePanel(entry) {
     let message = '';
     paint();
     try {
-      const made = await data.createInvite(createInviteBody(entry.id, choice, Date.now(), { needsApproval }));
+      const made = await data.createInvite(createInviteBody(entry.id, choice, Date.now(), { needsApproval, post: invitePostFor(postOn, postId) }));
       step = 'idle';           // the new link exists: a second press must not make a third
       choice = DEFAULT_EXPIRY;
       if (replacing) {
@@ -364,13 +379,6 @@ function invitePanel(entry) {
     };
     paintQr(url);
     prepareImage(row);
-    // The switch and the picked post only change the link text and the QR; the invite itself stays.
-    const swap = () => {
-      field.value = linkOf(row);
-      paintQr(field.value);
-      prepareImage(row);
-    };
-
     const warn = el('p', {
       className: 'invite-venue-warn', attrs: { role: 'note' },
       text: '承認オンのままです（会場で大勢が入るならオフに）。上のスイッチをオフにしたあとも、オンに戻せます。',
@@ -393,7 +401,7 @@ function invitePanel(entry) {
           toggle.disabled = false;
         }
       }, Boolean(row.needs_approval)),
-      ...postSwitch(swap),
+      postFixedNote(row),
       qrBox,
       qrBox.querySelector('svg') ? el('button', {
         className: 'btn btn-block btn-quiet invite-venue', attrs: { type: 'button' }, text: '会場で映す',
@@ -417,7 +425,13 @@ function invitePanel(entry) {
       el('div', { className: 'invite-manage' },
         el('button', {
           className: 'btn btn-small btn-quiet invite-renew', attrs: { type: 'button' }, text: '更新', disabled: busy,
-          on: { click: () => { needsApproval = Boolean(row.needs_approval); step = 'renew'; paint(); } },
+          on: { click: () => {
+            needsApproval = Boolean(row.needs_approval);
+            // The new link starts from the 会 of this one.
+            postOn = Boolean(row.post_id) && mine.some((item) => item.id === row.post_id);
+            if (postOn) postId = row.post_id;
+            step = 'renew'; paint();
+          } },
         }),
         el('button', {
           className: 'btn btn-small btn-quiet invite-revoke', attrs: { type: 'button' }, text: '止める', disabled: busy,
