@@ -469,9 +469,9 @@ test('join_approved: the headline is the community, the body says it worked', ()
 });
 
 test('the join kinds always interrupt, whatever the settings say', () => {
-  assert.deepEqual([...rules.ALWAYS_ON_TYPES].sort(), ['join_approved', 'join_request']);
+  assert.deepEqual([...rules.ALWAYS_ON_TYPES].sort(), ['event_cancel', 'event_cancelled', 'event_late', 'join_approved', 'join_request']);
   const off = { reply: { push: false, in_app: false }, reaction: { push: false, in_app: false }, island: { push: false, in_app: false } };
-  for (const type of ['join_request', 'join_approved']) {
+  for (const type of ['join_request', 'join_approved', 'event_late', 'event_cancel', 'event_cancelled']) {
     assert.equal(rules.interrupts({ type }, off), true, type);
     assert.equal(rules.interrupts({ type }, {}), true, `${type} without settings`);
     assert.equal(rules.interrupts({ type }, null), true, `${type} with null settings`);

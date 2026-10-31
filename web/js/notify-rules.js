@@ -22,10 +22,13 @@ export const CATEGORY_OF = Object.freeze({
   // 承認制 (2026-11-01): somebody waits to join a community of mine / my request was accepted.
   // No switch holds them back (ALWAYS_ON_TYPES), so they belong to no switch.
   join_request: 'join_request', join_approved: 'join_approved',
+  // 会 (2026-11-01 第2回a): to the host 「遅れます」「取り消しました」, to members who applied 「中止」.
+  event_late: 'event_late', event_cancel: 'event_cancel', event_cancelled: 'event_cancelled',
 });
 
 /** Kinds that no setting turns off: a person waits for the answer. Mirrors ALWAYS_ON_NOTIFICATION_TYPES in core/config.py. */
-export const ALWAYS_ON_TYPES = Object.freeze(['join_request', 'join_approved']);
+export const ALWAYS_ON_TYPES = Object.freeze([
+  'join_request', 'join_approved', 'event_late', 'event_cancel', 'event_cancelled']);
 export const isAlwaysOn = (type) => ALWAYS_ON_TYPES.includes(type);
 
 /** The name of a person the database does not show me (accounts are read only inside a shared community). */
@@ -66,6 +69,10 @@ export const KIND_TEXT = Object.freeze({
   // Templates too: {community} is the community's name from the payload.
   join_request: '『{community}』への参加を待っています',
   join_approved: '参加できました',
+  // 会: the same words as push_message() in app.py. {minutes} and {title} come from the payload.
+  event_late: '{minutes}分ほど遅れます',
+  event_cancel: '会の申し込みを取り消しました',
+  event_cancelled: '「{title}」は中止になりました',
 });
 
 /** The small line under a 「話してみたい」 / DM row. */
