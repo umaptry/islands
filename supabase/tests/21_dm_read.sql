@@ -29,8 +29,8 @@ select ok(not has_table_privilege('authenticated', 'public.dm_reads', 'UPDATE'),
 select ok(not has_table_privilege('authenticated', 'public.dm_reads', 'DELETE'), 'nor delete from it');
 select is((select relrowsecurity from pg_class where oid = 'public.dm_reads'::regclass), true,
           'row level security is on');
-select is((select count(*)::int from pg_policy where polrelid = 'public.dm_reads'::regclass), 0,
-          'and there is no policy');
+select is((select array_agg(polname::text) from pg_policy where polrelid = 'public.dm_reads'::regclass),
+          array['dm_reads_none'], 'and the only policy is dm_reads_none (lets nobody in)');
 select is((select count(*)::int from pg_trigger
             where tgrelid = 'public.dm_reads'::regclass and not tgisinternal), 0, 'no triggers');
 select ok(not has_function_privilege('anon', 'public.mark_dm_read(uuid)', 'execute'), 'anon cannot mark');
@@ -105,28 +105,33 @@ select throws_ok($$select public.dm_partner_read_at('d6d6d6d6-d6d6-4d6d-8d6d-d6d
 reset role;
 
 -- -----------------------------------------------------------------------
--- 4. ブロック（どちら向きでも、記録されず null。すでにある記録は動かず、見えない）
+-- 4. ブロック（どちら向きでも、新しくは記録されない。すでにある時刻は動かず、そのまま見える。
+--    見えなくなると、ブロックされたことが相手に分かってしまうため）
 -- -----------------------------------------------------------------------
 delete from public.dm_reads;
-insert into public.dm_reads(room_id, user_id, read_at)
-values ('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6', 'd5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a2', '2020-01-01 00:00:00+00');
+insert into public.dm_reads(room_id, user_id, read_at) values
+  ('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6', 'd5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a1', '2020-01-01 00:00:00+00'),
+  ('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6', 'd5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a2', '2020-01-02 00:00:00+00');
 insert into public.dm_blocks(blocker_id, blocked_id)
 values ('d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a1', 'd5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a2');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a1","role":"authenticated"}';
-select is((select public.dm_partner_read_at('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6')), null::timestamptz,
-          'the blocker reads null');
+select is((select public.dm_partner_read_at('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6')),
+          '2020-01-02 00:00:00+00'::timestamptz, 'the blocker still reads the kept time');
 select lives_ok($$select public.mark_dm_read('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6')$$,
                 'the blocker marks without an error');
 set local request.jwt.claims to '{"sub":"d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a2","role":"authenticated"}';
 select lives_ok($$select public.mark_dm_read('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6')$$,
                 'the blocked person marks without an error');
-select is((select public.dm_partner_read_at('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6')), null::timestamptz,
-          'the blocked person reads null (nothing says why)');
+select is((select public.dm_partner_read_at('d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6')),
+          '2020-01-01 00:00:00+00'::timestamptz,
+          'the blocked person still reads the kept time (nothing tells them about the block)');
 reset role;
-select is((select count(*)::int from public.dm_reads), 1, 'nothing new was recorded under a block');
-select is((select read_at from public.dm_reads), '2020-01-01 00:00:00+00'::timestamptz,
-          'and the old row did not move');
+select is((select count(*)::int from public.dm_reads), 2, 'nothing new was recorded under a block');
+select is((select read_at from public.dm_reads where user_id = 'd5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a1'),
+          '2020-01-01 00:00:00+00'::timestamptz, 'the blocker''s time did not move');
+select is((select read_at from public.dm_reads where user_id = 'd5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5a2'),
+          '2020-01-02 00:00:00+00'::timestamptz, 'nor did the blocked person''s');
 delete from public.dm_blocks;
 
 -- -----------------------------------------------------------------------

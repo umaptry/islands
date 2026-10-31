@@ -1697,6 +1697,8 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .dm-chips { position: absolute; bottom: -13px; display: flex; gap: 3px; }
 .dm-line:not(.mine) .dm-chips { right: 8px; }
 .dm-line.mine .dm-chips { left: 8px; }
+/* A one-letter bubble is narrower than two circles: keep it wide enough that they stay on it (no side scroll at 375px). */
+.dm-line.has-reactions .dm-bubble { min-width: 72px; }
 .dm-chip {
   min-width: 26px; height: 26px; padding: 0 6px; box-sizing: border-box; border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center; gap: 3px;
@@ -1712,7 +1714,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
   position: absolute; margin: 0; box-sizing: border-box; overflow-y: auto;
   background: #fff; color: var(--ink); box-shadow: 0 8px 28px rgba(0, 0, 0, .35);
 }
-.dm-lifted.mine { border-radius: 18px 18px 6px 18px; }
+.dm-lifted.mine { background: var(--dm-mine); color: var(--dm-mine-ink); border-radius: 18px 18px 6px 18px; }
 .dm-react-bar {
   position: absolute; height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 2px;
   padding: 0 10px; border-radius: 999px; background: #fff; box-shadow: 0 6px 22px rgba(0, 0, 0, .3);

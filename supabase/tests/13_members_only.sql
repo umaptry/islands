@@ -205,7 +205,8 @@ select is((select array_agg(p.proname::text order by p.proname) from pg_proc p
                                     'is_member_of_post', 'is_member_of_post_any',
                                     'community_map_posts', 'map_posts', 'map_cells',
                                     'notification_feed', 'touch_last_seen', 'mark_active',
-                                    'talk_peers', 'press_talk', 'withdraw_talk', 'my_talk_state', 'dm_room_list')),
+                                    'talk_peers', 'press_talk', 'withdraw_talk', 'my_talk_state', 'dm_room_list',
+                                    'react_dm', 'mark_dm_read', 'dm_partner_read_at')),
           null::text[], 'a signed-in person can run no security definer function other than the screens'' own');
 
 -- posts の列: anon はどの列も読めない（あとから足された列も）。authenticated の vec は読めず、書ける列は4つだけ。

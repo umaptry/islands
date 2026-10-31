@@ -1286,12 +1286,14 @@ class MemoryStore:
             return True
 
     def dm_partner_read_at(self, me, room_id):
-        """When the other person last read the room (ISO text), or None: not in the room, a block, not read yet."""
+        """When the other person last read the room (ISO text), or None: not in the room, not read yet.
+        A block does not hide the time already kept (that would tell who blocked); mark_dm_read just stops
+        moving it, so only what is sent after the block stays unread."""
         if not me:
             raise TalkRefused(TALK_ERROR_LOGIN, status=401)
         with self._lock:
             room = self._room_of(me, room_id)
-            if not room or self._talk_blocked(room["user_a"], room["user_b"]):
+            if not room:
                 return None
             other = room["user_b"] if room["user_a"] == me else room["user_a"]
             seen = self._dm_reads.get((room_id, other))

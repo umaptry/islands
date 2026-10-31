@@ -107,7 +107,7 @@ test('相手が部屋を開くまで既読は出ず、開いたあと次のポ�
   await guest.context.close();
 });
 
-test('ブロックがあると既読は出ない', async ({ browser }, testInfo) => {
+test('ブロックのあとに相手が開いても、既読は付かない', async ({ browser }, testInfo) => {
   test.setTimeout(150000);
   const { host, guest, roomId } = await matchedRoom(browser, testInfo);
   await say(host, roomId, 'こんにちは');
@@ -119,6 +119,29 @@ test('ブロックがあると既読は出ない', async ({ browser }, testInfo)
   await expect(guest.page.locator('.dm-blocked')).toBeVisible({ timeout: 15000 });
   await host.page.waitForTimeout(12000);   // ポーリング2回以上
   await expect(readMark(host)).toHaveCount(0);
+  await host.context.close();
+  await guest.context.close();
+});
+
+test('既読が付いたあとにブロックされても、既読は消えない（ブロックされたことが分からない）', async ({ browser }, testInfo) => {
+  test.setTimeout(150000);
+  const { host, guest, roomId } = await matchedRoom(browser, testInfo);
+  await say(host, roomId, 'こんにちは');
+  await openRoom(host, roomId);
+  await expect(thread(host).locator('.dm-line.mine')).toHaveCount(1, { timeout: 15000 });
+  await openRoom(guest, roomId);
+  await expect(readMark(host)).toHaveCount(1, { timeout: 20000 });
+  // 相手（guest）が host をブロックする
+  const hostId = await myId(host);
+  await guest.page.evaluate(async (id) => (await import('/static/js/net.js')).data.block(id), hostId);
+  // すでに同じ部屋を開いているので、いったん離れてから開き直す（ブロック中の画面にする）
+  await guest.page.goto('/#/map');
+  await expect(guest.page.locator('#map')).toHaveClass(/active/);
+  await guest.page.goto(`/#/dm/${roomId}`);
+  await expect(guest.page.locator('.dm-blocked')).toBeVisible({ timeout: 15000 });
+  await host.page.waitForTimeout(12000);   // ポーリング2回以上
+  await expect(readMark(host)).toHaveCount(1);
+  await expect(readMark(host)).toHaveText('既読');
   await host.context.close();
   await guest.context.close();
 });

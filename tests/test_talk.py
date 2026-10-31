@@ -676,16 +676,20 @@ def test_people_outside_the_room_record_and_see_nothing(matched):
     assert partner_read(guest, room).json() == {"partner_read_at": None}
 
 
-def test_a_block_records_nothing_and_shows_nothing_both_ways(matched):
+def test_a_block_records_nothing_new_but_keeps_showing_the_old_time_both_ways(matched):
     host, guest, *_, room = matched
     mark_read(guest, room)
+    seen = partner_read(host, room).json()["partner_read_at"]
+    assert seen
     guest.client.post("/api/local/dm/blocks", json={"blocked_id": host.id}, headers=guest.headers)
     for person in (host, guest):
-        assert partner_read(person, room).json() == {"partner_read_at": None}
         assert mark_read(person, room).json() == {"recorded": False}
+    # hiding the kept time would tell the host about the block, so it stays as it was, without moving
+    assert partner_read(host, room).json() == {"partner_read_at": seen}
+    assert partner_read(guest, room).json() == {"partner_read_at": None}     # the host's try was refused
     guest.client.delete(f"/api/local/dm/blocks/{host.id}", headers=guest.headers)
-    assert partner_read(host, room).json()["partner_read_at"]                # the old mark was kept, not moved
-    assert partner_read(guest, room).json() == {"partner_read_at": None}     # and the host's try was refused
+    assert partner_read(host, room).json() == {"partner_read_at": seen}
+    assert partner_read(guest, room).json() == {"partner_read_at": None}
 
 
 def test_read_routes_need_login(matched, fresh_client):

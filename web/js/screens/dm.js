@@ -97,7 +97,6 @@ let reactPending = 0;
 let partnerReadAt = null;
 let marked = null;
 let markFailures = 0;
-let readStateOn = true;
 const READ_FAILURES_MAX = 3;
 
 function stopRoom() {
@@ -113,7 +112,6 @@ function stopRoom() {
   partnerReadAt = null;
   marked = null;
   markFailures = 0;
-  readStateOn = true;
   input = null;
 }
 
@@ -148,7 +146,7 @@ function paintMessages({ stick = false } = {}) {
     }
     const { message, mine } = row;
     const chips = reactionChips(reactions, message.id, me);
-    const bubble = el('p', { className: 'dm-bubble', text: message.body });
+    const bubble = el('p', { className: 'dm-bubble', text: message.body, attrs: { 'data-message-id': message.id } });
     attachLongPress(bubble, { onHold: () => openMenu(message, bubble, mine) });
     // LINE's shape: the time (and 「既読」 above it, on mine) sits beside the bubble, on its bottom edge.
     const stamp = el('div', { className: 'dm-stamp' },
@@ -211,6 +209,13 @@ async function copyText(text) {
 function openMenu(message, bubble, mine) {
   if (!room) return;
   closeMenu();
+  // The 5-second poll may have painted the thread again during the half-second hold: the pressed bubble is
+  // then off the page and measures as 0. Use the one on screen now, or open nothing.
+  if (!bubble.isConnected) {
+    bubble = [...$('dmThread').querySelectorAll('.dm-bubble[data-message-id]')]
+      .find((node) => node.dataset.messageId === String(message.id));
+    if (!bubble) return;
+  }
   const rect = bubble.getBoundingClientRect();
   const canReact = reactionsOn && !room.blocked_by_me;
   const held = myReaction(reactions, message.id, state.account?.id);
@@ -350,7 +355,7 @@ async function recordRead(mine, id) {
 
 /** When the other person last read this room. True when what is on screen changed. */
 async function refreshPartnerRead(mine, id) {
-  if (!readStateOn || typeof data.dmReadState !== 'function') return false;
+  if (typeof data.dmReadState !== 'function') return false;
   let result = null;
   try {
     result = await data.dmReadState(id);
