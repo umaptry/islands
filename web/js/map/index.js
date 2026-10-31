@@ -36,7 +36,7 @@ import { groundOf } from './coast.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
-import { HOUSE_WIDTH, houseScore, houseTier } from './mesh.js';
+import { HOUSE_WIDTH, houseScore, houseSpot, houseTier } from './mesh.js';
 import { thinHouses } from './house-thin.js';
 import { PALETTE, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
 
@@ -1257,6 +1257,20 @@ function renderMap(time) {
     }
     return { island, members, tier, size, span, seed, x: at.x, foot: at.y, fade, show, town: true, home };
   }).filter(Boolean);
+  // Each town's landmarks, here before the trees so the trees keep off them too.
+  // Landmarks stand at fixed world points round the town (townHome); a slot
+  // that is not on land is never drawn, at any zoom.
+  places.forEach((place) => {
+    place.marks = [];
+    if (!place.town || place.tier < LANDMARK_MIN_TIER) return;
+    const markSpan = Math.max(worldSize(36), place.span * 0.8);
+    landmarksOf(place.island, place).slice(0, LANDMARK_SPOTS.length).forEach((name, index) => {
+      const slot = place.home.slots[index];
+      if (!slot || !slot.land) return;
+      const at = toScreen(slot.x, slot.y);
+      place.marks.push({ name, size: markSpan * scale, span: markSpan, wx: slot.x, wy: slot.y, x: at.x, foot: at.y });
+    });
+  });
   // One house for every post that has a face on the map, as big as a length in
   // the world, up and to the right of it - the person stands in front of their
   // door (2026-11-01, the user: south east of the face, the person looked to be
@@ -1269,8 +1283,6 @@ function renderMap(time) {
   let houses = [];
   // The smallest tier is drawn from HOUSE_MIN px wide; a bigger one is wider, so it shows no later.
   if (scale * HOUSE_WIDTH[0] >= HOUSE_MIN) {
-    const islandOf = new Map();
-    places.forEach((place) => place.members.forEach((id) => islandOf.set(id, place)));
     const faces = scale >= faceScale();
     const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
     // Houses are drawn out to `room` past the screen but gathered from a wider
@@ -1289,18 +1301,27 @@ function renderMap(time) {
       const point = toScreen(post.x, post.y);
       const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
       const seed = hashId(post.id);
-      const body = HOUSE_BODY[tier][((Math.round(seed) % 6) + 6) % 6];
-      const x = point.x + clear * Math.SQRT1_2 + houseSize * body[0];
-      const foot = point.y - clear * Math.SQRT1_2 - houseSize * body[1];
+      const { x, foot } = houseSpot(point.x, point.y, clear, houseSize, tier, seed);
       if (outside(x, foot, band)) return;
-      const place = islandOf.get(post.id);
+      // Only the landing post's own house comes up with it; the island's other
+      // houses stay as they are (they used to fade out with its ground and back).
       const own = stage && post.id === reveal.id ? stage.land : 1;
+      // Not there yet: it neither shows nor thins the houses beside it.
+      if (!(own > 0)) return;
+      // Faint with its face: left out by the search or filter, or stepping back
+      // while the map shows who joined a post.
+      const out = steppedBack(post, sifting);
+      const faint = out || dimmed(post);
+      const island = islandOfPost(post.id);
       houses.push({
-        id: post.id, score: houseScore(post),
+        id: post.id, score: houseScore(post), faint,
         // The open post and the one landing keep their house when houses crowd.
         keep: (state.selected != null && post.id === state.selected.id) || (stage != null && post.id === reveal.id),
-        x, foot, size: houseSize, tier, seed, calm: Boolean(place && place.island.quiet),
-        alpha: own * (place ? place.fade : 1), wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
+        // Quiet from its island on the whole map, not only the islands near the
+        // screen: the colour no longer comes and goes as the map pans.
+        x, foot, size: houseSize, tier, seed, calm: Boolean(island && island.quiet),
+        alpha: own * (out ? FILTERED_OUT : faint ? DIM : 1),
+        wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
       });
     });
     // Houses standing on each other are thinned the way the pins are: one stays
@@ -1309,14 +1330,12 @@ function renderMap(time) {
   }
 
   if (terrain && terrain.trees) {
-    const old = before && before.trees
-      ? new Set(before.trees.map((tree) => `${tree.x},${tree.y},${tree.name}`)) : null;
-    if (old) {
-      drawTrees(before.trees, houses, far ? [] : visible, far, 1);
-      drawTrees(terrain.trees.filter((tree) => !old.has(`${tree.x},${tree.y},${tree.name}`)),
-        houses, far ? [] : visible, far, stage.land);
+    const marks = places.flatMap((place) => place.marks);
+    if (before && before.trees) {
+      drawTrees(before.trees, houses, marks, far ? [] : visible, far, 1);
+      drawTrees(sproutedTrees(before.trees, terrain.trees), houses, marks, far ? [] : visible, far, stage.land);
     } else {
-      drawTrees(terrain.trees, houses, far ? [] : visible, far, 1);
+      drawTrees(terrain.trees, houses, marks, far ? [] : visible, far, 1);
     }
   }
 
@@ -1354,25 +1373,12 @@ function renderMap(time) {
       return;
     }
     const calm = Boolean(island.quiet);
-    const marked = place.tier >= LANDMARK_MIN_TIER;
-    const markSpan = Math.max(worldSize(36), place.span * 0.8);
-    const markSize = markSpan * scale;
-    // Landmarks stand at fixed world points round the town (townHome); a slot
-    // that is not on land is never drawn, at any zoom.
-    place.marks = [];
-    if (marked) {
-      landmarksOf(island, place).slice(0, LANDMARK_SPOTS.length).forEach((name, index) => {
-        const slot = place.home.slots[index];
-        if (!slot || !slot.land) return;
-        const at = toScreen(slot.x, slot.y);
-        place.marks.push({ name, size: markSize, x: at.x, foot: at.y });
-      });
-    }
+    // place.marks: worked out above, before the trees.
     const alpha = place.fade * place.show;
     place.marks.forEach((piece) => {
       standing.push({
         foot: piece.foot,
-        draw: () => { piece.box = drawLandmark(ctx, piece.name, piece.x, piece.foot, markSize, { alpha, calm }); },
+        draw: () => { piece.box = drawLandmark(ctx, piece.name, piece.x, piece.foot, piece.size, { alpha, calm }); },
       });
     });
     place.box = { left: x - size / 2, right: x + size / 2, top: foot - size, bottom: foot };
@@ -1895,31 +1901,56 @@ function landAtWorld(list, x, y) {
 }
 
 /** Trees, bushes and rocks from the terrain's scatter, kept off the houses and
- * out from under faces, and off the water: a crown reaching over the shore
- * stays home (a rock in the shallows is meant to stand in the water, in a pale
- * ring of broken water). Zoomed out, every other one. */
+ * the landmarks, out from under faces, and off the water: a crown reaching over
+ * the shore stays home (a rock in the shallows is meant to stand in the water, in
+ * a pale ring of broken water). Zoomed out, every other one. */
 const TREE_WORLD = 2.2;   // world units across a tree of size 1 (a round tree or a pine)
 const TREE_MIN = 3;       // px: smaller than this is not drawn
 const TREE_MAX = 400;     // px: a ceiling for the largest zoom
 const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
 const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
-// Of a house's size, per tier (hut, house, manor, castle) and per turn (the six
-// ways a house can face, by its seed): how far its walls and roof reach left of
-// where it stands, and below its foot (its shadow falls further, down and to the
-// right). Measured on the drawn pictures (pixels at least 120 opaque, shadow
-// left out) and rounded up a little. The house keeps its one worst value as before.
-const HOUSE_BODY = [
-  [[0.41, 0.24], [0.48, 0.29], [0.53, 0.33], [0.54, 0.35], [0.51, 0.34], [0.46, 0.31]],
-  Array(6).fill([0.7, 0.44]),
-  [[0.89, 0.54], [0.90, 0.68], [0.84, 0.78], [0.72, 0.83], [0.62, 0.82], [0.71, 0.76]],
-  [[1.03, 0.75], [1.17, 0.86], [1.26, 0.93], [1.31, 0.96], [1.26, 0.93], [1.17, 0.86]],
-];
 const HOUSE_GAP = 3;      // px between a pin and its house's nearest corner
 const HOUSE_DOT_CLEAR = 6;   // px a dot pin takes up, its unread ring included
 const HOUSE_CLEAR = [1.5, 1.9, 2.9, 3.9];  // world units a tree keeps from a house's foot, per tier
 const REEF_RING = 'rgba(225,246,252,0.45)';
 
-function drawTrees(trees, houses, posts, thin, alpha = 1) {
+// Which island each post is on, over every island the client holds - not only
+// the ones near the screen (places), where a quiet island's houses took and lost
+// their colour as the map panned. Made again only when the island list changes.
+let postIsland = { islands: null, map: new Map() };
+
+function islandOfPost(id) {
+  if (postIsland.islands !== state.islands) {
+    const map = new Map();
+    (state.islands || []).forEach((island) => (island.post_ids || []).forEach((pid) => map.set(pid, island)));
+    postIsland = { islands: state.islands, map };
+  }
+  return postIsland.map.get(id);
+}
+
+// The trees that come up with a landing post: worked out once a landing, not
+// every frame (thousands of trees made a string each, ~7 ms a frame).
+let sprouted = { before: null, after: null, list: [] };
+
+function sproutedTrees(before, after) {
+  if (sprouted.before !== before || sprouted.after !== after) {
+    const old = new Set(before.map((tree) => `${tree.x},${tree.y},${tree.name}`));
+    sprouted = { before, after, list: after.filter((tree) => !old.has(`${tree.x},${tree.y},${tree.name}`)) };
+  }
+  return sprouted.list;
+}
+
+// The ground a landmark keeps clear of trees, in its footprint widths (`span`):
+// to each side of its foot, behind it (up the screen; the building rises there)
+// and in front of it, where a tree's crown would reach up over it. Trees are
+// drawn first and stuck into the lighthouses, glasshouses and fields
+// (2026-10-31, review: the trees kept off the houses only).
+const MARK_HALF = 0.55;
+const MARK_BEHIND = 0.9;
+const MARK_FRONT = 0.1;
+const CROWN_TALL = 1.3;   // a crown's height, in its width
+
+function drawTrees(trees, houses, marks, posts, thin, alpha = 1) {
   // A tree is a length in the world, like the houses: it grows with the map, and
   // one too small to see on screen is not drawn - zoomed out there are no trees.
   const scale = state.camera.scale;
@@ -1945,6 +1976,12 @@ function drawTrees(trees, houses, posts, thin, alpha = 1) {
     }
     return false;
   };
+  const nearMark = (tree) => {
+    const crown = TREE_WORLD * tree.k;
+    return marks.some((mark) => Math.abs(tree.x - mark.wx) < MARK_HALF * mark.span + crown / 2
+      && tree.y > mark.wy - MARK_BEHIND * mark.span
+      && tree.y < mark.wy + MARK_FRONT * mark.span + CROWN_TALL * crown);
+  };
   const shown = [];
   trees.forEach((tree) => {
     if (thin && tree.k < 1.3) return;
@@ -1953,6 +1990,7 @@ function drawTrees(trees, houses, posts, thin, alpha = 1) {
     const size = Math.min(TREE_MAX, base * tree.k);
     if (size < TREE_MIN) return;
     if (bins.size && nearHouse(tree)) return;
+    if (marks.length && nearMark(tree)) return;
     if (posts.some(({ point }) => Math.abs(point.x - p.x) < 15 && Math.abs(point.y - p.y) < 18)) return;
     if (check && !tree.wet) {
       const reach = tree.name === 'rock' ? 0.2 : 0.35;

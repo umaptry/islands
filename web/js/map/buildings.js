@@ -14,7 +14,7 @@
 
 import { PALETTE, mixHex } from './palette.js';
 import { landmarkLights, landmarkMesh, landmarkSize } from './landmarks.js';
-import { HOUSE_TIERS, SHADOW_OF, facesOf, houseLights, partsOf, shadowOutline, tierIndex } from './mesh.js';
+import { HOUSE_TIERS, SHADOW_OF, facesOf, houseLights, houseTurn, partsOf, shadowOutline, tierIndex } from './mesh.js';
 
 export const TIER_COUNT = 5;
 
@@ -730,7 +730,7 @@ export function drawHouse(ctx, x, foot, size, opts = {}) {
   if (!ctx || !(size > 0)) return null;
   const { alpha = 1, calm = false, seed = 0 } = opts;
   const dpr = scaleOf(ctx);
-  const turn = ((Math.abs(seed | 0) % 6) + 6) % 6;
+  const turn = houseTurn(seed);
   const tier = tierIndex(opts.tier);
   const kind = HOUSE_TIERS[tier];
   const e = pickEntry({ shape: 'house', id: kind, calm, night: false, dpr, seed: turn }, size, (s) => render({
@@ -758,7 +758,7 @@ export function drawNightLights(ctx, what, x, foot, size) {
       size: s, calm, night: true, dpr, fitMode: LANDMARK_UNITS, fitKey: `l|${id}`,
     });
   } else if (what.house) {
-    const turn = ((Math.abs(what.seed | 0) % 6) + 6) % 6;
+    const turn = houseTurn(what.seed);
     const tier = tierIndex(what.tier);
     const kind = HOUSE_TIERS[tier];
     parts = { shape: 'lights-house', id: kind, calm, night: true, dpr, seed: turn };

@@ -7,9 +7,12 @@
 // OVERLAP_OK = 25% of the smaller box's area: houses side by side in a town);
 // more than that and only one stays. Who stays, in this order:
 //   1. the open post and the post that is landing,
-//   2. the bigger tier (castle > manor > house > hut),
-//   3. more reactions and messages,
-//   4. the smaller hash of the post id (the same answer every frame, so a house
+//   2. a house drawn at full strength over a faint one (`faint`: its post is
+//      left out by the search or filter, or steps back while the map shows who
+//      joined a post), so a faint castle does not hide a house that matches,
+//   3. the bigger tier (castle > manor > house > hut),
+//   4. more reactions and messages,
+//   5. the smaller hash of the post id (the same answer every frame, so a house
 //      does not flicker when the camera moves a little).
 // The result does not depend on the order of the input.
 
@@ -42,6 +45,7 @@ export function crowds(a, b) {
 
 const rank = (a, b) => (
   (b.keep ? 1 : 0) - (a.keep ? 1 : 0)
+  || (a.faint ? 1 : 0) - (b.faint ? 1 : 0)
   || b.tier - a.tier
   || (b.score || 0) - (a.score || 0)
   || (a.seed - b.seed)
@@ -49,7 +53,8 @@ const rank = (a, b) => (
 );
 
 /**
- * houses: [{ id, x, foot, size, tier, score, seed, keep }] (keep: open or landing).
+ * houses: [{ id, x, foot, size, tier, score, seed, keep, faint }] (keep: open or landing;
+ * faint: drawn faint by the search, the filter or 「参加者を見てみる」).
  * Returns the ones that stay (new array, same objects). A grid of cells as wide as
  * the widest box means each house only asks its eight neighbours' cells.
  */

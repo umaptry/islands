@@ -75,3 +75,15 @@ test('a few thousand houses are quick', () => {
   thinHouses(list);
   assert.ok(performance.now() - t < 200);
 });
+
+test('a faint house gives way to one at full strength, even a smaller tier', () => {
+  // 2026-10-31: a castle stepped back by the search or 「参加者を見てみる」 must not hide a matching hut.
+  const castle = house('c', 100, 100, 3, { faint: true, score: 20, seed: 1 });
+  const hut = house('h', 101, 100, 0, { seed: 9 });
+  assert.deepEqual(thinHouses([castle, hut]).map((h) => h.id), ['h']);
+  // The open or landing post still comes first, faint or not.
+  const open = house('o', 100, 100, 0, { faint: true, keep: true });
+  assert.deepEqual(ids(thinHouses([open, castle, hut])), ['o']);
+  // Both faint: the usual order (the bigger tier).
+  assert.deepEqual(thinHouses([castle, house('h2', 101, 100, 0, { faint: true })]).map((h) => h.id), ['c']);
+});
