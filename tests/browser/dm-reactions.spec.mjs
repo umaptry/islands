@@ -84,6 +84,8 @@ const noticeCount = (who) => who.page.evaluate(
   async () => (await (await import('/static/js/net.js')).data.listNotificationFeed(100)).length);
 
 test('長押しで帯とコピーが出て、付ける・付け替える・外すが相手にも届く（通知は出ない）', async ({ browser }, testInfo) => {
+  // 2人とポーリングを待つので重い。確かめることは幅で変わらないため 390px だけ（CI の 45 分の制限）
+  test.skip(testInfo.project.name !== '390px', '2人で使う反応の確認は 390px だけで流す');
   const { host, guest, roomId } = await matchedRoom(browser, testInfo);
   await say(host, roomId, 'こんにちは、土曜は来られますか');
   await say(guest, roomId, '行きます、楽しみです');

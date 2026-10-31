@@ -1,6 +1,12 @@
 // DM の既読を端から端まで確かめる（2026-10-31）。手元モード、ブラウザ2つで2人。差し替えなし（本物の markDmRead / dmReadState を使う）。
 import { test, expect } from '@playwright/test';
 
+// 2人と5秒ごとのポーリングを待つので重い。確かめることは画面の幅で変わらないため、390px だけで流す
+// （CI のブラウザテストは 45 分で打ち切られる。2026-10-31 の最終チェック）。
+test.beforeEach(({}, testInfo) => {
+  test.skip(testInfo.project.name !== '390px', '2人で使う既読の確認は 390px だけで流す');
+});
+
 const SECOND = 'Idempotency-Key';
 
 async function newPerson(browser, testInfo, name) {

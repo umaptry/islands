@@ -142,6 +142,8 @@ test('リアクションのチップが次の行とぶつからない', async ({
 });
 
 test('既読: 相手が読んだ時刻までの自分のメッセージにだけ出て、記録の呼び出しは必要なときだけ', async ({ browser }, testInfo) => {
+  // ポーリングを待つので重い。確かめることは幅で変わらないため 390px だけ（CI の 45 分の制限）
+  test.skip(testInfo.project.name !== '390px', '既読の呼び出しの確認は 390px だけで流す');
   test.setTimeout(120000);
   const { host, guest, roomId } = await matchedRoom(browser, testInfo);
   await say(host, roomId, 'よんだ');
