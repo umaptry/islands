@@ -1278,14 +1278,16 @@ function renderMap(time) {
       const tier = houseTier(post);
       if (scale * HOUSE_WIDTH[tier] < HOUSE_MIN) return;
       const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
-      const x = point.x + clear * Math.SQRT1_2 + houseSize * HOUSE_BODY[tier][0];
-      const foot = point.y - clear * Math.SQRT1_2 - houseSize * HOUSE_BODY[tier][1];
+      const seed = hashId(post.id);
+      const body = HOUSE_BODY[tier][((Math.round(seed) % 6) + 6) % 6];
+      const x = point.x + clear * Math.SQRT1_2 + houseSize * body[0];
+      const foot = point.y - clear * Math.SQRT1_2 - houseSize * body[1];
       const room = houseSize * 2;
       if (x < -room || x > width + room || foot < -room || foot > height + room * 2) return;
       const place = islandOf.get(post.id);
       const own = stage && post.id === reveal.id ? stage.land : 1;
       houses.push({
-        x, foot, size: houseSize, tier, seed: hashId(post.id), calm: Boolean(place && place.island.quiet),
+        x, foot, size: houseSize, tier, seed, calm: Boolean(place && place.island.quiet),
         alpha: own * (place ? place.fade : 1), wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
       });
     });
@@ -1886,11 +1888,17 @@ const TREE_MIN = 3;       // px: smaller than this is not drawn
 const TREE_MAX = 400;     // px: a ceiling for the largest zoom
 const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
 const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
-// Of a house's size, per tier (hut, house, manor, castle): how far its walls and
-// roof reach left of where it stands, and below its foot (its shadow falls
-// further, down and to the right). Measured on the drawn pictures (pixels at
-// least 120 opaque, the worst of the six turns, shadow left out).
-const HOUSE_BODY = [[0.54, 0.34], [0.7, 0.44], [0.89, 0.82], [1.3, 0.95]];
+// Of a house's size, per tier (hut, house, manor, castle) and per turn (the six
+// ways a house can face, by its seed): how far its walls and roof reach left of
+// where it stands, and below its foot (its shadow falls further, down and to the
+// right). Measured on the drawn pictures (pixels at least 120 opaque, shadow
+// left out) and rounded up a little. The house keeps its one worst value as before.
+const HOUSE_BODY = [
+  [[0.41, 0.24], [0.48, 0.29], [0.53, 0.33], [0.54, 0.35], [0.51, 0.34], [0.46, 0.31]],
+  Array(6).fill([0.7, 0.44]),
+  [[0.89, 0.54], [0.90, 0.68], [0.84, 0.78], [0.72, 0.83], [0.62, 0.82], [0.71, 0.76]],
+  [[1.03, 0.75], [1.17, 0.86], [1.26, 0.93], [1.31, 0.96], [1.26, 0.93], [1.17, 0.86]],
+];
 const HOUSE_GAP = 3;      // px between a pin and its house's nearest corner
 const HOUSE_DOT_CLEAR = 6;   // px a dot pin takes up, its unread ring included
 const HOUSE_CLEAR = [1.5, 1.9, 2.9, 3.9];  // world units a tree keeps from a house's foot, per tier

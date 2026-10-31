@@ -108,8 +108,8 @@ export const HOUSE_TIERS = ['hut', 'house', 'manor', 'castle'];
 /** From this many reactions and messages on, a post's house is of that tier:
  * [house, manor, castle]; fewer than the first is a hut. One place to tune. */
 export const HOUSE_TIER_FROM = [1, 4, 10];
-/** How wide each tier is across, in world units (a guide; the walls and roof
- * are drawn to about this). */
+/** How wide each tier is across, in world units - a guide (the manor draws a
+ * little narrower); it decides whether a tier is big enough on screen to draw. */
 export const HOUSE_WIDTH = [2.4, 3, 4.2, 5.6];
 
 const count = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
