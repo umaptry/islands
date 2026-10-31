@@ -1273,18 +1273,26 @@ function renderMap(time) {
     places.forEach((place) => place.members.forEach((id) => islandOf.set(id, place)));
     const faces = scale >= faceScale();
     const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
-    visible.forEach(({ post, point }) => {
+    // Houses are drawn out to `room` past the screen but gathered from a wider
+    // band, so one just past that still thins the houses it would stand on:
+    // otherwise a house at the edge stays until a bigger one beside it comes into
+    // reach, then goes. A box reaches 1.8 sizes up and 1.31 to the side at most
+    // (house-thin.js), so two that crowd stand under 3 sizes apart.
+    const room = houseSize * 2;
+    const band = room + houseSize * 4;
+    const outside = (x, foot, edge) => x < -edge || x > width + edge || foot < -edge || foot > height + edge + room;
+    state.posts.forEach((post) => {
       // Hut, house, manor, castle by what the post has gathered; a tier too small
       // on screen (under HOUSE_MIN px wide) is not drawn.
       const tier = houseTier(post);
       if (scale * HOUSE_WIDTH[tier] < HOUSE_MIN) return;
+      const point = toScreen(post.x, post.y);
       const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
       const seed = hashId(post.id);
       const body = HOUSE_BODY[tier][((Math.round(seed) % 6) + 6) % 6];
       const x = point.x + clear * Math.SQRT1_2 + houseSize * body[0];
       const foot = point.y - clear * Math.SQRT1_2 - houseSize * body[1];
-      const room = houseSize * 2;
-      if (x < -room || x > width + room || foot < -room || foot > height + room * 2) return;
+      if (outside(x, foot, band)) return;
       const place = islandOf.get(post.id);
       const own = stage && post.id === reveal.id ? stage.land : 1;
       houses.push({
@@ -1297,7 +1305,7 @@ function renderMap(time) {
     });
     // Houses standing on each other are thinned the way the pins are: one stays
     // (see house-thin.js). Trees and night lights below use what is left.
-    houses = thinHouses(houses);
+    houses = thinHouses(houses).filter((house) => !outside(house.x, house.foot, room));
   }
 
   if (terrain && terrain.trees) {
