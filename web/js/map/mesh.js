@@ -112,6 +112,34 @@ export const HOUSE_TIER_FROM = [1, 4, 10];
  * little narrower); it decides whether a tier is big enough on screen to draw. */
 export const HOUSE_WIDTH = [2.4, 3, 4.2, 5.6];
 
+/** Which of the six turns (15 degrees a step) a house with this seed is drawn
+ * at. The one rule for drawing it, lighting its windows and placing it by its
+ * body (HOUSE_BODY): a seed from hashId runs to 2^32 - 1, and placing it by
+ * `seed % 6` while drawing it by `|seed | 0| % 6` put a third of the manors and
+ * castles on their faces (2026-10-31, the user: the face stood on the roof). */
+export function houseTurn(seed) {
+  return Math.abs(Number(seed) | 0) % 6;
+}
+
+/** Of a house's size, per tier (hut, house, manor, castle) and per turn
+ * (houseTurn): how far its walls and roof reach left of where it stands, and
+ * below its foot (its shadow falls further, down and to the right). Measured on
+ * the drawn pictures (pixels at least 120 opaque, shadow left out) and rounded up
+ * a little. */
+export const HOUSE_BODY = [
+  [[0.41, 0.24], [0.48, 0.29], [0.53, 0.33], [0.54, 0.35], [0.51, 0.34], [0.46, 0.31]],
+  Array(6).fill([0.7, 0.44]),
+  [[0.89, 0.54], [0.90, 0.68], [0.84, 0.78], [0.72, 0.83], [0.62, 0.82], [0.71, 0.76]],
+  [[1.03, 0.75], [1.17, 0.86], [1.26, 0.93], [1.31, 0.96], [1.26, 0.93], [1.17, 0.86]],
+];
+
+/** Where a house stands (x, foot) for a pin at (px, py): its body's nearest
+ * corner `clear` px up and to the right of the pin. `size` is drawHouse's size. */
+export function houseSpot(px, py, clear, size, tier, seed) {
+  const body = HOUSE_BODY[tierIndex(tier)][houseTurn(seed)];
+  return { x: px + clear * Math.SQRT1_2 + size * body[0], foot: py - clear * Math.SQRT1_2 - size * body[1] };
+}
+
 const count = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
 
 /** Reactions and messages a post has gathered: like + help + join + comment counts. */
