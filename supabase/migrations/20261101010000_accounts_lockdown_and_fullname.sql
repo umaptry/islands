@@ -4,7 +4,7 @@
 --
 --   * いままで accounts は、ログインしていない人も含めて誰でも読めた（accounts_read が using (true)、anon にも
 --     列の読みを許可）。これを「本人」「同じコミュニティのメンバー」「自分と DM の部屋がある相手」だけにする。
---     anon は accounts を一切読めない。サーバー（service_role）は今までどおり読める。
+--     anon は列の権限は残すが、行を見せる policy が無いので常に0行（エラーにならない）。サーバー（service_role）は今までどおり読める。
 --   * accounts に name_confirmed_at / age_band / job_title / created_via を足す。
 --       name_confirmed_at・age_band・job_title: authenticated が読める列（行の絞り込みは accounts_read）。
 --       created_via: 読ませない。この4つとも、ブラウザからは書けない（サーバーだけが書く）。
@@ -15,7 +15,7 @@
 --
 -- **古いコード（今の main）のままこの SQL を流すと、ブラウザが accounts を直接読む所の見え方が変わる**:
 --   同じコミュニティの人・DM の相手・自分は今までどおり読める。コミュニティの外の人の名前・アイコンは読めなくなり、
---   画面は「名前が空」の扱いになる。ログインしていない人（招待リンクの画面など）は accounts を読めないが、
+--   画面は「名前が空」の扱いになる。ログインしていない人（招待リンクの画面など）は accounts が常に0行だが、
 --   招待の画面は check_invite（security definer）だけを使うので影響しない。洗い出しは作業報告を参照。
 --
 -- 足す・作り直すだけで、何度流しても壊れない。1本 = 1 transaction。
@@ -76,10 +76,11 @@ drop policy if exists accounts_read on public.accounts;
 create policy accounts_read on public.accounts for select to authenticated
   using (public.account_visible(id));
 
--- anon は表も列も読めない（revoke はその表の列の権限も外す）。
-revoke select on public.accounts from anon;
-
--- 新しい列: 読めるのは authenticated の3つだけ。書く権限は足さない（サーバーだけが書く）。created_via は誰にも読ませない。
-grant select (name_confirmed_at, age_band, job_title) on public.accounts to authenticated;
+-- anon の列の権限は、authenticated と同じ列にそろえて残す（外すと、ログイン前に posts などを accounts の埋め込みで
+-- 読む呼び出しが、0行ではなく permission denied になる。PostgREST は埋め込み先の列の権限を計画時に確かめるため）。
+-- anon 用の policy は作らない: accounts_read は authenticated だけなので、anon は常に0行（エラーにならない）。
+-- 新しい列: name_confirmed_at・age_band・job_title は anon にも select を付ける（行が0なので何も見えない）。
+-- created_via はどちらにも付けない。書く権限は足さない（サーバーだけが書く）。
+grant select (name_confirmed_at, age_band, job_title) on public.accounts to anon, authenticated;
 
 commit;

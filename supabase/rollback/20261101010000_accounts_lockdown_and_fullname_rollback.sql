@@ -21,7 +21,7 @@ create policy accounts_read on public.accounts for select using (true);
 grant select (id, display_name, affiliation, bio, link_url, icon_id, avatar_path,
               created_at, updated_at, topics, goal, seeking, offering)
   on public.accounts to anon, authenticated;
-revoke select (name_confirmed_at, age_band, job_title) on public.accounts from authenticated;
+revoke select (name_confirmed_at, age_band, job_title) on public.accounts from anon, authenticated;
 
 drop function if exists public.account_visible(uuid);
 drop function if exists public.shares_community_with(uuid);

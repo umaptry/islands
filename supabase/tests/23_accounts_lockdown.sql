@@ -76,11 +76,20 @@ update public.accounts set age_band = null, job_title = null, created_via = null
 -- -----------------------------------------------------------------------
 -- 2. 権限
 -- -----------------------------------------------------------------------
-select is((select count(*)::int from information_schema.columns c
+select is((select array_agg(c.column_name::text order by c.column_name) from information_schema.columns c
             where c.table_schema = 'public' and c.table_name = 'accounts'
-              and has_column_privilege('anon', 'public.accounts', c.column_name, 'select')), 0,
-          'anon can read no column of accounts');
-select ok(not has_table_privilege('anon', 'public.accounts', 'select'), 'nor the table');
+              and has_column_privilege('anon', 'public.accounts', c.column_name, 'select')),
+          (select array_agg(c.column_name::text order by c.column_name) from information_schema.columns c
+            where c.table_schema = 'public' and c.table_name = 'accounts'
+              and has_column_privilege('authenticated', 'public.accounts', c.column_name, 'select')),
+          'anon keeps the same readable columns as a signed-in person (so embeds do not fail with permission denied)');
+select ok(not has_column_privilege('anon', 'public.accounts', 'created_via', 'select'), 'but never created_via');
+select ok(not has_column_privilege('anon', 'public.accounts', 'vec_topics', 'select'), 'nor a vector');
+select ok(has_column_privilege('anon', 'public.accounts', 'age_band', 'select'), 'the new readable columns are granted to anon too');
+select ok(not has_table_privilege('anon', 'public.accounts', 'insert') and not has_column_privilege('anon', 'public.accounts', 'display_name', 'update'),
+          'and anon can write nothing');
+select is((select count(*)::int from pg_policies where schemaname = 'public' and tablename = 'accounts' and 'anon' = any(roles::text[])), 0,
+          'no policy of accounts is for anon (the rows are closed)');
 select ok(has_column_privilege('authenticated', 'public.accounts', 'display_name', 'select'), 'a signed-in person still reads names');
 select ok(has_column_privilege('authenticated', 'public.accounts', 'topics', 'select'), 'and topics');
 select ok(has_column_privilege('authenticated', 'public.accounts', 'name_confirmed_at', 'select'), 'and name_confirmed_at');
@@ -115,13 +124,18 @@ select is((select count(*)::int from pg_policies where schemaname = 'public' and
           'there is no other policy that reads accounts');
 
 -- -----------------------------------------------------------------------
--- 3. anon は読めない（招待の画面は check_invite で足りる）
+-- 3. anon は常に0行（列の権限は残す。エラーにしない）
 -- -----------------------------------------------------------------------
 set local role anon;
 set local request.jwt.claims to '{"role":"anon"}';
-select throws_ok($$select count(*) from public.accounts$$, '42501', null, 'anon: accounts cannot be read');
-select throws_ok($$select display_name from public.accounts$$, '42501', null, 'anon: not even the names');
-select throws_ok($$select id from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a1'$$, '42501', null, 'anon: nor one account by its id');
+select is((select count(*)::int from public.accounts), 0, 'anon: accounts has zero rows (no error)');
+select is((select count(*)::int from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a1'), 0, 'anon: nor one account by its id');
+select lives_ok($$select id, display_name, icon_id, avatar_path, age_band, job_title, name_confirmed_at from public.accounts$$,
+                'anon: reading the shared columns is not an error');
+select is((select count(a.id)::int from (select 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a1'::uuid as author_id) p
+             left join public.accounts a on a.id = p.author_id), 0,
+          'anon: a left join to accounts (the embed shape) gives a null author, not a permission error');
+select throws_ok($$select created_via from public.accounts$$, '42501', null, 'anon: created_via is still unreadable');
 select throws_ok($$select public.account_visible('f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a1')$$, '42501', null, 'anon: account_visible is not callable');
 select lives_ok($$select public.check_invite('nothing')$$, 'anon: check_invite still works');
 reset role;
