@@ -18,7 +18,7 @@ import { config, isLocal } from './config.js';
 import { session } from './session.js';
 import { attachActors } from './notify-rules.js';
 import { joinRefusal } from './recruit-rules.js';
-import { readPress, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
+import { readPress, readReact, readSent, talkLabelOf, talkRefusal } from './talk-rules.js';
 import { communitiesOn, shareOn } from './community-rules.js';
 import { imageExtension } from './image.js';
 
@@ -353,6 +353,20 @@ const supabaseBackend = {
       throw talkError(error, 'dm');
     }
   },
+  /** Everybody's reactions in one room (the table is small); only the two in the room can read it. */
+  async dmReactions(roomId) {
+    return restCall('dm_reactions', {
+      params: { select: 'message_id,account_id,kind', room_id: `eq.${roomId}`, limit: '2000' },
+    });
+  },
+  /** Add, swap or take off my one reaction to a message; answers the kind now on it (null = taken off). */
+  async reactDm(messageId, kind) {
+    try {
+      return readReact(await rpc('react_dm', { msg_id: messageId, new_kind: kind }));
+    } catch (error) {
+      throw talkError(error, 'dm');
+    }
+  },
   async block(blockedId) {
     await restCall('dm_blocks', {
       method: 'POST',
@@ -523,6 +537,15 @@ const localBackend = {
   sendDm: async (roomId, body) => {
     try {
       return readSent(await api.post(`/api/local/dm/rooms/${encodeURIComponent(roomId)}/messages`, { body }));
+    } catch (error) {
+      throw talkError(error, 'dm');
+    }
+  },
+  dmReactions: async (roomId) =>
+    (await api.get(`/api/local/dm/rooms/${encodeURIComponent(roomId)}/reactions`)).reactions || [],
+  reactDm: async (messageId, kind) => {
+    try {
+      return readReact(await api.post(`/api/local/dm/messages/${encodeURIComponent(messageId)}/reaction`, { kind }));
     } catch (error) {
       throw talkError(error, 'dm');
     }

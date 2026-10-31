@@ -392,3 +392,102 @@ test('garbage in storage is ignored, and only the newest rooms are kept', () => 
   assert.ok(kept[`room-${rules.DM_SEEN_MAX + 4}`], 'the newest stays');
   assert.equal(kept['room-0'], undefined, 'the oldest goes');
 });
+
+// ---------------------------------------------------------------- reactions to a message
+
+const MSG = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const MSG2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+test('the six reactions have keys, emoji and Japanese names, in this order', () => {
+  assert.deepEqual(rules.REACTIONS.map((entry) => entry.kind), ['heart', 'thumbs', 'laugh', 'wow', 'sad', 'pray']);
+  assert.deepEqual(rules.REACTIONS.map((entry) => entry.label),
+    ['ハート', 'いいね', '笑い', 'びっくり', '悲しい', 'ありがとう']);
+  assert.equal(rules.reactionOf('heart').emoji, '❤️');
+  assert.equal(rules.reactionOf('party'), null);
+  assert.equal(rules.reactionOf('❤️'), null);   // the emoji itself is not a key
+});
+
+test('chips: one per kind, two people on the same kind is one chip with 2, mine is marked', () => {
+  const rows = [
+    { message_id: MSG, account_id: ME, kind: 'heart' },
+    { message_id: MSG, account_id: AKI, kind: 'heart' },
+    { message_id: MSG2, account_id: AKI, kind: 'pray' },
+  ];
+  assert.deepEqual(rules.reactionChips(rows, MSG, ME).map((chip) => [chip.kind, chip.count, chip.mine]),
+    [['heart', 2, true]]);
+  assert.deepEqual(rules.reactionChips(rows, MSG2, ME).map((chip) => [chip.kind, chip.count, chip.mine]),
+    [['pray', 1, false]]);
+  const both = rules.reactionChips([
+    { message_id: MSG, account_id: ME, kind: 'pray' },
+    { message_id: MSG, account_id: AKI, kind: 'thumbs' },
+  ], MSG, ME);
+  assert.deepEqual(both.map((chip) => chip.kind), ['thumbs', 'pray']);   // the order of the six, not of arrival
+  assert.deepEqual(rules.reactionChips(null, MSG, ME), []);
+  assert.deepEqual(rules.reactionChips([{ message_id: MSG, account_id: ME, kind: 'bogus' }], MSG, ME), []);
+});
+
+test('pressing: add, swap, and the same one again takes it off (one per person per message)', () => {
+  let rows = [{ message_id: MSG, account_id: AKI, kind: 'wow' }];
+  assert.equal(rules.myReaction(rows, MSG, ME), null);
+  rows = rules.withMyReaction(rows, MSG, ME, 'heart');
+  assert.equal(rules.myReaction(rows, MSG, ME), 'heart');
+  assert.equal(rows.length, 2);
+  rows = rules.withMyReaction(rows, MSG, ME, 'sad');
+  assert.equal(rules.myReaction(rows, MSG, ME), 'sad');
+  assert.equal(rows.length, 2);
+  rows = rules.withMyReaction(rows, MSG, ME, 'sad');
+  assert.equal(rules.myReaction(rows, MSG, ME), null);
+  assert.deepEqual(rows, [{ message_id: MSG, account_id: AKI, kind: 'wow' }]);   // the other person's stays
+  assert.deepEqual(rules.withMyReaction(rows, MSG, ME, 'party'), rows);          // an unknown key adds nothing
+});
+
+test('the signature changes only when a reaction changes', () => {
+  const a = [{ message_id: MSG, account_id: ME, kind: 'heart' }, { message_id: MSG2, account_id: AKI, kind: 'pray' }];
+  const same = [a[1], a[0]];
+  assert.equal(rules.reactionSignature(a), rules.reactionSignature(same));
+  assert.notEqual(rules.reactionSignature(a), rules.reactionSignature([a[0]]));
+  assert.equal(rules.reactionSignature(null), '');
+});
+
+test('the answer of react_dm is read in either shape', () => {
+  assert.equal(rules.readReact({ kind: 'heart' }), 'heart');
+  assert.equal(rules.readReact([{ kind: 'pray' }]), 'pray');
+  assert.equal(rules.readReact({ kind: null }), null);
+  assert.equal(rules.readReact(null), null);
+});
+
+test('a missing table is told from an ordinary failure', () => {
+  assert.equal(rules.reactionsMissing({ status: 404, message: 'x' }), false);
+  assert.equal(rules.reactionsMissing({ status: 404, message: 'x' }, { rpc: true }), true);
+  assert.equal(rules.reactionsMissing({ status: 404, message: 'PGRST205 relation public.dm_reactions' }), true);
+  assert.equal(rules.reactionsMissing({ status: 400, message: 'x' }, { rpc: true }), false);
+  assert.equal(rules.reactionsMissing({ status: 400, message: 'Could not find the table public.dm_reactions' }), true);
+  assert.equal(rules.reactionsMissing({ status: 0, message: '接続できませんでした。' }), false);
+  assert.equal(rules.reactionsMissing({ status: 500, message: 'boom' }), false);
+  assert.equal(rules.reactionsMissing(null), false);
+});
+
+test('the lifted message keeps its place when there is room, and moves in from the edges when there is not', () => {
+  const mid = rules.liftLayout({ top: 300, height: 80 }, 800);
+  assert.equal(mid.bubbleTop, 300);
+  assert.equal(mid.barTop, 300 - 56 - 8);
+  assert.equal(mid.copyTop, 300 + 80 + 8);
+  const high = rules.liftLayout({ top: 20, height: 80 }, 800);      // no room above: everything moves down
+  assert.equal(high.barTop, 12);
+  assert.equal(high.bubbleTop, 12 + 56 + 8);
+  const low = rules.liftLayout({ top: 760, height: 60 }, 800);      // no room below: everything moves up
+  assert.equal(low.copyTop + 44, 800 - 12);
+  assert.equal(low.bubbleHeight, 60);
+  const tall = rules.liftLayout({ top: 100, height: 2000 }, 800);   // taller than the screen: cut to fit
+  assert.equal(tall.barTop, 12);
+  assert.equal(tall.copyTop + 44, 800 - 12);
+  const plain = rules.liftLayout({ top: 300, height: 80 }, 800, { bar: 0 });   // no emoji row
+  assert.equal(plain.bubbleTop, 300);
+});
+
+test('setting my reaction replaces mine and leaves the other person\'s alone', () => {
+  const rows = [{ message_id: MSG, account_id: AKI, kind: 'wow' }, { message_id: MSG, account_id: ME, kind: 'sad' }];
+  assert.equal(rules.myReaction(rules.setMyReaction(rows, MSG, ME, 'pray'), MSG, ME), 'pray');
+  assert.equal(rules.setMyReaction(rows, MSG, ME, null).length, 1);
+  assert.equal(rules.setMyReaction(rows, MSG, ME, 'sad').length, 2);
+});

@@ -3780,6 +3780,10 @@ class DmBlock(BaseModel):
     blocked_id: str
 
 
+class DmReaction(BaseModel):
+    kind: str
+
+
 def _talk_refusal(error):
     return HTTPException(status_code=error.status, detail=str(error))
 
@@ -3847,6 +3851,24 @@ def local_dm_send(room_id: str, payload: DmBody, request: Request):
         raise _talk_refusal(error)
     except StoreError:
         raise HTTPException(status_code=422, detail=f"メッセージは1〜{DM_BODY_MAX}字で入力してください。")
+
+
+@app.get("/api/local/dm/rooms/{room_id}/reactions")
+def local_dm_reactions(room_id: str, request: Request):
+    require_local()
+    try:
+        return {"reactions": state["store"].dm_reactions(current_user(request), room_id)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
+@app.post("/api/local/dm/messages/{message_id}/reaction")
+def local_dm_react(message_id: str, payload: DmReaction, request: Request):
+    require_local()
+    try:
+        return state["store"].react_dm(current_user(request), message_id, payload.kind)
+    except TalkRefused as error:
+        raise _talk_refusal(error)
 
 
 @app.post("/api/local/dm/blocks")
