@@ -16,7 +16,7 @@ async function person(browser, testInfo, name, { create = null, join = null, ini
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, icon_id: 'photo', affiliation: 'テスト' });
+    await api.put('/api/account/me', { display_name: name, icon_id: 'photo', affiliation: 'テスト', name_confirmed: true });
     if (create) return api.post('/api/local/communities', { name: create, slug: `t-${Math.random().toString(36).slice(2, 9)}` }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
     if (join) await api.post('/api/local/invites/claim', { code: join });
     return null;
@@ -44,6 +44,7 @@ async function openVenue(browser, testInfo) {
   const card = await openEdit(admin, id);
   await expect(card.locator('.invite-venue')).toHaveCount(0);   // QR が出るまでは無い
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-qr svg')).toBeVisible();
   return { admin, card, name };
@@ -94,7 +95,7 @@ test('「会場で映す」: 投稿のスイッチで変わったリンクを、
   await again.waitFor({ timeout: 15000 });
   await again.locator('.invite-open, .invite-qr').first().waitFor();
   await expect(again.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
-  await again.locator('.invite-switch').click();
+  await again.locator('.invite-switch:not(.invite-approval-switch)').click();
   await expect(again.locator('.invite-url')).toHaveValue(/[?]post=/);
   await again.locator('.invite-venue').click();
   const dialog = page.getByRole('dialog', { name: '会場で映す' });

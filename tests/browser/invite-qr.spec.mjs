@@ -18,7 +18,7 @@ async function person(browser, testInfo, name, { create = null, join = null, ini
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
     if (create) return api.post('/api/local/communities', { name: create, slug: `t-${Math.random().toString(36).slice(2, 9)}` }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
     if (join) await api.post('/api/local/invites/claim', { code: join });
     return null;
@@ -87,6 +87,7 @@ test('リンクがないとき「メンバーを招待する」→ 期限 → �
   // 期限は今日中が初めから選ばれている
   await expect(card.locator('.invite-chip.on')).toHaveText('今日中');
   await expect(card.locator('.invite-chip')).toHaveCount(5);
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
 
   const svg = card.locator('.invite-qr svg');
@@ -120,6 +121,7 @@ test('「会の投稿も一緒に開く」を切り替えるとリンクと QR �
   const postId = await makePost(admin, '金曜の夜に集まります', id);
   const card = await openEdit(admin, id);
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   const field = card.locator('.invite-url');
   await expect(field).toBeAttached();
@@ -128,14 +130,14 @@ test('「会の投稿も一緒に開く」を切り替えるとリンクと QR �
   const qrBefore = await card.locator('.invite-qr svg path').getAttribute('d');
   const codes = await activeCodes(admin, id);
 
-  await card.locator('.invite-switch').click();
+  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
   await expect(card.locator('.invite-with-post')).toBeChecked();
   await expect(card.locator('.invite-post-select')).toBeVisible();
   await expect(field).toHaveValue(`${plain}?post=${postId}`);
   expect(await card.locator('.invite-qr svg path').getAttribute('d')).not.toBe(qrBefore);
   expect(await activeCodes(admin, id)).toEqual(codes);
 
-  await card.locator('.invite-switch').click();
+  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
   await expect(field).toHaveValue(plain);
   expect(await card.locator('.invite-qr svg path').getAttribute('d')).toBe(qrBefore);
   expect(await activeCodes(admin, id)).toEqual(codes);
@@ -147,6 +149,7 @@ test('更新: 確かめてから作り直すと、前のリンクは止まり新
   const id = admin.made.community_id;
   const card = await openEdit(admin, id);
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   const field = card.locator('.invite-url');
   await expect(field).toBeAttached();
@@ -155,6 +158,7 @@ test('更新: 確かめてから作り直すと、前のリンクは止まり新
   await card.locator('.invite-renew').click();
   await expect(card.locator('.invite-chip.on')).toHaveText('今日中');
   await card.locator('.invite-chip[data-key="7d"]').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(admin.page.locator('.modal-title')).toHaveText('いまのリンクと QR は使えなくなります。作り直しますか？');
   // いったんやめる
@@ -165,6 +169,7 @@ test('更新: 確かめてから作り直すと、前のリンクは止まり新
 
   await card.locator('.invite-renew').click();
   await card.locator('.invite-chip[data-key="7d"]').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await admin.page.locator('.modal-actions .btn-danger').click();
   await expect(card.locator('.invite-line')).toContainText('あと7日');
@@ -201,6 +206,7 @@ test('止める: 確かめてから、いまあるリンクをすべて止めて
   const card2 = await openEdit(admin, id);
   await expect(card2.locator('.invite-qr')).toBeVisible();
   await card2.locator('.invite-renew').click();
+  await card2.locator('.invite-approval').uncheck();
   await card2.locator('.invite-make').click();
   await admin.page.locator('.modal-actions .btn-danger').click();
   await expect.poll(() => activeCodes(admin, id).then((list) => list.length)).toBe(1);
@@ -213,6 +219,7 @@ test('コピー・シェア・保存: 文面と画像が決めどおりで、シ
   const id = admin.made.community_id;
   const card = await openEdit(admin, id);
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-qr svg')).toBeVisible();
   const url = await card.locator('.invite-url').inputValue();
@@ -236,6 +243,7 @@ test('コピー・シェア・保存: 文面と画像が決めどおりで、シ
   const plain = await person(browser, testInfo, '招待のむっつめ', { create: `共有なし ${unique()}`, init: withoutShare });
   const card2 = await openEdit(plain, plain.made.community_id);
   await card2.locator('.invite-open').click();
+  await card2.locator('.invite-approval').uncheck();
   await card2.locator('.invite-make').click();
   await expect(card2.locator('.invite-copy')).toBeVisible();
   await expect(card2.locator('.invite-save')).toBeVisible();
@@ -260,6 +268,7 @@ test('タッチ端末で画像を渡せるなら、保存は共有シート（�
   const admin = await person(browser, testInfo, '招待のここのつめ', { create: name, init: withFileShare });
   const card = await openEdit(admin, admin.made.community_id);
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-qr svg')).toBeVisible();
   let downloaded = false;
@@ -278,6 +287,7 @@ test('止められなかったとき: 文が消えずに残り、更新で作っ
   const id = admin.made.community_id;
   const card = await openEdit(admin, id);
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-qr svg')).toBeVisible();
 
@@ -290,6 +300,7 @@ test('止められなかったとき: 文が消えずに残り、更新で作っ
 
   // 更新: 新しいリンクは1本だけ増え、画面は期限選びに戻らず、古いのを止められなかったと伝える
   await card.locator('.invite-renew').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await admin.page.locator('.modal-actions .btn-danger').click();
   await expect(card.locator('.error')).toContainText('古いリンクを止められませんでした');
@@ -315,16 +326,17 @@ test('リンクを作る前に「会の投稿も一緒に開く」を決めら�
   await card.locator('.invite-open').click();
   // 期限のすぐ下に、投稿のスイッチがあり、「リンクを作る」はその後ろ
   await expect(card.locator('.invite-chip')).toHaveCount(5);
-  await expect(card.locator('.invite-switch')).toBeVisible();
+  await expect(card.locator('.invite-switch:not(.invite-approval-switch)')).toBeVisible();
   await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
   await expect(card.locator('.invite-post-select')).toBeHidden();
   const order = await card.locator('.invite-form').evaluate((form) => [...form.children].map((child) => child.className));
   expect(order.findIndex((c) => c.includes('invite-chips'))).toBeLessThan(order.findIndex((c) => c.includes('invite-switch')));
   expect(order.findIndex((c) => c.includes('invite-switch'))).toBeLessThan(order.findIndex((c) => c.includes('invite-make')));
-  await card.locator('.invite-switch').click();
+  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
   await expect(card.locator('.invite-post-select')).toBeVisible();
   await card.locator('.invite-post-select').selectOption(older);
   await card.screenshot({ path: `C:/Users/tatsu/Desktop/Claude Code/islands_261012/_pw_tmp/fb2/rest/invite-choose-${testInfo.project.name}.png` });
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-qr svg')).toBeVisible();
   const code = (await activeCodes(admin, id))[0];
@@ -332,7 +344,7 @@ test('リンクを作る前に「会の投稿も一緒に開く」を決めら�
   await expect(card.locator('.invite-with-post')).toBeChecked();
   await expect(card.locator('.invite-post-select')).toHaveValue(older);
   // 上のスイッチは今までどおり使えて、切ると投稿なしのリンクになる
-  await card.locator('.invite-switch').click();
+  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
   await expect(card.locator('.invite-url')).toHaveValue(new RegExp(`#/invite/${code}$`));
   expect(newer).not.toBe(older);
   expect(await activeCodes(admin, id)).toHaveLength(1);
@@ -345,6 +357,7 @@ test('投稿をつけずに作ったリンクは、今までどおり投稿な�
   await makePost(admin, 'ひとつだけ', id);
   const card = await openEdit(admin, id);
   await card.locator('.invite-open').click();
+  await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-url')).toHaveValue(/#\/invite\/[^?]+$/);
   await expect(card.locator('.invite-with-post')).not.toBeChecked();

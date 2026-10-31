@@ -2240,3 +2240,103 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .post-author.static { cursor: default; }
 .post-author.static .post-author-name::after { content: none; }
 .post-author.static:hover .post-author-name { text-decoration: none; }
+
+/* ---------------------------------------------------------------- join approval (2026-11-01)
+ * The waiting page (#/waiting), what the invite page tells somebody before they apply, the admin's list of
+ * people waiting, and #/fullname. The look follows the images the user approved (変更イメージ 10・19・20回目). */
+#waiting { overflow-y: auto; }
+#waiting .auth-scroll { display: flex; flex-direction: column; flex: none; min-height: calc(100dvh - 64px); padding: 48px 24px; overflow: visible; }
+#waiting .brand-inline { font-size: 36px; line-height: 40px; margin: 0 0 32px; }
+#waiting .screen-title { font-size: 24px; line-height: 1.5; margin-bottom: 12px; overflow-wrap: anywhere; text-wrap: balance; word-break: auto-phrase; }
+#waiting .lede { margin-bottom: 20px; line-height: 1.7; text-wrap: pretty; }
+#waiting .btn { margin-top: 12px; }
+.waiting-card {
+  display: flex; align-items: center; gap: 12px; padding: 14px; margin: 4px 0 0; border-radius: var(--radius-sm);
+  background: #fff; color: var(--ink); box-shadow: var(--shadow); min-width: 0;
+}
+.waiting-card .avatar { flex: none; }
+.waiting-card-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.waiting-card-name { font-size: 15px; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; }
+.waiting-card-sub { font-size: 12px; color: var(--ink-2); line-height: 1.5; overflow-wrap: anywhere; }
+.waiting-fine { margin: 10px 0 8px; font-size: 12px; line-height: 1.7; color: var(--on-sea-2); text-wrap: pretty; word-break: auto-phrase; }
+#waiting .waiting-push { background: #fff; color: var(--ui, var(--sea)); margin-top: 24px; }
+.waiting-row { display: flex; gap: 10px; margin-top: 12px; }
+.waiting-row .btn { flex: 1; margin-top: 0; }
+.waiting-leave { margin-top: 22px; font-size: 12px; line-height: 1.7; color: var(--on-sea-2); }
+.waiting-leave b { display: block; color: #fff; margin-bottom: 2px; }
+.waiting-leave p { margin: 0; text-wrap: pretty; word-break: auto-phrase; }
+.waiting-leave a { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+.waiting-form { margin-top: 14px; }
+.waiting-form .field { margin-bottom: 14px; }
+.waiting-form-row { display: flex; gap: 10px; }
+.waiting-form-row .btn { flex: 1; margin-top: 0; }
+#waiting .waiting-form-row .btn:last-child { background: #fff; color: var(--ui, var(--sea)); }
+
+/* The invite page, for a link that needs an admin's approval. */
+.invite-disclose { margin: 0 0 4px; }
+.invite-disclose-box {
+  padding: 14px; border-radius: var(--radius-sm); font-size: 13px; line-height: 1.7; font-weight: 700;
+  background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .42); text-wrap: pretty; word-break: auto-phrase;
+}
+.invite-disclose-box span { display: block; font-weight: 400; color: var(--on-sea-2); }
+.invite-disclose-label { margin: 0 0 8px; font-size: 12px; font-weight: 700; }
+.invite-disclose .waiting-card { margin-bottom: 8px; }
+.invite-disclose .waiting-fine { margin-top: 0; font-weight: 700; }
+#invite .invite-disclose + .error { margin-top: 0; }
+#invite #inviteJoin.is-apply, #invite #inviteRegister.is-apply { background: #fff; color: var(--ui, var(--sea)); }
+
+/* The admin's edit page: the box of people waiting, and the approval switch. */
+.join-requests { padding: 14px; margin-bottom: 14px; border-radius: var(--radius); background: #fff; color: var(--ink); box-shadow: var(--shadow); }
+.join-requests-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: var(--ink); margin-bottom: 10px; }
+.join-requests-head::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.join-request { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-top: 1px solid var(--line); }
+.join-request:first-of-type { border-top: 0; padding-top: 2px; }
+.join-request-who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.join-request-name { font-size: 15px; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; }
+.join-request-affiliation { font-size: 12px; color: var(--ink-2); line-height: 1.5; overflow-wrap: anywhere; }
+.join-request-tag {
+  align-self: flex-start; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1.5;
+  background: var(--surface-3); color: var(--ink-2);
+}
+.join-request-tag.removed { background: #ffe9cf; color: #9a4a00; }
+.join-request-tag.line { background: #dff5e6; color: #1a7a43; }
+.join-request-email {
+  padding: 8px 10px; border-radius: 8px; font-size: 13px; background: var(--surface-2); border: 1px solid var(--line);
+  overflow-wrap: anywhere; color: var(--ink);
+}
+.join-request-email.none { border-style: dashed; color: var(--ink-3); background: transparent; }
+.join-request-when, .join-request-note { font-size: 11px; color: var(--ink-3); line-height: 1.6; margin: 0; }
+.join-request-acts { display: flex; gap: 10px; margin-top: 4px; }
+.join-request-acts .btn { flex: 1; min-height: 40px; box-shadow: none; }
+.join-request-no { background: var(--surface-2); color: var(--bad); border: 1px solid var(--line); }
+.join-request-yes { background: var(--ui, var(--sea)); color: #fff; }
+.join-request-gone { font-size: 12px; color: var(--ink-2); margin: 6px 0 0; }
+.invite-approval-switch { margin-top: 0; }
+.invite-approval-switch + .invite-note { margin-bottom: 10px; }
+.invite-venue-warn {
+  margin: 12px 0 0; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.7; font-weight: 700;
+  background: #fff3e0; border: 1px solid #f0b060; color: #8a4b00; text-wrap: pretty; word-break: auto-phrase;
+}
+.community-row.waiting .stack-who { color: #b8641b; }
+
+/* #/fullname: borderless fields with an underline, the save button big at the bottom. */
+#fullname .scroller { padding-top: 56px; }
+.fullname-badge {
+  display: inline-block; margin-bottom: 14px; padding: 3px 12px; border-radius: 999px; font-size: 12px; font-weight: 800;
+  background: #fff; color: #8a4b00;
+}
+#fullname .screen-title { font-size: 26px; line-height: 1.4; margin-bottom: 10px; text-wrap: balance; }
+#fullname .lede { margin-bottom: 36px; line-height: 1.7; text-wrap: pretty; word-break: auto-phrase; }
+.field-line { margin-bottom: 26px; }
+.field-line .label-text { margin-bottom: 4px; }
+.screen.tinted .input.input-line, .input.input-line {
+  background: transparent; border: 0; border-bottom: 1px solid rgba(255, 255, 255, .7); border-radius: 0; padding: 8px 0 10px; font-size: 18px;
+}
+.input.input-line:focus { background: transparent; border-bottom-color: #fff; box-shadow: 0 1px 0 #fff; }
+.fullname-note { margin: 0; font-size: 12px; line-height: 1.7; color: var(--on-sea-2); text-wrap: pretty; word-break: auto-phrase; }
+.fullname-foot { display: flex; flex-direction: column; align-items: center; gap: 10px; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.fullname-save { min-height: 56px; font-size: 16px; background: #fff; color: var(--ui, var(--sea)); }
+.fullname-later { background: none; border: 0; color: #fff; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; padding: 6px 12px; cursor: pointer; }
+.fullname-stuck { margin: 0; font-size: 12px; color: var(--on-sea-2); }
+.input.input-line:focus-visible { outline: none; }
+.fullname-foot { padding-left: 24px; padding-right: 24px; }

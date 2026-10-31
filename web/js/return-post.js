@@ -33,9 +33,9 @@ export function postIdFromHash(hash) {
 export const mapLinkFor = (id) => (validPostId(id) ? `#/map?post=${encodeURIComponent(id)}` : '#/map');
 
 /** Remember a post to go back to. Returns whether anything was kept. */
-export function savePendingPost(storage, id, now = Date.now()) {
+export function savePendingPost(storage, id, now = Date.now(), holdMs = 0) {
   if (!validPostId(id)) return false;
-  memory = { id, at: now };
+  memory = { id, at: now, ...(holdMs > 0 ? { until: now + holdMs } : {}) };
   try {
     if (storage) storage.setItem(RETURN_KEY, JSON.stringify(memory));
   } catch { /* memory only */ }
@@ -45,7 +45,8 @@ export function savePendingPost(storage, id, now = Date.now()) {
 function parse(raw) {
   try {
     const value = JSON.parse(raw);
-    return value && validPostId(value.id) && Number.isFinite(value.at) ? { id: value.id, at: value.at } : null;
+    if (!value || !validPostId(value.id) || !Number.isFinite(value.at)) return null;
+    return { id: value.id, at: value.at, ...(Number.isFinite(value.until) ? { until: value.until } : {}) };
   } catch {
     return null;
   }
@@ -58,8 +59,15 @@ export function readPendingPost(storage, now = Date.now()) {
     held = storage ? parse(storage.getItem(RETURN_KEY)) : null;
   } catch { /* fall back to memory */ }
   if (!held) held = memory;
-  if (!held || now - held.at > RETURN_TTL_MS || held.at - now > RETURN_TTL_MS) return null;
+  if (!held || expired(held, now, RETURN_TTL_MS)) return null;
   return held.id;
+}
+
+// Held for the usual time, or until `until` when the save asked to be kept longer (an application that waits
+// for an admin: 承認 can take days, and the post of the invite must still be there then).
+function expired(held, now, ttl) {
+  if (held.at - now > ttl) return true;
+  return now > Math.max(held.at + ttl, held.until || 0);
 }
 
 export function clearPendingPost(storage) {
@@ -95,9 +103,9 @@ export const JOIN_TTL_MS = 24 * 3600 * 1000;
 let joinMemory = null;
 
 /** Remember the post of the invite. Returns whether anything was kept. */
-export function saveInviteJoin(storage, id, now = Date.now()) {
+export function saveInviteJoin(storage, id, now = Date.now(), holdMs = 0) {
   if (!validPostId(id)) return false;
-  joinMemory = { id, at: now };
+  joinMemory = { id, at: now, ...(holdMs > 0 ? { until: now + holdMs } : {}) };
   try {
     if (storage) storage.setItem(JOIN_KEY, JSON.stringify(joinMemory));
   } catch { /* memory only */ }
@@ -111,7 +119,7 @@ export function readInviteJoin(storage, now = Date.now()) {
     held = storage ? parse(storage.getItem(JOIN_KEY)) : null;
   } catch { /* fall back to memory */ }
   if (!held) held = joinMemory;
-  if (!held || now - held.at > JOIN_TTL_MS || held.at - now > JOIN_TTL_MS) return null;
+  if (!held || expired(held, now, JOIN_TTL_MS)) return null;
   return held.id;
 }
 
@@ -121,3 +129,6 @@ export function clearInviteJoin(storage) {
     if (storage) storage.removeItem(JOIN_KEY);
   } catch { /* nothing to clear */ }
 }
+
+/** How long an invite's post and 会 are kept while the application waits for an admin (14 days). */
+export const WAITING_HOLD_MS = 14 * 24 * 3600 * 1000;

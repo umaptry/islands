@@ -44,6 +44,7 @@ export const state = {
   communitiesLoaded: false,
   communityId: null,      // the one whose map I am looking at
   viewCommunity: null,    // { id, name }: a linked post's community that I am not in (read only)
+  joinStatus: null,       // where each community stands for me when something is said: [{ id, name, status: pending/rejected/removed }]; [] = nothing, null = not known
 };
 
 export function subscribe(listener) {

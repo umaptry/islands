@@ -122,7 +122,7 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
     await session.verifyCode(email, otp.devCode);
     await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: '比較用', affiliation: 'テスト', icon_id: '1' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: '比較用', affiliation: 'テスト', name_confirmed: true, icon_id: '1' })).account;
     return (await api.post('/api/posts', { body: '週末はソロキャンプに出かけて、焚き火を眺めながら静かに過ごすのが好きです。', motivation: 50 })).id;
   });
   await page.reload();
@@ -378,7 +378,7 @@ async function signInForFirstPost(page, label) {
     await session.verifyCode(email, otp.devCode);
     await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: '1' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: '1' })).account;
   }, label);
 }
 
@@ -544,7 +544,7 @@ async function seedNeighbours(page, rows) {
     const otp = await (await page.request.post('/api/local/auth/otp', { data: { email } })).json();
     const got = await (await page.request.post('/api/local/auth/verify', { data: { email, code: otp.code } })).json();
     const headers = { Authorization: `Bearer ${got.access_token}` };
-    await page.request.put('/api/account/me', { data: { display_name: row.name, affiliation: 'テスト', icon_id: '1' }, headers });
+    await page.request.put('/api/account/me', { data: { display_name: row.name, affiliation: 'テスト', name_confirmed: true, icon_id: '1' }, headers });
     await page.request.post('/api/local/invites/claim', { data: { code: 'demo-invite-code-local-0001' }, headers });
     const mine = await (await page.request.get('/api/local/communities/mine', { headers })).json();
     const communityId = mine.communities[0].id || mine.communities[0].community_id;

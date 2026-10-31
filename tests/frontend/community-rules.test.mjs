@@ -218,7 +218,8 @@ test('who is kept on the waiting screen: only somebody in no community with some
 test('the waiting screen says pending, removed and rejected differently', () => {
   const pending = rules.waitingView({ id: 'p', name: 'コクヨ', status: 'pending' });
   assert.equal(pending.state, 'pending');
-  assert.equal(pending.title, '『コクヨ』への参加を待っています');
+  assert.equal(pending.title, '参加の承認を待っています');
+  assert.match(pending.lede, /「コクヨ」の管理者が確認しています/);
   assert.equal(pending.canCancel, true);
   const removed = rules.waitingView({ id: 'x', name: 'コクヨ', status: 'removed' });
   assert.equal(removed.state, 'removed');
@@ -226,7 +227,9 @@ test('the waiting screen says pending, removed and rejected differently', () => 
   assert.ok(removed.title.includes('コクヨ'));
   const rejected = rules.waitingView({ id: 'r', name: 'コクヨ', status: 'rejected' });
   assert.equal(rejected.state, 'rejected');
-  assert.equal(rejected.title, '参加できませんでした');
+  assert.equal(rejected.title, '「コクヨ」に参加できませんでした');
+  assert.match(rejected.note, /もう一度使うと、また申し込みになります/);
+  assert.match(removed.note, /招待リンクから申し込めます/);
   assert.equal(rejected.canCancel, false);
   assert.equal(new Set([pending.title, removed.title, rejected.title]).size, 3);
   assert.equal(rules.waitingView(null), null);
@@ -682,4 +685,52 @@ test('rename answers in either shape, and the list follows', () => {
   assert.deepEqual(rules.withRenamed(list, 'a', '夜の BAR'), [{ id: 'a', name: '夜の BAR', role: 'admin' }, list[1]]);
   assert.equal(list[0].name, 'BAR', 'the old list is not changed');
   assert.deepEqual(rules.withRenamed(null, 'a', 'x'), []);
+});
+
+// ---- 承認制の画面（2026-11-01 第1回）
+
+test('承認が要るリンクの招待画面：題は「参加の申し込み」。要らないリンクは今までどおり', () => {
+  const needs = rules.inviteView(rules.readInviteCheck({ valid: true, community_name: 'コクヨ', needs_approval: true }));
+  assert.equal(needs.state, 'valid');
+  assert.equal(needs.approval, true);
+  assert.equal(needs.title, '「コクヨ」への参加の申し込み');
+  assert.match(needs.lede, /承認されるまで中は見られません/);
+  const plain = rules.inviteView(rules.readInviteCheck({ valid: true, community_name: 'コクヨ' }));
+  assert.equal(plain.approval, false);
+  assert.equal(plain.title, 'コクヨ への招待です');
+  // 使えないリンクは、承認が要るかどうかに関わらず使えない案内
+  assert.equal(rules.inviteView(rules.readInviteCheck({ valid: false, reason: 'expired', needs_approval: true })).state, 'invalid');
+});
+
+test('取り消しと断るの確認の文は、会の名前・相手の名前を入れる', () => {
+  assert.equal(rules.cancelQuestion('コクヨ').title, '「コクヨ」への申し込みを取り消しますか？');
+  assert.match(rules.cancelQuestion('コクヨ').body, /同じ招待リンクからもう一度申し込めます/);
+  assert.equal(rules.rejectQuestion('カンベ', 'コクヨ').title, 'カンベさんの参加を断りますか？');
+  assert.match(rules.rejectQuestion('カンベ', 'コクヨ').body, /「コクヨ」の中を見られないまま/);
+  assert.match(rules.rejectQuestion('カンベ', 'コクヨ').body, /参加できませんでした/);
+});
+
+test('管理者の枠の札：前に外した人・前にお断りした人・LINE（メールアドレスなし）', () => {
+  const keys = (row) => rules.requestTags(row).map((tag) => tag.key);
+  assert.deepEqual(keys({ email: 'a@example.com' }), []);
+  assert.deepEqual(keys({ email: 'a@example.com', was_removed: true }), ['removed']);
+  assert.deepEqual(keys({ email: 'a@example.com', rejected_before: true }), ['rejected']);
+  assert.deepEqual(keys({ email: null }), ['line']);
+  assert.deepEqual(keys({ email: '  ' }), ['line']);
+  assert.deepEqual(keys({ email: '', was_removed: true, rejected_before: true }), ['removed', 'rejected', 'line']);
+});
+
+test('申し込んだ時刻：今日なら時刻だけ、前の日なら月日', () => {
+  const now = Date.parse('2026-11-01T03:30:00Z');   // 日本では 12:30
+  assert.equal(rules.requestedText('2026-11-01T03:04:00Z', now), '今日 12:04 に申し込み');
+  assert.equal(rules.requestedText('2026-10-30T02:48:00Z', now), '10/30 11:48 に申し込み');
+  assert.equal(rules.requestedText('おかしい', now), '');
+});
+
+test('待つ画面の三つの文は、題も説明もちがい、取り消せるのは待っている人だけ', () => {
+  const entries = ['pending', 'removed', 'rejected'].map((status) => rules.waitingView({ id: status, name: 'コクヨ', status }));
+  assert.equal(new Set(entries.map((entry) => entry.title)).size, 3);
+  assert.equal(new Set(entries.map((entry) => entry.lede)).size, 3);
+  assert.deepEqual(entries.map((entry) => entry.canCancel), [true, false, false]);
+  assert.equal(entries[0].note, '');
 });

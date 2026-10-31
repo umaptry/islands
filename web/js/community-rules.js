@@ -231,29 +231,74 @@ export function mustWait({ communities, joinStatus }) {
   return (communities || []).length === 0 && Array.isArray(joinStatus) && joinStatus.length > 0;
 }
 
-/** The waiting screen's words for one entry of readJoinStatus (null when there is none). */
+/** The waiting screen's words for one entry of readJoinStatus (null when there is none). `note` is the small line under the lede. */
 export function waitingView(entry) {
   if (!entry) return null;
   const name = entry.name || 'コミュニティ';
   if (entry.status === 'pending') {
     return {
       state: 'pending', name, canCancel: true,
-      title: `『${name}』への参加を待っています`,
-      lede: '管理者が確かめたら、通知でお知らせします。',
+      title: '参加の承認を待っています',
+      lede: `「${name}」の管理者が確認しています。承認されると、地図を見たり投稿したりできるようになります。期限はなく、管理者が決めるまで待てます。`,
+      note: '',
     };
   }
   if (entry.status === 'removed') {
     return {
       state: 'removed', name, canCancel: false,
-      title: `『${name}』に入れなくなりました`,
-      lede: '管理者が、このコミュニティから外しました。心当たりがなければ、管理者に聞いてみてください。',
+      title: `「${name}」の地図は見られなくなりました`,
+      lede: '管理者が、あなたをこのコミュニティから外しました。',
+      note: 'もう一度入りたいときは、使える招待リンクから申し込めます。管理者が承認すると戻れます。',
     };
   }
   return {
     state: 'rejected', name, canCancel: false,
-    title: '参加できませんでした',
-    lede: `『${name}』の管理者が、今回は参加をお断りしました。`,
+    title: `「${name}」に参加できませんでした`,
+    lede: '管理者が、今回は参加を見送りました。招待してくれた人に確認してください。',
+    note: '招待リンクをもう一度使うと、また申し込みになります。',
   };
+}
+
+/** What an admin of the waiting person can see, said to the person themselves (waiting screen, invite page). */
+export const ADMIN_SEES_NOTE = '管理者には、この名前・所属・メールアドレスが見えます（メールアドレスは承認を待っている間だけ）。';
+export const ADMIN_SEES_BOX = ['管理者に名前・所属・メールアドレスが見えます（承認を待つ間だけ）。', '承認されたあと、メールアドレスは見えなくなります。'];
+export const CONSENT_AFTER_PRESS = '「参加を申し込む」を押すと、上のことに同意したことになります。';
+export const LEAVE_NOTE = '今は画面からは退会できません。利用規約 第16条の連絡先に知らせてください。';
+
+/** The confirmation before taking an application back. */
+export function cancelQuestion(name) {
+  return {
+    title: `「${name || 'コミュニティ'}」への申し込みを取り消しますか？`,
+    body: '申し込みをなかったことにします。管理者には、あなたの名前・所属・メールアドレスが見えなくなります。あとで、同じ招待リンクからもう一度申し込めます。',
+  };
+}
+
+/** The confirmation before an admin turns somebody away. */
+export function rejectQuestion(name, community) {
+  return {
+    title: `${name || 'この人'}さんの参加を断りますか？`,
+    body: `${name || 'この人'}さんは「${community || 'コミュニティ'}」の中を見られないままです。本人の画面には「参加できませんでした」と出ます。`,
+  };
+}
+
+/** The row of the admin's waiting list: tags and the time. `row` is a list_join_requests row. */
+export function requestTags(row) {
+  const tags = [];
+  if (row && row.was_removed) tags.push({ key: 'removed', text: '前に外した人（承認すると前の投稿も戻ります）' });
+  if (row && row.rejected_before) tags.push({ key: 'rejected', text: '前にお断りした人' });
+  if (row && !String(row.email || '').trim()) tags.push({ key: 'line', text: 'LINE（メールアドレスなし）' });
+  return tags;
+}
+
+/** "今日 12:04 に申し込み" / "10/30 12:04 に申し込み" (Japan time). */
+export function requestedText(iso, now = Date.now()) {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  const day = (ms) => new Date(ms + JST_MS).toISOString().slice(0, 10);
+  const stamp = new Date(at + JST_MS).toISOString();
+  const time = stamp.slice(11, 16);
+  if (day(at) === day(now)) return `今日 ${time} に申し込み`;
+  return `${Number(stamp.slice(5, 7))}/${Number(stamp.slice(8, 10))} ${time} に申し込み`;
 }
 
 /** The line under another community's name in the switcher ('' when nothing is waiting there). */
@@ -298,8 +343,15 @@ export function inviteView(check) {
   }
   if (check.valid) {
     const name = check.name || 'コミュニティ';
+    if (check.needs_approval) {
+      return {
+        state: 'valid', approval: true,
+        title: `「${name}」への参加の申し込み`,
+        lede: 'このコミュニティは、管理者が確かめてから入れます。申し込んでも、承認されるまで中は見られません。',
+      };
+    }
     return {
-      state: 'valid',
+      state: 'valid', approval: false,
       title: `${name} への招待です`,
       lede: 'アカウントを作ると、このコミュニティの地図に入れます。',
     };

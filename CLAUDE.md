@@ -62,7 +62,7 @@
 
 ### web/（画面。ビルドなしの素の ES モジュール）
 - 入口：index.html（全画面のマークアップ）、style.css、js/app.js（起動）、js/router.js（画面の切り替えと下のナビ）、js/state.js、js/config.js
-- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）
+- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）、waiting.js（承認待ち・お断り・外された、#/waiting）、fullname.js（フルネームの確認、#/fullname。判断は fullname-rules.js）
 - 部品 js/components/：postcard.js、chat.js（投稿の下のメッセージ）、talk-button.js（もっと話してみたい）、image-viewer.js、heatobject.js
 - 地図の描画 js/map/：index.js（カメラ・操作・描画の中心）、terrain.js・terrain-worker.js（地面）、coast.js・land.js・landmass.js（陸と海）、buildings.js（家と町）、pins.js、lines.js（人の線）、kin.js（点線）、decor.js・surf.js・vehicles.js・sparkles.js（飾り）、palette.js（色）
 - 通信：net.js（`api` が Cloud Run、`data` が Supabase か手元）、session.js（ログイン）、realtime.js（通知をすぐ受け取る）、push.js・push-ask.js・sw.js（プッシュ）
