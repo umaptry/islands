@@ -296,6 +296,7 @@ class MemoryStore:
         self._dm_messages = []      # oldest first
         self._dm_blocks = set()     # (blocker_id, blocked_id)
         self._dm_reactions = {}     # (message_id, account_id) -> {message_id, room_id, account_id, kind, created_at}
+        self._dm_reads = {}         # (room_id, user_id) -> the last time that person read the room (a datetime)
         self._talk_stats = {}       # JST day -> {pressed, matched}: counts only
         self._talk_daily_presses = {}   # (account_id, JST day) -> people newly pressed that day
         self._communities = {}      # id -> {id, slug, name, created_by, created_at}
@@ -1268,6 +1269,33 @@ class MemoryStore:
                 "message_id": message_id, "room_id": room["id"], "account_id": me,
                 "kind": kind, "created_at": _stamp(_now()).isoformat()}
             return {"kind": kind}
+
+    def mark_dm_read(self, me, room_id):
+        """Record that I read this room just now (mark_dm_read in the migration). The time never goes back.
+        Only the two in the room, and only without a block; anything else records nothing and says nothing.
+        Answers True when something was recorded."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            room = self._room_of(me, room_id)
+            if not room or self._talk_blocked(room["user_a"], room["user_b"]):
+                return False
+            now = _stamp(_now())
+            held = self._dm_reads.get((room_id, me))
+            self._dm_reads[(room_id, me)] = max(held, now) if held else now
+            return True
+
+    def dm_partner_read_at(self, me, room_id):
+        """When the other person last read the room (ISO text), or None: not in the room, a block, not read yet."""
+        if not me:
+            raise TalkRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            room = self._room_of(me, room_id)
+            if not room or self._talk_blocked(room["user_a"], room["user_b"]):
+                return None
+            other = room["user_b"] if room["user_a"] == me else room["user_a"]
+            seen = self._dm_reads.get((room_id, other))
+            return _stamp(seen).isoformat() if seen else None
 
     def block_dm(self, me, blocked_id):
         if not blocked_id or blocked_id == me or blocked_id not in self._accounts:
