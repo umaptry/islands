@@ -106,6 +106,12 @@ jobs:
     # 30 was hit twice on 2026-10-29 (380 tests): a slow runner took 4.6 s a test, against 3.2 s
     # on the PR run of the same commit, and was cut off at test 374-378 with nothing failing.
     timeout-minutes: 45
+    # 45 was hit on 2026-11-01 (main already took 43m45s): the files are split over three runners,
+    # each with its own server, so one shard takes about a third of the time.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@v4
@@ -118,11 +124,11 @@ jobs:
       - run: pip install -r requirements-test.txt
       - run: npm install --no-save @playwright/test@1.55.0
       - run: npx playwright install --with-deps chromium
-      - run: npx playwright test
+      - run: npx playwright test --shard=${{ matrix.shard }}/3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: browser-verification
+          name: browser-verification-${{ matrix.shard }}
           path: |
             output/browser-tests/
             output/playwright-report/
