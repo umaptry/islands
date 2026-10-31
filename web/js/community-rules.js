@@ -212,6 +212,22 @@ export function inviteView(check) {
   return { state: 'invalid', title: check.name ? `${check.name} への招待は使えません` : '招待を使えませんでした', lede: `${REASON_TEXT[check.reason] || REASON_TEXT.unknown}${ASK_ADMIN}` };
 }
 
+/**
+ * The line under the lede when the QR came with a 会 (?post=): whoever comes in by it starts out joined
+ * to it (map.js joinFromInvite), so they are told before they press anything (2026-10-31). `post` is
+ * the id from the link; `meeting` the post when it could be read (signed in and a member), else null:
+ * someone not yet in the community cannot read it, and is told without the name. A 会 that could be read
+ * and no longer recruits, or is closed or full, is not joined, so nothing is said.
+ */
+export function inviteJoinNote({ post, meeting = null, open = true }) {
+  if (!post || !open) return null;
+  const chars = Array.from(String(meeting?.body || '').replace(/\s+/g, ' ').trim());
+  const name = chars.length > 18 ? `${chars.slice(0, 18).join('')}…` : chars.join('');
+  return name
+    ? `この QR の会（${name}）にも参加した状態で始まります。あとで取り消せます`
+    : 'この QR の会にも参加した状態で始まります。あとで取り消せます';
+}
+
 /** Which buttons the invite page offers. */
 export function inviteActions({ valid, signedIn, providers = [] }) {
   if (!valid) return { join: false, register: false, login: false, providers: [] };

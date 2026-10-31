@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 
 // No package.json "type" in this folder: load the module as a data: URL like the other tests.
 const source = await readFile(new URL('../../web/js/compose-rules.js', import.meta.url), 'utf8');
-const { bodyLength, composeFloor, counterLabel, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore, topicHeading, topicPlan, usableTopics } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { bodyLength, composeFloor, counterLabel, floorLength, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore, topicHeading, topicPlan, usableTopics } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('bodyLength counts characters as the server does: trimmed, an emoji is one', () => {
   assert.equal(bodyLength(''), 0);
@@ -78,6 +78,19 @@ test('shortNote: says how many more characters, only between 1 and floor-1', () 
   assert.equal(shortNote({ length: 14, floor: 15 }), 'あと1字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
   assert.equal(shortNote({ length: 15, floor: 15 }), null);
   assert.equal(shortNote({ length: 3, floor: 1 }), null);
+});
+
+test('floorLength: blanks run together count as one, as the server saves them', () => {
+  // アプリ開発 + 10 line breaks + ! : the box says 16, the server keeps 7 (アプリ開発 !)
+  const padded = `アプリ開発${'\n'.repeat(10)}!`;
+  assert.equal(bodyLength(padded), 16);
+  assert.equal(floorLength(padded), 7);
+  assert.equal(nextLabel({ length: floorLength(padded), floor: 15 }), '15字から投稿できます');
+  assert.equal(shortNote({ length: floorLength(padded), floor: 15 }), 'あと8字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
+  assert.equal(floorLength('  あ　 \t い  '), 3);
+  assert.equal(floorLength('一つの空白は そのまま'), 11);
+  assert.equal(floorLength(''), 0);
+  assert.equal(floorLength(null), 0);
 });
 
 test('counterLabel: "5 / 60"', () => {

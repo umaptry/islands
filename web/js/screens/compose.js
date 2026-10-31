@@ -45,7 +45,7 @@ import { communitiesActive, currentScope, refreshCommunities } from '../communit
 import { communityNameIn, postingTarget, shareOn, shareTargets } from '../community-rules.js';
 import { sharePost } from '../share.js';
 import {
-  bodyLength, composeFloor, counterLabel, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore,
+  bodyLength, composeFloor, counterLabel, floorLength, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore,
   topicHeading, topicPlan, usableTopics,
 } from '../compose-rules.js';
 import { primeKeyboard, releaseKeyboard } from '../keyboard.js';
@@ -71,6 +71,7 @@ let step = 1;                // ① words, ② how serious, ③ tags and other c
 let nudged = false;          // 次へ was pressed on ② before the bar was moved: say how to answer
 let asking = false;          // 次へ on ① is waiting for the topic check (the button says so and cannot be pressed)
 let topicMemory = null;      // the last text the server was asked about: { body, topics, accepted } (compose-rules topicPlan)
+let visit = 0;               // goes up each time the screen opens: an answer asked for on an earlier visit is no answer
 
 const TOPIC_WAIT_MS = 4000;  // the browser gives the topic check this long, then goes on to ② as if nothing came back
 
@@ -127,11 +128,14 @@ async function nextFromWords() {
     return;
   }
   if (plan === 'ask') {
+    const asked = visit;
     asking = true;
     paintCounter();
     const topics = await askTopics(text);
+    // The person may have left (and come back to the same words), or gone on typing, while the answer
+    // was on its way: then it is no answer. Another visit has its own asking and button.
+    if (asked !== visit) return;
     asking = false;
-    // The person may have left, or gone on typing, while the answer was on its way: then it is no answer.
     const stale = !$('compose').classList.contains('active') || step !== 1 || $('composeBody').value.trim() !== text;
     paintCounter();
     if (stale) return;
@@ -245,16 +249,18 @@ function paintCounter() {
   const floor = composeFloor({ editing: Boolean(editing), limits });
   const value = $('composeBody').value;
   const length = bodyLength(value);
-  const ratio = Math.min(1, length / (floor > 1 ? floor : max));
+  // The floor counts a run of blanks as one, as the server saves it; the counter and the 60 do not.
+  const counted = floorLength(value);
+  const ratio = Math.min(1, (floor > 1 ? counted : length) / (floor > 1 ? floor : max));
   const ring = $('composeCounter').querySelector('.value');
   ring.style.strokeDashoffset = String(56.5 * (1 - ratio));
-  $('composeCounter').classList.toggle('done', length >= floor);
+  $('composeCounter').classList.toggle('done', counted >= floor);
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = counterLabel(length, max);
-  const invalid = submitting || postBlocked || length < floor || length > max;
+  const invalid = submitting || postBlocked || counted < floor || length > max;
   $('composeNext').disabled = invalid || asking;
-  $('composeNext').textContent = asking ? '確かめています…' : nextLabel({ length, floor });
-  const note = editing ? null : shortNote({ length, floor });
+  $('composeNext').textContent = asking ? '確かめています…' : nextLabel({ length: counted, floor });
+  const note = editing ? null : shortNote({ length: counted, floor });
   $('composeShortNote').hidden = !note;
   $('composeShortNote').textContent = note || '';
   // The buttons are not held back by the slider: 次へ on ② points at the slider instead (see nudgeSlider).
@@ -655,6 +661,7 @@ export function setupCompose() {
         share: [...shareChosen] });
     },
     enter: async (params, query) => {
+      visit += 1;
       const first = query && query.get('first') === '1';
       firstPost = Boolean(first);
       $('compose').classList.toggle('first-post', firstPost);
