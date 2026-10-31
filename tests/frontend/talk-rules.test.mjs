@@ -467,6 +467,15 @@ test('a missing table is told from an ordinary failure', () => {
   assert.equal(rules.reactionsMissing(null), false);
 });
 
+test('missing read-mark functions are told from an ordinary failure', () => {
+  assert.equal(rules.dmReadMissing({ status: 404, message: 'x' }), true);
+  assert.equal(rules.dmReadMissing({ status: 404, message: 'PGRST202 Could not find the function public.mark_dm_read' }), true);
+  assert.equal(rules.dmReadMissing({ status: 400, message: 'Could not find the function public.dm_partner_read_at(room)' }), true);
+  assert.equal(rules.dmReadMissing({ status: 500, message: 'boom' }), false);
+  assert.equal(rules.dmReadMissing({ status: 0, message: '接続できませんでした。' }), false);
+  assert.equal(rules.dmReadMissing(null), false);
+});
+
 test('the lifted message keeps its place when there is room, and moves in from the edges when there is not', () => {
   const mid = rules.liftLayout({ top: 300, height: 80 }, 800);
   assert.equal(mid.bubbleTop, 300);
@@ -490,4 +499,87 @@ test('setting my reaction replaces mine and leaves the other person\'s alone', (
   assert.equal(rules.myReaction(rules.setMyReaction(rows, MSG, ME, 'pray'), MSG, ME), 'pray');
   assert.equal(rules.setMyReaction(rows, MSG, ME, null).length, 1);
   assert.equal(rules.setMyReaction(rows, MSG, ME, 'sad').length, 2);
+});
+
+// ---------------------------------------------------------------- times, days and read marks in the thread
+
+// Local-clock dates, so the tests pass in any time zone.
+const at = (y, m, d, h = 12, mi = 0) => new Date(y, m - 1, d, h, mi, 0).toISOString();
+const NOW = new Date(2026, 9, 31, 9, 30).getTime();   // 2026-10-31 (Sat) 9:30
+
+test('clockText is the 24-hour clock with no zero before the hour', () => {
+  assert.equal(rules.clockText(at(2026, 10, 31, 0, 53)), '0:53');
+  assert.equal(rules.clockText(at(2026, 10, 31, 0, 0)), '0:00');
+  assert.equal(rules.clockText(at(2026, 10, 31, 9, 5)), '9:05');
+  assert.equal(rules.clockText(at(2026, 10, 30, 22, 41)), '22:41');
+  assert.equal(rules.clockText(at(2026, 10, 30, 23, 59)), '23:59');
+  assert.equal(rules.clockText('nonsense'), '');
+  assert.equal(rules.clockText(null), '');
+});
+
+test('dayLabel: 今日, 昨日, month/day with the weekday, and the year when it is not this one', () => {
+  assert.equal(rules.dayLabel(at(2026, 10, 31, 0, 1), NOW), '今日');
+  assert.equal(rules.dayLabel(at(2026, 10, 31, 23, 59), NOW), '今日');
+  assert.equal(rules.dayLabel(at(2026, 10, 30, 23, 59), NOW), '昨日');
+  assert.equal(rules.dayLabel(at(2026, 10, 30, 0, 0), NOW), '昨日');
+  assert.equal(rules.dayLabel(at(2026, 10, 29, 23, 59), NOW), '10/29(木)');
+  assert.equal(rules.dayLabel(at(2026, 1, 3), NOW), '1/3(土)');
+  assert.equal(rules.dayLabel(at(2025, 10, 30), NOW), '2025/10/30(木)');
+  assert.equal(rules.dayLabel('nonsense', NOW), '');
+  // across a year end: 昨日 is still 昨日
+  assert.equal(rules.dayLabel(at(2025, 12, 31, 23, 0), new Date(2026, 0, 1, 0, 10).getTime()), '昨日');
+  assert.equal(rules.dayLabel(at(2025, 12, 30, 23, 0), new Date(2026, 0, 1, 0, 10).getTime()), '2025/12/30(火)');
+});
+
+test('threadRows: a day mark first and at every change of day, close lines for the same speaker', () => {
+  const m = (id, sender, stamp) => ({ id, sender_id: sender, body: id, created_at: stamp });
+  const rows = rules.threadRows([
+    m('a', AKI, at(2026, 10, 30, 22, 41)),
+    m('b', ME, at(2026, 10, 31, 0, 51)),     // past midnight: a new day mark
+    m('c', ME, at(2026, 10, 31, 0, 52)),
+    m('d', AKI, at(2026, 10, 31, 0, 55)),
+  ], { me: ME, now: NOW });
+  assert.deepEqual(rows.map((row) => (row.type === 'day' ? row.label : `${row.message.id}${row.cont ? '+' : ''}${row.mine ? 'm' : ''}`)),
+    ['昨日', 'a', '今日', 'b m', 'c+m', 'd'].map((x) => x.replace(' ', '')));
+  assert.equal(rows.find((row) => row.message?.id === 'b').time, '0:51');
+  assert.equal(rows.find((row) => row.message?.id === 'a').time, '22:41');
+});
+
+test('threadRows: the same speaker does not stay "close" across a day mark; an empty list is empty', () => {
+  const m = (id, stamp) => ({ id, sender_id: AKI, body: id, created_at: stamp });
+  const rows = rules.threadRows([m('a', at(2026, 10, 30, 23, 59)), m('b', at(2026, 10, 31, 0, 1))], { me: ME, now: NOW });
+  assert.equal(rows.filter((row) => row.type === 'message')[1].cont, false);
+  assert.deepEqual(rules.threadRows([], { me: ME, now: NOW }), []);
+  assert.deepEqual(rules.threadRows(null, { me: ME }), []);
+});
+
+test('threadRows: 既読 only on my messages sent at or before partner_read_at', () => {
+  const stamps = [at(2026, 10, 31, 8, 0), at(2026, 10, 31, 8, 5), at(2026, 10, 31, 8, 10)];
+  const messages = [
+    { id: 'a', sender_id: ME, created_at: stamps[0] },
+    { id: 'b', sender_id: AKI, created_at: stamps[1] },
+    { id: 'c', sender_id: ME, created_at: stamps[2] },
+  ];
+  const read = (partnerReadAt) => rules.threadRows(messages, { me: ME, now: NOW, partnerReadAt })
+    .filter((row) => row.type === 'message').map((row) => row.read);
+  assert.deepEqual(read(stamps[1]), [true, false, false]);
+  assert.deepEqual(read(stamps[2]), [true, false, true]);
+  assert.deepEqual(read(stamps[0]), [true, false, false], 'the same instant counts as read');
+  assert.deepEqual(read(null), [false, false, false]);
+  assert.deepEqual(read('nonsense'), [false, false, false]);
+});
+
+test('readToRecord: first time always (even an empty room), later only for something new, never while hidden', () => {
+  const t1 = at(2026, 10, 31, 8, 5);
+  const t2 = at(2026, 10, 31, 8, 9);
+  const mine = { id: 'a', sender_id: ME, created_at: at(2026, 10, 31, 8, 0) };
+  const theirs = (id, stamp) => ({ id, sender_id: AKI, created_at: stamp });
+  assert.equal(rules.readToRecord({ messages: [], me: ME }), '', 'first time, empty room: goes, with nothing to remember');
+  assert.equal(rules.readToRecord({ messages: [mine], me: ME }), '');
+  assert.equal(rules.readToRecord({ messages: [mine, theirs('b', t1)], me: ME }), t1);
+  assert.equal(rules.readToRecord({ messages: [mine, theirs('b', t1)], me: ME, marked: t1 }), null, 'nothing new');
+  assert.equal(rules.readToRecord({ messages: [mine], me: ME, marked: '' }), null);
+  assert.equal(rules.readToRecord({ messages: [mine, theirs('b', t1), theirs('c', t2)], me: ME, marked: t1 }), t2);
+  assert.equal(rules.readToRecord({ messages: [theirs('b', t1)], me: ME, visible: false }), null, 'hidden: wait');
+  assert.equal(rules.readToRecord({ messages: [theirs('b', t1)], me: ME, marked: null, visible: true }), t1);
 });

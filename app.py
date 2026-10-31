@@ -3871,6 +3871,24 @@ def local_dm_react(message_id: str, payload: DmReaction, request: Request):
         raise _talk_refusal(error)
 
 
+@app.post("/api/local/dm/{room_id}/read")
+def local_dm_mark_read(room_id: str, request: Request):
+    require_local()
+    try:
+        return {"recorded": state["store"].mark_dm_read(current_user(request), room_id)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
+@app.get("/api/local/dm/{room_id}/read")
+def local_dm_read_state(room_id: str, request: Request):
+    require_local()
+    try:
+        return {"partner_read_at": state["store"].dm_partner_read_at(current_user(request), room_id)}
+    except TalkRefused as error:
+        raise _talk_refusal(error)
+
+
 @app.post("/api/local/dm/blocks")
 def local_dm_block(payload: DmBlock, request: Request):
     require_local()

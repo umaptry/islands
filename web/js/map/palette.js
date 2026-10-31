@@ -45,10 +45,10 @@ export function pinColor(value) {
 // The time of day the map is painted in. Layers go over the ground and the
 // buildings and under the pins and names, each { color, blend, alpha }, with
 // `blend` a canvas globalCompositeOperation.
-// The page-like screens (compose, DM, マイページ ...) stay in the sea they had
-// before the map's sea deepened (screen-tone.js): a change of the map is not a
-// change of every screen.
-export const PAGE_SEA = '#46AEE6';
+// The page-like screens (compose, DM, マイページ ...) are painted in the map's own
+// sea (screen-tone.js), at the user's request on 2026-10-31: "make the other pages
+// match the map". It used to be the lighter #46AEE6 they had before the map's sea deepened.
+export const PAGE_SEA = PALETTE.sea;
 
 export const TIMES = {
   morning: [
