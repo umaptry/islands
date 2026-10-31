@@ -584,7 +584,8 @@ const localBackend = {
   // Not part of the agreed routes: a development server may or may not have it.
   communityInfo: (id) => api.get(`/api/local/communities/${encodeURIComponent(id)}`)
     .catch(() => null),
-  checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`, { auth: false }),
+  // Signed in, the token goes along so a removed or refused person is told the link needs approval.
+  checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`),
   claimInvite: (code, consent = consentVersion()) =>
     api.post('/api/local/invites/claim', { code, ...(consent ? { consent } : {}) }),
   createInvite: ({ post, ...body }) => api.post('/api/local/invites', { ...body, ...(post ? { post_id: post } : {}) }),
