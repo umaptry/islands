@@ -66,6 +66,7 @@ from core import growth
 from core import introductions
 from core import island_namer
 from core import topic_check
+from core import visibility
 from core import matching
 from core import island_tracking
 from core import notifications as notices
@@ -75,8 +76,14 @@ from core.clustering import assign_cluster, name_group
 from core.prompts import weekly_prompt
 from core import post_extras
 from core.config import (
+    AGE_BANDS,
     AWAY_DIGEST_COUNT,
     COMMUNITY_ERROR_POST,
+    CONSENT_VERSION,
+    FULLNAME_REQUIRED_FROM,
+    JOB_TITLE_MAX,
+    MEMBER_REMOVAL_FROM,
+    NAME_CONFIRM_ERROR,
     DM_BODY_MAX,
     EXAMPLE_POSTS,
     EXTRA_PROMPTS,
@@ -206,6 +213,8 @@ PUSH_MIN_GAP_SECONDS = 1.0
 PUSH_URL = "/#/notifications"
 # A "new resident" push opens the map, where the catch-up shows who moved in.
 PUSH_URL_RESIDENT = "/#/map"
+# 2026-11-01: 承認制。待っている人を知らされた管理者はそのコミュニティの画面（承認待ちの枠）へ。
+PUSH_URL_JOIN_REQUEST = "/#/community/{id}"
 
 _logger = logging.getLogger(__name__)
 
@@ -347,6 +356,7 @@ async def lifespan(_app):
             os.environ.get("EMBEDDING_CACHE_PATH", str(ROOT / ".cache" / "embeddings.sqlite3")))
         state["model"] = CachedEmbedder(state["model"], cache, state["manifest"]["embedding"])
     state["local_mode"] = state["store"].backend == "memory"
+    visibility.use_store(lambda: state["store"])
     if state["local_mode"] and not local_mode_allowed():
         # A production deploy that lost SUPABASE_URL / SUPABASE_SERVICE_KEY would otherwise quietly
         # become an open server whose login hands the code out on screen and whose dev switches
@@ -513,6 +523,9 @@ class AccountPatch(BaseModel):
     goal: str | None = None
     seeking: str | None = None
     offering: str | None = None
+    # 2026-11-01: true = 「フルネームと所属を確かめた」。name_confirmed_at をサーバーが now にする
+    # （画面から時刻は送れない）。名前か所属が空なら 422。false / null は何もしない。
+    name_confirmed: bool | None = None
 
 
 class NotificationSetting(BaseModel):
@@ -1327,6 +1340,18 @@ def connection_lines(force=False, community=None):
         # an event counts only when it landed on one of them.
         in_community = {post["id"] for post in posts}
         events = [event for event in events if event.get("post_id") in in_community]
+        # Only people who are members NOW: somebody who was removed or left has no line and no card
+        # on this map. A reply to such a person's comment still counts towards the post's owner.
+        members = {str(account) for account in store.community_member_ids(community)}
+        kept = []
+        for event in events:
+            if str(event["actor_id"]) not in members or str(event["post_author_id"]) not in members:
+                continue
+            parent = event.get("reply_author_id")
+            if parent and str(parent) not in members:
+                event = {**event, "reply_author_id": None}
+            kept.append(event)
+        events = kept
     where, best = home_posts(posts)
     by_author = defaultdict(list)
     for post in posts:
@@ -1894,6 +1919,19 @@ def push_subject():
     return "https://localhost"
 
 
+def hide_unseen_actors(entry):
+    """A copy of a notification entry whose `actors` the recipient may not see (visibility) carry
+    the hidden-person name instead. Entries with no `recipient_id` (a bare dict) are left alone."""
+    recipient = entry.get("recipient_id")
+    actors = entry.get("actors") or []
+    if not recipient or not actors:
+        return entry
+    shown = visibility.visible_ids(recipient, [a.get("id") for a in actors if a])
+    if all(not a or not a.get("id") or str(a["id"]) in shown for a in actors):
+        return entry
+    return {**entry, "actors": [visibility.mask_person(recipient, a, visible=shown) for a in actors]}
+
+
 def push_message(entry, hashed_tag=False):
     """One notification_feed() entry as the text a lock screen shows.
 
@@ -1901,7 +1939,19 @@ def push_message(entry, hashed_tag=False):
     post is not handed to the device's notification layer."""
     payload = entry.get("payload") or {}
     url = PUSH_URL
-    if entry["type"] == "island" and payload.get("kind") == "resident":
+    entry = hide_unseen_actors(entry)
+    if entry["type"] == "join_request":
+        # 管理者へ。待っている人の名前は visibility を通る（管理者には承認待ちの人も見える）。
+        first = (entry.get("actors") or [None])[0] or {}
+        who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
+        title = "参加の申し込み"
+        body = f"{who}さんが『{payload.get('community_name') or 'コミュニティ'}』への参加を待っています"
+        if payload.get("community_id") or entry.get("community_id"):
+            url = PUSH_URL_JOIN_REQUEST.format(id=payload.get("community_id") or entry.get("community_id"))
+    elif entry["type"] == "join_approved":
+        title = "参加できました"
+        body = f"『{payload.get('community_name') or 'コミュニティ'}』に参加できました"
+    elif entry["type"] == "island" and payload.get("kind") == "resident":
         first = (entry.get("actors") or [None])[0] or {}
         who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
         title = "新しい住人"
@@ -2070,6 +2120,19 @@ def poke_push_dispatch():
     return True
 
 
+def hide_unseen_residents(islands, viewer):
+    """The islands with each resident the viewer may not see (visibility) shown as the hidden-person
+    name. The islands are built once per community and shared, so this works on copies."""
+    if not viewer:
+        return islands
+    wanted = [person.get("id") for island in islands for person in island.get("residents") or []]
+    shown = visibility.visible_ids(viewer, wanted)
+    if all(str(who) in shown for who in wanted if who):
+        return islands
+    return [{**island, "residents": [visibility.mask_person(viewer, person, visible=shown)
+                                    for person in island.get("residents") or []]} for island in islands]
+
+
 def with_tracked_state(payload, community=None):
     """Live islands with the id, tier and landmarks of the island they continue.
     With `community`, only that community's saved islands can be continued."""
@@ -2108,7 +2171,7 @@ def similarity_of(cosine):
     return cosine_percent(cosine, anchors)
 
 
-def neighbors_for(post_id, terms, limit, community=None):
+def neighbors_for(post_id, terms, limit, community=None, viewer=None):
     """Ranked neighbours with shared words, straight off the ANN index.
 
     Ranking is by the 448-dim cosine and never by distance on the map. The map
@@ -2129,12 +2192,13 @@ def neighbors_for(post_id, terms, limit, community=None):
             ranked = state["store"].nearest_posts(post_id, limit)
     except (StoreError, ValueError):
         return []
-    return neighbor_rows(ranked, terms, community=community if members_only_quiet() else None)
+    return neighbor_rows(ranked, terms, community=community if members_only_quiet() else None, viewer=viewer)
 
 
-def neighbor_rows(ranked, terms, community=None):
+def neighbor_rows(ranked, terms, community=None, viewer=None):
     """[(post_id, cosine)] -> the rows the reveal and the orbit print.
-    With `community` (members_only), a post of any other community is dropped as well."""
+    With `community` (members_only), a post of any other community is dropped as well.
+    With `viewer`, the name and face of an author the viewer may not see (visibility) are hidden."""
     store = state["store"]
     out = []
     for other_id, cosine in ranked:
@@ -2169,12 +2233,23 @@ def neighbor_rows(ranked, terms, community=None):
             "shared": shared,
             "note": describe_relation(similarity if similarity is not None else 0, shared),
         })
+    if viewer and out:
+        shown = visibility.visible_ids(viewer, [row["author_id"] for row in out])
+        for row in out:
+            if str(row["author_id"]) not in shown:
+                row["display_name"] = visibility.HIDDEN_PERSON_NAME
+                row["icon_id"], row["avatar_path"] = "0", None
     return out
 
 
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
+
+def today_jst():
+    """Today's date in Japan (no daylight saving: +9 hours). The server keeps the clock."""
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+
 
 @app.get("/api/config")
 def config():
@@ -2223,13 +2298,20 @@ def config():
         # share: a post can be put on other communities' maps too (posts.share_group, 2026-10-29).
         "features": {"post_extras": post_extras_on(), "talk": talk_on(),
                      "communities": communities_on(), "members_only": members_only_quiet(),
-                     "share": share_on()},
+                     "share": share_on(),
+                     # 2026-11-01: 管理者の画面の「外す」ボタン。新しい規約の施行日から（サーバーの時計）。
+                     "member_removal": today_jst() >= MEMBER_REMOVAL_FROM},
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
         "talk": {"label": TALK_LABEL},
         "island_colors": list(ISLAND_COLORS),
+        # 2026-11-01 第1回：承認制・フルネーム。足した行はここにまとめた（terms-notice の `notice` は別の PR）。
+        "consent_version": CONSENT_VERSION,
+        "fullname": {"required": today_jst() >= FULLNAME_REQUIRED_FROM, "from": FULLNAME_REQUIRED_FROM.isoformat()},
+        "age_bands": [{"key": key, "label": label} for key, label in AGE_BANDS],
         "limits": {
+            "job_title_max": JOB_TITLE_MAX,
             "body_min": MIN_TEXT_LENGTH,
             "compose_min": COMPOSE_MIN_LENGTH,
             "body_max": MAX_TEXT_LENGTH,
@@ -2343,7 +2425,8 @@ def islands(response: Response, request: Request, community: str = ""):
         cid = community_param(user_id, community)
         maybe_track_islands()
         try:
-            payload = with_tracked_state(live_islands(community=cid), community=cid)
+            payload = hide_unseen_residents(
+                with_tracked_state(live_islands(community=cid), community=cid), user_id)
         except StoreError:
             raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
         response.headers["Cache-Control"] = "private, no-store"
@@ -2428,9 +2511,10 @@ def similar_people_route(request: Request, account: str = ""):
         _, best = home_posts(posts)
         places = islands_by_author(posts, communities=scope) if ranked else {}
         accounts = {row["id"]: row for row in store.list_accounts([row["id"] for row in ranked])}
+        shown = visibility.visible_ids(account, [row["id"] for row in ranked])
         out = []
         for row in ranked:
-            person = accounts.get(row["id"]) or {}
+            person = visibility.mask_person(account, accounts.get(row["id"]) or {"id": row["id"]}, visible=shown)
             home = best.get(row["id"])
             # Q15: a suggestion is never shown without the reason for it.
             intro = introduce(account, row["id"], index, places, ranked=row)
@@ -2486,6 +2570,8 @@ def person_card(person_id: str, request: Request, viewer: str = ""):
         partner_ids = [row["b"] if row["a"] == person_id else row["a"] for row in rows]
         shown = partner_ids[:PERSON_CARD_CONNECTIONS]
         partners = {row["id"]: row for row in store.list_accounts(shown)}
+        # The person asked for may be nobody the viewer shares a community with: name and profile hidden.
+        person = visibility.mask_person(viewer, person) if viewer else person
         intro = None
         if viewer and viewer != person_id:
             intro = introduce(viewer, person_id, people_index(scope), places)
@@ -2611,15 +2697,17 @@ def changes_digest(request: Request):
     except StoreError:
         names = {}
 
+    seen = visibility.visible_ids(user_id, list(names))
+
     def who(row):
         found, role = behind.get(row["id"], ([], "posts"))
         return {
-            "people": [{
+            "people": [visibility.mask_person(user_id, {
                 "id": person,
                 "display_name": names[person].get("display_name", ""),
                 "icon_id": names[person].get("icon_id", "0"),
                 "avatar_path": names[person].get("avatar_path"),
-            } for person in found if person in names],
+            }, visible=seen) for person in found if person in names],
             "people_role": role,
         }
 
@@ -2871,8 +2959,8 @@ def create_post(payload: PostCreate, request: Request):
         "icon_id": account.get("icon_id", "0"),
         "avatar_path": account.get("avatar_path"),
         "island": result_island,
-        "neighbors": (neighbors_for(row["id"], terms, NEIGHBOR_COUNT, community=community_id)
-                      if members else neighbors_for(row["id"], terms, NEIGHBOR_COUNT)),
+        "neighbors": (neighbors_for(row["id"], terms, NEIGHBOR_COUNT, community=community_id, viewer=user_id)
+                      if members else neighbors_for(row["id"], terms, NEIGHBOR_COUNT, viewer=user_id)),
     }
 
 
@@ -2930,7 +3018,7 @@ def preview_post(payload: PostPreview, request: Request):
         "cluster_id": cluster_id,
         "terms": terms,
         "island": preview_island(x, y, community_id),
-        "neighbors": neighbor_rows(ranked, terms, community=community_id),
+        "neighbors": neighbor_rows(ranked, terms, community=community_id, viewer=user_id),
         "saved": False,
     }
 
@@ -3278,7 +3366,8 @@ def neighbors(request: Request, post: str = "", limit: int = ORBIT_NEIGHBOR_COUN
         return {
             "post": post,
             "island": island_of(post, community),
-            "neighbors": neighbors_for(post, origin.get("terms") or [], limit, community=community),
+            "neighbors": neighbors_for(post, origin.get("terms") or [], limit, community=community,
+                                       viewer=user_id),
         }
     if not post:
         raise HTTPException(status_code=422, detail="投稿が指定されていません。")
@@ -3295,7 +3384,8 @@ def neighbors(request: Request, post: str = "", limit: int = ORBIT_NEIGHBOR_COUN
         "island": island_of(post),
         # A post of a community is near the people of that community only (its map).
         "neighbors": neighbors_for(post, origin.get("terms") or [], limit,
-                                   community=origin.get("community_id") if communities_on() else None),
+                                   community=origin.get("community_id") if communities_on() else None,
+                                   viewer=optional_user(request)),
     }
 
 
@@ -3380,7 +3470,7 @@ def match_rows(user_id, origin):
         return []
     extra = {item["id"]: item for item in picked}
     rows = neighbor_rows([(item["id"], item["cosine"]) for item in picked], origin.get("terms") or [],
-                         community=community if members_only_quiet() else None)
+                         community=community if members_only_quiet() else None, viewer=user_id)
     return [{**row, "prompt": extra[row["id"]]["prompt"], "reason": extra[row["id"]]["reason"],
              "kind": extra[row["id"]]["kind"]} for row in rows]
 
@@ -3555,6 +3645,8 @@ def local_verify(payload: OtpVerify):
         raise HTTPException(status_code=422, detail="パスコードが違います。")
     state["otp"].pop(email, None)
     account_id = _local_account_id(email)
+    if hasattr(state["store"], "remember_auth"):
+        state["store"].remember_auth(account_id, email, "email")  # what auth.users would hold
     return {
         "access_token": auth.dev_token(account_id),
         "user": {"id": account_id, "email": email},
@@ -3729,8 +3821,12 @@ def local_notification_feed(request: Request, limit: int = 50):
     settings = notices.merge_settings(store.get_notification_settings(user_id))
     feed = notices.group_feed(store.list_notifications(user_id, limit=500, viewer=user_id),
                               max(1, min(int(limit), 100)))
+    actors = [actor.get("id") for entry in feed for actor in entry.get("actors") or [] if actor]
+    shown = visibility.visible_ids(user_id, actors)
     for entry in feed:
         entry["interrupts"] = notices.allows(settings, entry["type"], "in_app")
+        entry["actors"] = [visibility.mask_person(user_id, actor, visible=shown) if actor else actor
+                           for actor in entry.get("actors") or []]
     unread = sum(1 for entry in feed if entry["unread"] and entry["interrupts"])
     return {"notifications": feed, "unread": unread, "settings": settings}
 
@@ -3916,12 +4012,18 @@ def local_dm_unblock(blocked_id: str, request: Request):
 
 class InviteCode(BaseModel):
     code: str
+    # 2026-11-01: the version of the terms the person agreed to on the screen (config.consent_version).
+    consent: str | None = None
 
 
 class InviteCreate(BaseModel):
     community_id: str
     minutes: int = 60
     until_end_of_day: bool = False
+    # 2026-11-01: 承認制（A）。true = このリンクで来た人は管理者が許すまで入れない。
+    needs_approval: bool = False
+    # 2026-11-01: 会の投稿を付けたリンク（`?post=` の穴）。そのコミュニティの生きている投稿だけ。
+    post: str | None = None
 
 
 class CommunityCreate(BaseModel):
@@ -3949,7 +4051,8 @@ def local_check_invite(code: str, request: Request):
     client = request.client.host if request.client else "?"
     if not check_rate_limit(f"invite-check:{client}", INVITE_CHECK_LIMIT):
         raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
-    return state["store"].check_invite(code)
+    # Signed in (a token was sent): a person once removed or turned down is told the link needs approval.
+    return state["store"].check_invite(code, me=optional_user(request))
 
 
 @app.post("/api/local/invites/claim")
@@ -3957,7 +4060,7 @@ def local_claim_invite(payload: InviteCode, request: Request):
     require_local()
     user_id = current_user(request)
     try:
-        return state["store"].claim_invite(user_id, payload.code)
+        return state["store"].claim_invite(user_id, payload.code, payload.consent)
     except Refused as error:
         raise _refusal(error)
 
@@ -3968,7 +4071,7 @@ def local_create_invite(payload: InviteCreate, request: Request):
     user_id = current_user(request)
     try:
         return state["store"].create_invite(user_id, payload.community_id, payload.minutes,
-                                            payload.until_end_of_day)
+                                            payload.until_end_of_day, payload.needs_approval, payload.post)
     except Refused as error:
         raise _refusal(error)
 
@@ -4137,6 +4240,76 @@ def local_image(account_id: str, name: str):
     return Response(content=raw, media_type=kind, headers={"Cache-Control": "max-age=3600"})
 
 
+# -- join approval (2026-11-01) ---------------------------------------------------
+# Stand-ins for the database functions the browser calls itself in a deployment (set_invite_approval,
+# my_join_status, cancel_join_request, list_join_requests, decide_join_request). The words of a
+# refusal are the database's (core/config.py APPROVAL_ERROR_*). Answers are wrapped the way the other
+# local routes are: {"statuses": [...]}, {"requests": [...]}.
+
+class InviteApproval(BaseModel):
+    approval: bool
+
+
+class JoinCancel(BaseModel):
+    community_id: str
+
+
+class JoinDecision(BaseModel):
+    approve: bool
+
+
+@app.post("/api/local/invites/{invite_id}/approval")
+def local_set_invite_approval(invite_id: str, payload: InviteApproval, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        state["store"].set_invite_approval(user_id, invite_id, payload.approval)
+    except Refused as error:
+        raise _refusal(error)
+    return {"ok": True}
+
+
+@app.get("/api/local/join/status")
+def local_join_status(request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"statuses": state["store"].my_join_status(user_id)}
+    except Refused as error:
+        raise _refusal(error)
+
+
+@app.post("/api/local/join/cancel")
+def local_join_cancel(payload: JoinCancel, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        state["store"].cancel_join_request(user_id, payload.community_id)
+    except Refused as error:
+        raise _refusal(error)
+    return {"ok": True}
+
+
+@app.get("/api/local/communities/{community_id}/join-requests")
+def local_list_join_requests(community_id: str, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"requests": state["store"].list_join_requests(user_id, community_id)}
+    except Refused as error:
+        raise _refusal(error)
+
+
+@app.post("/api/local/communities/{community_id}/join-requests/{person}/decide")
+def local_decide_join_request(community_id: str, person: str, payload: JoinDecision, request: Request):
+    require_local()
+    user_id = current_user(request)
+    try:
+        return {"result": state["store"].decide_join_request(user_id, community_id, person, payload.approve)}
+    except Refused as error:
+        raise _refusal(error)
+
+
 # --------------------------------------------------------------------------
 # account (both modes)
 # --------------------------------------------------------------------------
@@ -4173,6 +4346,7 @@ def account_update(payload: AccountPatch, request: Request):
     """
     user_id = current_user(request)
     fields = payload.model_dump(exclude_unset=True)
+    confirm_name = bool(fields.pop("name_confirmed", None))
 
     if "display_name" in fields:
         # The one field that cannot be cleared: it is what the map draws.
@@ -4194,6 +4368,18 @@ def account_update(payload: AccountPatch, request: Request):
             fields[key] = str(fields[key]).strip()[:cap] or None
 
     store = state["store"]
+    if confirm_name:
+        # 「フルネームと所属を確かめた」：この保存のあとの名前と所属が両方そろっているときだけ。
+        # 時刻は画面から受け取らず、ここで決める。
+        try:
+            current = store.get_account(user_id) or {}
+        except StoreError:
+            raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
+        merged_name = fields["display_name"] if "display_name" in fields else current.get("display_name")
+        merged_affiliation = fields["affiliation"] if "affiliation" in fields else current.get("affiliation")
+        if not str(merged_name or "").strip() or not str(merged_affiliation or "").strip():
+            raise HTTPException(status_code=422, detail=NAME_CONFIRM_ERROR)
+        fields["name_confirmed_at"] = datetime.now(timezone.utc).isoformat()
     touched = [key for key in people.VECTOR_FIELDS if key in fields]
     if "topics" in fields:
         fields["topics"] = clean_topics(fields["topics"])
