@@ -87,3 +87,21 @@ def test_the_notice_after_the_effective_day(client, monkeypatch):
 
 def test_no_notice_after_the_period(client, monkeypatch):
     assert notice_at(client, monkeypatch, "2026-12-01T00:00:00") is None
+
+
+# The real next pages: the banner's #changes link must land, the effective date must be stated,
+# and every link inside must stay on the next versions (the current ones say something else).
+@pytest.mark.parametrize("page,other", [("terms", "privacy"), ("privacy", "terms")])
+def test_the_real_next_pages_announce_the_change(client, page, other):
+    text = client.get(f"/{page}/next").text
+    assert 'id="changes"' in text
+    assert "施行日：2026年11月16日" in text
+    assert f'href="/{other}/next' in text
+    assert f'href="/{other}"' not in text and f'href="/{other}#' not in text
+
+
+@pytest.mark.parametrize("page", ["terms", "privacy"])
+def test_the_current_pages_point_to_the_next_ones(client, page, monkeypatch):
+    set_now(monkeypatch, "2026-11-02T12:00:00")
+    text = client.get(f"/{page}").text
+    assert f'href="/{page}/next#changes"' in text
