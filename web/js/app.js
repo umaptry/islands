@@ -34,6 +34,11 @@ import { WAITING_HOLD_MS, mapLinkFor, postIdFromHash, savePendingPost, takePendi
 import { setupInvite, settleSession } from './screens/invite.js';
 import { communitiesActive, dropCommunities, refreshCommunities, refreshJoinStatus } from './communities.js';
 import { mustWait, parseInviteHash } from './community-rules.js';
+// ---- 会：公開側（第2回a） ----
+import { setupEventApply } from './screens/event-apply.js';
+import { setupEventMe } from './screens/event-me.js';
+import { forgetEventGuest, guestHome, refreshEventGuest } from './event-guest.js';
+import { eventHashFor, isEventPattern, parseEventPath, peekApplyReturn } from './event-rules.js';
 
 // Where every hash lands. The order matters only in that the first match wins.
 route('#/welcome', 'welcome');
@@ -54,6 +59,9 @@ route('#/u/:id', 'user');
 route('#/dm', 'dmList');
 route('#/dm/:id', 'dmRoom');
 route('#/community/:id', 'communityEdit');
+// ---- 会：公開側（第2回a） ----
+route('#/e/:code', 'eventApply');
+route('#/e/:code/me', 'eventMe');
 
 // Signed out, you can look at the map and read a post; you cannot write, react
 // or have an inbox. Sending somebody to the sign-in screen is a redirect and
@@ -82,12 +90,17 @@ const needsAffiliation = () => Boolean(state.account && state.account.display_na
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
   const onboarding = onboardingStep();
+  // ---- 会：公開側（第2回a） ---- the pages of a 会 are open to anybody (the page itself asks for a sign-in where it needs one)
+  if (isEventPattern(pattern)) return null;
   if (pattern === '#/waiting') {
     // Open for anybody the status list says something about (a person in another community opens it from the switcher).
     if (!session.signedIn()) return '#/welcome';
     return Array.isArray(state.joinStatus) && state.joinStatus.length ? null : '#/map';
   }
   if (session.signedIn() && mustWaitNow() && !WAIT_EXEMPT.has(pattern)) return '#/waiting';
+  // ---- 会：公開側（第2回a） ---- a guest (applied to a 会, in no community) may open only the pages of that 会
+  const guestAt = guestHome();
+  if (guestAt && !['#/welcome', '#/auth', '#/invite/:code', '#/waiting'].includes(pattern)) return guestAt;
   if (pattern === '#/fullname') return fullnameHeld() ? null : '#/map';
   if (pattern === '#/affiliation') return needsAffiliation() ? null : '#/map';
   if (needsAffiliation() && !AFFILIATION_EXEMPT.has(pattern)) {
@@ -154,6 +167,8 @@ async function boot() {
   setupCommunityEdit();
   setupWaiting();
   setupFullname();
+  setupEventApply();   // ---- 会：公開側（第2回a） ----
+  setupEventMe();
   setupRealtime({ onArrive: refreshNotifications });
   setupPush({ onRefresh: refreshNotifications, onOpen: (hash) => navigate(hash) });
   setupPushAsk();
@@ -170,6 +185,17 @@ async function boot() {
   const redirect = session.adoptRedirect();
   if (redirect !== 'adopted') session.restore();
   if (redirect === 'failed') toast('ログインできませんでした。もう一度お試しください。');
+
+  // ---- 会：公開側（第2回a） ---- /e/<code> is the page of a 会: the router reads the hash, so the path becomes #/e/<code>.
+  // (After the sign-in has been taken from the address, which a LINE sign-in leaves on this very path.) A sign-in that came
+  // back to the front page while somebody was applying goes back to that 会.
+  const eventPath = parseEventPath(window.location.pathname);
+  if (eventPath && eventPath.kind === 'apply') {
+    history.replaceState(null, '', `/${eventHashFor(eventPath.code, 'apply')}`);
+  } else if (redirect === 'adopted' && peekApplyReturn(browserStorage())) {
+    history.replaceState(null, '', `/${eventHashFor(peekApplyReturn(browserStorage()), 'apply')}`);
+  }
+  const onEventPage = /^#\/e\//.test(window.location.hash);
 
   let invalidatedSession = false;
   let accountRead = false;
@@ -200,6 +226,9 @@ async function boot() {
   if (session.signedIn() && !invalidatedSession && accountRead && communitiesActive()) {
     if (parseInviteHash(window.location.hash)) {
       await refreshCommunities();
+    } else if (onEventPage) {
+      // ---- 会：公開側（第2回a） ---- applying to a 会 makes the account: not signed out for having none yet
+      await refreshCommunities();
     } else {
       const settledInvite = await settleSession(state.account);
       if (settledInvite.blocked) {
@@ -213,6 +242,8 @@ async function boot() {
   // somebody who is waiting is sent to #/waiting at once. Then: is the full name still to be asked this time?
   if (session.signedIn() && !invalidatedSession && accountRead && communitiesActive()) await refreshJoinStatus();
   if (state.account) markFullnameDue();
+  // ---- 会：公開側（第2回a） ---- a guest is held on the page of their 会: which 会 is read before the router moves
+  if (session.signedIn() && !invalidatedSession && accountRead && state.account && state.communities.length === 0) await refreshEventGuest();
 
   // Not signed in, or signed in but not yet through the first-post steps: the
   // link waits. (A finished account is simply taken to it by the router.)
@@ -278,6 +309,7 @@ async function boot() {
       refreshNav();
       dropCommunities();
       forgetMapData();
+      forgetEventGuest();   // ---- 会：公開側（第2回a） ----
     }
     // Also rings on every token refresh; both only act when the person changed.
     syncRealtime();

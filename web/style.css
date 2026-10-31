@@ -2340,3 +2340,107 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .fullname-stuck { margin: 0; font-size: 12px; color: var(--on-sea-2); }
 .input.input-line:focus-visible { outline: none; }
 .fullname-foot { padding-left: 24px; padding-right: 24px; }
+
+/* ---- 会：公開側（第2回a） ----
+ * The public page of a 会 (#/e/<code>), its steps of applying, and the guest page (#/e/<code>/me).
+ * 画面イメージ 16回目の1・2・3、20回目の3・4: the sea, big white buttons at the bottom, fields without a frame. */
+#eventApply, #eventMe { overflow: hidden; }
+.ev-body { padding-top: 28px; padding-bottom: 20px; }
+.ev-body [hidden], .ev-foot [hidden] { display: none !important; }
+.ev-brand { font-size: 24px; font-weight: 800; letter-spacing: .01em; margin-bottom: 26px; }
+.ev-title { font-size: 26px; line-height: 1.4; margin: 0 0 12px; font-weight: 800; white-space: pre-line; overflow-wrap: anywhere; text-wrap: balance; word-break: auto-phrase; }
+.ev-title.is-mid { font-size: 24px; margin-bottom: 10px; }
+.ev-title.is-center, .ev-lede.is-center { text-align: center; }
+.ev-lede { margin: 0 0 18px; font-size: 14px; line-height: 1.7; color: var(--on-sea-2); white-space: pre-line; text-wrap: pretty; word-break: auto-phrase; overflow-wrap: anywhere; }
+.ev-lines { margin-bottom: 26px; }
+.ev-line { font-size: 14px; line-height: 1.8; color: var(--on-sea); overflow-wrap: anywhere; }
+.ev-sub { font-size: 14px; font-weight: 800; margin: 0 0 10px; }
+.ev-small { margin-bottom: 22px; }
+.ev-small-title { font-size: 14px; font-weight: 800; overflow-wrap: anywhere; }
+.ev-small-when { font-size: 13px; color: var(--on-sea-2); line-height: 1.6; }
+.ev-fine { margin: 10px 0 0; font-size: 12px; line-height: 1.7; color: var(--on-sea-2); text-wrap: pretty; word-break: auto-phrase; }
+.ev-fine a, .ev-consent a, .ev-center a, .ev-link { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+.ev-center { text-align: center; }
+.ev-hint { display: block; margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--on-sea-2); }
+.ev-lock { margin: 0 0 16px; font-size: 12px; color: var(--on-sea-2); }
+.ev-error { min-height: 20px; margin-top: 10px; color: #ffd8d2; font-size: 13px; line-height: 1.6; }
+
+.ev-band { margin: -28px -24px 22px; padding: 14px 24px; font-size: 14px; font-weight: 800; text-align: center; color: #fff; }
+.ev-band.is-red { background: #c0392b; }
+.ev-band.is-amber { background: #ffe9a8; color: #5a3a00; text-align: left; font-weight: 700; }
+.ev-band.is-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ev-band.is-row b { display: block; font-size: 13px; }
+.ev-band.is-row span { display: block; font-size: 11px; line-height: 1.5; font-weight: 600; }
+.ev-band-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; text-align: center; white-space: pre-line; padding: 8px 14px; border-radius: 999px; background: #3b2a00; color: #fff; font-size: 12px; font-weight: 800; line-height: 1.3; }
+
+.ev-card { background: #fff; color: var(--ink); border-radius: 18px; padding: 16px 16px 14px; margin-bottom: 14px; }
+.ev-card.ev-plain { padding: 14px 16px; }
+.ev-card .ev-small-when { color: var(--ink-2); }
+.ev-count { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.ev-count-n { font-size: 30px; font-weight: 800; line-height: 1; }
+.ev-count-u { font-size: 16px; font-weight: 800; }
+.ev-count-l { font-size: 13px; color: var(--ink-2); }
+.ev-cap { margin-left: auto; font-size: 12px; color: var(--ink-3); }
+.ev-break { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.ev-break:last-of-type { border-bottom: 0; }
+.ev-break-title { font-size: 11px; font-weight: 800; color: var(--ink-3); margin-bottom: 4px; }
+.ev-break-items { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; }
+.ev-break-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.ev-card .ev-fine { color: var(--ink-3); margin-top: 8px; }
+.ev-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.ev-dot.is-big { width: 28px; height: 28px; }
+.ev-dots { display: flex; justify-content: center; gap: 8px; margin: 10px 0 6px; }
+
+/* the foot: a big white button, the quiet choice under it */
+.ev-foot { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 8px 24px calc(20px + env(safe-area-inset-bottom)); max-width: 512px; }
+.ev-primary { min-height: 56px; font-size: 16px; background: #fff; color: var(--ui, var(--sea)); }
+.ev-primary:disabled { background: rgba(255, 255, 255, .45); color: rgba(255, 255, 255, .85); }
+.ev-quiet { background: none; border: 0; color: #fff; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; padding: 6px 12px; cursor: pointer; }
+.ev-line-btn { min-height: 56px; font-size: 16px; background: #06c755; color: #fff; text-decoration: none; }
+.ev-mail-btn { min-height: 44px; font-size: 14px; background: rgba(255, 255, 255, .22); color: #fff; box-shadow: none; }
+.ev-line-wrap { position: relative; width: 100%; }
+.ev-tag { position: absolute; top: -9px; left: 14px; z-index: 1; padding: 1px 10px; border-radius: 999px; background: #fff; color: #06a548; font-size: 11px; font-weight: 800; }
+.ev-why { width: 100%; background: #fff; color: var(--ink); border-radius: 14px; padding: 12px 14px; font-size: 12px; line-height: 1.7; }
+.ev-why b { display: block; font-size: 13px; margin-bottom: 2px; }
+.ev-why ul { list-style: none; margin: 0; padding: 0; }
+.ev-consent { margin: 0; font-size: 11.5px; line-height: 1.7; color: var(--on-sea-2); text-align: center; text-wrap: pretty; word-break: auto-phrase; }
+
+/* the probe */
+.ev-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.ev-chip { padding: 8px 16px; border-radius: 999px; border: 0; background: rgba(255, 255, 255, .22); color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; }
+.ev-chip.is-on { background: #fff; color: var(--ui, var(--sea)); }
+.ev-add { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 16px; }
+.ev-add .input { flex: 1; min-width: 0; }
+.ev-result { text-align: center; margin-top: 8px; }
+.ev-result-lead { font-size: 13px; color: var(--ink-2); line-height: 1.6; }
+.ev-result-n { font-size: 44px; font-weight: 800; line-height: 1.2; color: var(--ui, var(--sea)); }
+.ev-result-u { font-size: 20px; margin-left: 2px; }
+
+/* steps */
+.ev-progress { display: flex; gap: 6px; margin-bottom: 18px; }
+.ev-progress span { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .3); }
+.ev-progress span.is-on { background: #fff; }
+.ev-qno { font-size: 12px; font-weight: 800; margin-bottom: 4px; }
+.ev-early { font-size: 12px; font-weight: 800; margin-bottom: 8px; color: #fff; }
+.ev-answer { width: 100%; background: transparent; border: 0; outline: 0; resize: none; color: #fff; font: inherit; font-size: 20px; line-height: 1.6; padding: 6px 0; caret-color: #fff; }
+.ev-answer::placeholder { color: rgba(255, 255, 255, .6); }
+.ev-count-chars { text-align: right; font-size: 12px; color: var(--on-sea-2); }
+.ev-choices { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.ev-choice { text-align: left; padding: 14px 18px; border-radius: 999px; border: 0; background: rgba(255, 255, 255, .22); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+.ev-choice.is-on { background: #fff; color: var(--ui, var(--sea)); }
+.ev-dev { margin-bottom: 14px; }
+
+/* done */
+.ev-check { width: 64px; height: 64px; margin: 24px auto 16px; border-radius: 50%; background: #fff; color: #2f9e5f; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 800; }
+
+/* the guest page */
+.ev-status { padding: 14px 16px; }
+.ev-status-title { font-size: 16px; font-weight: 800; }
+.ev-status.is-ok .ev-status-title, .ev-status.is-attended .ev-status-title { color: #1f7a45; }
+.ev-status.is-cancelled { background: rgba(255, 255, 255, .88); }
+.ev-status.is-cancelled .ev-status-title { color: #c0392b; }
+.ev-status-note { margin: 6px 0 0; font-size: 13px; line-height: 1.7; color: var(--ink-2); }
+.ev-late { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
+.ev-late-btn { padding: 12px 4px; border-radius: 12px; border: 0; background: rgba(255, 255, 255, .22); color: #fff; font-size: 12px; font-weight: 800; line-height: 1.4; cursor: pointer; }
+.ev-late-btn.is-on { background: #fff; color: var(--ui, var(--sea)); }
+/* ---- 会：公開側 ここまで ---- */

@@ -197,9 +197,10 @@ export const session = {
   },
 
   /** OAuth is a full-page redirect; the token comes back in the URL fragment. */
-  startOAuth(provider) {
+  startOAuth(provider, returnPath = '/') {
     const { url } = config().supabase;
-    const redirect = `${window.location.origin}/`;
+    // 2026-11-01: the page of a 会 comes back to its own address (/e/<code>), not to the front page.
+    const redirect = `${window.location.origin}${/^\/[\w\-/]*$/.test(returnPath) ? returnPath : '/'}`;
     window.location.href =
       `${url}/auth/v1/authorize?provider=${encodeURIComponent(SUPABASE_PROVIDERS[provider] || provider)}` +
       `&redirect_to=${encodeURIComponent(redirect)}`;

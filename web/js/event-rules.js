@@ -1,0 +1,294 @@
+// The rules behind the public page of a 会 (/e/<code>, #/e/<code>) and the guest page (#/e/<code>/me), kept free of
+// the page so they can be tested in node (tests/frontend/event-rules.test.mjs). No imports on purpose.
+//
+// What a person who is not signed in may see (E 8): the name, the time, the place, who hosts it, how many people are
+// coming, and counts by age / job / genre where a group of two or fewer is folded into 「ほか」. Never a name, never
+// the words of an answer. Words that name a 島 are not used on these pages (the genre is just 「アウトドア」).
+
+export const HOKA = 'ほか';
+export const BREAKDOWN_FLOOR = 3;          // a group smaller than this is folded into 「ほか」 (BREAKDOWN_MIN_COUNT on the server)
+export const WEEKDAYS = '日月火水木金土';
+export const LATE_MINUTES = Object.freeze([10, 30, 60]);
+export const LATE_LABELS = Object.freeze({ 10: '10分くらい遅れる', 30: '30分くらい遅れる', 60: '1時間以上遅れる' });
+const CODE_PATTERN = /^[A-Za-z0-9_-]{6,64}$/;
+
+export const EVENT_WORDS = Object.freeze({
+  applyTo: '申し込みに進む',
+  applyNow: 'すぐ申し込む',
+  probe: 'あなたと近い人が来るか見てみる',
+  cancelledBand: 'この会は中止になりました',
+  cancelledNote: '申し込みは取り消されています。',
+  fullBand: '先着人数に達しました',
+  deadlineBand: '申し込みの期限が過ぎました',
+  declined: '定員などの都合により、今回はご参加をお受けできないことになりました。またの機会にぜひお越しください。',
+  attended: '受付しました',
+  cancelledReg: '申し込みを取り消しました',
+  waiting: '受付を待っています',
+  notFound: 'この会は見つかりません。',
+  consentLead: '「申し込む」を押すと、',
+  consentTail: 'に同意したことになります。',
+  noQuestions: '質問はありません。',
+  friendBand: 'LINE でお知らせが届きません',
+  friendNote: 'islands の LINE を友だち追加すると届きます',
+});
+
+// ---------------------------------------------------------------- the address
+
+/** "/e/<code>" or "/c/<code>" (the path a link opens) -> { kind: 'apply' | 'checkin', code }, or null. */
+export function parseEventPath(pathname) {
+  const found = /^\/([ec])\/([^/?#]+)\/?$/.exec(String(pathname || ''));
+  if (!found) return null;
+  let code = found[2];
+  try { code = decodeURIComponent(code); } catch { return null; }
+  if (!CODE_PATTERN.test(code)) return null;
+  return { kind: found[1] === 'e' ? 'apply' : 'checkin', code };
+}
+
+export const validEventCode = (code) => CODE_PATTERN.test(String(code || ''));
+
+/** The hash of a page of a 会. kind: 'apply' (the public page), 'me' (the guest page), 'checkin'. */
+export function eventHashFor(code, kind = 'apply') {
+  if (!validEventCode(code)) return '#/map';
+  if (kind === 'checkin') return `#/c/${code}`;
+  return kind === 'me' ? `#/e/${code}/me` : `#/e/${code}`;
+}
+
+/** Is this route pattern one of the pages of a 会 (they are open to people who are not members)? */
+export const isEventPattern = (pattern) => /^#\/(e|c)\/:code(\/|$)/.test(String(pattern || ''));
+
+// ---------------------------------------------------------------- when
+
+function jst(value) {
+  const stamp = typeof value === 'number' ? value : Date.parse(value);
+  if (!Number.isFinite(stamp)) return null;
+  return new Date(stamp + 9 * 3600 * 1000);       // read with the getUTC* of this shifted date: Japan time
+}
+const two = (n) => String(n).padStart(2, '0');
+
+/** "11/21(金)" in Japan time, or ''. */
+export function dayText(value) {
+  const d = jst(value);
+  return d ? `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${WEEKDAYS[d.getUTCDay()]})` : '';
+}
+
+/** "19:00" in Japan time, or ''. */
+export function clockText(value) {
+  const d = jst(value);
+  return d ? `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}` : '';
+}
+
+/** "11/21(金) 19:00〜22:00" (the end only when it is the same day, otherwise with its own date). */
+export function windowText(event) {
+  if (!event || !event.starts_at) return '';
+  const start = jst(event.starts_at);
+  if (!start) return '';
+  const head = `${dayText(event.starts_at)} ${clockText(event.starts_at)}`;
+  if (!event.ends_at) return head;
+  const end = jst(event.ends_at);
+  if (!end) return head;
+  const sameDay = start.getUTCFullYear() === end.getUTCFullYear() && start.getUTCMonth() === end.getUTCMonth()
+    && start.getUTCDate() === end.getUTCDate();
+  return sameDay ? `${head}〜${clockText(event.ends_at)}` : `${head}〜${dayText(event.ends_at)} ${clockText(event.ends_at)}`;
+}
+
+/** 'before' | 'during' | 'after': where now stands against the 会 (the late and cancel buttons end with it). */
+export function phaseOf(event, now = Date.now()) {
+  const start = Date.parse(event && event.starts_at);
+  const end = Date.parse(event && event.ends_at);
+  if (Number.isFinite(end) && now > end) return 'after';
+  if (Number.isFinite(start) && now >= start) return 'during';
+  return 'before';
+}
+
+/** A link that puts the 会 in a person's calendar (Google Calendar's template). '' when the time cannot be read. */
+export function calendarUrl(event, origin = '') {
+  const start = Date.parse(event && event.starts_at);
+  const end = Date.parse(event && event.ends_at);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return '';
+  const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const params = new URLSearchParams({
+    action: 'TEMPLATE', text: event.title || 'islands の会', dates: `${stamp(start)}/${stamp(end)}`,
+    location: event.place || '', details: origin ? `${origin}/e/${event.code}` : '',
+  });
+  return `https://calendar.google.com/calendar/render?${params}`;
+}
+
+/** A link to the place on a map. '' without a place. */
+export function mapUrl(place) {
+  const text = String(place || '').trim();
+  return text ? `https://www.google.com/maps/search/?${new URLSearchParams({ api: '1', query: text })}` : '';
+}
+
+// ---------------------------------------------------------------- the public page
+
+/**
+ * What the public page does with its state. `info` is GET /api/public/events/<code>.
+ * { state: 'open' | 'full' | 'deadline' | 'cancelled', canApply, band }
+ */
+export function applyView(info) {
+  const closed = info && info.closed;
+  if (closed === 'cancelled') return { state: 'cancelled', canApply: false, band: EVENT_WORDS.cancelledBand };
+  if (closed === 'full') return { state: 'full', canApply: false, band: EVENT_WORDS.fullBand };
+  if (closed === 'deadline') return { state: 'deadline', canApply: false, band: EVENT_WORDS.deadlineBand };
+  return { state: 'open', canApply: true, band: '' };
+}
+
+/** 「18人 参加予定」 and, when there is a limit, 「定員 20人」. Nothing is shown for a 会 nobody has applied to. */
+export function countView(info) {
+  const count = Number(info && info.applied_count) || 0;
+  const capacity = Number.isInteger(info && info.capacity) ? info.capacity : null;
+  return {
+    count, empty: count === 0,
+    capacityText: capacity ? `定員 ${capacity}人` : '',
+  };
+}
+
+/**
+ * The counts by age / job / genre, as rows: [{ key, title, items: [{ label, count }] }]. Groups below three
+ * people are folded into 「ほか」 again here (the server has done it; a second check costs nothing and keeps the
+ * promise even if a number comes through wrong), and 「ほか」 is always last. Empty groups are left out.
+ */
+export function breakdownRows(breakdown) {
+  const titles = [['age', '年代'], ['job', '職種'], ['genre', 'ジャンル']];
+  const rows = [];
+  for (const [key, title] of titles) {
+    const list = Array.isArray(breakdown && breakdown[key]) ? breakdown[key] : [];
+    const kept = [];
+    let other = 0;
+    for (const item of list) {
+      const count = Number(item && item.count) || 0;
+      const label = String((item && item.label) || '');
+      if (!label || count <= 0) continue;
+      if (label === HOKA || count < BREAKDOWN_FLOOR) other += count; else kept.push({ label, count });
+    }
+    kept.sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : 1));
+    if (other > 0) kept.push({ label: HOKA, count: other });
+    if (kept.length) rows.push({ key, title, items: kept });
+  }
+  return rows;
+}
+
+/** The answer of 近い人が来るか見てみる: { level: none|few|many, count } -> the words. */
+export function probeView(result) {
+  const level = result && result.level;
+  if (level === 'many' && Number.isFinite(result.count)) {
+    return { level, number: String(result.count), unit: '人', lead: 'あなたと近そうな人が', tail: '参加予定です' };
+  }
+  if (level === 'few') return { level, number: '少し', unit: '', lead: 'あなたと近そうな人が', tail: '参加予定です' };
+  return { level: 'none', number: 'まだ', unit: '', lead: 'あなたと近そうな人は', tail: 'いません' };
+}
+
+/** What was typed for the probe -> 1〜2 interests (30 characters at most each), or null. */
+export function cleanInterests(list, max = 30) {
+  const items = (Array.isArray(list) ? list : []).map((item) => String(item || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (items.length < 1 || items.length > 2) return null;
+  if (items.some((item) => Array.from(item).length > max)) return null;
+  return items;
+}
+
+// ---------------------------------------------------------------- the guest page
+
+/**
+ * What the guest page says. `event` is GET /api/events/<code> .event, `me` its `me`.
+ * { tone, title, note, canLate, canCancel, canReapply, showFriend }
+ *   tone: 'cancelled' (a red band) | 'declined' | 'ok' | 'attended' | 'waiting' | 'cancelledReg' | 'none'
+ * A cancelled 会 shows no near people (E 12; the page leaves the section out when `showNear` is false).
+ */
+export function statusView(me, event, now = Date.now()) {
+  const status = (me && me.status) || 'none';
+  const cancelled = Boolean(event && event.cancelled);
+  const phase = phaseOf(event, now);
+  const base = { canLate: false, canCancel: false, canReapply: false, showNear: false, showFriend: false };
+  if (cancelled) {
+    return { ...base, tone: 'cancelled', title: EVENT_WORDS.cancelledBand, note: EVENT_WORDS.cancelledNote };
+  }
+  if (status === 'declined') return { ...base, tone: 'declined', title: '', note: EVENT_WORDS.declined };
+  if (status === 'attended') {
+    return { ...base, tone: 'attended', title: EVENT_WORDS.attended, note: '', showNear: false };
+  }
+  if (status === 'waiting') return { ...base, tone: 'waiting', title: EVENT_WORDS.waiting, note: '' };
+  if (status === 'cancelled') {
+    return { ...base, tone: 'cancelledReg', title: EVENT_WORDS.cancelledReg, note: '', canReapply: phase !== 'after' };
+  }
+  if (status === 'applied') {
+    const live = phase !== 'after';
+    return {
+      ...base, tone: 'ok', title: '申し込み済み', note: phase === 'after' ? '会は終了しました。' : '',
+      canLate: live, canCancel: live, showNear: true, showFriend: !(me && me.line_friend),
+    };
+  }
+  return { ...base, tone: 'none', title: '', note: '' };
+}
+
+/** "30分くらい遅れる" etc. for the three choices; `selected` marks the one that is set. */
+export function lateChoices(selected, allowed = LATE_MINUTES) {
+  return allowed.map((minutes) => ({ minutes, label: LATE_LABELS[minutes] || `${minutes}分遅れる`, selected: minutes === selected }));
+}
+
+/** The one-line reason of a near person (D 例 D `near`), without any strong words when the closeness is low. */
+export function nearReasonText(near) {
+  if (!near || !near.reason) return '';
+  return String(near.reason);
+}
+
+/** An answer of the server -> a sentence for a person. Known words first; the server's own sentence otherwise. */
+export function errorText(error) {
+  const message = error && error.message ? String(error.message) : '';
+  if (error && error.status === 0) return message || '接続できませんでした。通信環境をご確認ください。';
+  return message || 'うまくいきませんでした。もう一度お試しください。';
+}
+
+// ---------------------------------------------------------------- where to come back to
+
+const RETURN_KEY = 'islands-event-apply-return';
+export const RETURN_HOLD_MS = 30 * 60 * 1000;
+
+/** Before leaving for a sign-in (LINE opens another page): remember which 会 the person was applying to. */
+export function rememberApplyReturn(storage, code, now = Date.now()) {
+  if (!storage || !validEventCode(code)) return false;
+  try {
+    storage.setItem(RETURN_KEY, JSON.stringify({ code, at: now }));
+    return true;
+  } catch { return false; }
+}
+
+/** The same, without taking it (start-up looks first; the page of the 会 takes it). */
+export function peekApplyReturn(storage, now = Date.now()) {
+  if (!storage) return null;
+  try {
+    const saved = JSON.parse(storage.getItem(RETURN_KEY) || 'null');
+    if (!saved || !validEventCode(saved.code) || !Number.isFinite(saved.at)) return null;
+    return now - saved.at <= RETURN_HOLD_MS ? saved.code : null;
+  } catch { return null; }
+}
+
+/** The 会 to go back to after a sign-in came back to a bare address, or null. Taken once. */
+export function takeApplyReturn(storage, now = Date.now()) {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(RETURN_KEY);
+    storage.removeItem(RETURN_KEY);
+    const saved = JSON.parse(raw || 'null');
+    if (!saved || !validEventCode(saved.code) || !Number.isFinite(saved.at)) return null;
+    return now - saved.at <= RETURN_HOLD_MS ? saved.code : null;
+  } catch { return null; }
+}
+
+const PROBE_KEY = 'islands-event-probe';
+
+/** The interests typed for the probe, kept for the tab only (the server keeps nothing). [] when none. */
+export function probeDraft(storage, code) {
+  if (!storage) return [];
+  try {
+    const saved = JSON.parse(storage.getItem(`${PROBE_KEY}:${code}`) || 'null');
+    return cleanInterests(saved) || [];
+  } catch { return []; }
+}
+
+export function saveProbeDraft(storage, code, interests) {
+  if (!storage) return false;
+  try {
+    storage.setItem(`${PROBE_KEY}:${code}`, JSON.stringify(cleanInterests(interests) || []));
+    return true;
+  } catch { return false; }
+}
