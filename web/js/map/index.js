@@ -646,9 +646,9 @@ function attachGestures() {
 
 const DOUBLE_TAP_MS = 320;
 const DOUBLE_TAP_PX = 32;
-const DOUBLE_TAP_ZOOM = 2;
+const DOUBLE_TAP_ZOOM = 4;
 
-/** Twice as close, the tapped spot staying under the finger. */
+/** Four times as close, the tapped spot staying under the finger. */
 function doubleTapZoom(event) {
   const rect = canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
