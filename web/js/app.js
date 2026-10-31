@@ -82,11 +82,16 @@ const needsAffiliation = () => Boolean(state.account && state.account.display_na
 setGuard((pattern) => {
   const signedIn = Boolean(state.account && state.account.display_name);
   const onboarding = onboardingStep();
+  // 2026-11-01: somebody who applied and closed the page before giving a name has no name to show the admin and no
+  // way to give one on the waiting screen: they finish the name first (#/setup), and the save carries on to #/waiting.
+  const unnamedAndWaiting = session.signedIn() && !signedIn && mustWaitNow();
   if (pattern === '#/waiting') {
     // Open for anybody the status list says something about (a person in another community opens it from the switcher).
     if (!session.signedIn()) return '#/welcome';
+    if (unnamedAndWaiting) return '#/setup';
     return Array.isArray(state.joinStatus) && state.joinStatus.length ? null : '#/map';
   }
+  if (unnamedAndWaiting && !WAIT_EXEMPT.has(pattern)) return '#/setup';
   if (session.signedIn() && mustWaitNow() && !WAIT_EXEMPT.has(pattern)) return '#/waiting';
   if (pattern === '#/fullname') return fullnameHeld() ? null : '#/map';
   if (pattern === '#/affiliation') return needsAffiliation() ? null : '#/map';

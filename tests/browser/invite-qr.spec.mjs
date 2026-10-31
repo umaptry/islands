@@ -42,10 +42,10 @@ const activeCodes = (who, communityId) => who.page.evaluate(async (id) => {
     .filter((row) => !row.revoked_at && Date.parse(row.expires_at) > now).map((row) => row.code);
 }, communityId);
 
-const addInvite = (who, communityId, minutes) => who.page.evaluate(async ({ communityId, minutes }) => {
+const addInvite = (who, communityId, minutes, post = null) => who.page.evaluate(async ({ communityId, minutes, post }) => {
   const { api } = await import('/static/js/net.js');
-  return api.post('/api/local/invites', { community_id: communityId, minutes, until_end_of_day: false });
-}, { communityId, minutes });
+  return api.post('/api/local/invites', { community_id: communityId, minutes, until_end_of_day: false, ...(post ? { post } : {}) });
+}, { communityId, minutes, post });
 
 const noSideScroll = async (page) =>
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -98,7 +98,7 @@ test('リンクがないとき「メンバーを招待する」→ 期限 → �
   await expect(card.getByRole('button', { name: 'リンクをコピー' })).toBeVisible();
   await expect(card.getByRole('button', { name: 'シェア' })).toBeVisible();
   await expect(card.getByRole('button', { name: '保存' })).toBeVisible();
-  await expect(card.locator('.invite-with-post')).toBeAttached();
+  await expect(card.locator('.invite-post-fixed')).toBeVisible();
   await expect(card.locator('.invite-renew')).toBeVisible();
   await expect(card.locator('.invite-revoke')).toBeVisible();
   expect(await activeCodes(admin, id)).toHaveLength(1);
@@ -115,7 +115,7 @@ test('リンクがないとき「メンバーを招待する」→ 期限 → �
   await expect(again.locator('.invite-url')).toHaveValue(urlBefore);
 });
 
-test('「会の投稿も一緒に開く」を切り替えるとリンクと QR が変わるが、招待は増えない', async ({ browser }, testInfo) => {
+test('作ったあとの「会の投稿」は変えられない。「更新」で作り直すと、新しいリンクが投稿つきになり古いリンクは止まる', async ({ browser }, testInfo) => {
   const admin = await person(browser, testInfo, '招待のふたつめ', { create: `切替 ${unique()}`, init: withShare });
   const id = admin.made.community_id;
   const postId = await makePost(admin, '金曜の夜に集まります', id);
@@ -127,20 +127,27 @@ test('「会の投稿も一緒に開く」を切り替えるとリンクと QR �
   await expect(field).toBeAttached();
   const plain = await field.inputValue();
   expect(plain).not.toContain('?post=');
-  const qrBefore = await card.locator('.invite-qr svg path').getAttribute('d');
-  const codes = await activeCodes(admin, id);
+  // 作ったあとはスイッチがない（招待に保存されているので、その場では変えられない）
+  await expect(card.locator('.invite-with-post')).toHaveCount(0);
+  await expect(card.locator('.invite-post-fixed')).toContainText('付いていません');
+  const [oldCode] = await activeCodes(admin, id);
 
+  await card.locator('.invite-renew').click();
   await card.locator('.invite-switch:not(.invite-approval-switch)').click();
-  await expect(card.locator('.invite-with-post')).toBeChecked();
   await expect(card.locator('.invite-post-select')).toBeVisible();
-  await expect(field).toHaveValue(`${plain}?post=${postId}`);
-  expect(await card.locator('.invite-qr svg path').getAttribute('d')).not.toBe(qrBefore);
-  expect(await activeCodes(admin, id)).toEqual(codes);
-
-  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
-  await expect(field).toHaveValue(plain);
-  expect(await card.locator('.invite-qr svg path').getAttribute('d')).toBe(qrBefore);
-  expect(await activeCodes(admin, id)).toEqual(codes);
+  await card.locator('.invite-make').click();
+  await admin.page.locator('.modal-actions .btn-danger').click();
+  await expect(card.locator('.invite-post-fixed')).toContainText('金曜の夜に集まります');
+  const codes = await activeCodes(admin, id);
+  expect(codes).toHaveLength(1);
+  expect(codes[0]).not.toBe(oldCode);
+  await expect(field).toHaveValue(new RegExp(`#/invite/${codes[0]}[?]post=${postId}$`));
+  // 保存されているのは招待の側（URL ではなく）
+  const saved = await admin.page.evaluate(async (cid) => {
+    const { api } = await import('/static/js/net.js');
+    return (await api.get(`/api/local/invites?community_id=${cid}`)).invites.filter((row) => !row.revoked_at).map((row) => row.post_id);
+  }, id);
+  expect(saved).toEqual([postId]);
   await noSideScroll(admin.page);
 });
 
@@ -341,11 +348,13 @@ test('リンクを作る前に「会の投稿も一緒に開く」を決めら�
   await expect(card.locator('.invite-qr svg')).toBeVisible();
   const code = (await activeCodes(admin, id))[0];
   await expect(card.locator('.invite-url')).toHaveValue(new RegExp(`#/invite/${code}[?]post=${older}$`));
-  await expect(card.locator('.invite-with-post')).toBeChecked();
-  await expect(card.locator('.invite-post-select')).toHaveValue(older);
-  // 上のスイッチは今までどおり使えて、切ると投稿なしのリンクになる
-  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
-  await expect(card.locator('.invite-url')).toHaveValue(new RegExp(`#/invite/${code}$`));
+  await expect(card.locator('.invite-post-fixed')).toContainText('古い投稿です');
+  // 招待そのものに会が保存されている
+  const savedPost = await admin.page.evaluate(async (cid) => {
+    const { api } = await import('/static/js/net.js');
+    return (await api.get(`/api/local/invites?community_id=${cid}`)).invites.filter((row) => !row.revoked_at).map((row) => row.post_id);
+  }, id);
+  expect(savedPost).toEqual([older]);
   expect(newer).not.toBe(older);
   expect(await activeCodes(admin, id)).toHaveLength(1);
   await noSideScroll(admin.page);
@@ -360,14 +369,14 @@ test('投稿をつけずに作ったリンクは、今までどおり投稿な�
   await card.locator('.invite-approval').uncheck();
   await card.locator('.invite-make').click();
   await expect(card.locator('.invite-url')).toHaveValue(/#\/invite\/[^?]+$/);
-  await expect(card.locator('.invite-with-post')).not.toBeChecked();
+  await expect(card.locator('.invite-post-fixed')).toContainText('付いていません');
 });
 
 test('QR の会つきの招待を開くと、その会にも参加した状態で始まることが先に書いてある（2026-10-31）', async ({ browser }, testInfo) => {
   const admin = await person(browser, testInfo, '会の説明', { create: `会の説明 ${unique()}`, init: withShare });
   const id = admin.made.community_id;
   const postId = await makePost(admin, '金曜の夜に集まります', id);
-  const { code } = await addInvite(admin, id, 60);
+  const { code } = await addInvite(admin, id, 60, postId);
   const note = '#inviteJoinNote';
   // メンバー（会を読める人）には会の名前つきで
   await admin.page.goto(`/?me=${unique()}#/invite/${code}?post=${postId}`);
@@ -380,7 +389,41 @@ test('QR の会つきの招待を開くと、その会にも参加した状態�
   await expect(guest.locator(note)).toHaveText('この QR の会にも参加した状態で始まります。あとで取り消せます');
   await noSideScroll(guest);
   // 会のない招待では何も言わない
-  await guest.goto(`/?again=1#/invite/${code}`);
+  const plain = await addInvite(admin, id, 60);
+  await guest.goto(`/?again=1#/invite/${plain.code}`);
   await expect(guest.locator('#inviteRegister')).toBeVisible();
   await expect(guest.locator(note)).toBeHidden();
+});
+
+test('URL の ?post= を書き換えても、別の会には参加しない（会は招待に保存されたものだけ）', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '書き換えのあき', { create: `書換 ${unique()}`, init: withShare });
+  const id = admin.made.community_id;
+  const real = await makePost(admin, '本当の会です', id);
+  const other = await makePost(admin, 'ほかの会です', id);
+  const withReal = await addInvite(admin, id, 60, real);
+  const without = await addInvite(admin, id, 60);
+  const hasJoined = (who, postId) => who.page.evaluate(async (pid) => {
+    const { data } = await import('/static/js/net.js');
+    const list = await data.reactorsOf(pid, 'join').catch(() => []);
+    return list.length;
+  }, postId);
+
+  // 1) 会つきの招待に、別の会の id を書いたリンクで来ても、保存された会（real）にだけ参加する
+  const a = await person(browser, testInfo, 'あたらしいあ');
+  await a.page.goto(`/?t=${unique()}#/invite/${withReal.code}?post=${other}`);
+  await a.page.locator('#inviteJoin').click();
+  await expect(a.page.locator('#map')).toHaveClass(/active/);
+  await expect.poll(() => a.page.evaluate(() => localStorage.getItem('islands-invite-join') || '')).not.toContain(other);
+  await expect(a.page.locator('#sheet.on .post-card')).toContainText('本当の会です', { timeout: 20000 });
+  expect(await hasJoined(a, other)).toBe(0);
+
+  // 2) 会のない招待に ?post= を付けても、何にも参加しないし開かない
+  const b = await person(browser, testInfo, 'あたらしいび');
+  await b.page.goto(`/?t=${unique()}#/invite/${without.code}?post=${other}`);
+  await expect(b.page.locator('#inviteJoinNote')).toBeHidden();
+  await b.page.locator('#inviteJoin').click();
+  await expect(b.page.locator('#map')).toHaveClass(/active/);
+  await expect(b.page.locator('#sheet.on .post-card')).toHaveCount(0);
+  expect(await b.page.evaluate(() => localStorage.getItem('islands-invite-join'))).toBeNull();
+  expect(await hasJoined(b, other)).toBe(0);
 });

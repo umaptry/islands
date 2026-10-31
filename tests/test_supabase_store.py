@@ -39,6 +39,9 @@ TABLES = {"accounts": {}, "posts": {}, "reactions": {}, "comments": {}, "notific
 INVITE_GUARD = {"on": False, "claimed": set()}
 # Tables the database does not have yet (before a migration is run): PostgREST answers 404.
 MISSING_TABLES = set()
+# The 2026-11-01 accounts column before its SQL is run: naming it in a select is answered with 400 (42703),
+# or with 403 (42501) while the column is not granted yet.
+OLD_ACCOUNTS = {"status": None}
 SEQUENCE = {"n": 0}
 ISLAND_RUN = {"at": None}
 
@@ -85,6 +88,16 @@ class FakePostgrest(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def _old_accounts_refusal(self, query):
+        """The refusal PostgREST gives for a select that names name_confirmed_at, or None."""
+        if self._table() != "accounts" or not OLD_ACCOUNTS["status"]:
+            return None
+        if "name_confirmed_at" not in query.get("select", [""])[0]:
+            return None
+        if OLD_ACCOUNTS["status"] == 403:
+            return self._send(403, {"code": "42501", "message": "permission denied for table accounts (name_confirmed_at)"})
+        return self._send(400, {"code": "42703", "message": "column accounts.name_confirmed_at does not exist"})
 
     def _table(self):
         return urlparse(self.path).path.rsplit("/", 1)[-1]
@@ -179,6 +192,8 @@ class FakePostgrest(BaseHTTPRequestHandler):
         if self._table() in MISSING_TABLES:
             return self._send(404, {"code": "PGRST205", "message":
                                     f"Could not find the table 'public.{self._table()}'"})
+        if self._old_accounts_refusal(query):
+            return
         rows = [row for row in TABLES[self._table()].values() if self._filters(query)(row)]
         rows.sort(key=lambda row: row.get("created_at") or "")
 
@@ -199,6 +214,8 @@ class FakePostgrest(BaseHTTPRequestHandler):
 
         if parsed.path.rsplit("/", 2)[-2] == "rpc":
             return self._rpc(table, record)
+        if self._old_accounts_refusal(parse_qs(parsed.query)):
+            return
 
         if (table == "accounts" and INVITE_GUARD["on"] and isinstance(record, dict)
                 and record.get("id") not in TABLES["accounts"]
@@ -370,6 +387,8 @@ class FakePostgrest(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         patch = self._body()
+        if self._old_accounts_refusal(query):
+            return
         matched = [
             row for row in TABLES[self._table()].values() if self._filters(query)(row)
         ]
@@ -1196,6 +1215,33 @@ def test_any_other_bad_request_on_an_account_save_is_still_a_plain_store_error(s
     with pytest.raises(StoreError) as caught:
         store.upsert_account(str(uuid.uuid4()), {"display_name": "x"})
     assert type(caught.value) is StoreError
+
+
+# -- 2026-11-01: the code may come out before the SQL: accounts are read without the new column ---------
+
+@pytest.mark.parametrize("status", [400, 403])
+def test_accounts_are_read_without_the_new_column_until_its_sql_is_run(store, status):
+    reset_communities(store)
+    OLD_ACCOUNTS["status"] = status
+    store._accounts_old_until = 0.0
+    try:
+        who = account(store)
+        found = store.get_account(who)                       # no 400 -> 503 on /api/account/me
+        assert found and found["id"] == who and "name_confirmed_at" not in found
+        assert [row["id"] for row in store.list_accounts([who])] == [who]
+        saved = store.upsert_account(who, {"bio": "SQL より先に出たコード"})   # PATCH (no name)
+        assert saved["bio"] == "SQL より先に出たコード"
+        named = store.upsert_account(who, {"display_name": "なまえ", "bio": "もう一度"})   # POST (upsert)
+        assert named["bio"] == "もう一度"
+        # the SQL is run: after the minute passes the new column is read again
+        OLD_ACCOUNTS["status"] = None
+        store._accounts_old_until = 0.0
+        TABLES["accounts"][who]["name_confirmed_at"] = "2026-11-01T00:00:00Z"
+        assert store.get_account(who)["name_confirmed_at"] == "2026-11-01T00:00:00Z"
+    finally:
+        OLD_ACCOUNTS["status"] = None
+        store._accounts_old_until = 0.0
+        reset_communities(store)
 
 
 # -- 2026-10-26: the 'moved in' notice reads only the people it may tell, and the blocks ------------

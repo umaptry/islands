@@ -229,3 +229,36 @@ test('承認制：別の会にいる人は、切り替えの一覧に「（承�
   await expect(member.page.locator('#waitingTitle')).toHaveText('参加の承認を待っています');
   expect(own.community_id).toBeTruthy();
 });
+
+test('承認制：申し込んだあと名前を入れずに閉じた人は、開き直すと待つ画面ではなく名前の画面に行き、保存すると待つ画面になる', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '管理のなお');
+  const bar = await makeCommunity(admin, `名前なしの会 ${unique()}`);
+  const { url } = await makeApprovalLink(admin, bar.community_id);
+  const code = url.match(/#\/invite\/([^?]+)/)[1];
+
+  // メールのコードで入り、申し込みだけして（名前なし）、そのまま閉じた状態をつくる。
+  const guest = await openContext(browser, testInfo);
+  await guest.page.goto('/');
+  await expect(guest.page.locator('#welcome')).toHaveClass(/active/);
+  await guest.page.evaluate(async ({ email, code }) => {
+    const { session } = await import('/static/js/session.js');
+    const { api } = await import('/static/js/net.js');
+    const otp = await session.requestCode(email);
+    await session.verifyCode(email, otp.devCode);
+    await api.post('/api/local/invites/claim', { code });
+  }, { email: `noname-${crypto.randomUUID()}@example.com`, code });
+
+  // 開き直す：待つ画面でも地図でも、行き先は名前の画面。
+  await guest.page.goto(`/?again=${unique()}#/waiting`);
+  await expect(guest.page.locator('#setup')).toHaveClass(/active/, { timeout: 15000 });
+  await guest.page.goto(`/?again=${unique()}#/map`);
+  await expect(guest.page.locator('#setup')).toHaveClass(/active/, { timeout: 15000 });
+  await expect(guest.page.locator('#setupName')).toBeVisible();
+
+  // 名前と所属を入れて保存すると、待つ画面。
+  await guest.page.locator('#setupName').fill('名前をあとで入れるひと');
+  await guest.page.locator('#setupAffiliation').fill('テスト会社');
+  await guest.page.locator('#setupSave').click();
+  await expect(guest.page.locator('#waiting')).toHaveClass(/active/, { timeout: 15000 });
+  await expect(guest.page.locator('#waitingCard')).toContainText('名前をあとで入れるひと');
+});

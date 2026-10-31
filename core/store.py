@@ -126,8 +126,14 @@ POST_COLUMNS = POST_COLUMNS_BASE + "," + ",".join(EXTRA_COLUMNS)
 # database has them (see supports_share), like the extras above.
 SHARE_COLUMNS = ("share_group", "group_join_count")
 SHARE_CHECK_SECONDS = 60
-ACCOUNT_COLUMNS = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
-                   "updated_at,topics,goal,seeking,offering,name_confirmed_at")
+ACCOUNT_COLUMNS_BASE = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
+                        "updated_at,topics,goal,seeking,offering")
+# The 2026-11-01 column (フルネーム確認済み). A database that has not had the migration yet answers 400 (42703)
+# or 401/403 (42501) when it is named, so accounts are read without it until it shows up (see
+# SupabaseStore._account_columns) - the code may come out before the SQL, and nobody is shut out for it.
+ACCOUNT_NEW_COLUMNS = ("name_confirmed_at",)
+ACCOUNT_COLUMNS = ACCOUNT_COLUMNS_BASE + "," + ",".join(ACCOUNT_NEW_COLUMNS)
+ACCOUNT_COLUMNS_RECHECK_SECONDS = 60
 # The hidden profile vectors. Written by the server only, never selected for a client.
 PROFILE_VECTOR_COLUMNS = ("vec_topics", "vec_goal", "vec_seeking", "vec_offering")
 # Naming a landmass needs the words and the position, not the essays.
@@ -2088,6 +2094,7 @@ class SupabaseStore:
         self._members_only_checked_at = None
         self._has_share = False            # until the database shows the 2026-10-29 columns
         self._share_checked_at = None
+        self._accounts_old_until = 0.0     # monotonic time until which accounts are read without the new columns
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -2152,17 +2159,53 @@ class SupabaseStore:
                    json={"cache_key": key, "embedding": value})
         return self.get_embedding(key)
 
+    # -- accounts without the 2026-11-01 column (the code may come out before the SQL) --------------
+
+    def _account_columns(self):
+        return ACCOUNT_COLUMNS_BASE if time.monotonic() < self._accounts_old_until else ACCOUNT_COLUMNS
+
+    @staticmethod
+    def _missing_account_column(response):
+        """True when a 400/401/403 says accounts has no (readable) name_confirmed_at yet."""
+        if response.status_code not in (400, 401, 403):
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42703", "PGRST204", "42501") and any(name in text for name in ACCOUNT_NEW_COLUMNS)
+
+    def _accounts_request(self, method, *, label, params, headers=None, json=None, allow_statuses=()):
+        """One accounts request that names the account columns. When the database does not have (or may not
+        read) the new column, asks again without it, and keeps asking without it for a minute."""
+        for attempt in (1, 2):
+            columns = self._account_columns()
+            response = self._send(method, ACCOUNTS, label=label, headers=headers, json=json,
+                                  params={**params, "select": columns},
+                                  allow_statuses=tuple(allow_statuses) + (400, 401, 403))
+            if response.status_code < 300:
+                return response
+            if attempt == 1 and columns == ACCOUNT_COLUMNS and self._missing_account_column(response):
+                print("[store] accounts has no readable " + ",".join(ACCOUNT_NEW_COLUMNS)
+                      + "; reading without it until the migration is run", flush=True)
+                self._accounts_old_until = time.monotonic() + ACCOUNT_COLUMNS_RECHECK_SECONDS
+                continue
+            if response.status_code in allow_statuses:
+                return response
+            print(f"[store] {label} failed: HTTP {response.status_code}: {(response.text or '')[:200]}", flush=True)
+            raise StoreError(label)
+        raise StoreError(label)  # pragma: no cover
+
     def get_account(self, account_id):
-        rows = self._get(ACCOUNTS, {
-            "select": ACCOUNT_COLUMNS, "id": f"eq.{account_id}", "limit": "1",
-        })
+        rows = self._accounts_request("GET", label="読み込み", params={"id": f"eq.{account_id}", "limit": "1"}).json()
         return rows[0] if rows else None
 
     def list_accounts(self, ids):
         if not ids:
             return []
         joined = ",".join(ids)
-        return self._get(ACCOUNTS, {"select": ACCOUNT_COLUMNS, "id": f"in.({joined})"})
+        return self._accounts_request("GET", label="読み込み", params={"id": f"in.({joined})"}).json()
 
     def upsert_account(self, account_id, fields):
         # fields arrives already filtered by the AccountPatch model, and a null
@@ -2179,21 +2222,21 @@ class SupabaseStore:
             # NULL on the row it would insert before it looks for the conflict, so the icon-photo
             # step after an e-mail sign-up (icon_id and avatar_path only) was refused with 23502
             # every time (2026-10-28, two new people stuck on 「次へ」).
-            response = self._send(
-                "PATCH", ACCOUNTS, label="プロフィールの保存",
+            response = self._accounts_request(
+                "PATCH", label="プロフィールの保存",
                 headers={"Prefer": "return=representation"},
-                params={"id": f"eq.{account_id}", "select": ACCOUNT_COLUMNS},
+                params={"id": f"eq.{account_id}"},
                 json={key: value for key, value in record.items() if key != "id"},
             )
             rows = response.json()
             if rows:
                 return rows[0]
             # No such account yet: the insert below refuses it the way it always did.
-        response = self._send(
-            "POST", ACCOUNTS, label="プロフィールの保存",
+        response = self._accounts_request(
+            "POST", label="プロフィールの保存",
             headers={"Prefer": "return=representation,resolution=merge-duplicates"},
             # select keeps the hidden vectors out of the answer.
-            params={"on_conflict": "id", "select": ACCOUNT_COLUMNS},
+            params={"on_conflict": "id"},
             json=record, allow_statuses=(400,),
         )
         if response.status_code == 400:

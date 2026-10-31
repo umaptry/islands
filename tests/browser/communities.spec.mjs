@@ -52,12 +52,14 @@ async function makeInviteLink(admin, communityId, { postId, key } = {}) {
   await card.locator('.invite-open').click();
   if (key) await card.locator(`.invite-chip[data-key="${key}"]`).click();
   await card.locator('.invite-approval').uncheck();
-  await card.locator('.invite-make').click();
-  await card.locator('.invite-qr').waitFor();
+  // 会の投稿はリンクを作る前に決める（作ったあとは招待に保存されて変えられない）
   if (postId) {
+    await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
     await card.locator('.invite-with-post').check();
     await card.locator('.invite-post-select').selectOption(postId);
   }
+  await card.locator('.invite-make').click();
+  await card.locator('.invite-qr').waitFor();
   const url = await card.locator('.invite-url').inputValue();
   expect(url).toContain('#/invite/');
   return { url: url.slice(url.indexOf('#')), card };
@@ -266,7 +268,9 @@ test('招待に付ける投稿は、そのコミュニティの投稿だけ。�
 
   // 選べる投稿は、そのコミュニティの投稿だけ（読書会の投稿は出ない）
   const { url, card } = await makeInviteLink(admin, bar.community_id, { postId: barPost });
+  await card.locator('.invite-renew').click();
   await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);
+  await card.locator('.invite-cancel').click();
   expect(url).toContain(`?post=${barPost}`);
   const visitor = await openContext(browser, testInfo);
   await visitor.page.goto(`/${url}`);
@@ -317,6 +321,8 @@ test('編集画面を URL で直接開いても、自分の投稿が読み込ま
   await admin.page.goto(`/?again=${unique()}#/community/${bar.community_id}`);
   const card = admin.page.locator(`#communityEditBody .community-invites[data-community-id="${bar.community_id}"]`);
   await card.locator('.invite-qr').waitFor({ timeout: 15000 });
+  // 作ったあとの投稿の付け外しは「更新」（作り直し）から
+  await card.locator('.invite-renew').click();
   await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
   await card.locator('.invite-with-post').check();
   await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);

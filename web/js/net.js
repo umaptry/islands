@@ -325,10 +325,17 @@ const supabaseBackend = {
     try {
       rows = await read();
     } catch (error) {
-      // The new columns are not there yet (400): the narrow read, from now on.
-      if (!accountColumnsNew || !error || error.status !== 400) throw error;
+      // The new columns are not there yet (400), or not readable yet (401/403, 42501 - e.g. the SQL was taken back
+      // while this code stays): the narrow read, from now on.
+      if (!accountColumnsNew || !error || ![400, 401, 403].includes(error.status)) throw error;
+      // Only a read that works without them settles it (a 401 of an expired sign-in fails again and changes nothing).
       accountColumnsNew = false;
-      rows = await read();
+      try {
+        rows = await read();
+      } catch (again) {
+        accountColumnsNew = true;
+        throw again;
+      }
     }
     // No row is a person I may not read (or none at all): the caller says "not found".
     return rows.length ? rows[0] : null;
@@ -588,7 +595,7 @@ const localBackend = {
   checkInvite: (code) => api.get(`/api/local/invites/check/${encodeURIComponent(code)}`),
   claimInvite: (code, consent = consentVersion()) =>
     api.post('/api/local/invites/claim', { code, ...(consent ? { consent } : {}) }),
-  createInvite: ({ post, ...body }) => api.post('/api/local/invites', { ...body, ...(post ? { post_id: post } : {}) }),
+  createInvite: ({ post, ...body }) => api.post('/api/local/invites', { ...body, ...(post ? { post } : {}) }),
   listInvites: async (community) =>
     (await api.get(`/api/local/invites?${new URLSearchParams({ community_id: community })}`)).invites || [],
   revokeInvite: async (invite) => {
