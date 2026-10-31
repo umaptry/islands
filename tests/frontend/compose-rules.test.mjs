@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 
 // No package.json "type" in this folder: load the module as a data: URL like the other tests.
 const source = await readFile(new URL('../../web/js/compose-rules.js', import.meta.url), 'utf8');
-const { bodyLength, followPromptTag, splitOverflow, stepBefore } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { bodyLength, composeFloor, counterLabel, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore, topicHeading, topicPlan, usableTopics } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('bodyLength counts characters as the server does: trimmed, an emoji is one', () => {
   assert.equal(bodyLength(''), 0);
@@ -54,4 +54,49 @@ test('followPromptTag: a tag the person set themselves is never changed', () => 
   assert.deepEqual(followPromptTag({ ticked: null, want: null, on: [] }), { untick: null, tick: null, ticked: null });
   // the prompt's tick, already gone some other way: nothing to untick
   assert.deepEqual(followPromptTag({ ticked: HELP, want: null, on: [] }), { untick: null, tick: null, ticked: null });
+});
+
+test('composeFloor: a new post needs 15, an edit keeps the server floor, an old server changes nothing', () => {
+  const limits = { body_min: 1, compose_min: 15 };
+  assert.equal(composeFloor({ editing: false, limits }), 15);
+  assert.equal(composeFloor({ editing: true, limits }), 1);
+  assert.equal(composeFloor({ editing: false, limits: { body_min: 1 } }), 1);
+  assert.equal(composeFloor({ editing: false, limits: undefined }), 1);
+});
+
+test('nextLabel: 次へ names the floor until the words reach it', () => {
+  assert.equal(nextLabel({ length: 0, floor: 15 }), '15字から投稿できます');
+  assert.equal(nextLabel({ length: 14, floor: 15 }), '15字から投稿できます');
+  assert.equal(nextLabel({ length: 15, floor: 15 }), '次へ');
+  // an edit (floor 1) keeps the plain label
+  assert.equal(nextLabel({ length: 0, floor: 1 }), '次へ');
+});
+
+test('shortNote: says how many more characters, only between 1 and floor-1', () => {
+  assert.equal(shortNote({ length: 0, floor: 15 }), null);
+  assert.equal(shortNote({ length: 5, floor: 15 }), 'あと10字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
+  assert.equal(shortNote({ length: 14, floor: 15 }), 'あと1字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
+  assert.equal(shortNote({ length: 15, floor: 15 }), null);
+  assert.equal(shortNote({ length: 3, floor: 1 }), null);
+});
+
+test('counterLabel: "5 / 60"', () => {
+  assert.equal(counterLabel(5, 60), '5 / 60');
+});
+
+test('topicPlan: ask once per text; the sheet comes back without asking again; 「このまま次へ」 goes on', () => {
+  assert.equal(topicPlan({ last: null, body: 'あいう' }), 'ask');
+  assert.equal(topicPlan({ last: { body: 'あいう', topics: ['a', 'b'], accepted: false }, body: ' あいう ' }), 'sheet');
+  assert.equal(topicPlan({ last: { body: 'あいう', topics: ['a', 'b'], accepted: true }, body: 'あいう' }), 'go');
+  assert.equal(topicPlan({ last: { body: 'あいう', topics: [], accepted: false }, body: 'あいう' }), 'go');
+  // the text changed: ask again
+  assert.equal(topicPlan({ last: { body: 'あいう', topics: ['a', 'b'], accepted: true }, body: 'あいうえ' }), 'ask');
+});
+
+test('topicHeading and usableTopics', () => {
+  assert.equal(topicHeading(3), '話題が3つ入っているみたいです');
+  assert.deepEqual(usableTopics(['a', 'b', 'c', 'd', 'e']), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(usableTopics(['a']), []);
+  assert.deepEqual(usableTopics(['a', ' ', 3]), []);
+  assert.deepEqual(usableTopics(null), []);
 });
