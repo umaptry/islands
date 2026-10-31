@@ -181,6 +181,33 @@ select is((select count(*)::int from public.accounts where id <> 'f2f2f2f2-f2f2-
 set local request.jwt.claims to '{"role":"authenticated"}';
 select is((select count(*)::int from public.accounts), 0, 'a token with no person reads nobody');
 
+-- 承認待ちの人: 自分が管理者のコミュニティに pending で申し込んでいる人だけ、管理者に読める
+set local request.jwt.claims to '{"sub":"f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a1","role":"authenticated"}';   -- m1（A の管理者）
+select is((select display_name from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9'), 'pend', 'the admin of A reads a pending applicant of A');
+select is(public.account_visible('f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9'), true, 'account_visible: a pending applicant, for the admin');
+set local request.jwt.claims to '{"sub":"f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a2","role":"authenticated"}';   -- m2（A の一般メンバー）
+select is((select count(*)::int from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9'), 0, 'another member of A does not');
+set local request.jwt.claims to '{"sub":"f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a4","role":"authenticated"}';   -- bb（B の管理者）
+select is((select count(*)::int from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9'), 0, 'nor the admin of another community');
+reset role;
+-- 断ったあと: 管理者にも読めない
+update public.community_join_requests set status = 'rejected' where account_id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9';
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a1","role":"authenticated"}';
+select is((select count(*)::int from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9'), 0, 'after a refusal the admin cannot read them any more');
+reset role;
+-- 承認したあと: メンバーになるので、同じコミュニティとして読める（申し込みの行はもう無い）
+delete from public.community_join_requests where account_id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9';
+insert into public.community_members(community_id, account_id) values ((select a from cm), 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a2","role":"authenticated"}';
+select is((select display_name from public.accounts where id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9'), 'pend', 'after approval (now a member) everyone in A reads them');
+reset role;
+-- 元に戻す（あとの確認のため）
+delete from public.community_members where account_id = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9';
+insert into public.community_join_requests(community_id, account_id) values ((select a from cm), 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2a9');
+set local role authenticated;
+
 -- -----------------------------------------------------------------------
 -- 5. 今のコードが accounts にすることは、今までどおり動く
 -- -----------------------------------------------------------------------

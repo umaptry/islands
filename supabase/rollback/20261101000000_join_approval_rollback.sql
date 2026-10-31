@@ -7,7 +7,7 @@
 -- 戻すもの: 承認制の関数とトリガーを消す。check_invite・claim_invite(code)・create_invite（3引数）・
 -- list_invites・create_community を M1 の前の定義に戻す。
 -- 戻さないもの（足しただけで無害なので残す）:
---   * 表 community_join_requests / community_removals（中身も残る）
+--   * 表 community_join_requests / community_removals / join_request_notices（中身も残る）
 --   * 列 community_invites.needs_approval / post_id、community_members.joined_via / invite_id / event_post_id
 --   * notifications_type_check の join_request / join_approved（今ある通知の行が残っていても壊れない）
 --   * M1 が community_removals に移した 10/29 の手作業の記録（app_settings の行は戻さない）

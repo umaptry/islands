@@ -52,7 +52,8 @@ language sql stable security definer set search_path = public as $$
                   where a.account_id = (select auth.uid()) and b.account_id = other)
 $$;
 
--- accounts の行を読んでよいか: 本人、または同じコミュニティ、または自分と DM の部屋がある相手
+-- accounts の行を読んでよいか: 本人、または同じコミュニティ、または自分と DM の部屋がある相手、
+-- または自分が管理者のコミュニティに承認待ちで申し込んでいる人
 -- （E の 9: DM の相手には、コミュニティが違っても名前とアイコンを見せる）。
 create or replace function public.account_visible(other uuid)
 returns boolean
@@ -62,6 +63,11 @@ language sql stable security definer set search_path = public as $$
       or exists (select 1 from public.dm_rooms r
                   where (r.user_a = (select auth.uid()) and r.user_b = other)
                      or (r.user_b = (select auth.uid()) and r.user_a = other))
+      -- 自分が管理者のコミュニティに、承認待ち（pending）として申し込んでいる人（管理者の通知・一覧で名前を読むため）
+      or exists (select 1 from public.community_join_requests q
+                  join public.community_members m on m.community_id = q.community_id
+                 where q.account_id = other and q.status = 'pending'
+                   and m.account_id = (select auth.uid()) and m.role = 'admin')
 $$;
 
 revoke all on function public.shares_community_with(uuid) from public, anon;

@@ -4,6 +4,8 @@
 --
 --   * community_join_requests  承認待ち（pending）と断った人（rejected）。メンバー表とは別の表。
 --                              consent_version = 同意した規約の版（E の 19）。全拒否（関数とトリガーだけが触る）。
+--   * join_request_notices     「管理者に最後に知らせた時刻」（人 × 会）。取り消しても消さず、承認・断る・
+--                              オフのリンクで入ったときに消す。24時間に1回の間引きはこの表で数える。全拒否。
 --   * community_removals       外した人の記録。この回では「承認の中で外した人を読む」ためだけに作る
 --                              （外す・戻すの関数は M5）。全拒否。
 --   * community_invites        needs_approval（承認のスイッチ）、post_id（ふつうの招待に会を付ける）を足す。
@@ -92,11 +94,24 @@ create table if not exists public.community_removals (
 );
 create index if not exists community_removals_account_idx on public.community_removals (account_id);
 
--- 2つとも invite_claims と同じ形: 全拒否。サーバーのキー(service_role)は RLS を通らない。
+-- 管理者への通知の間引き用。通知の行とは別に「最後に知らせた時刻」を覚える（取り消して申し込み直しても、
+-- 24時間に1回まで）。承認・断る・オフのリンクで入ったときに、その行を消す。
+create table if not exists public.join_request_notices (
+  community_id uuid not null references public.communities (id) on delete cascade,
+  account_id   uuid not null references auth.users (id) on delete cascade,
+  notified_at  timestamptz not null default now(),
+  primary key (community_id, account_id)
+);
+
+-- 3つとも invite_claims と同じ形: 全拒否。サーバーのキー(service_role)は RLS を通らない。
 alter table public.community_join_requests enable row level security;
 alter table public.community_removals      enable row level security;
-revoke all on public.community_join_requests, public.community_removals from anon, authenticated;
-grant all on public.community_join_requests, public.community_removals to service_role;
+alter table public.join_request_notices    enable row level security;
+revoke all on public.community_join_requests, public.community_removals, public.join_request_notices from anon, authenticated;
+grant all on public.community_join_requests, public.community_removals, public.join_request_notices to service_role;
+drop policy if exists join_request_notices_none on public.join_request_notices;
+create policy join_request_notices_none on public.join_request_notices
+  for all using (false) with check (false);
 drop policy if exists community_join_requests_none on public.community_join_requests;
 drop policy if exists community_removals_none      on public.community_removals;
 create policy community_join_requests_none on public.community_join_requests
@@ -117,9 +132,10 @@ alter table public.notifications add constraint notifications_type_check
 -- 4. 中だけの関数（誰にも実行権を渡さない）
 -- ===========================================================================
 -- 管理者全員に「参加を待っています」（join_request）を書く。payload は {community_id, community_name} だけ
--- （メールアドレスは入れない）。間引き: 同じ人・同じ会の通知が24時間以内にあれば書かない
--- （24時間より古い同じ通知は、書く前に消す）。申し込んだ人の accounts の行が無ければ何もしない
--- （notifications.actor_id は accounts を指すため。名前を入れたとき、トリガーが呼び直す）。
+-- （メールアドレスは入れない）。間引き: join_request_notices に、同じ人・同じ会で24時間以内に知らせた記録があれば
+-- 書かない（取り消しても記録は消えないので、取り消して申し込み直しても24時間に1回）。書くときは、古い同じ通知を
+-- 消してから書く。申し込んだ人の accounts の行が無ければ何もしない（notifications.actor_id は accounts を指すため。
+-- 名前を入れたとき、トリガーが呼び直す）。
 create or replace function public.join_request_notify(community uuid, person uuid)
 returns void
 language plpgsql security definer set search_path = public as $$
@@ -131,15 +147,17 @@ begin
      or not exists (select 1 from public.accounts a where a.id = join_request_notify.person) then
     return;
   end if;
-  delete from public.notifications n
-   where n.type = 'join_request' and n.actor_id = join_request_notify.person
-     and n.community_id = join_request_notify.community
-     and n.created_at <= now() - interval '24 hours';
-  if exists (select 1 from public.notifications n
-              where n.type = 'join_request' and n.actor_id = join_request_notify.person
-                and n.community_id = join_request_notify.community) then
+  if exists (select 1 from public.join_request_notices s
+              where s.community_id = join_request_notify.community and s.account_id = join_request_notify.person
+                and s.notified_at > now() - interval '24 hours') then
     return;
   end if;
+  insert into public.join_request_notices (community_id, account_id, notified_at)
+  values (join_request_notify.community, join_request_notify.person, now())
+  on conflict (community_id, account_id) do update set notified_at = excluded.notified_at;
+  delete from public.notifications n
+   where n.type = 'join_request' and n.actor_id = join_request_notify.person
+     and n.community_id = join_request_notify.community;
   insert into public.notifications (recipient_id, actor_id, type, community_id, payload)
   select m.account_id, join_request_notify.person, 'join_request', join_request_notify.community,
          jsonb_build_object('community_id', join_request_notify.community, 'community_name', cname)
@@ -282,6 +300,7 @@ begin
      where q.community_id = inv_comm and q.account_id = me and q.status = 'pending';
     delete from public.notifications n
      where n.type = 'join_request' and n.actor_id = me and n.community_id = inv_comm;
+    delete from public.join_request_notices s where s.community_id = inv_comm and s.account_id = me;
   else
     select q.status into req_status from public.community_join_requests q
      where q.community_id = inv_comm and q.account_id = me;
@@ -312,6 +331,7 @@ begin
        where q.community_id = inv_comm and q.account_id = me and q.status = 'pending';
       delete from public.notifications n
        where n.type = 'join_request' and n.actor_id = me and n.community_id = inv_comm;
+      delete from public.join_request_notices s where s.community_id = inv_comm and s.account_id = me;
     end if;
   end if;
 
@@ -448,7 +468,7 @@ language sql stable security definer set search_path = public as $$
   order by 4 desc, 1
 $$;
 
--- 自分の承認待ちを取り消す（行を消し、管理者への通知も消す）。ただし、前に断られたことがある人
+-- 自分の承認待ちを取り消す（行を消し、管理者への通知も消す。join_request_notices は消さない＝申し込み直しても24時間は知らせない）。ただし、前に断られたことがある人
 -- （rejected_before）の行は消さず、断られた状態に戻す（消すと、取り消しで断りを帳消しにして、
 -- オフのリンクで入り直せてしまう）。断られた行そのものは触らない。
 create or replace function public.cancel_join_request(community uuid)
@@ -562,6 +582,9 @@ begin
   delete from public.notifications n
    where n.type = 'join_request' and n.actor_id = decide_join_request.person
      and n.community_id = decide_join_request.community;
+  -- 決まったので、間引きの記録も消す（断られたあとの申し込みは、また知らせる）
+  delete from public.join_request_notices s
+   where s.community_id = decide_join_request.community and s.account_id = decide_join_request.person;
   return case when coalesce(approve, false) then 'approved' else 'rejected' end;
 end $$;
 

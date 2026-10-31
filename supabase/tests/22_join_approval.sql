@@ -130,9 +130,13 @@ select ok(not has_table_privilege('authenticated', 'public.community_removals', 
 select ok(not has_table_privilege('authenticated', 'public.community_removals', 'INSERT'), 'nor write them');
 select ok(not has_table_privilege('authenticated', 'public.community_removals', 'DELETE'), 'nor delete them');
 select ok(has_table_privilege('service_role', 'public.community_removals', 'SELECT'), 'the server key can read them');
+select ok(not has_table_privilege('anon', 'public.join_request_notices', 'SELECT'), 'anon cannot read the notice record');
+select ok(not has_table_privilege('authenticated', 'public.join_request_notices', 'SELECT'), 'nor a signed-in person');
+select ok(not has_table_privilege('authenticated', 'public.join_request_notices', 'INSERT'), 'nor write it');
+select ok(has_table_privilege('service_role', 'public.join_request_notices', 'SELECT'), 'the server key can read it');
 select is((select count(*)::int from pg_policies where schemaname = 'public'
-              and tablename in ('community_join_requests', 'community_removals') and qual = 'false'), 2,
-          'both new tables have the deny-everything policy');
+              and tablename in ('community_join_requests', 'community_removals', 'join_request_notices') and qual = 'false'), 3,
+          'all three new tables have the deny-everything policy');
 select ok((select relrowsecurity from pg_class where oid = 'public.community_join_requests'::regclass), 'row level security is on (requests)');
 select ok((select relrowsecurity from pg_class where oid = 'public.community_removals'::regclass), 'and on (removals)');
 
@@ -374,6 +378,8 @@ reset role;
 select public.join_request_notify((select bar from cm), 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9');
 select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9'), 2,
           'calling the notifier again within 24 hours writes nothing');
+update public.join_request_notices set notified_at = now() - interval '25 hours'
+ where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9';
 update public.notifications set created_at = now() - interval '25 hours'
  where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9';
 select public.join_request_notify((select bar from cm), 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9');
@@ -390,6 +396,7 @@ reset role;
 select is((select count(*)::int from public.notifications where actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0'), 2, 'and the admins were told');
 delete from public.notifications where actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0';
 update public.community_join_requests set notified_at = null where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0';
+delete from public.join_request_notices where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0';   -- 間引きの記録も消す（失敗の道を通すため）
 alter table public.notifications add constraint boom check (type <> 'join_request') not valid;
 select lives_ok($$update public.accounts set display_name = 'victim saved' where id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0'$$,
                 'a failing notification does not stop the profile save');
@@ -412,7 +419,24 @@ set local request.jwt.claims to '{"sub":"e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0","
 select is(public.claim_invite('ja-on-invite-code-00000000002') ->> 'status', 'pending', 'applying again after cancelling: pending');
 reset role;
 select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0'), 2,
-          'the admins see at most one notification each for the same person');
+          'the first successful notice (the earlier try failed and left no record): both admins are told');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0","role":"authenticated"}';
+select lives_ok($$select public.cancel_join_request((select bar from cm))$$, 'cancel again');
+select is(public.claim_invite('ja-on-invite-code-00000000002') ->> 'status', 'pending', 'and apply again');
+reset role;
+select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0'), 0,
+          'applying again right after cancelling does not notify again (once per 24 hours)');
+select is((select count(*)::int from public.join_request_notices where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0'), 1,
+          'because cancelling kept the record of the last notice');
+update public.join_request_notices set notified_at = now() - interval '25 hours' where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0';
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0","role":"authenticated"}';
+select lives_ok($$select public.cancel_join_request((select bar from cm))$$, 'cancel once more');
+select is(public.claim_invite('ja-on-invite-code-00000000002') ->> 'status', 'pending', 'and apply a day later');
+reset role;
+select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2b0'), 2,
+          'after 24 hours the admins are told again');
 set local role authenticated;
 select lives_ok($$select public.cancel_join_request((select bar from cm))$$, 'cancelling again');
 select lives_ok($$select public.cancel_join_request((select other from cm))$$, 'cancelling where nothing is pending is harmless');
@@ -543,6 +567,8 @@ select is((select payload ->> 'community_name' from public.notifications where t
           'BAR', 'with the community name');
 select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9'), 0,
           'the admins'' "waiting" notifications about them are gone');
+select is((select count(*)::int from public.join_request_notices where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9'), 0,
+          'and so is the record of the last notice (decided)');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a9","role":"authenticated"}';
 select is((select count(*)::int from public.community_map_posts((select bar from cm), -100, -100, 100, 100, 100)), 2, 'now they see the map');
@@ -577,7 +603,8 @@ reset role;
 select is((select rejected_before from public.community_join_requests where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a4'), true, 'rejected_before is set');
 select is((select status from public.community_join_requests where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a4'), 'pending', 'pending again');
 select ok((select decided_at is null and decided_by is null from public.community_join_requests where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a4'), 'the old decision is cleared');
-select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a4'), 2, 'and the admins are told again');
+select is((select count(*)::int from public.notifications where type = 'join_request' and actor_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a4'), 2,
+          'and the admins are told again (a refusal cleared the notice record, so an application after it notifies)');
 select ok(not exists (select 1 from public.community_members where account_id = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2a4'), 'they did not get in');
 select is((select uses from public.community_invites where code = 'ja-off-invite-code-0000000001'), 3, 'uses counts the new request (a5 and a7 joined, a4 asked)');
 -- 取り消しても断りは帳消しにならない
