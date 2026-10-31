@@ -381,10 +381,14 @@ NOTIFICATION_CATEGORY_OF = {
     # 2026-11-01: 承認制。分類の名前は種類名そのもの（設定の画面に出る分類ではないので、
     # NOTIFICATION_CATEGORIES には足さない）。設定に関係なく常にオン：ALWAYS_ON_NOTIFICATION_TYPES。
     "join_request": "join_request", "join_approved": "join_approved",
+    # 2026-11-01 第2回a：会（イベント申し込み）。主催者へ「遅れます」「キャンセルしました」、
+    # 申し込み中のメンバーへ「会が中止になりました」（アプリの中の通知）。
+    "event_late": "event_late", "event_cancel": "event_cancel", "event_cancelled": "event_cancelled",
 }
 # Types that are ALWAYS shown and pushed, whatever the settings say: a person waiting to be let in,
-# and "you are in" (notices.allows / interrupts). 後の回で event_late・event_cancel を足す。
-ALWAYS_ON_NOTIFICATION_TYPES = frozenset({"join_request", "join_approved"})
+# and "you are in" (notices.allows / interrupts). 2026-11-01 第2回a：会の遅れる連絡・キャンセル・中止も常にオン。
+ALWAYS_ON_NOTIFICATION_TYPES = frozenset({
+    "join_request", "join_approved", "event_late", "event_cancel", "event_cancelled"})
 # Only these are folded into one line ("A ほか2人") when they follow each other. The
 # talk lines are shown one by one: a talk_wish has no actor and no post.
 CHAINED_NOTIFICATION_TYPES = frozenset({"like", "help", "join"})
@@ -666,3 +670,82 @@ MATCH_CANDIDATES = 15
 # notification (the founder's decision, 10/29 evening: a 5-minute bundle needed a timer that is lost
 # while Cloud Run sleeps, so a push could be late or never come).
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 会（イベント申し込み）2026-11-01 第2回a。設計は設計_イベント申し込み/D_関数の取り決め.md。
+# DB 関数（supabase/migrations/20261106000000_events.sql）と同じ数字・同じ文。
+# ---------------------------------------------------------------------------
+EVENT_TITLE_MAX = 40
+EVENT_PLACE_MAX = 60
+EVENT_QUESTIONS_MAX = 3                     # 11/1 決定：now・past・future の最大3問
+EVENT_QUESTION_PROMPTS = ("now", "past", "future")
+EVENT_QUESTION_LABEL_MAX = 40
+EVENT_QUESTION_HINT_MAX = 60
+EVENT_ANSWERS_MIN = 2                       # メンバーでない人が申し込むとき答える最少数
+EVENT_ANSWER_MAX = 60
+REFERRAL_MAX = 40
+# きっかけの選択肢（仮。画面イメージで確かめる。自由入力も40字まで受ける）
+REFERRAL_CHOICES = ("友だちに聞いた", "SNSで見た", "主催者に誘われた", "その他")
+LATE_CHOICES = (10, 30, 60)
+CHECKIN_OPENS_BEFORE_HOURS = 3
+CHECKIN_CLOSES_AFTER_HOURS = 2
+EVENT_CLEANUP_DAYS = 7                      # 会の終了からこの日数で、受付していない申し込みと予約を消す
+EVENT_REMIND_WEEK_DAYS = 7                  # week_before = 開始の7日前の同じ時刻
+EVENT_REMIND_DAY_HOURS = 3                  # day_of = 開始の3時間前
+OUTBOUND_MAX_ATTEMPTS = 5
+OUTBOUND_STALE_HOURS = 24                   # 予定からこれ以上たった予約は取り出さない
+OUTBOUND_LEASE_SECONDS = 300
+OUTBOUND_BATCH = 50
+OUTBOUND_KINDS = ("week_before", "day_of", "after", "declined", "event_cancelled", "event_changed")
+LINE_WEBHOOK_KEEP_DAYS = 30                 # E の 4
+BREAKDOWN_MIN_COUNT = 3                     # 内訳は2人以下を「ほか」に（E の 8）
+BREAKDOWN_OTHER = "ほか"
+PUBLIC_EVENT_CACHE_SECONDS = 60
+WALKIN_REJECT_MAX = 3
+# probe（近い人が来るか見てみる）
+PROBE_INTERESTS_MAX = 2
+PROBE_INTEREST_LENGTH = 30
+PROBE_PER_DEVICE_PER_DAY = 5                # 同じ cookie・同じ IP から1つの会につき1日
+PROBE_PER_EVENT_PER_DAY = 300               # 会全体で1日
+PROBE_COSINE = 0.40                         # 仮：興味の文と回答の中心化コサインがこれ以上なら「近い」
+PROBE_COOKIE = "islands_probe"
+PROBE_FEW_MAX = 2                           # 1〜2人は「少し」、3人以上は数字（E の 8）
+EVENT_STATUSES = ("applied", "attended", "cancelled", "declined", "waiting")
+EVENT_LIVE_STATUSES = ("applied", "waiting", "attended")
+
+# エラーコード（hint）→ HTTP の番号と日本語の文。D の 1-2。DB 関数・MemoryStore・API が同じ文を使う。
+EVENT_ERROR_TEXT = {
+    "not_logged_in": "ログインしてください。",
+    "event_not_found": "この会は見つかりません。",
+    "event_cancelled": "この会は中止になりました。",
+    "event_banned": "このコミュニティの会には申し込めません。",
+    "event_members_only": "この会は、コミュニティのメンバーだけが申し込めます。",
+    "event_not_host": "この会の主催者だけが行えます。",
+    "event_attended": "受付のあとは、取り消せません。",
+    "event_not_applied": "この会に申し込んでいません。",
+    "checkin_closed": "受付の時間ではありません。",
+    "checkin_cancelled_reg": "申し込みを取り消しているため、受付できません。主催者に声をかけてください。",
+    "walkin_limit": "受付待ちのやり直しは3回までです。主催者に声をかけてください。",
+    "not_waiting": "この人は受付待ちではありません。",
+    "capacity_below_joins": "先着人数は、いまの申し込みの人数より少なくできません。",
+    "answers_required": "質問は2つ以上答えてください。",
+    "name_required": "フルネームと所属を入力してください。",
+    "public_admin_only": "公開の会は、コミュニティの管理者だけが作れます。",
+    "probe_limit": "今日はここまでです。",
+    "recruit_closed": "申し込みの期限が過ぎています。",
+    "recruit_full": "先着人数に達しています。",
+    "event_use_apply": "会への参加は、申し込みから行ってください。",
+    "event_invalid": "会の内容を確かめてください。",
+    "terms_required": "新しい利用規約とプライバシーポリシーに同意してください。",
+}
+EVENT_STATUS_OF = {
+    "not_logged_in": 401, "event_not_found": 404, "event_cancelled": 409, "event_banned": 403,
+    "event_members_only": 403, "event_not_host": 403, "event_attended": 409, "event_not_applied": 409,
+    "checkin_closed": 409, "checkin_cancelled_reg": 409, "walkin_limit": 429, "not_waiting": 409,
+    "capacity_below_joins": 422, "answers_required": 422, "name_required": 422,
+    "public_admin_only": 403, "probe_limit": 429, "recruit_closed": 409, "recruit_full": 409,
+    "event_use_apply": 403, "event_invalid": 422, "terms_required": 422,
+}
+EVENT_SHARE_ERROR = "会の投稿は、ほかのコミュニティに出せません。"
+EVENT_CAPACITY_ERROR = EVENT_ERROR_TEXT["capacity_below_joins"]

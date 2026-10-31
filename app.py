@@ -67,6 +67,8 @@ from core import introductions
 from core import island_namer
 from core import topic_check
 from core import visibility
+from core import events
+from core import jobs
 from core import matching
 from core import island_tracking
 from core import notifications as notices
@@ -80,6 +82,17 @@ from core.config import (
     AWAY_DIGEST_COUNT,
     COMMUNITY_ERROR_POST,
     CONSENT_VERSION,
+    EVENT_ANSWERS_MIN,
+    EVENT_ANSWER_MAX,
+    EVENT_CAPACITY_ERROR,
+    EVENT_ERROR_TEXT,
+    EVENT_PLACE_MAX,
+    EVENT_QUESTIONS_MAX,
+    EVENT_SHARE_ERROR,
+    EVENT_TITLE_MAX,
+    LATE_CHOICES,
+    REFERRAL_CHOICES,
+    REFERRAL_MAX,
     FULLNAME_REQUIRED_FROM,
     JOB_TITLE_MAX,
     MEMBER_REMOVAL_FROM,
@@ -415,6 +428,18 @@ async def lifespan(_app):
 
 app = FastAPI(title="islands", lifespan=lifespan, docs_url=None, redoc_url=None)
 
+# 2026-11-01 第2回a：会（イベント申し込み）と予約送信。/e/{code}・/c/{code} もここ。
+app.include_router(events.router)
+app.include_router(jobs.router)
+try:
+    # LINE の受け口（core/line.py。別の枝で作っている）。まだ無くても動く。
+    # 配線：from core import line; app.include_router(line.router); 起動時に line.configure(lambda: state["store"])
+    from core import line as line_module
+except ImportError:
+    line_module = None
+else:
+    app.include_router(line_module.router)
+
 # The free egress allowance on the deploy target is 1GiB/month, and the web
 # assets are highly compressible text. minimum_size skips the small JSON
 # replies, where the header would cost more than the compression saves.
@@ -432,8 +457,10 @@ async def map_runtime_guard(request, call_next):
     path = request.url.path
     # /api/push/* touches no map data, and the dispatch poke comes from the
     # database after every notification: no runtime lookup for those.
+    # /api/jobs/（遅れ連絡の送信を止めない）・/api/line/（LINE は送り直さない）・/api/public/（地図に触らない
+    # ゲスト用ページ）も同じ（2026-11-01）。
     protected = (path.startswith('/api/') and path not in ('/api/health', '/api/config')
-                 and not path.startswith('/api/push/'))
+                 and not path.startswith(('/api/push/', '/api/jobs/', '/api/line/', '/api/public/')))
     if protected and state.get("manifest"):
         from starlette.concurrency import run_in_threadpool
         try:
@@ -472,6 +499,9 @@ class PostCreate(BaseModel):
     # 2026-10-26. The community whose map this post belongs to. Ignored while
     # features.communities is false; otherwise the author must be a member.
     community_id: str | None = None
+    # 2026-11-01: 会（イベント申し込み）。タグ「参加者募集中」と先着人数のある投稿に、会の中身を付ける。
+    # {title, starts_at, ends_at, place, visibility, questions, agree_terms}。core.events が検める。
+    event: dict | None = None
 
 
 class TopicCheck(BaseModel):
@@ -1951,6 +1981,18 @@ def push_message(entry, hashed_tag=False):
     elif entry["type"] == "join_approved":
         title = "参加できました"
         body = f"『{payload.get('community_name') or 'コミュニティ'}』に参加できました"
+    elif entry["type"] in ("event_late", "event_cancel", "event_cancelled"):
+        # 2026-11-01 会：遅れる・キャンセル（主催者へ）、中止（申し込み中のメンバーへ）
+        first = (entry.get("actors") or [None])[0] or {}
+        who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
+        if entry["type"] == "event_late":
+            title, body = "会に遅れる連絡", f"{who}さんが{payload.get('minutes') or ''}分ほど遅れます"
+        elif entry["type"] == "event_cancel":
+            title, body = "会の申し込み", f"{who}さんが申し込みを取り消しました"
+        else:
+            title, body = "会が中止になりました", f"「{payload.get('title') or '会'}」は中止になりました"
+        if entry.get("post_id"):
+            url = f"/#/map?post={entry['post_id']}"
     elif entry["type"] == "island" and payload.get("kind") == "resident":
         first = (entry.get("actors") or [None])[0] or {}
         who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
@@ -2300,7 +2342,15 @@ def config():
                      "communities": communities_on(), "members_only": members_only_quiet(),
                      "share": share_on(),
                      # 2026-11-01: 管理者の画面の「外す」ボタン。新しい規約の施行日から（サーバーの時計）。
-                     "member_removal": today_jst() >= MEMBER_REMOVAL_FROM},
+                     "member_removal": today_jst() >= MEMBER_REMOVAL_FROM,
+                     # 2026-11-01 第2回a：会の申し込み・LINE の送信・「近い人が来るか見てみる」
+                     "events": events.events_on(state["store"]),
+                     "line_messaging": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()),
+                     "probe": (events.events_on(state["store"]) and os.environ.get("ISLANDS_PROBE", "") != "0"
+                               and bool(getattr(state["store"], "supports_probe", False)))},
+        # 友だち追加のボタン（未設定なら null）
+        "line": {"add_friend_url": os.environ.get("LINE_ADD_FRIEND_URL", "").strip() or None},
+        "referral_choices": list(REFERRAL_CHOICES),
         # 2026-10-26: new accounts need an invite link (only meaningful with features.communities).
         "invite_only": invite_only_on(),
         # 2026-10-26: 「話してみたい」のボタンの名前。画面は features.talk が true のときだけ使う。
@@ -2312,6 +2362,9 @@ def config():
         "age_bands": [{"key": key, "label": label} for key, label in AGE_BANDS],
         "limits": {
             "job_title_max": JOB_TITLE_MAX,
+            "event_title_max": EVENT_TITLE_MAX, "event_place_max": EVENT_PLACE_MAX,
+            "event_questions_max": EVENT_QUESTIONS_MAX, "event_answers_min": EVENT_ANSWERS_MIN,
+            "event_answer_max": EVENT_ANSWER_MAX, "referral_max": REFERRAL_MAX, "late_choices": list(LATE_CHOICES),
             "body_min": MIN_TEXT_LENGTH,
             "compose_min": COMPOSE_MIN_LENGTH,
             "body_max": MAX_TEXT_LENGTH,
@@ -2876,7 +2929,8 @@ def create_post(payload: PostCreate, request: Request):
         except StoreError:
             raise HTTPException(503, "投稿の保存状況を確認できませんでした。")
         if existing:
-            return {**existing, "island": island_for_viewer(existing, user_id), "neighbors": []}
+            return {**existing, "island": island_for_viewer(existing, user_id), "neighbors": [],
+                    **events.existing_info(state["store"], existing, events.base_url_of(request))}
     if not check_rate_limit(user_id):
         raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
 
@@ -2911,6 +2965,13 @@ def create_post(payload: PostCreate, request: Request):
             raise HTTPException(status_code=403, detail=COMMUNITY_ERROR_POST)
         extras = {**extras, "community_id": community_id}
 
+    event_clean = None
+    if payload.event is not None:
+        # 会：投稿を保存する前に、中身・公開の権限・規約への同意を確かめる（失敗なら何も保存しない）
+        event_clean = events.prepare(
+            store, user_id, payload.event, tags=tags, capacity=extras.get("recruit_capacity"),
+            community_id=community_id, agree_terms=bool(payload.event.get("agree_terms")))
+
     x, y, cluster_id, terms, vector, centred = project(body)
     record = {
         "author_id": user_id,
@@ -2939,6 +3000,10 @@ def create_post(payload: PostCreate, request: Request):
         raise HTTPException(
             status_code=503, detail="保存に失敗しました。もう一度「地図にのせる」を押してください。"
         )
+    event_info = None
+    if event_clean is not None:
+        # 投稿を先に保存し、会の行を作る。失敗したら投稿を戻して断る（D 7 章 10）
+        event_info = events.create_for_post(store, user_id, row, event_clean, events.base_url_of(request))
     invalidate_islands()
     try:
         notify_resident(row["id"], user_id, account.get("display_name", ""),
@@ -2955,6 +3020,7 @@ def create_post(payload: PostCreate, request: Request):
         maybe_track_islands()  # a new island waiting for its AI name is named within a minute
     return {
         **row,
+        **({"event": event_info} if event_info else {}),
         "display_name": account.get("display_name", ""),
         "icon_id": account.get("icon_id", "0"),
         "avatar_path": account.get("avatar_path"),
@@ -3153,6 +3219,11 @@ def edit_post(post_id: str, payload: PostPatch, request: Request):
                         fields["recruit_capacity"] = post_extras.clean_capacity(payload.recruit_capacity)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
+    if extras_on and "recruit_capacity" in fields and events.is_event_post(store, post_id):
+        # 会の投稿：先着人数は、いまの申し込みの人数より少なくできない（空にもできない）
+        capacity = fields["recruit_capacity"]
+        if capacity is None or capacity < int((existing or {}).get("join_count") or 0):
+            raise HTTPException(status_code=422, detail=EVENT_CAPACITY_ERROR)
     if payload.motivation is not None:
         fields["motivation"] = clean_motivation(payload.motivation)
     if payload.clear_image:
@@ -3221,6 +3292,8 @@ def share_post(post_id: str, payload: PostShare, request: Request):
         raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
     if not original or original["author_id"] != user_id:
         raise HTTPException(status_code=404, detail=MEMBERS_ONLY_NOT_FOUND)
+    if events.is_event_post(store, pid):
+        raise HTTPException(status_code=409, detail=EVENT_SHARE_ERROR)
     if len(original.get("body") or "") > MAX_TEXT_LENGTH:
         # Written before the 60-character limit: the database takes no new post that long.
         raise HTTPException(status_code=422, detail=SHARE_ERROR_LONG)
@@ -3755,6 +3828,9 @@ def local_delete_comment(comment_id: str, request: Request):
 def local_add_reaction(payload: ReactionChange, request: Request):
     require_local()
     user_id = current_user(request)
+    if payload.kind == "join" and events.is_event_post(state["store"], payload.post_id):
+        # reactions_event_join_guard：会への参加は申し込みから
+        raise HTTPException(status_code=403, detail=EVENT_ERROR_TEXT["event_use_apply"])
     try:
         created = state["store"].add_reaction(payload.post_id, user_id, payload.kind)
     except StoreError as error:
@@ -3770,6 +3846,8 @@ def local_add_reaction(payload: ReactionChange, request: Request):
 def local_remove_reaction(post_id: str, kind: str, request: Request):
     require_local()
     user_id = current_user(request)
+    if kind == "join" and events.is_event_post(state["store"], post_id):
+        raise HTTPException(status_code=403, detail=EVENT_ERROR_TEXT["event_use_apply"])
     removed = state["store"].remove_reaction(post_id, user_id, kind)
     invalidate_connections()
     return {"ok": removed}

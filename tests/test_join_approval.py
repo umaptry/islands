@@ -360,7 +360,9 @@ def test_the_two_kinds_are_always_on_whatever_the_settings(world):
         assert notices.allows(off, kind, "push") and notices.allows(off, kind, "in_app")
         assert notices.category_of(kind) == kind
     assert not notices.allows(off, "like", "push")
-    assert config.ALWAYS_ON_NOTIFICATION_TYPES == frozenset({"join_request", "join_approved"})
+    # 第2回a で会の 3 種類（event_late・event_cancel・event_cancelled）が増えた
+    assert config.ALWAYS_ON_NOTIFICATION_TYPES == frozenset({
+        "join_request", "join_approved", "event_late", "event_cancel", "event_cancelled"})
 
 
 def test_the_feed_marks_them_as_interrupting_and_counts_them_unread(world):
