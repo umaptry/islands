@@ -421,29 +421,6 @@ export function landmarkForm(name) {
   return hit ? { type: hit[0], variant: hit[1] } : { type: 'manor', variant: 'default' };
 }
 
-const awning = (p, cx, cy, w, z0, n, c1, c2) => {
-  const [a, b] = faces(w);
-  for (let i = 0; i < n; i += 1) {
-    const x0 = cx - a + (i * a) / n;
-    const x1 = cx - a + ((i + 1) * a) / n;
-    const y0 = cy - z0 + (i * b) / n;
-    const y1 = cy - z0 + ((i + 1) * b) / n;
-    p.poly([[x0, y0], [x1, y1], [x1 - 1.3, y1 + 2.6], [x0 - 1.3, y0 + 2.6]], i % 2 === 0 ? c1 : c2);
-  }
-};
-
-const smoke = (p, x, y) => {
-  p.circ(x, y, 1.5, '#FFFFFF', 0.75);
-  p.circ(x + 1.6, y - 2.6, 1.9, '#FFFFFF', 0.6);
-  p.circ(x + 3.6, y - 5.4, 2.3, '#FFFFFF', 0.42);
-};
-
-const slab = (p, cx, cy, a, b, thick, top, left, right) => {
-  p.poly([[cx - a, cy], [cx, cy + b], [cx, cy + b + thick], [cx - a, cy + thick]], left);
-  p.poly([[cx + a, cy], [cx, cy + b], [cx, cy + b + thick], [cx + a, cy + thick]], right);
-  p.poly([[cx, cy - b], [cx + a, cy], [cx, cy + b], [cx - a, cy]], top);
-};
-
 /** A landmark: its solid faces, then the lights it keeps for the night. */
 function landmarkScene(p, name) {
   const { type, variant } = landmarkForm(name);

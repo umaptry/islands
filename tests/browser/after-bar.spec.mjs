@@ -9,6 +9,8 @@ async function newPerson(browser, testInfo, name, extra = {}) {
   const context = await browser.newContext({ baseURL, viewport, ...extra });
   const page = await context.newPage();
   await page.goto(`/#/invite/${INVITE}`);
+  // The settings are read as the app starts; on a busy machine the page can be ready before they are.
+  await expect(page.locator('#inviteRegister')).toBeVisible({ timeout: 20000 });
   await page.evaluate(async ({ email, name, code }) => {
     const { session } = await import('/static/js/session.js');
     const { api, data } = await import('/static/js/net.js');
