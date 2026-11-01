@@ -310,6 +310,7 @@ export function setupEventApply() {
       setError('');
       try {
         await session.verifyCode(pendingEmail, input.value);
+        takeApplyReturn(browserStorage());   // この画面のまま続けるので、覚えておいた戻り先はもう要らない
         await loadAfterSignIn();
         await begin();
       } catch (error) {

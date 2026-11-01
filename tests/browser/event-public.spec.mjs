@@ -177,7 +177,7 @@ test('申し込み（メール）：あなたについて → きっかけ → �
   // 2. きっかけ：選ぶまで次へ進めない
   await expect(page.locator('#eventApplyBody .ev-title')).toHaveText('このイベントを知ったきっかけ');
   await expect(page.locator('#eventStepNext')).toBeDisabled();
-  await expect(page.locator('#eventApplyBody')).toContainText('主催者だけに見えます');
+  await expect(page.locator('#eventApplyBody')).toContainText('主催者と管理者だけに見えます');
   await shot(page, testInfo, 'ステップ_きっかけ');
   await page.getByRole('button', { name: 'SNSで見た', exact: true }).click();
   await page.locator('#eventStepNext').click();
@@ -394,5 +394,73 @@ test('メンバーの1タップ申し込み：質問なし、同意の文つき�
   await expect(member.page.locator('#eventMeStatus')).toContainText('申し込み済み');
   await expect(member.page.locator('#eventMeMap')).toBeVisible();     // メンバーはマップへ戻れる
   await member.context.close();
+  await host.context.close();
+});
+
+// ---- レビュー指摘の直し（第2回a）
+
+test('コミュニティの中だけの会：メンバーでない人には、入力させずに案内し、新しく申し込む道を出さない', async ({ browser }, testInfo) => {
+  test.setTimeout(90000);
+  const host = await signedIn(browser, testInfo, '主催の坂内');
+  const { code } = await makeEvent(host, { visibility: 'community' });
+  // ログインなし
+  const guest = await guestPage(browser, testInfo);
+  await guest.page.goto(`/e/${code}`);
+  await expect(guest.page.locator('#eventCommunityOnly')).toHaveText('この会は、コミュニティのメンバーだけが申し込めます');
+  await expect(guest.page.locator('#eventApplyNow')).toHaveCount(0);
+  await expect(guest.page.locator('#eventMail')).toHaveCount(0);
+  await expect(guest.page.locator('#eventLine')).toHaveCount(0);
+  await noSideScroll(guest.page);
+  // ログイン済みでも、メンバーでなければ同じ
+  const outsider = await signedIn(browser, testInfo, '外の人', { path: `/e/${code}` });
+  await outsider.page.goto(`/e/${code}`);
+  await expect(outsider.page.locator('#eventCommunityOnly')).toBeVisible();
+  await expect(outsider.page.locator('#eventApplyNow')).toHaveCount(0);
+  await outsider.context.close();
+  await guest.context.close();
+  await host.context.close();
+});
+
+test('申し込んでいない人がゲスト用ページを開くと公開ページへ。取り消したゲストはマップへ出られない', async ({ browser }, testInfo) => {
+  test.setTimeout(90000);
+  const host = await signedIn(browser, testInfo, '主催の坂内');
+  const { code } = await makeEvent(host);
+  const person = await signedIn(browser, testInfo, 'ゲスト花子', { path: `/e/${code}` });
+  const { page } = person;
+  // 申し込んでいない：空白ではなく公開ページ
+  await page.goto(`/#/e/${code}/me`);
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(`#/e/${code}`);
+  await expect(page.locator('#eventApply')).toHaveClass(/active/);
+  // 申し込んで、取り消す
+  await page.evaluate(async (code) => {
+    const { api } = await import('/static/js/net.js');
+    await api.post(`/api/events/${code}/apply`, {
+      agree_terms: true, referral: 'SNSで見た',
+      profile: { display_name: 'ゲスト 花子', affiliation: '○○株式会社', age_band: '30s', job_title: 'デザイナー' },
+      answers: [{ prompt: 'now', body: '陶芸教室に通っています' }, { prompt: 'future', body: '朝のランニングを始めたい' }],
+    });
+    await api.post(`/api/events/${code}/cancel`, {});
+  }, code);
+  await page.goto('/');
+  await page.evaluate(() => { location.hash = '#/map'; });
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(`#/e/${code}/me`);
+  await expect(page.locator('#eventMeStatus')).toContainText('申し込みを取り消しました');
+  await page.evaluate(() => { location.hash = '#/me'; });
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(`#/e/${code}/me`);
+  await person.context.close();
+  await host.context.close();
+});
+
+test('ログインしないで主催者の画面を開くと、ログインのあとにその会の主催者の画面へ戻る', async ({ browser }, testInfo) => {
+  test.setTimeout(90000);
+  const host = await signedIn(browser, testInfo, '主催の坂内');
+  const { code } = await makeEvent(host);
+  const guest = await guestPage(browser, testInfo);
+  const { page } = guest;
+  await page.goto(`/#/e/${code}/host`);
+  await expect(page.locator('#auth')).toHaveClass(/active/, { timeout: 15000 });
+  const stored = await page.evaluate(() => sessionStorage.getItem('islands-event-host-return') || localStorage.getItem('islands-event-host-return'));
+  expect(stored).toContain(code);
+  await guest.context.close();
   await host.context.close();
 });

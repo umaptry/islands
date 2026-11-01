@@ -224,7 +224,7 @@ test('会を作る → 1タップ申し込み → 名簿 → お断り → 中�
   await expect(rowAnn).toContainText('30分遅れ');
   await expect(rowAnn).toContainText('招待');
   await expect(host.page.locator('.ev-person', { hasText: 'メンバーぼぶ' }).or(host.page.locator('.ev-person', { hasText: 'ぼぶ 太郎' }))).toHaveCount(1);
-  await expect(host.page.locator('#eventHost')).toContainText('きっかけは主催者だけに見えます');
+  await expect(host.page.locator('#eventHost')).toContainText('きっかけは主催者と管理者だけに見えます');
   await noSideScroll(host.page);
   await host.page.locator('.ev-card', { hasText: '出欠つき名簿' }).scrollIntoViewIfNeeded();
   await shot(host.page, testInfo, '10_名簿');
@@ -331,4 +331,38 @@ test('会ではない募集の投稿は、今までどおり「参加」で、�
   });
   await guest.page.goto(`/?deny=${unique()}#/e/${other.event.public_code}/host`);
   await expect(guest.page.locator('#map')).toHaveClass(/active/, { timeout: 15000 });
+});
+
+test('名前が未確認のメンバー：カードの「申し込む」→ フルネームで「あとで」→ カードに戻って、また名前の画面へ送られない', async ({ browser }, testInfo) => {
+  test.setTimeout(120000);
+  const host = await person(browser, testInfo, '主催のひろ');
+  const community = await makeCommunity(host, `BAR ${unique()}`);
+  const made = await host.page.evaluate(async ({ communityId, start, end }) => {
+    const { api } = await import('/static/js/net.js');
+    return api.post('/api/posts', {
+      body: '夜の会をひらきます。話してみたい人は来てください。', tags: ['参加者募集中'], motivation: 55, community_id: communityId,
+      recruit_capacity: 5,
+      event: { title: 'The Night Office BAR #2', starts_at: start, ends_at: end, place: '渋谷', visibility: 'community', agree_terms: true,
+        questions: [{ prompt: 'now', label: '今', hint: '' }, { prompt: 'past', label: '昔', hint: '' }, { prompt: 'future', label: '先', hint: '' }] },
+    }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
+  }, { communityId: community.community_id, start: new Date(Date.now() + 10 * 86400000).toISOString(), end: new Date(Date.now() + 10 * 86400000 + 3 * 3600000).toISOString() });
+  const bob = await person(browser, testInfo, 'メンバーぼぶ', { confirmed: false });
+  await bringIn(host, community.community_id, bob);
+  await bob.page.goto(`/?bob=${unique()}#/map?post=${made.id}`);
+  await bob.page.waitForFunction(() => document.querySelector('#fullname.active') || document.querySelector('#sheet.on .post-card'), null, { timeout: 30000 });
+  if (await bob.page.locator('#fullname.active').count()) {
+    test.skip(!(await bob.page.locator('#fullnameLater').isVisible()), '必須の期間は「あとで」がない');
+    await bob.page.locator('#fullnameLater').click();
+  }
+  await bob.page.locator('#sheet.on .post-card').waitFor({ timeout: 30000 });
+  await bob.page.locator('#sheet.on .ev-apply-btn').click();
+  await expect(bob.page.locator('#fullname')).toHaveClass(/active/);
+  await bob.page.locator('#fullnameLater').click();
+  await expect(bob.page.locator('#sheet.on .post-card')).toBeVisible({ timeout: 15000 });
+  await bob.page.waitForTimeout(1500);
+  await expect(bob.page.locator('#fullname')).not.toHaveClass(/active/);
+  await expect(bob.page.locator('.ev-modal')).toHaveCount(0);
+  await expect(bob.page.locator('#sheet.on .ev-apply-btn')).toHaveText('申し込む');
+  await bob.context.close();
+  await host.context.close();
 });
