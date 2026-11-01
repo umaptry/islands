@@ -8,7 +8,7 @@
 // 会かどうかは GET /api/events/by-post/{id} で調べる（会でなければ 404 ＝ ふつうの募集の投稿で、今までどおり）。
 // 調べるまでは「参加」のボタンを隠しておく（会の投稿で押されないように）。
 
-import { eventHostApi } from '../event-host-api.js';
+import { eventsApi } from '../events-api.js';
 import {
   TERMS_NEXT, PRIVACY_NEXT, applyConfirm, applyFailure, applyLink, cancelConfirm, formatWhen, hostHash,
   memberAction, needsFullnameFirst,
@@ -33,7 +33,7 @@ async function load(postId) {
   if (known.has(postId)) return known.get(postId);
   let view = null;
   try {
-    view = await eventHostApi.byPost(postId);
+    view = await eventsApi.byPost(postId);
   } catch {
     return undefined;           // 読めなかった（通信など）：次に開いたときにもう一度
   }
@@ -124,7 +124,7 @@ export function mountEventBlock(post, foot, joinButton) {
     const ok = await askApply(view.event);
     if (!ok) return;
     try {
-      await eventHostApi.apply(view.event.code);
+      await eventsApi.apply(view.event.code);
       toast('申し込みました。');
       await refresh();
     } catch (error) {
@@ -138,8 +138,8 @@ export function mountEventBlock(post, foot, joinButton) {
     const text = cancelConfirm(view.event);
     if (!await confirmAction({ title: text.title, body: text.body, confirmLabel: text.confirmLabel })) return;
     try {
-      await eventHostApi.cancel(view.event.code);
-      toast('申し込みを取り消しました。');
+      await eventsApi.cancel(view.event.code);
+      toast('申し込みを取り消しました');
       await refresh();
     } catch (error) {
       toast(error.message);
@@ -185,8 +185,14 @@ export function mountEventBlock(post, foot, joinButton) {
       text: action.label,
     });
     button.disabled = action.disabled;
-    if (action.kind === 'apply') button.addEventListener('click', apply);
-    if (action.kind === 'applied') button.addEventListener('click', cancelMine);
+    // 送信中は押せなくする（二度押しで確認が2回出ないように）
+    const once = (run) => async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try { await run(); } finally { if (button.isConnected) button.disabled = action.disabled; }
+    };
+    if (action.kind === 'apply') button.addEventListener('click', once(apply));
+    if (action.kind === 'applied') button.addEventListener('click', once(cancelMine));
     holder.append(button);
     if (!event.cancelled) holder.append(info);
   }
@@ -194,6 +200,8 @@ export function mountEventBlock(post, foot, joinButton) {
   const afterName = () => {
     if (applyAfterName !== post.id) return;
     applyAfterName = null;
+    // 名前がまだ未確認なら（「あとで」で戻ってきたとき）は何もしない。もう一度 #/fullname へ送ると抜け出せなくなる。
+    if (needsFullnameFirst(state.account)) return;
     if (view && memberAction(view)?.kind === 'apply') apply();
   };
 

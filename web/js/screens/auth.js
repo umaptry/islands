@@ -26,6 +26,7 @@ import { refreshMyPosts, refreshMyReactions } from './map.js';
 import { refreshNotifications } from './notifications.js';
 import { browserStorage, refreshTalk } from '../talk.js';
 import { mapLinkFor, takePendingPost } from '../return-post.js';
+import { takeHostReturn } from '../event-rules.js';
 import { browseView, entryView, mustWait, readPendingInvite } from '../community-rules.js';
 import { settleSession } from './invite.js';
 import { $, $$, avatar, clear, el, toast } from '../ui.js';
@@ -319,7 +320,7 @@ export async function afterSignIn() {
     return;
   }
   const waiting = onboardingStep() ? null : takePendingPost(browserStorage());
-  navigate(waiting ? mapLinkFor(waiting) : '#/map');
+  navigate(waiting ? mapLinkFor(waiting) : (takeHostReturn(browserStorage()) || '#/map'));
 }
 
 // ---------------------------------------------------------------- avatar

@@ -71,6 +71,7 @@ export const KIND_TEXT = Object.freeze({
   join_approved: '参加できました',
   // 会: the same words as push_message() in app.py. {minutes} and {title} come from the payload.
   event_late: '{minutes}分ほど遅れます',
+  event_late_hour: '1時間以上遅れます',
   event_cancel: '会の申し込みを取り消しました',
   event_cancelled: '「{title}」は中止になりました',
 });
@@ -221,6 +222,7 @@ export function bodyText(entry, talkLabel = '') {
   // The reason is written for the reader by the server (payload.reason).
   if (entry.type === 'match') return String(payload.reason || '').trim() || KIND_TEXT.match;
   // 会 (第2回a): {minutes} と {title} は payload から（サーバーの push_message と同じ文）。
+  if (entry.type === 'event_late' && Number(payload.minutes) === 60) return KIND_TEXT.event_late_hour;
   if (entry.type === 'event_late') return fill(KIND_TEXT.event_late, { minutes: payload.minutes });
   if (entry.type === 'event_cancelled') return fill(KIND_TEXT.event_cancelled, { title: String(payload.title || '').trim() || '会' });
   if (entry.others) return GROUP_TEXT;

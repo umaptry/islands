@@ -208,3 +208,44 @@ test('エラーの文：サーバーの日本語をそのまま。つながら�
   assert.match(rules.errorText({ status: 0, message: '' }), /接続/);
   assert.match(rules.errorText(null), /もう一度/);
 });
+
+// ---- レビュー指摘の直し（第2回a）
+
+test('コミュニティの中だけの会：メンバーではないと分かったら手順を止める', () => {
+  assert.deepEqual(rules.communityOnlyView({ visibility: 'public' }, false), { communityOnly: false, mustStop: false, note: '' });
+  const only = rules.communityOnlyView({ visibility: 'community' }, false);
+  assert.equal(only.mustStop, true);
+  assert.equal(only.note, 'この会は、コミュニティのメンバーだけが申し込めます');
+  assert.equal(rules.communityOnlyView({ visibility: 'community' }, true).mustStop, false);
+  assert.equal(rules.communityOnlyView({ visibility: 'community' }, null).mustStop, false);   // まだ分からない
+  assert.equal(rules.communityOnlyView(null, false).mustStop, false);
+});
+
+test('ゲスト用ページ：申し込んでいない人は公開ページ、主催者は主催者の画面へ', () => {
+  const event = { cancelled: false };
+  assert.equal(rules.meRedirect({ event, me: { status: 'none' } }, 'abcdef'), '#/e/abcdef');
+  assert.equal(rules.meRedirect({ event, me: { status: 'none' }, is_host: true }, 'abcdef'), '#/e/abcdef/host');
+  assert.equal(rules.meRedirect({ event, me: { status: 'applied' } }, 'abcdef'), null);
+  assert.equal(rules.meRedirect({ event, me: { status: 'cancelled' } }, 'abcdef'), null);
+  assert.equal(rules.meRedirect({ event: { cancelled: true }, me: { status: 'none' } }, 'abcdef'), null);   // 中止の会は帯を出す
+});
+
+test('ゲストの戻り先：生きている申し込みが先、なければ最後の会', () => {
+  const list = [
+    { code: 'aaaaaa', starts_at: '2026-11-01T10:00:00Z', status: 'cancelled' },
+    { code: 'bbbbbb', starts_at: '2026-12-01T10:00:00Z', status: 'declined' },
+  ];
+  assert.equal(rules.guestEntry(list).code, 'bbbbbb');
+  assert.equal(rules.guestEntry([...list, { code: 'cccccc', starts_at: '2027-01-01T00:00:00Z', status: 'applied' }]).code, 'cccccc');
+  assert.equal(rules.guestEntry([]), null);
+});
+
+test('主催者の画面から来たログインの戻り先：覚えて一度だけ取り出す', () => {
+  const storage = memory();
+  assert.equal(rules.rememberHostReturn(storage, 'abcdef'), true);
+  assert.equal(rules.takeHostReturn(storage), '#/e/abcdef/host');
+  assert.equal(rules.takeHostReturn(storage), null);
+  rules.rememberHostReturn(storage, 'abcdef', 0);
+  assert.equal(rules.takeHostReturn(storage, rules.RETURN_HOLD_MS + 1), null);
+  assert.equal(rules.rememberHostReturn(storage, 'x'), false);
+});

@@ -4,9 +4,9 @@
 //   中      内容を変える（日時・場所・名前）／会を中止する（確かめてから）／地図の投稿を開く
 //   下      名簿：数の帯・1人ずつ（名前・会社・きっかけ・入り方・状態）・「•••」→ お断りする（確かめてから）
 // 主催者はその会を投稿した人。名簿はコミュニティの管理者も見られる（お断りは主催者だけ）。
-// 判断は event-host-rules.js、サーバーの道は event-host-api.js。
+// 判断は event-host-rules.js、サーバーの道は events-api.js。
 
-import { eventHostApi } from '../event-host-api.js';
+import { eventsApi } from '../events-api.js';
 import {
   applyLink, cancelEventConfirm, checkinLink, countsView, declineConfirm, formatWhen,
   quotaText, rosterSections, rowActions, rowTags, statusChip, toLocalInput, validateEventEdit,
@@ -17,6 +17,8 @@ import { removePost, state } from '../state.js';
 import { $, chooseAction, clear, confirmAction, el, toast } from '../ui.js';
 import { forgetEvent } from '../components/event-card.js';
 import { config } from '../config.js';
+import { rememberHostReturn } from '../event-rules.js';
+import { browserStorage } from '../talk.js';
 import { mapLinkFor } from '../return-post.js';
 
 let request = 0;
@@ -120,7 +122,7 @@ function editForm() {
     if (!Object.keys(fields).length) { toast('変えた所がありません。'); return; }
     save.disabled = true;
     try {
-      const result = await eventHostApi.update(event.code, fields);
+      const result = await eventsApi.update(event.code, fields);
       forgetEvent(event.post_id);
       toast(result.notified
         ? `変更しました。申し込んでいる${result.notified}人にお知らせします。`
@@ -150,7 +152,7 @@ async function cancelEvent() {
   const text = cancelEventConfirm(event.title, event.applied_count);
   if (!await confirmAction({ title: text.title, body: text.body, confirmLabel: text.confirmLabel, danger: true })) return;
   try {
-    await eventHostApi.cancelEvent(event.post_id);
+    await eventsApi.cancelEvent(event.post_id);
     removePost(event.post_id);
     forgetEvent(event.post_id);
     toast('会を中止しました。');
@@ -186,7 +188,7 @@ async function decide(row) {
   const text = declineConfirm(row);
   if (!await confirmAction({ title: text.title, body: text.body, confirmLabel: text.confirmLabel, danger: true })) return;
   try {
-    await eventHostApi.decline(view.event.code, row.account_id);
+    await eventsApi.decline(view.event.code, row.account_id);
     toast(`${row.display_name || 'その人'}さんをお断りしました。`);
     openMenu = null;
     forgetEvent(view.event.post_id);
@@ -234,7 +236,7 @@ function rosterCard() {
       counts.map((item) => el('div', { className: `ev-count ${item.key}`, attrs: { 'data-count': item.key } },
         el('b', { className: 'num', text: item.n }), el('span', { text: item.label })))),
     quota ? el('p', { className: 'ev-note', text: quota }) : null,
-    el('p', { className: 'ev-lock', text: '🔒 きっかけは主催者だけに見えます' }),
+    el('p', { className: 'ev-lock', text: '🔒 きっかけは主催者と管理者だけに見えます' }),
     sections.length
       ? sections.map((group) => el('div', { className: 'ev-group', attrs: { 'data-group': group.key } },
         el('div', { className: 'ev-group-title', text: `${group.title}（${group.rows.length}）` }),
@@ -267,7 +269,7 @@ async function load(code) {
   const mine = ++request;
   let next;
   try {
-    next = await eventHostApi.get(code);
+    next = await eventsApi.get(code);
   } catch (failure) {
     if (mine === request) {
       toast(failure.status === 404 ? 'この会は見つかりませんでした。' : failure.message);
@@ -278,7 +280,7 @@ async function load(code) {
   if (mine !== request) return;
   let list = null;
   try {
-    list = await eventHostApi.roster(code);
+    list = await eventsApi.roster(code);
   } catch {
     list = null;
   }
@@ -300,7 +302,11 @@ export function setupEventHost() {
   });
   screen('eventHost', {
     async enter(params, query) {
-      if (!state.account) { navigate('#/auth', { replace: true }); return; }
+      if (!state.account) {
+        rememberHostReturn(browserStorage(), params.code);
+        navigate('#/auth', { replace: true });
+        return;
+      }
       fresh = Boolean(query && query.get('new') === '1');
       mode = 'main';
       openMenu = null;

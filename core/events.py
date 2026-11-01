@@ -595,8 +595,9 @@ def _view_for(store, event, user_id):
 
 
 @router.get("/api/events/mine")
-def my_events(request: Request):
-    """生きている申し込みだけ（起動時の振り分けが使う）。"""
+def my_events(request: Request, all: int = 0):
+    """生きている申し込みだけ（起動時の振り分けが使う）。?all=1 なら取り消し・お断り・中止も含めて全部返す
+    （コミュニティに入っていない人を、最後の会のゲスト用ページに戻すのに使う）。"""
     host = _host()
     user_id = host.current_user(request)
     store = _store()
@@ -604,9 +605,12 @@ def my_events(request: Request):
     now = _utc()
     with guarded():
         rows = store.my_event_registrations(user_id)
-    live = [row for row in rows
-            if row["status"] in EVENT_LIVE_STATUSES and not row.get("cancelled_at")
-            and _utc(row["ends_at"]) + timedelta(days=EVENT_CLEANUP_DAYS) > now]
+    if all:
+        live = list(rows)
+    else:
+        live = [row for row in rows
+                if row["status"] in EVENT_LIVE_STATUSES and not row.get("cancelled_at")
+                and _utc(row["ends_at"]) + timedelta(days=EVENT_CLEANUP_DAYS) > now]
     return {"events": [{"code": row["public_code"], "title": row["title"],
                         "starts_at": _utc(row["starts_at"]).isoformat(), "status": row["status"]}
                        for row in live]}

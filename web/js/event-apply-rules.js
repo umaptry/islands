@@ -25,7 +25,7 @@ export const APPLY_WORDS = Object.freeze({
   jobLabel: '職種',
   jobPlaceholder: '例：エンジニア、店舗スタッフ',
   referralTitle: 'このイベントを知ったきっかけ',
-  referralNote: '主催者だけに見えます',
+  referralNote: '主催者と管理者だけに見えます',
   questionLead: '仕事でも趣味でも',
   questionOne: '1つに絞って書いてください',
   early: '2問答えたので、ここで申し込めます',

@@ -9,10 +9,10 @@ import { session } from '../session.js';
 import { state } from '../state.js';
 import { navigate, screen } from '../router.js';
 import { $, clear, confirmAction, el, toast } from '../ui.js';
-import { publicApi } from '../event-public-api.js';
-import { forgetEventGuest, refreshEventGuest } from '../event-guest.js';
+import { eventsApi } from '../events-api.js';
+import { refreshEventGuest } from '../event-guest.js';
 import {
-  EVENT_WORDS, calendarUrl, errorText, eventHashFor, lateChoices, mapUrl, statusView, validEventCode, windowText,
+  EVENT_WORDS, calendarUrl, errorText, eventHashFor, lateChoices, mapUrl, meRedirect, statusView, validEventCode, windowText,
 } from '../event-rules.js';
 import { canAddFriend, friendUrl } from './event-apply.js';
 
@@ -40,7 +40,7 @@ export function setupEventMe() {
     message('読み込んでいます…');
     let result;
     try {
-      result = await publicApi.get(code);
+      result = await eventsApi.get(code);
     } catch (error) {
       if (mark !== turn) return;
       if (error.status === 401) { navigate(eventHashFor(code, 'apply'), { replace: true }); return; }
@@ -48,6 +48,9 @@ export function setupEventMe() {
       return;
     }
     if (mark !== turn) return;
+    // 申し込んでいない人や主催者が開いたら、空白にせず公開ページ（主催者は主催者の画面）へ
+    const elsewhere = meRedirect(result, code);
+    if (elsewhere) { navigate(elsewhere, { replace: true }); return; }
     document.title = result.event.title ? `${result.event.title} | islands` : 'islands';
     render(result);
   }
@@ -113,7 +116,7 @@ export function setupEventMe() {
 
   async function setLate(minutes) {
     try {
-      await publicApi.late(code, minutes);
+      await eventsApi.late(code, minutes);
       toast('主催者に伝えました');
       await load({ code });
     } catch (error) {
@@ -127,9 +130,8 @@ export function setupEventMe() {
     });
     if (!yes) return;
     try {
-      await publicApi.cancel(code);
-      forgetEventGuest();
-      refreshEventGuest().catch(() => {});
+      await eventsApi.cancel(code);
+      await refreshEventGuest().catch(() => {});
       await load({ code });
     } catch (error) {
       toast(errorText(error));

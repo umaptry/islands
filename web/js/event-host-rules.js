@@ -29,7 +29,7 @@ export const HOST_WORDS = Object.freeze({
   stepWhen: 'いつ、どこでやる会？',
   stepWhenNote: '申し込みページに、そのまま載ります。',
   stepQuestions: '申し込む人に聞きたいことは？',
-  stepQuestionsNote: '申し込む人は2問以上答えます（メンバーは答えなくても申し込めます）。',
+  stepQuestionsNote: 'メンバーは質問なしで申し込めます。公開にしたとき、申し込む人は2問以上答えます。',
   doneTitle: '申し込みページができました',
   consent: '作ると、新しい利用規約とプライバシーポリシーに同意したことになります。',
 });
@@ -177,7 +177,7 @@ export function cancelEventConfirm(title, appliedCount = 0) {
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
-/** 画像5 の数の帯：申し込み・来場・遅れる・キャンセル・お断り。 */
+/** 画像5 の数の帯：申し込み・来場・遅れる・取り消し・お断り。 */
 export function countsView(roster) {
   const counts = (roster && roster.counts) || {};
   const people = (roster && roster.people) || [];
@@ -186,7 +186,7 @@ export function countsView(roster) {
     { key: 'applied', label: '申し込み', n: num(counts.applied) + num(counts.attended) },
     { key: 'attended', label: '来場', n: num(counts.attended) },
     { key: 'late', label: '遅れる', n: late },
-    { key: 'cancelled', label: 'キャンセル', n: num(counts.cancelled) },
+    { key: 'cancelled', label: '取り消し', n: num(counts.cancelled) },
     { key: 'declined', label: 'お断り', n: num(counts.declined) },
   ];
 }

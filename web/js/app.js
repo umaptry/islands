@@ -39,7 +39,7 @@ import { mustWait, parseInviteHash } from './community-rules.js';
 import { setupEventApply } from './screens/event-apply.js';
 import { setupEventMe } from './screens/event-me.js';
 import { forgetEventGuest, guestHome, refreshEventGuest } from './event-guest.js';
-import { eventHashFor, isEventPattern, parseEventPath, peekApplyReturn } from './event-rules.js';
+import { eventHashFor, isEventPattern, parseEventPath, peekApplyReturn, rememberHostReturn, takeHostReturn } from './event-rules.js';
 // ---- 会：主催者とメンバー（第2回a） ----
 import { setupEventHost } from './screens/event-host.js';
 import { setupEventCompose } from './screens/event-compose.js';
@@ -131,6 +131,11 @@ setGuard((pattern) => {
     return onboarding === 'post' ? '#/post?first=1' : '#/guidance';
   }
   if (NEEDS_ACCOUNT.has(pattern) && !signedIn) {
+    // 主催者の画面を開こうとしたなら、ログインのあとにその会へ戻す
+    if (pattern === '#/e/:code/host') {
+      const found = /^#\/e\/([^/?#]+)\/host/.exec(window.location.hash || '');
+      if (found) rememberHostReturn(browserStorage(), decodeURIComponent(found[1]));
+    }
     return session.signedIn() ? '#/setup' : '#/auth';
   }
   // The DM does not exist while features.talk is off (the code can ship first).
@@ -280,6 +285,7 @@ async function boot() {
       // Came back from Google (or any fresh load) with a post waiting for them.
       const waiting = onboardingStep() ? null : takePendingPost(browserStorage());
       if (waiting) first = mapLinkFor(waiting);
+      else first = takeHostReturn(browserStorage()) || first;
     } else if (session.signedIn()) first = '#/setup';
     history.replaceState(null, '', first);
   }

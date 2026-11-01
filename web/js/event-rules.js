@@ -23,6 +23,7 @@ export const EVENT_WORDS = Object.freeze({
   declined: '定員などの都合により、今回はご参加をお受けできないことになりました。またの機会にぜひお越しください。',
   attended: '受付しました',
   cancelledReg: '申し込みを取り消しました',
+  communityOnly: 'この会は、コミュニティのメンバーだけが申し込めます',
   waiting: '受付を待っています',
   notFound: 'この会は見つかりません。',
   consentLead: '「申し込む」を押すと、',
@@ -50,6 +51,7 @@ export const validEventCode = (code) => CODE_PATTERN.test(String(code || ''));
 export function eventHashFor(code, kind = 'apply') {
   if (!validEventCode(code)) return '#/map';
   if (kind === 'checkin') return `#/c/${code}`;
+  if (kind === 'host') return `#/e/${code}/host`;
   return kind === 'me' ? `#/e/${code}/me` : `#/e/${code}`;
 }
 
@@ -89,6 +91,15 @@ export function windowText(event) {
   const sameDay = start.getUTCFullYear() === end.getUTCFullYear() && start.getUTCMonth() === end.getUTCMonth()
     && start.getUTCDate() === end.getUTCDate();
   return sameDay ? `${head}〜${clockText(event.ends_at)}` : `${head}〜${dayText(event.ends_at)} ${clockText(event.ends_at)}`;
+}
+
+/** Which registration the guest page is for: the soonest live one, else the last 会 (by start time). */
+export function guestEntry(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const byStart = (a, b) => String(a.starts_at).localeCompare(String(b.starts_at));
+  const alive = list.filter((item) => ['applied', 'waiting', 'attended'].includes(item.status)).sort(byStart);
+  if (alive.length) return alive[0];
+  return [...list].sort(byStart).pop() || null;
 }
 
 /** 'before' | 'during' | 'after': where now stands against the 会 (the late and cancel buttons end with it). */
@@ -131,6 +142,32 @@ export function applyView(info) {
   if (closed === 'full') return { state: 'full', canApply: false, band: EVENT_WORDS.fullBand };
   if (closed === 'deadline') return { state: 'deadline', canApply: false, band: EVENT_WORDS.deadlineBand };
   return { state: 'open', canApply: true, band: '' };
+}
+
+/**
+ * 「コミュニティの中だけ」の会（visibility が community）は、メンバーしか申し込めない。公開ページの返りから、
+ * 申し込みの前に手順を止めるかを決める。isMember は GET /api/events/<code> の me.is_member（まだ分からないときは null）。
+ * { communityOnly, mustStop, note }
+ *   mustStop  メンバーではないと分かっている（ここから先の入力は無駄になる）
+ */
+export function communityOnlyView(info, isMember = null) {
+  const communityOnly = Boolean(info) && info.visibility === 'community';
+  return {
+    communityOnly,
+    mustStop: communityOnly && isMember === false,
+    note: communityOnly ? EVENT_WORDS.communityOnly : '',
+  };
+}
+
+/**
+ * ゲスト用ページ（#/e/<code>/me）を開いたとき、そこにいる意味がない人をどこへ送るか。
+ * 申し込んでいない人（状態 none）は、会が中止でなければ主催者は主催者の画面、ほかは公開ページ。null ならそのまま表示。
+ */
+export function meRedirect(result, code) {
+  const status = (result && result.me && result.me.status) || 'none';
+  const event = (result && result.event) || {};
+  if (status !== 'none' || event.cancelled || event.closed === 'cancelled') return null;
+  return eventHashFor(code, result && result.is_host ? 'host' : 'apply');
 }
 
 /** 「18人 参加予定」 and, when there is a limit, 「定員 20人」. Nothing is shown for a 会 nobody has applied to. */
@@ -291,4 +328,27 @@ export function saveProbeDraft(storage, code, interests) {
     storage.setItem(`${PROBE_KEY}:${code}`, JSON.stringify(cleanInterests(interests) || []));
     return true;
   } catch { return false; }
+}
+
+const HOST_RETURN_KEY = 'islands-event-host-return';
+
+/** ログインしないで主催者の画面を開いたとき：ログインのあとに戻る会を覚える。 */
+export function rememberHostReturn(storage, code, now = Date.now()) {
+  if (!storage || !validEventCode(code)) return false;
+  try {
+    storage.setItem(HOST_RETURN_KEY, JSON.stringify({ code, at: now }));
+    return true;
+  } catch { return false; }
+}
+
+/** 覚えていた会（主催者の画面）の道を一度だけ取り出す。なければ null。 */
+export function takeHostReturn(storage, now = Date.now()) {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(HOST_RETURN_KEY);
+    storage.removeItem(HOST_RETURN_KEY);
+    const saved = JSON.parse(raw || 'null');
+    if (!saved || !validEventCode(saved.code) || !Number.isFinite(saved.at)) return null;
+    return now - saved.at <= RETURN_HOLD_MS ? eventHashFor(saved.code, 'host') : null;
+  } catch { return null; }
 }

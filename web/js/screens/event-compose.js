@@ -56,7 +56,7 @@ function paintQuestions() {
   const need = Number(config().limits?.event_answers_min) || 2;
   $('eventComposeQLede').textContent = session.visibility === 'public'
     ? `公開の会は、質問を${need}つ以上入れてください。申し込む人は${need}つ以上答えます。`
-    : `申し込む人は${need}つ以上答えます（質問が${need}つ未満なら、その数だけ）。メンバーは質問なしで申し込めます。`;
+    : 'メンバーは質問なしで申し込めます。ここで選ぶ質問は、あとで公開にしたときに使います。';
 }
 
 function finish(value) {

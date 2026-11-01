@@ -4,7 +4,7 @@
 // A person who is not signed in sees the 会 and the counts (nothing else: E 8), may try 「近い人が来るか見てみる」,
 // and signs in (LINE first, e-mail small). Then the steps: あなたについて (only when the name is not confirmed yet)
 // -> きっかけ -> up to three questions (two answers are enough) -> done. A member of the community applies with one tap.
-// The rules are in event-rules.js and event-apply-rules.js; the calls are in event-public-api.js.
+// The rules are in event-rules.js and event-apply-rules.js; the calls are in events-api.js.
 
 import { config } from '../config.js';
 import { api } from '../net.js';
@@ -13,10 +13,10 @@ import { state } from '../state.js';
 import { navigate, screen } from '../router.js';
 import { $, clear, el, toast } from '../ui.js';
 import { browserStorage } from '../talk.js';
-import { publicApi } from '../event-public-api.js';
+import { eventsApi } from '../events-api.js';
 import { noteEventGuest, refreshEventGuest } from '../event-guest.js';
 import {
-  EVENT_WORDS, applyView, breakdownRows, calendarUrl, cleanInterests, countView, errorText, eventHashFor, probeDraft,
+  EVENT_WORDS, applyView, breakdownRows, calendarUrl, cleanInterests, communityOnlyView, countView, errorText, eventHashFor, probeDraft,
   probeView, rememberApplyReturn, saveProbeDraft, takeApplyReturn, validEventCode, windowText,
 } from '../event-rules.js';
 import {
@@ -138,20 +138,43 @@ export function setupEventApply() {
     return el('div', { className: `ev-band ${view.state === 'cancelled' ? 'is-red' : 'is-amber'}`, id: 'eventBand', text: view.band });
   }
 
+  /** 「コミュニティの中だけ」の会で、メンバーではないと分かっている（または分からないがログインしていない）か。 */
+  function gateView() {
+    let isMember = null;
+    if (!session.signedIn()) isMember = false;
+    else if (mine && mine.me) isMember = Boolean(mine.me.is_member);
+    else if (!state.communities.length) isMember = false;
+    return communityOnlyView(info, isMember);
+  }
+
+  const mapButton = () => (state.communities.length
+    ? quiet('マップを開く', () => navigate('#/map'), { id: 'eventToMap' }) : null);
+
   function showInfo() {
     const view = applyView(info);
+    const gate = gateView();
     const content = [closedBand(view), brand(), ...titleBlock()];
+    if (gate.mustStop && view.state !== 'cancelled') {
+      content.push(el('div', { className: 'ev-band is-amber', id: 'eventCommunityOnly', text: gate.note }));
+    }
     if (view.state !== 'cancelled') {
       content.push(el('h2', { className: 'ev-sub', text: 'どんな人が来る？' }), peopleCard());
     }
     const footer = [];
-    if (view.canApply) {
+    if (gate.mustStop) {
+      // メンバーしか申し込めない会：新しく申し込む道は出さない。ログイン前は入り口、ログイン後はマップへ。
+      if (view.canApply && !session.signedIn()) footer.push(primary('ログインする', () => navigate('#/auth'), { id: 'eventLoginMember' }));
+      footer.push(mapButton());
+    } else if (view.canApply) {
       const probeOn = Boolean(config().features && config().features.probe);
       if (probeOn) footer.push(primary(EVENT_WORDS.probe, () => showProbe(), { id: 'eventProbeOpen' }));
       footer.push(probeOn
         ? quiet(EVENT_WORDS.applyNow, () => proceed(), { id: 'eventApplyNow' })
         : primary(EVENT_WORDS.applyTo, () => proceed(), { id: 'eventApplyNow' }));
       footer.push(el('p', { className: 'ev-fine ev-center', text: 'このページは検索エンジンには載りません。' }));
+    } else {
+      // 満員・締切・中止など、押せるボタンがないとき：メンバーが戻れるように
+      footer.push(mapButton());
     }
     paint(content, footer);
     const now = $('eventApplyNow');
@@ -212,7 +235,7 @@ export function setupEventApply() {
       let answer = null;
       let note = '';
       try {
-        answer = await publicApi.probe(code, flow.interests);
+        answer = await eventsApi.probe(code, flow.interests);
       } catch (error) {
         note = errorText(error);
       }
@@ -233,7 +256,7 @@ export function setupEventApply() {
     if (lineOn) {
       footer.push(el('div', { className: 'ev-why' },
         el('b', { text: 'LINE で申し込むと' }),
-        el('ul', {}, ...['1週間前と当日にリマインドが届く', '遅刻・キャンセルはボタン1つで連絡できる', '近い人をいつでも見られる'].map((t) => el('li', { text: `✓ ${t}` })))));
+        el('ul', {}, ...['1週間前と当日にリマインドが届く', '遅刻・取り消しはボタン1つで連絡できる', '近い人をいつでも見られる'].map((t) => el('li', { text: `✓ ${t}` })))));
       footer.push(el('div', { className: 'ev-line-wrap' },
         el('span', { className: 'ev-tag', text: 'おすすめ' }),
         el('button', {
@@ -241,7 +264,7 @@ export function setupEventApply() {
           on: { click: () => { rememberApplyReturn(browserStorage(), code); session.startOAuth('line', `/e/${code}`); } } })));
       footer.push(el('button', {
         className: 'btn btn-block ev-mail-btn', text: 'メールで申し込む', attrs: { type: 'button', id: 'eventMail' }, on: { click: () => showEmail() } }));
-      footer.push(el('p', { className: 'ev-fine ev-center', text: 'メールの場合、遅刻・キャンセルはメールの返信で' }));
+      footer.push(el('p', { className: 'ev-fine ev-center', text: 'メールの場合、遅刻・取り消しはメールの返信で' }));
     } else {
       footer.push(primary('メールで申し込む', () => showEmail(), { id: 'eventMail' }));
     }
@@ -257,6 +280,8 @@ export function setupEventApply() {
       send.disabled = true;
       setError('');
       try {
+        // 届いたメールのリンクを押すと「/」に戻る。戻り先の会を、送る前に覚えておく
+        rememberApplyReturn(browserStorage(), code);
         const result = await session.requestCode(email.value);
         pendingEmail = result.email;
         showCode(result.devCode);
@@ -316,7 +341,7 @@ export function setupEventApply() {
     const mark = ++turn;
     paint([brand(), el('p', { className: 'ev-lede', text: '確認しています…' })]);
     try {
-      mine = await publicApi.get(code);
+      mine = await eventsApi.get(code);
     } catch (error) {
       if (mark !== turn) return;
       if (error.status === 401) { session.signOut(); showMethod(); return; }
@@ -328,6 +353,11 @@ export function setupEventApply() {
     if (['applied', 'attended', 'waiting'].includes(me.status)) { navigate(eventHashFor(code, 'me'), { replace: true }); return; }
     if (mine.event && mine.event.cancelled) { navigate(eventHashFor(code, 'me'), { replace: true }); return; }
     if (me.status === 'declined') { navigate(eventHashFor(code, 'me'), { replace: true }); return; }
+    if (communityOnlyView(info, Boolean(me.is_member)).mustStop) {
+      paint([brand(), el('div', { className: 'ev-band is-amber', id: 'eventCommunityOnly', text: EVENT_WORDS.communityOnly })],
+        [mapButton(), quiet('もどる', () => showInfo())]);
+      return;
+    }
     const account = state.account || {};
     const settled = Boolean(account.display_name && account.affiliation && account.name_confirmed_at);
     flow.isMember = Boolean(me.is_member);
@@ -504,8 +534,11 @@ export function setupEventApply() {
       answers,
     });
     try {
-      const result = await publicApi.apply(code, payload);
-      state.account = (await api.get('/api/account/me')).account || state.account;
+      const result = await eventsApi.apply(code, payload);
+      // 申し込みはもう済んでいる。アカウントの読み直しが失敗しても、エラーにはしない。
+      try {
+        state.account = (await api.get('/api/account/me')).account || state.account;
+      } catch { /* 次に開いたときに読み直す */ }
       noteEventGuest({ code, title: info.title, starts_at: info.starts_at, status: result.status || 'applied' });
       refreshEventGuest().catch(() => {});
       showDone();
@@ -549,7 +582,7 @@ export function setupEventApply() {
     if (!validEventCode(code)) { paint([brand(), el('h1', { className: 'ev-title', text: EVENT_WORDS.notFound })]); return; }
     paint([brand(), el('p', { className: 'ev-lede', text: '読み込んでいます…' })]);
     try {
-      info = await publicApi.info(code);
+      info = await eventsApi.info(code);
     } catch (error) {
       if (mark !== turn) return;
       paint([brand(), el('h1', { className: 'ev-title', id: 'eventNotFound', text: error.status === 404 ? EVENT_WORDS.notFound : errorText(error) })]);
@@ -567,7 +600,7 @@ export function setupEventApply() {
     if (session.signedIn() && state.account && state.account.display_name) {
       // Somebody who has applied already has no business on this page: their own page is the guest page.
       try {
-        mine = await publicApi.get(code);
+        mine = await eventsApi.get(code);
         if (mark !== turn) return;
         if (mine.me && ['applied', 'attended', 'waiting', 'declined'].includes(mine.me.status)) {
           navigate(eventHashFor(code, 'me'), { replace: true });

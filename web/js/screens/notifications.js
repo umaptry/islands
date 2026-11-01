@@ -20,7 +20,7 @@ import { chooseCurrent, communityIdOfPost, communityNameFor, refreshCommunities 
 import { communityNameIn } from '../community-rules.js';
 import { openOnMap } from './map.js';
 // ---- 会：主催者とメンバー（第2回a） ----
-import { eventHostApi } from '../event-host-api.js';
+import { eventsApi } from '../events-api.js';
 import { hostHash, noticeTarget } from '../event-host-rules.js';
 import {
   openDmForNotification, recomputeDmUnread, refreshDmRooms, refreshTalk, talkAvailable, talkLabel,
@@ -396,7 +396,7 @@ async function open(entry) {
   if (entry.type === 'event_late' || entry.type === 'event_cancel' || entry.type === 'event_cancelled') {
     const target = noticeTarget(entry);
     if (target.kind === 'host') {
-      const found = await eventHostApi.byPost(target.postId).catch(() => null);
+      const found = await eventsApi.byPost(target.postId).catch(() => null);
       if (found && found.event) {
         await navigate(hostHash(found.event.code));
         return;

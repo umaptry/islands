@@ -118,3 +118,7 @@ test('画面の文に「島」を使わない', () => {
   assert.equal(Object.values(rules.APPLY_WORDS).join('').includes('島'), false);
   assert.equal(Object.values(rules.QUESTION_EXAMPLES).join('').includes('島'), false);
 });
+
+test('きっかけの説明は、主催者と管理者だけに見えると言う（規約の約束）', () => {
+  assert.equal(rules.APPLY_WORDS.referralNote, '主催者と管理者だけに見えます');
+});

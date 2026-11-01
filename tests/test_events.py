@@ -513,6 +513,28 @@ def test_mine_and_by_post(world):
     assert get(admin, "/api/events/mine").json() == {"events": []}
 
 
+def test_mine_all_keeps_cancelled_registrations(world):
+    """?all=1 は取り消し・お断りも返す（コミュニティに入っていない人を、最後の会のページに戻すため）。"""
+    admin, cid, people = world
+    made = create_event(admin, cid, visibility="public")
+    code = made["event"]["public_code"]
+    guest = people("g16@example.test", "ゲスト")
+    assert get(guest, "/api/events/mine?all=1").json() == {"events": []}
+    apply(guest, code)
+    post(guest, f"/api/events/{code}/cancel")
+    assert get(guest, "/api/events/mine").json() == {"events": []}                       # 生きているものだけ
+    everything = get(guest, "/api/events/mine?all=1").json()["events"]
+    assert len(everything) == 1 and everything[0]["code"] == code and everything[0]["status"] == "cancelled"
+
+
+def test_push_words_for_late_sixty_minutes():
+    """60分の選択肢は「1時間以上遅れる」。通知も「1時間以上遅れます」にそろえる。"""
+    def entry(minutes):
+        return {"type": "event_late", "category": "event", "payload": {"minutes": minutes}, "actors": [{"display_name": "ゲスト"}], "others": 0}
+    assert application.push_message(entry(60))["body"].endswith("さんが1時間以上遅れます")
+    assert application.push_message(entry(30))["body"].endswith("さんが30分ほど遅れます")
+
+
 # --------------------------------------------------------------------------
 # ゲスト用ページの集計（ぼかし）
 # --------------------------------------------------------------------------

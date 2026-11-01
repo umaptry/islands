@@ -199,6 +199,7 @@ test('通知の行き先：遅れる・取り消しは名簿、中止は地図',
 
 test('通知の文：遅れる分・中止の会の名前が入る', () => {
   assert.equal(notify.bodyText({ type: 'event_late', payload: { minutes: 30 } }), '30分ほど遅れます');
+  assert.equal(notify.bodyText({ type: 'event_late', payload: { minutes: 60 } }), '1時間以上遅れます');
   assert.equal(notify.bodyText({ type: 'event_cancel', payload: {} }), '会の申し込みを取り消しました');
   assert.equal(notify.bodyText({ type: 'event_cancelled', payload: { title: 'BAR #2' } }), '「BAR #2」は中止になりました');
   assert.equal(notify.bodyText({ type: 'event_cancelled', payload: {} }), '「会」は中止になりました');

@@ -1988,7 +1988,8 @@ def push_message(entry, hashed_tag=False):
         first = (entry.get("actors") or [None])[0] or {}
         who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
         if entry["type"] == "event_late":
-            title, body = "会に遅れる連絡", f"{who}さんが{payload.get('minutes') or ''}分ほど遅れます"
+            title, body = "会に遅れる連絡", (f"{who}さんが1時間以上遅れます" if payload.get("minutes") == 60
+                            else f"{who}さんが{payload.get('minutes') or ''}分ほど遅れます")
         elif entry["type"] == "event_cancel":
             title, body = "会の申し込み", f"{who}さんが申し込みを取り消しました"
         else:
