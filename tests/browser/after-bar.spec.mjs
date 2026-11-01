@@ -73,7 +73,7 @@ test('地図の何もない所をダブルタップすると、その場所を�
   await me.page.touchscreen.tap(spot.x, spot.y);
   await me.page.waitForTimeout(60);
   await me.page.touchscreen.tap(spot.x, spot.y);
-  await expect.poll(async () => (await camera()).scale / start.scale, { timeout: 5000 }).toBeCloseTo(2, 2);
+  await expect.poll(async () => (await camera()).scale / start.scale, { timeout: 5000 }).toBeCloseTo(4, 2);
   // たたいた場所は、指の下に残る
   const end = await camera();
   const worldOf = (c) => ({ x: (spot.x - c.x) / c.scale, y: (spot.y - c.y) / c.scale });

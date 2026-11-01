@@ -594,6 +594,12 @@
 </section>
 
 <!-- ============ shared ============ -->
+<!-- 規約・ポリシー改定のお知らせ (js/notice.js)。ふだんの画面（下のナビがある画面）の一番上に細く出る。 -->
+<div class="notice-band" id="noticeBand" role="status" hidden>
+  <p class="notice-text"><span id="noticeText"></span> <a class="notice-more" id="noticeMore" href="/terms/next#changes">くわしく</a></p>
+  <button class="notice-close" id="noticeClose" type="button" aria-label="お知らせを閉じる">✕</button>
+</div>
+
 <nav class="bottom-nav" id="bottomNav" hidden>
   <button class="nav-item on" data-route="#/map"><span class="nav-icon">🗺</span><span class="nav-label">マップ</span></button>
   <button class="nav-item" data-route="#/dm" id="navDm" hidden>

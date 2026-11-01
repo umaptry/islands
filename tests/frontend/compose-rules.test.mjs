@@ -64,18 +64,19 @@ test('composeFloor: a new post needs 15, an edit keeps the server floor, an old 
   assert.equal(composeFloor({ editing: false, limits: undefined }), 1);
 });
 
-test('nextLabel: 次へ names the floor until the words reach it', () => {
+test('nextLabel: 次へ names the floor, then how many more, until the words reach it', () => {
   assert.equal(nextLabel({ length: 0, floor: 15 }), '15字から投稿できます');
-  assert.equal(nextLabel({ length: 14, floor: 15 }), '15字から投稿できます');
+  assert.equal(nextLabel({ length: 6, floor: 15 }), 'あと9字で投稿できます');
+  assert.equal(nextLabel({ length: 14, floor: 15 }), 'あと1字で投稿できます');
   assert.equal(nextLabel({ length: 15, floor: 15 }), '次へ');
   // an edit (floor 1) keeps the plain label
   assert.equal(nextLabel({ length: 0, floor: 1 }), '次へ');
 });
 
-test('shortNote: says how many more characters, only between 1 and floor-1', () => {
+test('shortNote: says what to add, only between 1 and floor-1 (the count is on 次へ)', () => {
   assert.equal(shortNote({ length: 0, floor: 15 }), null);
-  assert.equal(shortNote({ length: 5, floor: 15 }), 'あと10字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
-  assert.equal(shortNote({ length: 14, floor: 15 }), 'あと1字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
+  assert.equal(shortNote({ length: 5, floor: 15 }), 'どんなことを・どうして を足すと、近い人が見つけやすくなります');
+  assert.equal(shortNote({ length: 14, floor: 15 }), 'どんなことを・どうして を足すと、近い人が見つけやすくなります');
   assert.equal(shortNote({ length: 15, floor: 15 }), null);
   assert.equal(shortNote({ length: 3, floor: 1 }), null);
 });
@@ -85,8 +86,8 @@ test('floorLength: blanks run together count as one, as the server saves them', 
   const padded = `アプリ開発${'\n'.repeat(10)}!`;
   assert.equal(bodyLength(padded), 16);
   assert.equal(floorLength(padded), 7);
-  assert.equal(nextLabel({ length: floorLength(padded), floor: 15 }), '15字から投稿できます');
-  assert.equal(shortNote({ length: floorLength(padded), floor: 15 }), 'あと8字。どんなことを・どうして を足すと、近い人が見つけやすくなります');
+  assert.equal(nextLabel({ length: floorLength(padded), floor: 15 }), 'あと8字で投稿できます');
+  assert.equal(shortNote({ length: floorLength(padded), floor: 15 }), 'どんなことを・どうして を足すと、近い人が見つけやすくなります');
   assert.equal(floorLength('  あ　 \t い  '), 3);
   assert.equal(floorLength('一つの空白は そのまま'), 11);
   assert.equal(floorLength(''), 0);
