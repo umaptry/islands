@@ -530,7 +530,7 @@ def test_mine_all_keeps_cancelled_registrations(world):
 def test_push_words_for_late_sixty_minutes():
     """60分の選択肢は「1時間以上遅れる」。通知も「1時間以上遅れます」にそろえる。"""
     def entry(minutes):
-        return {"type": "event_late", "category": "event", "payload": {"minutes": minutes}, "actors": [{"display_name": "ゲスト"}], "others": 0}
+        return {"type": "event_late", "id": "n1", "created_at": "2026-11-01T00:00:00Z", "category": "event", "payload": {"minutes": minutes}, "actors": [{"display_name": "ゲスト"}], "others": 0}
     assert application.push_message(entry(60))["body"].endswith("さんが1時間以上遅れます")
     assert application.push_message(entry(30))["body"].endswith("さんが30分ほど遅れます")
 
