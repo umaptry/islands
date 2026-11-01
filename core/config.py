@@ -7,6 +7,7 @@ list in `stopwords.py`: the geometry parameters stay identical.
 """
 
 import os
+from datetime import date
 
 GEMINI_MODEL_NAME = "gemini-embedding-2"
 GEMINI_DIMENSIONS = 384
@@ -138,7 +139,8 @@ MIN_TEXT_LENGTH = 1
 # 画面だけの決まりにしてある。/api/config の limits.compose_min で画面に渡す。
 COMPOSE_MIN_LENGTH = 15
 MAX_TEXT_LENGTH = 60
-MAX_NAME_LENGTH = 16
+# 2026-11-01: 24 字（フルネームのお願い。supabase の display_name の制約と /api/config の limits.name_max もこの値）。
+MAX_NAME_LENGTH = 24
 MAX_COMMENT_LENGTH = 500
 MAX_AFFILIATION_LENGTH = 32
 MAX_BIO_LENGTH = 300
@@ -376,7 +378,13 @@ NOTIFICATION_CATEGORY_OF = {
     # 2026-10-29: 「つながり」: somebody just posted something that connects to your post. A reaction
     # (the settings screen only gets a longer note), one row each, never folded.
     "match": "reaction",
+    # 2026-11-01: 承認制。分類の名前は種類名そのもの（設定の画面に出る分類ではないので、
+    # NOTIFICATION_CATEGORIES には足さない）。設定に関係なく常にオン：ALWAYS_ON_NOTIFICATION_TYPES。
+    "join_request": "join_request", "join_approved": "join_approved",
 }
+# Types that are ALWAYS shown and pushed, whatever the settings say: a person waiting to be let in,
+# and "you are in" (notices.allows / interrupts). 後の回で event_late・event_cancel を足す。
+ALWAYS_ON_NOTIFICATION_TYPES = frozenset({"join_request", "join_approved"})
 # Only these are folded into one line ("A ほか2人") when they follow each other. The
 # talk lines are shown one by one: a talk_wish has no actor and no post.
 CHAINED_NOTIFICATION_TYPES = frozenset({"like", "help", "join"})
@@ -570,6 +578,30 @@ INVITE_ERROR_ADMIN_ONLY_LIST = "このコミュニティの招待リンクは、
 INVITE_ERROR_ADMIN_ONLY_REVOKE = "この招待リンクは、管理者だけが止められます。"
 INVITE_ERROR_MINUTES = "有効な時間は1分から30日の間で指定してください。"
 COMMUNITY_ERROR_POST = "このコミュニティに投稿できません。"
+# 承認制 (2026-11-01, A の設計 2-1)。ブラウザが直接呼ぶ DB 関数の日本語。pgTAP と pytest が同じ文を見る。
+APPROVAL_ERROR_INVITE_ADMIN_ONLY = "この招待リンクの設定は、管理者だけが変えられます。"
+APPROVAL_ERROR_INVITE_UNKNOWN = "招待リンクが見つかりません。"
+APPROVAL_ERROR_LIST_ADMIN_ONLY = "参加の申し込みは、管理者だけが見られます。"
+APPROVAL_ERROR_DECIDE_ADMIN_ONLY = "参加の申し込みは、管理者だけが決められます。"
+APPROVAL_ERROR_POST_NOT_IN_COMMUNITY = "この投稿はこのコミュニティのものではありません。"
+# 承認待ちの人を管理者が見る・決める。承認待ちが取り消し済みでも同じ文で扱う（'already'）。
+JOIN_REQUEST_NOTIFY_HOURS = 24      # 同じ人・同じ会について管理者に知らせるのは 24 時間に 1 回まで
+# 申し込み画面が claim_invite に送る「同意した規約の版」（施行日と同じ。E の 19）。
+CONSENT_VERSION = "2026-11-16"
+# 新しい規約・ポリシーの施行日（日本時間 0:00）。「外す」のボタンはこの日から（features.member_removal）。
+MEMBER_REMOVAL_FROM = date(2026, 11, 16)
+# フルネームの確認が必須になる日（同じ施行日。時計はサーバーが持つ）。
+FULLNAME_REQUIRED_FROM = date(2026, 11, 16)
+# 年代（accounts.age_band）。画面の選択肢と並びが同じ。
+AGE_BANDS = (
+    ("10s", "10代"), ("20s", "20代"), ("30s", "30代"),
+    ("40s", "40代"), ("50s", "50代"), ("60s", "60代"),
+)
+JOB_TITLE_MAX = 32
+# 名前を確かめるときに足りないもの（PUT /api/account/me の name_confirmed）。
+NAME_CONFIRM_ERROR = "フルネームと所属を入力してください。"
+# accounts_read を閉じたあと、見えない人の名前の代わりに出す言葉。
+HIDDEN_PERSON_NAME = "（このコミュニティの外の人）"
 # ほかのコミュニティにも出す (2026-10-29, supabase/migrations/20261029000000_share_group.sql).
 SHARE_ERROR_OFF = "ほかのコミュニティに出す機能は、まだ使えません。"
 SHARE_ERROR_NONE = "出すコミュニティを選んでください。"

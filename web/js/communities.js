@@ -12,7 +12,7 @@ import { notify, state } from './state.js';
 import { browserStorage } from './talk.js';
 import {
   chooseCommunity, communitiesOn, forgetCommunity, mapScope, normalizeCommunities,
-  recallCommunity, rememberCommunity, withJoined,
+  readJoinStatus, recallCommunity, rememberCommunity, withJoined,
 } from './community-rules.js';
 
 export function communitiesActive() {
@@ -34,6 +34,27 @@ export async function refreshCommunities() {
     setCommunities(normalizeCommunities(rows));
   } catch { /* keep what we had */ }
   return state.communities;
+}
+
+/**
+ * Read my_join_status into state.joinStatus: a list (empty = nothing is waiting or said), or null = not known
+ * (the SQL is not there yet, or the read failed). What was known before is kept when a read fails, and nobody
+ * is sent away for not knowing. Call it where refreshCommunities() is called at start-up, before the router moves.
+ */
+export async function refreshJoinStatus() {
+  if (!communitiesActive() || !session.signedIn()) return state.joinStatus ?? null;
+  try {
+    const list = readJoinStatus(await data.myJoinStatus());
+    if (list) {
+      state.joinStatus = list;
+      notify('community');
+    } else if (state.joinStatus === undefined) {
+      state.joinStatus = null;
+    }
+  } catch {
+    if (state.joinStatus === undefined) state.joinStatus = null;
+  }
+  return state.joinStatus;
 }
 
 function setCommunities(list, accountId = accountKey()) {
@@ -67,6 +88,7 @@ export function chooseCurrent(id) {
 }
 
 export function clearCommunities(accountId = accountKey()) {
+  state.joinStatus = null;
   state.communities = [];
   state.communitiesLoaded = false;
   state.communityId = null;
@@ -78,6 +100,7 @@ export function clearCommunities(accountId = accountKey()) {
 /** For sign-out: forget the lists but leave the remembered choice for next time. */
 export function dropCommunities() {
   postCommunities.clear();
+  state.joinStatus = null;
   state.communities = [];
   state.communitiesLoaded = false;
   state.communityId = null;

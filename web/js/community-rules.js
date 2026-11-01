@@ -146,24 +146,164 @@ export function resetInviteMemory() {
 
 // ---------------------------------------------------------------- the server's answers
 
-/** check_invite -> { valid, name, reason }. Anything odd reads as "not found". */
+/** An id (a post) from an answer: text, or null. */
+const idOf = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+
+/**
+ * check_invite -> { valid, name, reason, needs_approval, post_id }. Anything odd reads as "not found".
+ * An older database answers three keys: no approval, no post. A link that is no use never asks for approval.
+ */
 export function readInviteCheck(raw) {
   const row = Array.isArray(raw) ? raw[0] : raw;
-  if (!row || typeof row !== 'object') return { valid: false, name: '', reason: 'unknown' };
+  if (!row || typeof row !== 'object') {
+    return { valid: false, name: '', reason: 'unknown', needs_approval: false, post_id: null };
+  }
   if (row.valid === true) {
-    return { valid: true, name: String(row.community_name || '').trim(), reason: null };
+    return {
+      valid: true,
+      name: String(row.community_name || '').trim(),
+      reason: null,
+      needs_approval: row.needs_approval === true,
+      post_id: idOf(row.post_id),
+    };
   }
   // The name is kept for a link that is no longer usable: "which community's
   // link ran out" is the first thing a person wants to know.
   const reason = row.reason in REASON_TEXT ? row.reason : 'unknown';
-  return { valid: false, name: String(row.community_name || '').trim(), reason };
+  return { valid: false, name: String(row.community_name || '').trim(), reason, needs_approval: false, post_id: null };
 }
 
-/** claim_invite -> { id, name } or null. */
+/** What claim_invite can say about me: in now, in already, or waiting for an admin. */
+export const CLAIM_STATUSES = Object.freeze(['joined', 'already', 'pending']);
+
+/**
+ * claim_invite -> { id, name, status, post_id } or null. An older database says no status: it let me in.
+ * A status this code does not know is read as waiting (never as "in").
+ */
 export function readClaim(raw) {
   const row = Array.isArray(raw) ? raw[0] : raw;
   if (!row || typeof row !== 'object' || !row.community_id) return null;
-  return { id: String(row.community_id), name: String(row.community_name || '').trim() };
+  const status = row.status == null ? 'joined' : (CLAIM_STATUSES.includes(row.status) ? row.status : 'pending');
+  return {
+    id: String(row.community_id),
+    name: String(row.community_name || '').trim(),
+    status,
+    post_id: idOf(row.post_id),
+  };
+}
+
+/** The claim let me in (joined / already), not left me waiting. */
+export const claimedIn = (claim) => Boolean(claim) && claim.status !== 'pending';
+
+// ---------------------------------------------------------------- waiting for approval
+
+/** The states my_join_status can say, most pressing first. */
+export const JOIN_STATES = Object.freeze(['pending', 'removed', 'rejected']);
+
+/**
+ * my_join_status (rows, or the local answer) -> [{ id, name, status, at }], most pressing first,
+ * or null when it could not be read ("not known": nobody is turned away for that).
+ */
+export function readJoinStatus(raw) {
+  if (raw == null) return null;
+  const rows = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const list = [];
+  rows.forEach((row) => {
+    const id = row && (row.community_id || row.id);
+    if (!id || seen.has(String(id)) || !JOIN_STATES.includes(row.status)) return;
+    seen.add(String(id));
+    list.push({
+      id: String(id),
+      name: String(row.community_name || row.name || '').trim() || 'コミュニティ',
+      status: row.status,
+      at: row.at || null,
+    });
+  });
+  return list.sort((x, y) => JOIN_STATES.indexOf(x.status) - JOIN_STATES.indexOf(y.status));
+}
+
+/**
+ * Should this person be kept on the waiting screen? Yes when they are in no community and something is
+ * said about them. A status that is not known (null) never sends anybody there, and never away.
+ */
+export function mustWait({ communities, joinStatus }) {
+  return (communities || []).length === 0 && Array.isArray(joinStatus) && joinStatus.length > 0;
+}
+
+/** The waiting screen's words for one entry of readJoinStatus (null when there is none). `note` is the small line under the lede. */
+export function waitingView(entry) {
+  if (!entry) return null;
+  const name = entry.name || 'コミュニティ';
+  if (entry.status === 'pending') {
+    return {
+      state: 'pending', name, canCancel: true,
+      title: '参加の承認を待っています',
+      lede: `「${name}」の管理者が確認しています。承認されると、地図を見たり投稿したりできるようになります。期限はなく、管理者が決めるまで待てます。`,
+      note: '',
+    };
+  }
+  if (entry.status === 'removed') {
+    return {
+      state: 'removed', name, canCancel: false,
+      title: `「${name}」の地図は見られなくなりました`,
+      lede: '管理者が、あなたをこのコミュニティから外しました。',
+      note: 'もう一度入りたいときは、使える招待リンクから申し込めます。管理者が承認すると戻れます。',
+    };
+  }
+  return {
+    state: 'rejected', name, canCancel: false,
+    title: `「${name}」に参加できませんでした`,
+    lede: '管理者が、今回は参加を見送りました。招待してくれた人に確認してください。',
+    note: '招待リンクをもう一度使うと、また申し込みになります。',
+  };
+}
+
+/** What an admin of the waiting person can see, said to the person themselves (waiting screen, invite page). */
+export const ADMIN_SEES_NOTE = '管理者には、この名前・所属・メールアドレスが見えます（メールアドレスは承認を待っている間だけ）。';
+export const ADMIN_SEES_BOX = ['管理者に名前・所属・メールアドレスが見えます（承認を待つ間だけ）。', '承認されたあと、メールアドレスは見えなくなります。'];
+export const CONSENT_AFTER_PRESS = '「参加を申し込む」を押すと、上のことに同意したことになります。';
+export const LEAVE_NOTE = '今は画面からは退会できません。利用規約 第16条の連絡先に知らせてください。';
+
+/** The confirmation before taking an application back. */
+export function cancelQuestion(name) {
+  return {
+    title: `「${name || 'コミュニティ'}」への申し込みを取り消しますか？`,
+    body: '申し込みをなかったことにします。管理者には、あなたの名前・所属・メールアドレスが見えなくなります。あとで、同じ招待リンクからもう一度申し込めます。',
+  };
+}
+
+/** The confirmation before an admin turns somebody away. */
+export function rejectQuestion(name, community) {
+  return {
+    title: `${name || 'この人'}さんの参加を断りますか？`,
+    body: `${name || 'この人'}さんは「${community || 'コミュニティ'}」の中を見られないままです。本人の画面には「参加できませんでした」と出ます。`,
+  };
+}
+
+/** The row of the admin's waiting list: tags and the time. `row` is a list_join_requests row. */
+export function requestTags(row) {
+  const tags = [];
+  if (row && row.was_removed) tags.push({ key: 'removed', text: '前に外した人（承認すると前の投稿も戻ります）' });
+  if (row && row.rejected_before) tags.push({ key: 'rejected', text: '前にお断りした人' });
+  if (row && !String(row.email || '').trim()) tags.push({ key: 'line', text: 'LINE（メールアドレスなし）' });
+  return tags;
+}
+
+/** "今日 12:04 に申し込み" / "10/30 12:04 に申し込み" (Japan time). */
+export function requestedText(iso, now = Date.now()) {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  const day = (ms) => new Date(ms + JST_MS).toISOString().slice(0, 10);
+  const stamp = new Date(at + JST_MS).toISOString();
+  const time = stamp.slice(11, 16);
+  if (day(at) === day(now)) return `今日 ${time} に申し込み`;
+  return `${Number(stamp.slice(5, 7))}/${Number(stamp.slice(8, 10))} ${time} に申し込み`;
+}
+
+/** The line under another community's name in the switcher ('' when nothing is waiting there). */
+export function waitingLabel(entry) {
+  return entry && entry.status === 'pending' ? `${entry.name || 'コミュニティ'}（承認待ち）` : '';
 }
 
 /** my_communities / the local list -> [{ id, slug, name, role }] (no duplicates). */
@@ -203,8 +343,15 @@ export function inviteView(check) {
   }
   if (check.valid) {
     const name = check.name || 'コミュニティ';
+    if (check.needs_approval) {
+      return {
+        state: 'valid', approval: true,
+        title: `「${name}」への参加の申し込み`,
+        lede: 'このコミュニティは、管理者が確かめてから入れます。申し込んでも、承認されるまで中は見られません。',
+      };
+    }
     return {
-      state: 'valid',
+      state: 'valid', approval: false,
       title: `${name} への招待です`,
       lede: 'アカウントを作ると、このコミュニティの地図に入れます。',
     };
@@ -542,13 +689,18 @@ export function minutesUntilEndOfDayJst(now = Date.now()) {
   return Math.max(1, Math.ceil((end - now) / 60000));
 }
 
-/** The body create_invite is called with. */
-export function createInviteBody(communityId, choiceKey, now = Date.now()) {
+/**
+ * The body create_invite is called with. `needsApproval`: the link makes people wait for an admin;
+ * `post`: the meeting (a post of this community) that travels with the link. `post` is left out when there is none.
+ */
+export function createInviteBody(communityId, choiceKey, now = Date.now(), { needsApproval = false, post = null } = {}) {
   const choice = EXPIRY_CHOICES.find((entry) => entry.key === choiceKey) || EXPIRY_CHOICES.find((entry) => entry.key === DEFAULT_EXPIRY);
   return {
     community_id: communityId,
     minutes: choice.untilEndOfDay ? minutesUntilEndOfDayJst(now) : choice.minutes,
     until_end_of_day: Boolean(choice.untilEndOfDay),
+    needs_approval: Boolean(needsApproval),
+    ...(post ? { post: String(post) } : {}),
   };
 }
 

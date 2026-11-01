@@ -74,8 +74,8 @@ select ok(not has_table_privilege('authenticated', 'public.community_invites', '
           'and stopped by functions only');
 select ok(not has_table_privilege('anon', 'public.community_members', 'SELECT'), 'anon reads no members');
 select ok(not has_table_privilege('anon', 'public.community_invites', 'SELECT'), 'anon reads no invites');
-select ok(not has_function_privilege('anon', 'public.claim_invite(text)', 'execute'), 'anon cannot claim');
-select ok(not has_function_privilege('anon', 'public.create_invite(uuid, integer, boolean)', 'execute'),
+select ok(not has_function_privilege('anon', 'public.claim_invite(text, text)', 'execute'), 'anon cannot claim');
+select ok(not has_function_privilege('anon', 'public.create_invite(uuid, integer, boolean, boolean, uuid)', 'execute'),
           'anon cannot make an invite');
 select ok(not has_function_privilege('anon', 'public.list_invites(uuid)', 'execute'), 'anon cannot list invites');
 select ok(not has_function_privilege('anon', 'public.revoke_invite(uuid)', 'execute'), 'anon cannot stop one');
@@ -143,15 +143,17 @@ select bar, 'stopped-invite-code-00000003', 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1a
 set local role anon;
 reset request.jwt.claims;
 select is(public.check_invite('good-invite-code-0000000001'),
-          '{"valid": true, "community_name": "BAR", "reason": null}'::jsonb,
-          'a good code: valid, the name, nothing else');
+          '{"valid": true, "community_name": "BAR", "reason": null, "needs_approval": false, "post_id": null}'::jsonb,
+          'a good code: valid, the name, whether approval is needed, the event post (none), nothing else');
 select is((select array_agg(k order by k) from jsonb_object_keys(public.check_invite('good-invite-code-0000000001')) k),
-          array['community_name', 'reason', 'valid'], 'exactly those three keys (no id, no counts)');
+          array['community_name', 'needs_approval', 'post_id', 'reason', 'valid'],
+          'exactly those five keys (no id, no counts)');
 select is(public.check_invite('old-invite-code-00000000002') ->> 'reason', 'expired', 'an expired code says so');
 select is((public.check_invite('old-invite-code-00000000002') ->> 'valid')::boolean, false, 'and is not valid');
 select is(public.check_invite('stopped-invite-code-00000003') ->> 'reason', 'revoked', 'a stopped code says so');
 select is(public.check_invite('nonsense'),
-          '{"valid": false, "community_name": null, "reason": "unknown"}'::jsonb, 'an unknown code is unknown');
+          '{"valid": false, "community_name": null, "reason": "unknown", "needs_approval": null, "post_id": null}'::jsonb,
+          'an unknown code is unknown');
 select throws_ok($$select * from public.community_invites$$, '42501', null, 'anon cannot read the invites table');
 select throws_ok($$select public.claim_invite('good-invite-code-0000000001')$$, '42501', null,
                  'anon cannot claim');

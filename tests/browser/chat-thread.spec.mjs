@@ -12,7 +12,7 @@ async function person(page, name) {
   const got = await (await page.request.post('/api/local/auth/verify', { data: { email, code: otp.code } })).json();
   const headers = { Authorization: `Bearer ${got.access_token}` };
   const account = (await (await page.request.put('/api/account/me', {
-    data: { display_name: name, icon_id: 'photo', affiliation: 'テスト' }, headers,
+    data: { display_name: name, icon_id: 'photo', affiliation: 'テスト', name_confirmed: true }, headers,
   })).json()).account;
   await page.request.post('/api/local/invites/claim', { data: { code: 'demo-invite-code-local-0001' }, headers });
   const mine = await (await page.request.get('/api/local/communities/mine', { headers })).json();
@@ -39,7 +39,7 @@ async function signIn(page, name) {
     await session.verifyCode(email, otp.devCode);
     await api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: label, icon_id: 'photo', affiliation: 'テスト' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: label, icon_id: 'photo', affiliation: 'テスト', name_confirmed: true })).account;
     return state.account.id;
   }, name);
 }

@@ -18,7 +18,7 @@ async function signIn(page, label) {
     await session.verifyCode(email, otp.devCode);
     await api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' })).account;
   }, label);
 }
 

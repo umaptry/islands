@@ -206,7 +206,12 @@ select is((select array_agg(p.proname::text order by p.proname) from pg_proc p
                                     'community_map_posts', 'map_posts', 'map_cells',
                                     'notification_feed', 'touch_last_seen', 'mark_active',
                                     'talk_peers', 'press_talk', 'withdraw_talk', 'my_talk_state', 'dm_room_list',
-                                    'react_dm', 'mark_dm_read', 'dm_partner_read_at')),
+                                    'react_dm', 'mark_dm_read', 'dm_partner_read_at',
+                                    -- 2026-11-01 承認制（M1）と accounts を閉じる（M2）。画面が呼ぶ①の関数。
+                                    -- 中だけの join_request_notify・accounts_join_request_notify は足さない（見張りの役目）
+                                    'set_invite_approval', 'my_join_status', 'cancel_join_request',
+                                    'list_join_requests', 'decide_join_request',
+                                    'shares_community_with', 'account_visible')),
           null::text[], 'a signed-in person can run no security definer function other than the screens'' own');
 
 -- posts の列: anon はどの列も読めない（あとから足された列も）。authenticated の vec は読めず、書ける列は4つだけ。

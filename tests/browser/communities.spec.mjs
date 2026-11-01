@@ -22,7 +22,7 @@ async function person(browser, testInfo, name) {
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
   }, { email, name });
   who.name = name;
   return who;
@@ -51,12 +51,15 @@ async function makeInviteLink(admin, communityId, { postId, key } = {}) {
   await card.waitFor({ timeout: 15000 });
   await card.locator('.invite-open').click();
   if (key) await card.locator(`.invite-chip[data-key="${key}"]`).click();
-  await card.locator('.invite-make').click();
-  await card.locator('.invite-qr').waitFor();
+  await card.locator('.invite-approval').uncheck();
+  // 会の投稿はリンクを作る前に決める（作ったあとは招待に保存されて変えられない）
   if (postId) {
+    await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
     await card.locator('.invite-with-post').check();
     await card.locator('.invite-post-select').selectOption(postId);
   }
+  await card.locator('.invite-make').click();
+  await card.locator('.invite-qr').waitFor();
   const url = await card.locator('.invite-url').inputValue();
   expect(url).toContain('#/invite/');
   return { url: url.slice(url.indexOf('#')), card };
@@ -117,7 +120,8 @@ test('管理者が招待リンクを作り、新しい人がそのリンクか�
   const mapRows = await call(admin, 'get', `/api/local/communities/${bar.community_id}/map`);
   expect(mapRows.posts.some((p) => p.body.includes('焙煎'))).toBe(true);
 
-  // 投稿画面にも行き先が出る。
+  // 投稿画面にも行き先が出る。（フォームで登録した人は、次に開いたときにフルネームのお願いが出る。ここでは確かめ済みにしておく）
+  await guest.page.evaluate(async () => (await import('/static/js/net.js')).api.put('/api/account/me', { name_confirmed: true }));
   await guest.page.goto(`/?c=${unique()}#/post`);
   await expect(guest.page.locator('#composeCommunity')).toContainText(`${bar.name} に投稿`);
   await noSideScroll(guest.page);
@@ -166,7 +170,7 @@ test('招待制のとき、招待なしでは登録できず、招待リンク�
       const email = `direct-${crypto.randomUUID()}@example.com`;
       const otp = await session.requestCode(email);
       await session.verifyCode(email, otp.devCode);
-      try { await api.put('/api/account/me', { display_name: 'すり抜け', affiliation: 'テスト', icon_id: 'photo' }); return 'ok'; }
+      try { await api.put('/api/account/me', { display_name: 'すり抜け', affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' }); return 'ok'; }
       catch (error) { return `error ${error.status ?? ''}`; }
     });
     expect(direct).toMatch(/^error 403/);
@@ -264,7 +268,9 @@ test('招待に付ける投稿は、そのコミュニティの投稿だけ。�
 
   // 選べる投稿は、そのコミュニティの投稿だけ（読書会の投稿は出ない）
   const { url, card } = await makeInviteLink(admin, bar.community_id, { postId: barPost });
+  await card.locator('.invite-renew').click();
   await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);
+  await card.locator('.invite-cancel').click();
   expect(url).toContain(`?post=${barPost}`);
   const visitor = await openContext(browser, testInfo);
   await visitor.page.goto(`/${url}`);
@@ -315,6 +321,8 @@ test('編集画面を URL で直接開いても、自分の投稿が読み込ま
   await admin.page.goto(`/?again=${unique()}#/community/${bar.community_id}`);
   const card = admin.page.locator(`#communityEditBody .community-invites[data-community-id="${bar.community_id}"]`);
   await card.locator('.invite-qr').waitFor({ timeout: 15000 });
+  // 作ったあとの投稿の付け外しは「更新」（作り直し）から
+  await card.locator('.invite-renew').click();
   await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
   await card.locator('.invite-with-post').check();
   await expect.poll(() => card.locator('.invite-post-select option').evaluateAll((nodes) => nodes.map((node) => node.value))).toEqual([barPost]);

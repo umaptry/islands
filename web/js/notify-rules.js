@@ -19,7 +19,17 @@ export const CATEGORY_OF = Object.freeze({
   talk_wish: 'reaction', talk_match: 'reaction', dm: 'reply',
   // A post that may connect to one of mine (2026-10-29).
   match: 'reaction',
+  // 承認制 (2026-11-01): somebody waits to join a community of mine / my request was accepted.
+  // No switch holds them back (ALWAYS_ON_TYPES), so they belong to no switch.
+  join_request: 'join_request', join_approved: 'join_approved',
 });
+
+/** Kinds that no setting turns off: a person waits for the answer. Mirrors ALWAYS_ON_NOTIFICATION_TYPES in core/config.py. */
+export const ALWAYS_ON_TYPES = Object.freeze(['join_request', 'join_approved']);
+export const isAlwaysOn = (type) => ALWAYS_ON_TYPES.includes(type);
+
+/** The name of a person the database does not show me (accounts are read only inside a shared community). */
+export const OUTSIDE_NAME = '（このコミュニティの外の人）';
 
 /** The three kinds that belong to 「話してみたい」 / DM. */
 export const TALK_TYPES = Object.freeze(['talk_wish', 'talk_match', 'dm']);
@@ -53,6 +63,9 @@ export const KIND_TEXT = Object.freeze({
   talk_wish: '誰かが、あなたと{label}と言っています',
   talk_match: '{name}さんと、お互いに『{label}』でした。DMが開きました',
   dm: '{name}さんからメッセージが届きました',
+  // Templates too: {community} is the community's name from the payload.
+  join_request: '『{community}』への参加を待っています',
+  join_approved: '参加できました',
 });
 
 /** The small line under a 「話してみたい」 / DM row. */
@@ -119,6 +132,7 @@ export function settingsRows(settings) {
  * the server says quiet_post is false). With no similar row, the island switch
  * alone decides; with no island row either, it is shown. */
 export function interrupts(entry, settings) {
+  if (isAlwaysOn(entry.type)) return true;
   const all = settings || {};
   if (entry.type === 'quiet_post') {
     if (all.similar && all.similar.in_app === false) return false;
@@ -143,7 +157,13 @@ export function attachActors(entries, accounts) {
     if (entry.type === 'talk_wish') return { ...entry, actor_id: null, actors: [] };
     if (Array.isArray(entry.actors)) return entry;
     const actor = entry.actor_id ? byId.get(entry.actor_id) : null;
-    return { ...entry, actors: actor ? [actor] : [] };
+    if (actor) return { ...entry, actors: [actor] };
+    // `accounts` was asked and this person is not in the answer: somebody outside my communities.
+    // (No answer at all, `accounts` undefined, names nobody.)
+    if (entry.actor_id && Array.isArray(accounts)) {
+      return { ...entry, actors: [{ id: entry.actor_id, display_name: OUTSIDE_NAME, icon_id: '0', avatar_path: null }] };
+    }
+    return { ...entry, actors: [] };
   });
 }
 
@@ -161,11 +181,15 @@ export function communityIdOf(entry, postCommunities = {}) {
 export function headline(entry, talkLabel = '') {
   if (isTalkType(entry.type)) return talkHeadline(entry, talkLabel);
   if (isResident(entry)) return '新しい住人';
+  if (entry.type === 'join_approved') return String((entry.payload || {}).community_name || '').trim() || 'コミュニティ';
   if (entry.type === 'island') {
     const name = (entry.payload || {}).name;
     return name ? `島「${name}」` : '島';
   }
   const first = (entry.actors && entry.actors[0]) || {};
+  // A requester is not in my community yet, so a name that cannot be read is not "outside" - it is a request.
+  const unreadable = !first.display_name || first.display_name === OUTSIDE_NAME;
+  if (entry.type === 'join_request' && unreadable) return '参加を希望する人';
   const name = first.display_name || 'だれか';
   return entry.others ? `${name} ほか${entry.others}人` : name;
 }
@@ -173,9 +197,14 @@ export function headline(entry, talkLabel = '') {
 export function bodyText(entry, talkLabel = '') {
   if (isTalkType(entry.type)) return talkLabel ? TALK_HINT[entry.type] : '';
   const payload = entry.payload || {};
+  if (entry.type === 'join_request') {
+    return fill(KIND_TEXT.join_request, { community: String(payload.community_name || '').trim() || 'コミュニティ' });
+  }
+  if (entry.type === 'join_approved') return KIND_TEXT.join_approved;
   // Same words as the push (PUSH_TEXT in app.py): 「{島}に{名前}さんが引っ越してきました」.
   if (isResident(entry)) {
-    const who = String((entry.actors && entry.actors[0] && entry.actors[0].display_name) || '').trim();
+    const named = String((entry.actors && entry.actors[0] && entry.actors[0].display_name) || '').trim();
+    const who = named === OUTSIDE_NAME ? '' : named;
     const plain = who.endsWith('さん') && who.length > 2 ? who.slice(0, -2) : who;
     const cause = payload.cause || (plain ? `${plain}さんが引っ越してきました` : '誰かが引っ越してきました');
     return payload.name ? `${payload.name}に${cause}` : cause;
@@ -197,7 +226,8 @@ function talkHeadline(entry, label) {
   // (A missing name is 「相手」 here and 「だれか」 on the lock screen; talk-rules.js says
   // 「この人」 under the button: each is the natural word for its place.)
   const shown = String(first.display_name || '').trim().replace(/さん$/, '');
-  const name = entry.type === 'talk_wish' ? '' : (shown || '相手');
+  // (A person outside my communities is 「相手」 here: 「…の外の人さん」 would read badly.)
+  const name = entry.type === 'talk_wish' ? '' : (shown && shown !== OUTSIDE_NAME ? shown : '相手');
   return fill(KIND_TEXT[entry.type], { label, name });
 }
 

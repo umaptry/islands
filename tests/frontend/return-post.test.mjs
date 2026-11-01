@@ -137,3 +137,21 @@ test('the 会 of an invite QR is kept for a day, until it is joined', () => {
   assert.equal(rules.readInviteJoin(storage, now), null);
   assert.equal(rules.saveInviteJoin(storage, '../etc', now), false);
 });
+
+test('承認を待つ間は、招待の投稿と会への参加を長く預かる（普通の期限を超えても残る）', async () => {
+  const mod = await import(new URL('../../web/js/return-post.js', import.meta.url));
+  const store = (() => { const map = new Map(); return { getItem: (k) => map.get(k) ?? null, setItem: (k, v) => map.set(k, v), removeItem: (k) => map.delete(k) }; })();
+  const HOUR = 3600 * 1000;
+  const t0 = Date.parse('2026-11-01T00:00:00Z');
+  mod.resetPendingMemory();
+  mod.savePendingPost(store, 'post-a', t0, mod.WAITING_HOLD_MS);
+  mod.saveInviteJoin(store, 'post-b', t0, mod.WAITING_HOLD_MS);
+  assert.equal(mod.readPendingPost(store, t0 + 7 * 24 * HOUR), 'post-a', '6時間より長く残る');
+  assert.equal(mod.readInviteJoin(store, t0 + 7 * 24 * HOUR), 'post-b', '1日より長く残る');
+  assert.equal(mod.readPendingPost(store, t0 + 15 * 24 * HOUR), null, '14日で切れる');
+  // 預かりを頼まなかった普通の保存は、今までの期限のまま
+  mod.resetPendingMemory();
+  mod.savePendingPost(store, 'post-c', t0);
+  assert.equal(mod.readPendingPost(store, t0 + 5 * HOUR), 'post-c');
+  assert.equal(mod.readPendingPost(store, t0 + 7 * HOUR), null);
+});

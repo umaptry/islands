@@ -17,7 +17,7 @@ async function newPerson(browser, testInfo, name, extra = {}) {
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
     await data.claimInvite(code);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
   }, { email: `${name}-${crypto.randomUUID()}@example.com`, name, code: INVITE });
   return { page, context };
 }

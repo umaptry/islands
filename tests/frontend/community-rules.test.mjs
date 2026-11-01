@@ -123,22 +123,38 @@ test('with no usable storage the invite is held in memory for this page load', (
 
 // ---------------------------------------------------------------- the server's answers
 
-test('check_invite is read into one shape, and anything odd reads as not found', () => {
-  assert.deepEqual(rules.readInviteCheck({ valid: true, community_name: ' BAR ', reason: null }), { valid: true, name: 'BAR', reason: null });
-  assert.deepEqual(rules.readInviteCheck({ valid: false, community_name: null, reason: 'expired' }), { valid: false, name: '', reason: 'expired' });
-  assert.deepEqual(rules.readInviteCheck({ valid: false, community_name: 'BAR', reason: 'expired' }), { valid: false, name: 'BAR', reason: 'expired' },
+test('check_invite is read into one shape (five keys), and anything odd reads as not found', () => {
+  const none = { needs_approval: false, post_id: null };
+  assert.deepEqual(rules.readInviteCheck({ valid: true, community_name: ' BAR ', reason: null }), { valid: true, name: 'BAR', reason: null, ...none },
+    'an older database says three keys: no approval, no post');
+  assert.deepEqual(rules.readInviteCheck({ valid: false, community_name: null, reason: 'expired' }), { valid: false, name: '', reason: 'expired', ...none });
+  assert.deepEqual(rules.readInviteCheck({ valid: false, community_name: 'BAR', reason: 'expired' }), { valid: false, name: 'BAR', reason: 'expired', ...none },
     'the name of a link that ran out is kept');
-  assert.deepEqual(rules.readInviteCheck({ valid: false, reason: 'revoked' }), { valid: false, name: '', reason: 'revoked' });
-  assert.deepEqual(rules.readInviteCheck([{ valid: true, community_name: 'A' }]), { valid: true, name: 'A', reason: null }, 'a one-row array');
+  assert.deepEqual(rules.readInviteCheck({ valid: false, reason: 'revoked' }), { valid: false, name: '', reason: 'revoked', ...none });
+  assert.deepEqual(rules.readInviteCheck([{ valid: true, community_name: 'A' }]), { valid: true, name: 'A', reason: null, ...none }, 'a one-row array');
   for (const odd of [null, undefined, 'x', {}, { valid: false, reason: 'weird' }, { valid: 'true' }]) {
     const read = rules.readInviteCheck(odd);
     assert.equal(read.valid, false);
     assert.equal(read.reason, 'unknown');
+    assert.deepEqual(Object.keys(read).sort(), ['name', 'needs_approval', 'post_id', 'reason', 'valid']);
   }
 });
 
+test('check_invite says whether the link waits for an admin, and which meeting travels with it', () => {
+  const read = rules.readInviteCheck({ valid: true, community_name: 'コクヨ', reason: null, needs_approval: true, post_id: POST });
+  assert.deepEqual(read, { valid: true, name: 'コクヨ', reason: null, needs_approval: true, post_id: POST });
+  assert.equal(rules.readInviteCheck({ valid: true, needs_approval: 'true' }).needs_approval, false, 'only a real true counts');
+  assert.equal(rules.readInviteCheck({ valid: true, post_id: 5 }).post_id, null);
+  assert.equal(rules.readInviteCheck({ valid: true, post_id: '  ' }).post_id, null);
+  // A link that is no use asks for nothing, whatever the row holds.
+  const dead = rules.readInviteCheck({ valid: false, reason: 'expired', needs_approval: true, post_id: POST });
+  assert.equal(dead.needs_approval, false);
+  assert.equal(dead.post_id, null);
+});
+
 test('claim_invite and my_communities are read', () => {
-  assert.deepEqual(rules.readClaim({ community_id: 'c1', community_name: 'BAR' }), { id: 'c1', name: 'BAR' });
+  assert.deepEqual(rules.readClaim({ community_id: 'c1', community_name: 'BAR' }),
+    { id: 'c1', name: 'BAR', status: 'joined', post_id: null }, 'an older database let me in and said no status');
   assert.equal(rules.readClaim(null), null);
   assert.equal(rules.readClaim({}), null);
   assert.equal(rules.readClaim({ community_name: 'x' }), null);
@@ -155,6 +171,71 @@ test('claim_invite and my_communities are read', () => {
   ]);
   assert.deepEqual(rules.normalizeCommunities(undefined), []);
   assert.deepEqual(rules.adminOf(list).map((entry) => entry.id), ['a']);
+});
+
+test('claim_invite: status and the meeting of the link are read; an unknown status is never "in"', () => {
+  for (const status of ['joined', 'already', 'pending']) {
+    const claim = rules.readClaim({ community_id: 'c1', community_name: ' コクヨ ', status, post_id: POST });
+    assert.deepEqual(claim, { id: 'c1', name: 'コクヨ', status, post_id: POST });
+  }
+  assert.equal(rules.readClaim({ community_id: 'c1', status: 'banana' }).status, 'pending');
+  assert.equal(rules.readClaim([{ community_id: 'c1', status: 'already' }]).status, 'already');
+  assert.equal(rules.readClaim({ community_id: 'c1', post_id: 7 }).post_id, null);
+  assert.equal(rules.claimedIn(rules.readClaim({ community_id: 'c1', status: 'pending' })), false);
+  assert.equal(rules.claimedIn(rules.readClaim({ community_id: 'c1', status: 'already' })), true);
+  assert.equal(rules.claimedIn(rules.readClaim({ community_id: 'c1' })), true);
+  assert.equal(rules.claimedIn(null), false);
+});
+
+test('my_join_status is read into a list, most pressing first; "not known" stays null', () => {
+  assert.equal(rules.readJoinStatus(null), null);
+  assert.equal(rules.readJoinStatus(undefined), null);
+  assert.deepEqual(rules.readJoinStatus([]), []);
+  assert.deepEqual(rules.readJoinStatus('x'), []);
+  const list = rules.readJoinStatus([
+    { community_id: 'r', community_name: 'R', status: 'rejected', at: '2026-11-01T00:00:00Z' },
+    { community_id: 'p', community_name: ' P ', status: 'pending', at: null },
+    { community_id: 'p', community_name: 'again', status: 'pending' },
+    { community_id: 'x', community_name: 'X', status: 'removed' },
+    { community_id: 'y', status: 'nonsense' },
+    { status: 'pending' },
+    null,
+  ]);
+  assert.deepEqual(list.map((entry) => [entry.id, entry.status]), [['p', 'pending'], ['x', 'removed'], ['r', 'rejected']]);
+  assert.equal(list[0].name, 'P');
+  assert.equal(rules.readJoinStatus([{ community_id: 'q', status: 'pending' }])[0].name, 'コミュニティ');
+});
+
+test('who is kept on the waiting screen: only somebody in no community with something said about them', () => {
+  const said = [{ id: 'p', name: 'P', status: 'pending' }];
+  assert.equal(rules.mustWait({ communities: [], joinStatus: said }), true);
+  assert.equal(rules.mustWait({ communities: [{ id: 'a' }], joinStatus: said }), false, 'a person in another community is not held');
+  assert.equal(rules.mustWait({ communities: [], joinStatus: [] }), false);
+  assert.equal(rules.mustWait({ communities: [], joinStatus: null }), false, 'not known: nobody is sent there');
+  assert.equal(rules.mustWait({ communities: undefined, joinStatus: undefined }), false);
+});
+
+test('the waiting screen says pending, removed and rejected differently', () => {
+  const pending = rules.waitingView({ id: 'p', name: 'コクヨ', status: 'pending' });
+  assert.equal(pending.state, 'pending');
+  assert.equal(pending.title, '参加の承認を待っています');
+  assert.match(pending.lede, /「コクヨ」の管理者が確認しています/);
+  assert.equal(pending.canCancel, true);
+  const removed = rules.waitingView({ id: 'x', name: 'コクヨ', status: 'removed' });
+  assert.equal(removed.state, 'removed');
+  assert.equal(removed.canCancel, false);
+  assert.ok(removed.title.includes('コクヨ'));
+  const rejected = rules.waitingView({ id: 'r', name: 'コクヨ', status: 'rejected' });
+  assert.equal(rejected.state, 'rejected');
+  assert.equal(rejected.title, '「コクヨ」に参加できませんでした');
+  assert.match(rejected.note, /もう一度使うと、また申し込みになります/);
+  assert.match(removed.note, /招待リンクから申し込めます/);
+  assert.equal(rejected.canCancel, false);
+  assert.equal(new Set([pending.title, removed.title, rejected.title]).size, 3);
+  assert.equal(rules.waitingView(null), null);
+  assert.equal(rules.waitingLabel({ name: 'コクヨ', status: 'pending' }), 'コクヨ（承認待ち）');
+  assert.equal(rules.waitingLabel({ name: 'コクヨ', status: 'rejected' }), '');
+  assert.equal(rules.waitingLabel(null), '');
 });
 
 test('a community just joined is added once and keeps what is known', () => {
@@ -353,12 +434,24 @@ test('the five lengths an admin can choose', () => {
 
 test('create_invite is asked for the minutes, and for the end of the day when that is chosen', () => {
   const now = Date.UTC(2026, 9, 30, 10, 0, 0);   // 19:00 JST on 10/30
-  assert.deepEqual(rules.createInviteBody('c1', '1h', now), { community_id: 'c1', minutes: 60, until_end_of_day: false });
-  assert.deepEqual(rules.createInviteBody('c1', '3h', now), { community_id: 'c1', minutes: 180, until_end_of_day: false });
-  assert.deepEqual(rules.createInviteBody('c1', '1d', now), { community_id: 'c1', minutes: 1440, until_end_of_day: false });
-  assert.deepEqual(rules.createInviteBody('c1', '7d', now), { community_id: 'c1', minutes: 10080, until_end_of_day: false });
-  assert.deepEqual(rules.createInviteBody('c1', 'today', now), { community_id: 'c1', minutes: 299, until_end_of_day: true });
+  assert.deepEqual(rules.createInviteBody('c1', '1h', now), { community_id: 'c1', minutes: 60, until_end_of_day: false, needs_approval: false });
+  assert.deepEqual(rules.createInviteBody('c1', '3h', now), { community_id: 'c1', minutes: 180, until_end_of_day: false, needs_approval: false });
+  assert.deepEqual(rules.createInviteBody('c1', '1d', now), { community_id: 'c1', minutes: 1440, until_end_of_day: false, needs_approval: false });
+  assert.deepEqual(rules.createInviteBody('c1', '7d', now), { community_id: 'c1', minutes: 10080, until_end_of_day: false, needs_approval: false });
+  assert.deepEqual(rules.createInviteBody('c1', 'today', now), { community_id: 'c1', minutes: 299, until_end_of_day: true, needs_approval: false });
   assert.equal(rules.createInviteBody('c1', 'nonsense', now).until_end_of_day, true, 'an unknown choice is the default');
+});
+
+test('create_invite carries the approval switch and the meeting only when they are held', () => {
+  const now = Date.UTC(2026, 9, 30, 10, 0, 0);
+  assert.deepEqual(rules.createInviteBody('c1', '1d', now, { needsApproval: true }),
+    { community_id: 'c1', minutes: 1440, until_end_of_day: false, needs_approval: true });
+  assert.deepEqual(rules.createInviteBody('c1', '1d', now, { needsApproval: true, post: POST }),
+    { community_id: 'c1', minutes: 1440, until_end_of_day: false, needs_approval: true, post: POST });
+  assert.deepEqual(rules.createInviteBody('c1', 'today', now, { post: POST }),
+    { community_id: 'c1', minutes: 299, until_end_of_day: true, needs_approval: false, post: POST });
+  assert.ok(!('post' in rules.createInviteBody('c1', '1d', now, { post: '' })), 'no meeting: no key');
+  assert.equal(rules.createInviteBody('c1', '1d', now, { needsApproval: 'yes' }).needs_approval, true, 'always a boolean');
 });
 
 test('「今日中」 is 23:59 Japan time, wherever the browser is', () => {
@@ -592,4 +685,52 @@ test('rename answers in either shape, and the list follows', () => {
   assert.deepEqual(rules.withRenamed(list, 'a', '夜の BAR'), [{ id: 'a', name: '夜の BAR', role: 'admin' }, list[1]]);
   assert.equal(list[0].name, 'BAR', 'the old list is not changed');
   assert.deepEqual(rules.withRenamed(null, 'a', 'x'), []);
+});
+
+// ---- 承認制の画面（2026-11-01 第1回）
+
+test('承認が要るリンクの招待画面：題は「参加の申し込み」。要らないリンクは今までどおり', () => {
+  const needs = rules.inviteView(rules.readInviteCheck({ valid: true, community_name: 'コクヨ', needs_approval: true }));
+  assert.equal(needs.state, 'valid');
+  assert.equal(needs.approval, true);
+  assert.equal(needs.title, '「コクヨ」への参加の申し込み');
+  assert.match(needs.lede, /承認されるまで中は見られません/);
+  const plain = rules.inviteView(rules.readInviteCheck({ valid: true, community_name: 'コクヨ' }));
+  assert.equal(plain.approval, false);
+  assert.equal(plain.title, 'コクヨ への招待です');
+  // 使えないリンクは、承認が要るかどうかに関わらず使えない案内
+  assert.equal(rules.inviteView(rules.readInviteCheck({ valid: false, reason: 'expired', needs_approval: true })).state, 'invalid');
+});
+
+test('取り消しと断るの確認の文は、会の名前・相手の名前を入れる', () => {
+  assert.equal(rules.cancelQuestion('コクヨ').title, '「コクヨ」への申し込みを取り消しますか？');
+  assert.match(rules.cancelQuestion('コクヨ').body, /同じ招待リンクからもう一度申し込めます/);
+  assert.equal(rules.rejectQuestion('カンベ', 'コクヨ').title, 'カンベさんの参加を断りますか？');
+  assert.match(rules.rejectQuestion('カンベ', 'コクヨ').body, /「コクヨ」の中を見られないまま/);
+  assert.match(rules.rejectQuestion('カンベ', 'コクヨ').body, /参加できませんでした/);
+});
+
+test('管理者の枠の札：前に外した人・前にお断りした人・LINE（メールアドレスなし）', () => {
+  const keys = (row) => rules.requestTags(row).map((tag) => tag.key);
+  assert.deepEqual(keys({ email: 'a@example.com' }), []);
+  assert.deepEqual(keys({ email: 'a@example.com', was_removed: true }), ['removed']);
+  assert.deepEqual(keys({ email: 'a@example.com', rejected_before: true }), ['rejected']);
+  assert.deepEqual(keys({ email: null }), ['line']);
+  assert.deepEqual(keys({ email: '  ' }), ['line']);
+  assert.deepEqual(keys({ email: '', was_removed: true, rejected_before: true }), ['removed', 'rejected', 'line']);
+});
+
+test('申し込んだ時刻：今日なら時刻だけ、前の日なら月日', () => {
+  const now = Date.parse('2026-11-01T03:30:00Z');   // 日本では 12:30
+  assert.equal(rules.requestedText('2026-11-01T03:04:00Z', now), '今日 12:04 に申し込み');
+  assert.equal(rules.requestedText('2026-10-30T02:48:00Z', now), '10/30 11:48 に申し込み');
+  assert.equal(rules.requestedText('おかしい', now), '');
+});
+
+test('待つ画面の三つの文は、題も説明もちがい、取り消せるのは待っている人だけ', () => {
+  const entries = ['pending', 'removed', 'rejected'].map((status) => rules.waitingView({ id: status, name: 'コクヨ', status }));
+  assert.equal(new Set(entries.map((entry) => entry.title)).size, 3);
+  assert.equal(new Set(entries.map((entry) => entry.lede)).size, 3);
+  assert.deepEqual(entries.map((entry) => entry.canCancel), [true, false, false]);
+  assert.equal(entries[0].note, '');
 });

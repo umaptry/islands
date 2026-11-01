@@ -16,7 +16,7 @@ import { activeScreen, navigate, screen } from '../router.js';
 import { primeKeyboard } from '../keyboard.js';
 import { state } from '../state.js';
 import { membersOnly } from '../config.js';
-import { communityIdOfPost, communityNameFor } from '../communities.js';
+import { chooseCurrent, communityIdOfPost, communityNameFor, refreshCommunities } from '../communities.js';
 import { communityNameIn } from '../community-rules.js';
 import { openOnMap } from './map.js';
 import {
@@ -46,13 +46,16 @@ let dmNoticeSeen = '';     // the DM-message rows known, so a new one re-reads t
 
 const TONES = { like: 'like', help: 'help', join: 'join', comment: 'comment', reply: 'comment',
   connection: 'join', similar: 'help', island: 'join', quiet_post: 'help',
-  talk_wish: 'join', talk_match: 'join', dm: 'comment', match: 'join' };
+  talk_wish: 'join', talk_match: 'join', dm: 'comment', match: 'join',
+  join_request: 'join', join_approved: 'join' };
 const BAND_ICONS = { like: '♥', help: '✋', join: '➕', comment: '💬', reply: '💬',
   connection: '➕', similar: '✋', island: '📍', quiet_post: '✋',
-  talk_wish: '💬', talk_match: '💬', dm: '💬', match: '🔗' };
+  talk_wish: '💬', talk_match: '💬', dm: '💬', match: '🔗',
+  join_request: '➕', join_approved: '✅' };
 const ICONS = { like: 'heart', help: 'help', join: 'hand', comment: 'message', reply: 'message',
   connection: 'hand', similar: 'user', island: 'pin', quiet_post: 'user',
-  talk_wish: 'user', talk_match: 'message', dm: 'message', match: 'link' };
+  talk_wish: 'user', talk_match: 'message', dm: 'message', match: 'link',
+  join_request: 'user', join_approved: 'hand' };
 let matchSeen = null;      // the 「お互いに」 rows known, so the buttons re-read when a new one arrives
 
 /**
@@ -129,6 +132,8 @@ async function load() {
   followTalk(entries);
   if (activeScreen() === 'notifications' && signature(state.notifications) !== painted) paintList();
   announce(entries, settings, account.id);
+  // The waiting page looks again when an approval has arrived.
+  document.dispatchEvent(new CustomEvent('notifications:loaded'));
 }
 
 /** A new 「お互いに」 row means a DM has opened: re-read what the cards show. A new
@@ -362,6 +367,21 @@ async function open(entry) {
   }
   if (entry.type === 'talk_match' || entry.type === 'dm') {
     await openDmForNotification(entry);
+    return;
+  }
+  // 2026-11-01 承認制: an application opens the admin's edit page of that community (the list is on top of it);
+  // an approval makes that community the one to look at.
+  if (entry.type === 'join_request' || entry.type === 'join_approved') {
+    const community = entry.community_id || (entry.payload || {}).community_id || '';
+    if (entry.type === 'join_request') {
+      await navigate(community ? `#/community/${encodeURIComponent(community)}` : '#/map');
+      return;
+    }
+    if (community) {
+      if (!state.communities.some((item) => item.id === community)) await refreshCommunities();
+      chooseCurrent(community);
+    }
+    await navigate('#/map');
     return;
   }
   if (!entry.post_id) return;

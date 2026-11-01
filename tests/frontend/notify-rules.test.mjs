@@ -16,7 +16,16 @@ const TOPIC = rules.topicFor(UID);
 test('every kind belongs to the category the server files it under', () => {
   const block = config.match(/NOTIFICATION_CATEGORY_OF\s*=\s*\{([\s\S]*?)\}/)[1];
   const server = Object.fromEntries([...block.matchAll(/"(\w+)":\s*"(\w+)"/g)].map((m) => [m[1], m[2]]));
-  assert.deepEqual({ ...rules.CATEGORY_OF }, server);
+  // The join kinds (2026-11-01) are named in core/config.py by the server side; until it is merged only the
+  // browser knows them. Once both know them, they must agree.
+  const joinKinds = ['join_request', 'join_approved'];
+  const client = { ...rules.CATEGORY_OF };
+  for (const kind of joinKinds) {
+    if (!(kind in server)) delete client[kind];
+    else assert.equal(rules.CATEGORY_OF[kind], server[kind], kind);
+  }
+  assert.deepEqual(client, server);
+  assert.deepEqual(joinKinds.map((kind) => rules.categoryOf(kind)), joinKinds);
   assert.equal(rules.categoryOf('quiet_post'), 'island');
   assert.equal(rules.categoryOf('island'), 'island');
 });
@@ -26,7 +35,7 @@ test('the list says what the lock screen says', () => {
   const pushed = Object.fromEntries([...block.matchAll(/"(\w+)":\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
   // The 「話してみたい」 kinds are built from the button's name: see the test further down.
   for (const [kind, text] of Object.entries(pushed)) {
-    if (rules.TALK_TYPES.includes(kind)) continue;
+    if (rules.TALK_TYPES.includes(kind) || rules.isAlwaysOn(kind)) continue;   // templates: see the join tests
     assert.equal(rules.KIND_TEXT[kind], text, kind);
   }
   assert.equal(rules.GROUP_TEXT, app.match(/PUSH_GROUP_TEXT = "([^"]+)"/)[1]);
@@ -136,7 +145,8 @@ test('the feed carries only the newest actor id; the face is put on afterwards',
     { id: 'n4', actors: [{ id: 'z' }] }];
   const faced = rules.attachActors(rows, [{ id: 'a', display_name: 'あおい' }]);
   assert.deepEqual(faced[0].actors, [{ id: 'a', display_name: 'あおい' }]);
-  assert.deepEqual(faced[1].actors, []);
+  // asked for and not answered: somebody outside my communities, named so (the page must not fall over)
+  assert.deepEqual(faced[1].actors, [{ id: 'gone', display_name: '（このコミュニティの外の人）', icon_id: '0', avatar_path: null }]);
   assert.deepEqual(faced[2].actors, []);
   assert.deepEqual(faced[3].actors, [{ id: 'z' }]);
 });
@@ -433,4 +443,71 @@ test('match rows: filed under 反応, read as the reason the server wrote, with 
   assert.equal(rules.bodyText({ type: 'match', payload: {} }), 'あなたの投稿とつながりそうな投稿が見つかりました。');
   assert.ok(rules.CATEGORIES.find((c) => c.id === 'reaction').note.includes('・つながりそうな投稿'));
   assert.equal(rules.interrupts(row, rules.defaultSettings()), true);
+});
+
+// ---------------------------------------------------------------- 承認制 (2026-11-01)
+
+const joinRow = (type, extra = {}) => ({
+  id: 'j1', type, unread: true, ids: ['j1'], actor_id: null, post_id: null, payload: { community_id: 'c1', community_name: 'コクヨ' }, ...extra,
+});
+
+test('join_request: the headline is the name, the body says who they wait to join', () => {
+  const entry = rules.attachActors([joinRow('join_request', { actor_id: 'a' })], [{ id: 'a', display_name: 'あおい', icon_id: '1', avatar_path: null }])[0];
+  assert.equal(rules.headline(entry), 'あおい');
+  assert.equal(rules.bodyText(entry), '『コクヨ』への参加を待っています');
+  assert.equal(rules.bodyText({ ...entry, payload: {} }), '『コミュニティ』への参加を待っています');
+  assert.equal(rules.bodyText({ type: 'join_request' }), '『コミュニティ』への参加を待っています', 'no payload at all');
+  assert.equal(rules.categoryOf('join_request'), 'join_request');
+});
+
+test('join_approved: the headline is the community, the body says it worked', () => {
+  const entry = joinRow('join_approved');
+  assert.equal(rules.headline(entry), 'コクヨ');
+  assert.equal(rules.bodyText(entry), '参加できました');
+  assert.equal(rules.headline({ type: 'join_approved' }), 'コミュニティ');
+  assert.equal(rules.headline(joinRow('join_approved', { payload: { community_name: '  ' } })), 'コミュニティ');
+});
+
+test('the join kinds always interrupt, whatever the settings say', () => {
+  assert.deepEqual([...rules.ALWAYS_ON_TYPES].sort(), ['join_approved', 'join_request']);
+  const off = { reply: { push: false, in_app: false }, reaction: { push: false, in_app: false }, island: { push: false, in_app: false } };
+  for (const type of ['join_request', 'join_approved']) {
+    assert.equal(rules.interrupts({ type }, off), true, type);
+    assert.equal(rules.interrupts({ type }, {}), true, `${type} without settings`);
+    assert.equal(rules.interrupts({ type }, null), true, `${type} with null settings`);
+    assert.equal(rules.isAlwaysOn(type), true);
+  }
+  assert.equal(rules.isAlwaysOn('like'), false);
+  assert.equal(rules.interrupts({ type: 'like' }, off), false, 'the others still obey the switches');
+  const rows = [joinRow('join_request'), joinRow('join_approved', { id: 'j2', ids: ['j2'] }), like({ id: 'n9', ids: ['n9'] })];
+  assert.equal(rules.unreadCount(rows, off), 2, 'the badge counts them');
+  assert.equal(rules.arrivals(rows, new Set(), off).length, 2, 'and they arrive');
+});
+
+test('a person the database hides is 「（このコミュニティの外の人）」, and nothing falls over', () => {
+  assert.equal(rules.OUTSIDE_NAME, '（このコミュニティの外の人）');
+  // Asked for (an empty answer) and not there: the name stands in.
+  const outside = rules.attachActors([like({ actor_id: 'nobody', actors: undefined })], [])[0];
+  assert.equal(rules.headline(outside), '（このコミュニティの外の人）');
+  assert.equal(rules.bodyText(outside), rules.KIND_TEXT.like);
+  // The read itself failed (no answer): the old, nameless reading.
+  const unasked = rules.attachActors([like({ actor_id: 'nobody', actors: undefined })], undefined)[0];
+  assert.deepEqual(unasked.actors, []);
+  assert.equal(rules.headline(unasked), 'だれか');
+  // A grouped row with the hidden person first.
+  assert.equal(rules.headline({ ...outside, others: 2 }), '（このコミュニティの外の人） ほか2人');
+  // Other places a name is put in a sentence stay readable.
+  const talk = rules.attachActors([{ id: 't', type: 'dm', actor_id: 'nobody', payload: {} }], [])[0];
+  assert.equal(rules.headline(talk, 'もっと話してみたい'), '相手さんからメッセージが届きました');
+  const resident = rules.attachActors([{ id: 'r', type: 'island', actor_id: 'nobody', payload: { kind: 'resident', name: '島A' } }], [])[0];
+  assert.equal(rules.bodyText(resident), '島Aに誰かが引っ越してきました');
+  // A request from somebody I cannot read yet is still a request.
+  const request = rules.attachActors([joinRow('join_request', { actor_id: 'nobody' })], [])[0];
+  assert.equal(rules.headline(request), '参加を希望する人');
+  // rows that carry no actor id at all
+  for (const type of ['like', 'comment', 'island', 'quiet_post', 'match', 'join_request', 'join_approved']) {
+    const row = rules.attachActors([{ id: 'x', type, payload: {} }], [])[0];
+    assert.equal(typeof rules.headline(row), 'string');
+    assert.equal(typeof rules.bodyText(row), 'string');
+  }
 });

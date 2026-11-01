@@ -15,7 +15,7 @@ async function openCompose(page) {
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
     await data.claimInvite(code);
-    await api.put('/api/account/me', { display_name: 'しつ', affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: 'しつ', affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
     // a post of one's own, so that this is not the first post (the first post has its own opening)
     await api.post('/api/posts', { body: '朝のランニングを1年続けています。いっしょに走れる人を探しています', tags: [], motivation: 55 },
       { headers: { 'Idempotency-Key': crypto.randomUUID() } });

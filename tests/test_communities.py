@@ -100,7 +100,8 @@ def test_the_demo_community_and_its_fixed_code(people):
     store().seed_demo_community()  # once only
     ann = people("ann@example.com", "あん")
     check = ann.client.get(f"/api/local/invites/check/{LOCAL_DEMO_INVITE_CODE}").json()
-    assert check == {"valid": True, "community_name": LOCAL_DEMO_COMMUNITY_NAME, "reason": None}
+    assert check == {"valid": True, "community_name": LOCAL_DEMO_COMMUNITY_NAME, "reason": None,
+                     "needs_approval": False, "post_id": None}
     joined = post(ann, "/api/local/invites/claim", {"code": LOCAL_DEMO_INVITE_CODE}).json()
     assert joined["community_name"] == LOCAL_DEMO_COMMUNITY_NAME
     mine = get(ann, "/api/local/communities/mine").json()["communities"]
@@ -123,14 +124,15 @@ def test_an_admin_makes_an_invite_with_a_long_random_code(people):
     cid = make_community(admin)
     first = create_invite(admin, cid, 60)
     second = create_invite(admin, cid, 60)
-    assert set(first) == {"code", "expires_at", "id"}
+    assert set(first) == {"code", "expires_at", "id", "needs_approval", "post_id"}
     assert len(first["code"]) >= 22 and re.fullmatch(r"[0-9a-f]+", first["code"])
     assert first["code"] != second["code"]
     expires = datetime.fromisoformat(first["expires_at"])
     assert timedelta(minutes=59) < expires - datetime.now(timezone.utc) < timedelta(minutes=61)
     rows = get(admin, f"/api/local/invites?community_id={cid}").json()["invites"]
     assert [row["id"] for row in rows] == [second["id"], first["id"]], "newest first"
-    assert set(rows[0]) == {"id", "code", "expires_at", "revoked_at", "uses", "created_at"}
+    assert set(rows[0]) == {"id", "code", "expires_at", "revoked_at", "uses", "created_at",
+                            "needs_approval", "post_id"}
     assert rows[0]["uses"] == 0 and rows[0]["revoked_at"] is None
 
 
@@ -197,7 +199,7 @@ def test_the_end_of_the_day_moves_to_tomorrow_when_it_is_almost_over():
 # check_invite: that and nothing else
 # --------------------------------------------------------------------------
 
-def test_check_invite_answers_three_keys_and_the_reason(people):
+def test_check_invite_answers_five_keys_and_the_reason(people):
     admin = people("admin@example.com", "かんり")
     cid = make_community(admin, "ひみつの会")
     good = create_invite(admin, cid)
@@ -209,10 +211,12 @@ def test_check_invite_answers_three_keys_and_the_reason(people):
     def check(code):
         return admin.client.get(f"/api/local/invites/check/{code}").json()
 
-    assert check(good["code"]) == {"valid": True, "community_name": "ひみつの会", "reason": None}
-    assert check(expired["code"]) == {"valid": False, "community_name": "ひみつの会", "reason": "expired"}
-    assert check(stopped["code"]) == {"valid": False, "community_name": "ひみつの会", "reason": "revoked"}
-    assert check("nonsense") == {"valid": False, "community_name": None, "reason": "unknown"}
+    off = {"needs_approval": False, "post_id": None}
+    none = {"needs_approval": None, "post_id": None}   # a link that cannot be used says null for both
+    assert check(good["code"]) == {"valid": True, "community_name": "ひみつの会", "reason": None, **off}
+    assert check(expired["code"]) == {"valid": False, "community_name": "ひみつの会", "reason": "expired", **none}
+    assert check(stopped["code"]) == {"valid": False, "community_name": "ひみつの会", "reason": "revoked", **none}
+    assert check("nonsense") == {"valid": False, "community_name": None, "reason": "unknown", **none}
     assert cid not in repr(check(good["code"])), "no community id"
 
 
@@ -225,10 +229,10 @@ def test_claiming_joins_once_and_counts_the_use_once(people):
     ann = people("ann@example.com", "あん")
     cid = make_community(admin, "BAR")
     invite = create_invite(admin, cid)
-    for _ in range(2):
+    for status in ("joined", "already"):
         claimed = post(ann, "/api/local/invites/claim", {"code": invite["code"]})
         assert claimed.status_code == 200
-        assert claimed.json() == {"community_id": cid, "community_name": "BAR"}
+        assert claimed.json() == {"community_id": cid, "community_name": "BAR", "status": status, "post_id": None}
     mine = get(ann, "/api/local/communities/mine").json()["communities"]
     assert [(row["community_id"], row["role"]) for row in mine] == [(cid, "member")]
     rows = get(admin, f"/api/local/invites?community_id={cid}").json()["invites"]
