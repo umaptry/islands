@@ -767,7 +767,11 @@ test('an account with no affiliation is held on the affiliation screen, then goe
   await page.locator('#affiliationInput').fill('コクヨ');
   await expect(page.locator('#affiliationSave')).toBeEnabled();
   await page.locator('#affiliationSave').click();
-  // もともと行こうとしていた場所（#/me）へ。
+  // 2026-11-01: 所属のあとはフルネームの確認（名前は未確認のまま）。保存すると、もともと行こうとしていた場所（#/me）へ。
+  await expect(page.locator('#fullname')).toHaveClass(/active/);
+  await expect(page.locator('#fullnameAffiliation')).toHaveValue('コクヨ');
+  await page.locator('#fullnameName').fill('所属 なし');
+  await page.locator('#fullnameSave').click();
   await expect(page.locator('#me')).toHaveClass(/active/);
   await page.evaluate(() => { location.hash = '#/map'; });
   await expect(page.locator('#map')).toHaveClass(/active/);

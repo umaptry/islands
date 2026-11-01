@@ -82,26 +82,27 @@ test('「会場で映す」: 全画面の重ね表示に、QR・コミュニテ�
   await expect(dialog).toHaveCount(0);
 });
 
-test('「会場で映す」: 投稿のスイッチで変わったリンクを、開くたびに映す', async ({ browser }, testInfo) => {
-  const { admin, card } = await openVenue(browser, testInfo);
+test('「会場で映す」: 会の投稿つきで作ったリンクを映す', async ({ browser }, testInfo) => {
+  const admin = await person(browser, testInfo, '会場のひと', { create: `会場 ${unique()}`, init: withShare });
   const page = admin.page;
   const id = admin.made.community_id;
   await page.evaluate(async (id) => {
     const { api } = await import('/static/js/net.js');
     await api.post('/api/posts', { body: '会場の投稿', tags: ['参加者募集中'], motivation: 55, community_id: id }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
   }, id);
-  await page.reload();
-  const again = page.locator(`#communityEditBody .community-invites[data-community-id="${id}"]`);
-  await again.waitFor({ timeout: 15000 });
-  await again.locator('.invite-open, .invite-qr').first().waitFor();
-  await expect(again.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
-  await again.locator('.invite-switch:not(.invite-approval-switch)').click();
-  await expect(again.locator('.invite-url')).toHaveValue(/[?]post=/);
-  await again.locator('.invite-venue').click();
+  // 2026-11-01: 会は招待に保存されるので、リンクを作る前に選ぶ（作ったあとは「更新」で作り直す）。
+  const card = await openEdit(admin, id);
+  await card.locator('.invite-open').click();
+  await expect(card.locator('.invite-with-post')).toBeEnabled({ timeout: 10000 });
+  await card.locator('.invite-switch:not(.invite-approval-switch)').click();
+  await card.locator('.invite-approval').uncheck();
+  await card.locator('.invite-make').click();
+  await expect(card.locator('.invite-qr svg')).toBeVisible();
+  await expect(card.locator('.invite-url')).toHaveValue(/[?]post=/);
+  await card.locator('.invite-venue').click();
   const dialog = page.getByRole('dialog', { name: '会場で映す' });
-  expect(await dialog.locator('svg path').getAttribute('d')).toBe(await again.locator('.invite-qr svg path').getAttribute('d'));
+  expect(await dialog.locator('svg path').getAttribute('d')).toBe(await card.locator('.invite-qr svg path').getAttribute('d'));
   await page.keyboard.press('Escape');
-  void card;
 });
 
 for (const [width, height] of [[1280, 720], [1366, 768], [1920, 1080]]) {
