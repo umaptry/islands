@@ -272,11 +272,22 @@ class InviteRequired(CommunityRefused):
         super().__init__(message, status)
 
 
+class EventRefused(Refused):
+    """A 会（イベント申し込み）rule said no. `code` is the hint the database function raises
+    (core/config.py EVENT_STATUS_OF), `status` its HTTP number. core/store_events.py has the rest."""
+
+    def __init__(self, message, status=422, code=None):
+        super().__init__(message, status)
+        self.code = code
+
+
+from core.store_events import EventsMemoryMixin, EventsSupabaseMixin   # noqa: E402  (needs the classes above)
+
 # ---------------------------------------------------------------------------
 # memory
 # ---------------------------------------------------------------------------
 
-class MemoryStore:
+class MemoryStore(EventsMemoryMixin):
     """In-process store for local development and tests.
 
     Every count and every notification the schema maintains with a trigger is
@@ -324,6 +335,7 @@ class MemoryStore:
         self._push_config = {"vapid_public": None, "vapid_private": None, "dispatch_url": None}
         self._push_subscriptions = {}  # endpoint -> row
         self._presence = {}         # account_id -> datetime the app is on screen until
+        self._init_events()          # core/store_events.py: the tables of the 会
         self._lock = threading.RLock()
         # Stands in for the database trigger that pokes /api/push/dispatch.
         # Called with the lock held, so it must only raise a flag and return.
@@ -345,7 +357,8 @@ class MemoryStore:
             # The accounts BEFORE INSERT trigger: a NEW account needs an invite while
             # invite_only is on. An account that already has a row always passes.
             if (self._app_settings.get("invite_only") and account_id not in self._accounts
-                    and account_id not in self._invite_claims):
+                    and account_id not in self._invite_claims
+                    and not self._has_event_registration(account_id)):
                 raise InviteRequired()
             row = self._accounts.get(account_id) or {
                 "id": account_id,
@@ -508,6 +521,7 @@ class MemoryStore:
             if not row or row.get("deleted_at") or row["author_id"] != author_id:
                 return False
             row["deleted_at"] = _now()
+            self._event_on_post_deleted(post_id)   # events_on_post_delete (the trigger): a 会 is called off
             return True
 
     # -- the copies of one post in several communities (2026-10-29) --------------
@@ -2060,7 +2074,7 @@ class MemoryStore:
 # supabase
 # ---------------------------------------------------------------------------
 
-class SupabaseStore:
+class SupabaseStore(EventsSupabaseMixin):
     """PostgREST client. Server-side only, with an elevated API key."""
 
     backend = "supabase"

@@ -49,6 +49,9 @@ import {
   topicHeading, topicPlan, usableTopics,
 } from '../compose-rules.js';
 import { primeKeyboard, releaseKeyboard } from '../keyboard.js';
+// ---- 会：主催者とメンバー（第2回a） ----
+import { askEventDraft } from './event-compose.js';
+import { hostHash, HOST_WORDS } from '../event-host-rules.js';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
@@ -456,6 +459,35 @@ function paintRecruit() {
     $('composeDeadline').value = '';
     $('composeCapacity').value = '';
   }
+  paintEventToggle(open);
+}
+
+// ---- 会：主催者とメンバー（第2回a） ----
+// 「申し込みのある会にする」：新しい投稿で、コミュニティの中で、参加者募集中を選んだときだけ出る。
+const eventsOn = () => Boolean(config().features?.events) && communitiesActive();
+
+function paintEventToggle(open) {
+  const row = $('composeEventRow');
+  if (!row) return;
+  const shown = Boolean(open) && eventsOn() && !editing && Boolean(shareHere());
+  row.hidden = !shown;
+  if (!shown) $('composeEventOn').checked = false;
+  $('composeSubmit').textContent = submitLabel();
+}
+
+/** 投稿するボタンの文：会にするときは、このあと「会の中身」の画面が開く。 */
+function submitLabel() {
+  if (editing) return '保存';
+  return $('composeEventOn') && $('composeEventOn').checked ? HOST_WORDS.eventNext : '投稿する';
+}
+
+const eventWanted = () => Boolean($('composeEventOn') && $('composeEventOn').checked && !$('composeEventRow').hidden);
+
+/** 今の画面のコミュニティで、自分が管理者か（公開の会は管理者だけ）。 */
+function adminHere() {
+  const id = shareHere();
+  const entry = state.communities.find((item) => item.id === id);
+  return Boolean(entry && entry.role === 'admin');
 }
 
 // ---------------------------------------------------------------- ほかのコミュニティにも出す (2026-10-29)
@@ -648,6 +680,7 @@ export function setupCompose() {
   });
 
   $('composeSubmit').addEventListener('click', submit);
+  $('composeEventOn').addEventListener('change', () => { $('composeSubmit').textContent = submitLabel(); });
 
   screen('compose', {
     leave() {
@@ -729,7 +762,7 @@ export function setupCompose() {
       }
 
       $('composeTitle').textContent = editing ? '投稿を編集' : '新規投稿';
-      $('composeSubmit').textContent = editing ? '保存' : '投稿する';
+      $('composeSubmit').textContent = submitLabel();
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
         ? 'ひとこと書いて、あなたの島を作りましょう。'
@@ -845,6 +878,19 @@ async function submit() {
     toast(message);
     return;
   }
+  // 会にするとき：先着人数が要る。会の中身（日時・場所・質問）を聞いてから送る。やめたら投稿画面に戻る。
+  let eventDraft = null;
+  if (!editing && eventWanted()) {
+    const capacity = parseCapacity($('composeCapacity').value);
+    if (capacity === null) {
+      const message = '会には先着人数が必要です。「先着人数」を入れてください。';
+      $('composeError').textContent = message;
+      toast(message);
+      return;
+    }
+    eventDraft = await askEventDraft({ capacity, isAdmin: adminHere() });
+    if (!eventDraft) { show('compose'); return; }
+  }
   submitting = true;
   $('composeSubmit').disabled = true;
   $('composeError').textContent = '';
@@ -866,6 +912,8 @@ async function submit() {
     deadline: $('composeDeadline').value,
     capacity: $('composeCapacity').value,
   }));
+
+  if (eventDraft) payload.event = { ...eventDraft, agree_terms: true };
 
   try {
     if (imageBlob) {
@@ -896,6 +944,13 @@ async function submit() {
     drafts.delete(draftKey);
     draftKey = '';
     moment('post');
+    // 会：投稿は地図に載り、できあがり（申し込みのリンクと受付 QR）を主催者メニューで見せる。
+    // 会の投稿は、ほかのコミュニティには出せない。
+    if (result.event && result.event.public_code) {
+      toast('会を作りました。');
+      await navigate(hostHash(result.event.public_code, { fresh: true }));
+      return;
+    }
     // The copies go while the post lands (they stand where it stands, on the other maps).
     const sharing = shareAfterSave(result.id);
     // Straight onto the map, where the new ground rises and the face lands
@@ -914,7 +969,7 @@ async function submit() {
     show('compose');
   } finally {
     submitting = false;
-    $('composeSubmit').textContent = editing ? '保存' : '投稿する';
+    $('composeSubmit').textContent = submitLabel();
     paintCounter();
   }
 }

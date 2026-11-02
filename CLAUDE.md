@@ -49,6 +49,7 @@
 - API：`/api/config`・`/api/islands`・`/api/connections`・`/api/posts`（作成・プレビュー・編集・共有・削除）・`/api/matches` など
 - local mode：`/api/local/*`（Supabase の代役）。末尾に「join approval」の見出しで承認制の道（承認の切り替え・申し込み状況・取り消し・一覧・決める）
 - account：`/api/account/me`（両方のモード）
+- 会：`app.include_router(events.router)`・`jobs.router`・`line.router`（起動前に `line.configure(lambda: state["store"])`）が先頭近くにある。`PostCreate.event`、会の投稿の編集・共有・参加ボタンの扱いは `events.is_event_post` で見る
 - static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`。`/privacy`・`/terms` は施行日（core/config.py の `POLICY_REVISION_EFFECTIVE`）の前は今の文、あとは `*-next.html` を自動で返す（`policy_now()` で時計を差し替えてテスト）。`/privacy/next`・`/terms/next` は新しい文。`/api/config` の `notice` が規約改定のお知らせ（期間の外は null）
 
 ### core/（サーバーの部品）
@@ -59,6 +60,7 @@
 - 通知：notifications.py（`allows`。`ALWAYS_ON_NOTIFICATION_TYPES` の2種類は設定に関係なく常にオン）、webpush.py
 - 名前を出してよい人：visibility.py（`visible_ids`・`display_name_for`・`mask_person`。accounts を閉じたあとのブラウザと同じ見え方。サーバーが名前を返す所は通す：push の文・近い投稿のカード・島の住人の顔・人のカード・おかえり・手元の通知一覧。地図の中の線は今のメンバーに絞ってあるので通さない）
 - 土台：config.py（設定値はすべてここ）、auth.py（ログインの確認）、store.py（`MemoryStore` と `SupabaseStore`）
+- 会（イベント申し込み。2026-11-01〜）：events.py（`/e/{code}`・`/c/{code}`、`/api/public/events/*`・`/api/events/*`、会を作る〈`POST /api/posts` の `event`〉・申し込み・取り消し・遅れる・名簿・お断り・probe。純粋な関数 `clean_event`・`bucket`・`blur` など）、jobs.py（`POST /api/jobs/tick`：予約送信と片付け。`schedule_times`・`run_tick`・`run_cleanup`）、store_events.py（`EventsSupabaseMixin`＝DB 関数を呼ぶ／`EventsMemoryMixin`＝手元モード。メソッド名は DB 関数と同じ。`store.py` はこの 2 つを継承するだけ）。line.py（LINE 公式アカウント：`POST /api/line/webhook`・push・送る文 `build_message`・follow／postback）。ストアのメソッドと DB 関数の名前・引数は tests/test_events_db_contract.py が SQL と見比べる。設計は設計_イベント申し込み/D_関数の取り決め.md。受付・参加者リスト・会のあとは第2回b。
 
 ### web/（画面。ビルドなしの素の ES モジュール）
 - 入口：index.html（全画面のマークアップ）、style.css、js/app.js（起動）、js/router.js（画面の切り替えと下のナビ）、js/state.js、js/config.js
