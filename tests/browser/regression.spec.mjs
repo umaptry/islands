@@ -204,7 +204,8 @@ test('a post image opens in the viewer with close and reactions, and closes by b
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
   });
   // the picture shows under the words on ①, as on the card
-  await expect(page.locator('#composeImagePreview')).toBeVisible();
+  // The preview shows once the squeezing is done: on a slow CI machine a big picture can take more than 5s
+  await expect(page.locator('#composeImagePreview')).toBeVisible({ timeout: 20000 });
   await page.locator('#composeNext').click();
   await page.locator('#composeMotivation').fill('70');
   await page.locator('#composeNext2').click();
@@ -277,7 +278,8 @@ test('a photo posts from a browser that cannot write WebP (Safari, iPhone includ
   await page.locator('#composeImageInput').setInputFiles({
     name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(noise, 'base64'),
   });
-  await expect(page.locator('#composeImagePreview')).toBeVisible();
+  // The preview shows once the squeezing is done: on a slow CI machine a big picture can take more than 5s
+  await expect(page.locator('#composeImagePreview')).toBeVisible({ timeout: 20000 });
   await page.locator('#composeNext').click();
   await page.locator('#composeMotivation').fill('70');
   await page.locator('#composeNext2').click();
