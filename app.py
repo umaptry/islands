@@ -1614,6 +1614,17 @@ def notify_islands(events, states, now, community=None):
     return rows
 
 
+def _village_name(name):
+    """A village's name for a lock screen: 「キャンプ村」 stays, 「キャンプ」 becomes 「キャンプ村」, and a
+    name kept from the many-islands map, 「キャンプ島」 or 「キャンプ大陸」, becomes 「キャンプ村」."""
+    name = str(name)
+    for old in ("大陸", "島"):
+        if name.endswith(old) and len(name) > len(old):
+            name = name[: -len(old)]
+            break
+    return name if name.endswith("村") else f"{name}村"
+
+
 def _plain_name(display_name):
     """A display name without a trailing 「さん」, so that 「さん」 can be added once."""
     name = display_name or "だれか"
@@ -1865,7 +1876,7 @@ PUSH_TEXT = {
     "reply": "あなたのメッセージに返信しました。",
     "connection": "初めてやりとりしました。地図に線が引かれます。",
     "similar": "話題や目標が近い人が参加しました。",
-    "island": "島が変わりました。",
+    "island": "村が変わりました。",
     # 2026-10-26. talk_wish names nobody (the row has no actor); dm never carries the text.
     "talk_wish": f"誰かが、あなたと{TALK_LABEL}と言っています",
     "talk_match": "{name}さんと、お互いに『" + TALK_LABEL + "』でした。DMが開きました",
@@ -1922,10 +1933,10 @@ def push_message(entry, hashed_tag=False):
         first = (entry.get("actors") or [None])[0] or {}
         who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
         title = "新しい住人"
-        body = f"{payload.get('name') or '島'}に{who}さんが引っ越してきました"
+        body = f"{_village_name(payload['name']) if payload.get('name') else '村'}に{who}さんが引っ越してきました"
         url = PUSH_URL_RESIDENT
     elif entry["type"] == "island":
-        title = f"島「{payload['name']}」" if payload.get("name") else "島"
+        title = (_village_name(payload["name"]) if payload.get("name") else "村")
         body = f"{payload['cause']}。" if payload.get("cause") else PUSH_TEXT["island"]
     elif entry["type"] == "talk_wish":
         # Never reads the actors: whoever pressed is not in the row, and must not get in.
@@ -2355,20 +2366,27 @@ def health():
 
 
 _map_b_lock = threading.Lock()
+_map_b_failed = {"at": None}
+MAP_B_RETRY_SECONDS = 300   # 作れなかったら、この間は作り直さない（毎回の /api/islands を遅くしない）
 
 
 def ensure_map_b_base():
     """地図B案の土台を（まだなければ）作る。同時に呼ばれたら2回目は待つ。作れなければ False（起動は止めない）。"""
     if island_b.base() is not None:
         return True
+    failed = _map_b_failed["at"]
+    if failed is not None and time.monotonic() - failed < MAP_B_RETRY_SECONDS:
+        return False
     with _map_b_lock:
         if island_b.base() is not None:
             return True
         try:
             island_b.build(state["seed_map"]["seed"])
         except Exception as error:  # noqa: BLE001
+            _map_b_failed["at"] = time.monotonic()
             logging.getLogger(__name__).warning("地図B案の土台を作れませんでした: %s", error)
             return False
+    _map_b_failed["at"] = None
     return True
 
 

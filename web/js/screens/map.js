@@ -244,7 +244,7 @@ function paintMapStatus() {
     : filtering ? `${state.posts.filter(matchesFilters).length}件が該当・検索対象は読み込み済みの範囲です${terrainNote}`
     : state.posts.length > 0 && terrainNote ? `${state.posts.length}件表示${terrainNote}`
     : worldCount === 0 && !state.myPosts.length ? (canPostFromMap({ signedIn: Boolean(state.account), scope })
-      ? 'まだ投稿がありません。右下の「＋」から、最初の投稿で島をつくりましょう。'
+      ? 'まだ投稿がありません。右下の「＋」から、最初の投稿で家を建てましょう。'
       : 'まだ投稿がありません。')
     : 'この範囲には投稿がありません。右下の全体表示ボタンで全体を見られます';
 }

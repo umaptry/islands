@@ -136,7 +136,7 @@ def test_encryption_matches_the_rfc_8291_example():
 
 def test_a_message_comes_back_out_with_the_browsers_keys():
     browser = Browser()
-    message = {"title": "島「焚き火」", "body": "あ" * 300}
+    message = {"title": "焚き火村", "body": "あ" * 300}
     body = webpush.encrypt(json.dumps(message, ensure_ascii=False).encode("utf-8"),
                            browser.p256dh, webpush.b64u(browser.auth))
     assert browser.decrypt(body) == message
@@ -428,7 +428,7 @@ def test_an_island_change_is_named_after_the_island(fresh_client, people):
     }])
     service, _ = dispatch()
     [message] = [browser.decrypt(sent["body"]) for sent in service.sent]
-    assert message["title"] == "島「焚き火」"
+    assert message["title"] == "焚き火村"
     assert message["body"] == "新しい言葉が増えて名前が変わりました。"
     assert message["kind"] == "island"
 

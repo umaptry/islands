@@ -80,8 +80,8 @@ test('close in, the regions show no names', () => {
   assert.deepEqual(placed.map((entry) => entry.text), ['はじまりの村']);
 });
 
-test('a region reads 〇〇 地方', () => {
-  assert.equal(regionText({ name: 'みなと' }), 'みなと 地方');
+test('a region reads as its own place name, with no 地方 after it', () => {
+  assert.equal(regionText({ name: '食の森' }), '食の森');
 });
 
 test('a face within 20 px of one already kept is left out; a far one stays', () => {

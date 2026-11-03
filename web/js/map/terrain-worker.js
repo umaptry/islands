@@ -3,10 +3,17 @@
 // job through offthread.js and only puts the pixels on a canvas.
 
 import { useConfig } from '../config.js';
-import { detailPixels, groundPixels } from './terrain.js';
+import { detailPixels, detailSurf, groundPixels } from './terrain.js';
 import { setIslandB, setIslandBView } from './island-b.js';
 
-const BUILD = { ground: groundPixels, detail: detailPixels };
+// 'strip' is rows of the sharp texture of plan B (job.strip), 'surf' its surf lines
+// alone: the page puts them together (offthread.js offThreadDetail).
+const BUILD = {
+  ground: groundPixels,
+  detail: detailPixels,
+  strip: detailPixels,
+  surf: (job) => ({ coast: detailSurf(job) }),
+};
 
 self.onmessage = (event) => {
   const { id, kind, config, job, islandB } = event.data;
@@ -22,7 +29,7 @@ self.onmessage = (event) => {
       self.postMessage({ id, built: null });
       return;
     }
-    self.postMessage({ id, built }, [built.pixels.buffer]);
+    self.postMessage({ id, built }, built.pixels ? [built.pixels.buffer] : []);
   } catch (error) {
     self.postMessage({ id, error: String((error && error.message) || error) });
   }

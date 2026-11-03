@@ -10,8 +10,9 @@ const configUrl = asModule(await read('config.js'));
 const coastUrl = asModule((await read('map/coast.js')).replace("'../config.js'", `'${configUrl}'`));
 const surfUrl = asModule(await read('map/surf.js'));
 const islandUrl = asModule(await read('map/island-b.js'));
+const roadsUrl = asModule(await read('map/roads-b.js'));
 const terrainBUrl = asModule((await read('map/terrain-b.js'))
-  .replace("'./island-b.js'", `'${islandUrl}'`).replace("'./surf.js'", `'${surfUrl}'`));
+  .replace("'./island-b.js'", `'${islandUrl}'`).replace("'./surf.js'", `'${surfUrl}'`).replace("'./roads-b.js'", `'${roadsUrl}'`));
 const terrainUrl = asModule((await read('map/terrain.js'))
   .replace("'../config.js'", `'${configUrl}'`).replace("'./coast.js'", `'${coastUrl}'`).replace("'./surf.js'", `'${surfUrl}'`)
   .replace("'./island-b.js'", `'${islandUrl}'`).replace("'./terrain-b.js'", `'${terrainBUrl}'`));
@@ -159,14 +160,10 @@ test('forest "mass": one canopy in the pixels, trees only along its rim', () => 
   const deepInside = (t) => island.coastAt(t.x, t.y) > 60 && Math.hypot(t.x - 30, t.y - 10) > 50 && Math.hypot(t.x, t.y + 48) > 40;
   assert.equal(mass.filter(deepInside).length, 0, 'none in the middle of the canopy');
   assert.ok(grove.filter(deepInside).length > 0, 'while groves fill it');
-  // The canopy is baked in: forest pixels vary far more than in grove mode.
-  const spread = (b) => {
-    const seen = new Set();
-    for (let y = 110; y < 130; y += 1) for (let x = 40; x < 60; x += 1) seen.add(b.pixels[(y * 200 + x) * 4 + 1]);
-    return seen.size;
-  };
+  // The canopy is baked in: its pixels are its own low-poly faces, not the grove's flat green.
   island.setIslandBView({ forest: 'grove' });
-  assert.ok(spread(built) > spread(computeB(options)) + 5);
+  const flat = computeB(options);
+  assert.ok(!Buffer.from(built.pixels.buffer).equals(Buffer.from(flat.pixels.buffer)), 'the canopy is not the grove ground');
   // The payload's own choice is used when the view has none.
   reset({ forest: 'mass' });
   assert.equal(island.forestMode(), 'mass');

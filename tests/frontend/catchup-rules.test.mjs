@@ -52,7 +52,7 @@ test('it opens only on a quiet map, signed in, in front', () => {
 
 test('titles, steps and gestures', () => {
   assert.equal(rules.slideTitle('はな', 'キャンプ島'), 'はなさんがキャンプ島の住人になりました');
-  assert.equal(rules.slideTitle('', ''), 'だれかさんがこの島の住人になりました');
+  assert.equal(rules.slideTitle('', ''), 'だれかさんがこの村の住人になりました');
   // A name that already ends in 「さん」 is not given a second one (the push does the same).
   assert.equal(rules.slideTitle('はなさん', 'キャンプ島'), 'はなさんがキャンプ島の住人になりました');
   assert.equal(rules.slideTitle('さん', 'キャンプ島'), 'さんさんがキャンプ島の住人になりました');

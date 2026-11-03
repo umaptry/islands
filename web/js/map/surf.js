@@ -31,6 +31,9 @@ export const SURF = {
   // is some 40 across.)
   from: 120,
   full: 80,
+  // Map B (`world`): the sizes above are screen px at this many px per world
+  // unit, and grow and shrink with the map like the trees (2026-11-02).
+  ref: 4,
 };
 
 const smooth01 = (a, b, x) => {
@@ -193,7 +196,10 @@ function resample({ pts, closed }, step, passes) {
  * contour, its normal pointing away from the land, and how far it may be pushed
  * outward / inward before it meets other land.
  */
-export function coastLines(toLand, width, height, { perScreen, perWorld, minX, minY, scale }) {
+export function coastLines(toLand, width, height, { perScreen: screenPx, perWorld, minX, minY, scale: screenScale, world = false }) {
+  // With `world`, every size is in px at SURF.ref px per world unit, whatever the zoom.
+  const perScreen = world ? perWorld / SURF.ref : screenPx;
+  const scale = world ? SURF.ref : screenScale;
   const level = SURF.mid * perScreen;
   const out = [];
   trace(toLand, width, height, level).forEach((chain) => {
@@ -242,7 +248,7 @@ export function coastLines(toLand, width, height, { perScreen, perWorld, minX, m
     }
     out.push({ closed, n: m, data });
   });
-  return out.length ? { mid: SURF.mid, lines: out } : null;
+  return out.length ? { mid: SURF.mid, world, lines: out } : null;
 }
 
 // ---------------------------------------------------------------- drawing
@@ -265,6 +271,9 @@ export function drawSurf(ctx, surf, view, time, dim = 1) {
   const origin = toScreen(0, 0);
   const u = surfPhase(time);
   const sway = time === null ? 0 : time * 0.5;
+  // A world-sized surf (map B) is laid out at SURF.ref px per world unit and drawn at `scale`.
+  const unit = surf.world ? SURF.ref : scale;
+  const grow = surf.world ? scale / SURF.ref : 1;
   const margin = 24;
   let visited = 0;
   ctx.save();
@@ -276,7 +285,7 @@ export function drawSurf(ctx, surf, view, time, dim = 1) {
     if (line.alpha <= 0.01) continue;
     const push = line.dist - surf.mid;       // screen px from the traced contour
     ctx.globalAlpha = Math.min(1, line.alpha * strength);
-    ctx.lineWidth = line.width;
+    ctx.lineWidth = line.width * Math.max(0.5, Math.min(2.2, grow));
     ctx.beginPath();
     surf.lines.forEach(({ closed, n, data }) => {
       let pen = false;
@@ -290,13 +299,13 @@ export function drawSurf(ctx, surf, view, time, dim = 1) {
         visited += 1;
         const ripple = SURF.wobble * Math.sin((x * 0.7 + y * 0.5) * 0.8 + sway);
         const o = push + ripple;                  // screen px, signed
-        const inRange = o >= 0 ? o / scale <= data[at + 4] : -o / scale <= data[at + 5];
+        const inRange = o >= 0 ? o / unit <= data[at + 4] : -o / unit <= data[at + 5];
         if (!inRange || sx < -margin || sx > width + margin || sy < -margin || sy > height + margin) {
           pen = false;
           continue;
         }
-        const px = sx + data[at + 2] * o;
-        const py = sy + data[at + 3] * o;
+        const px = sx + data[at + 2] * o * grow;
+        const py = sy + data[at + 3] * o * grow;
         if (pen) ctx.lineTo(px, py);
         else ctx.moveTo(px, py);
         pen = true;

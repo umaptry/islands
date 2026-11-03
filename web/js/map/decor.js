@@ -129,27 +129,42 @@ export function dashStrength(scale) {
 /** The strokes kept when zoomed out: every other row, staggered, every other one along it. */
 const keptOut = (c, r) => (r & 1) === 0 && ((c + (r >> 1)) & 1) === 0;
 
-// Map B: the sea's strokes are laid on a grid in world units (the prototype's 24 x 20 times 2.5), so they
-// grow and shrink with the map like the trees, and only where the sea is open (further out than 9 x 2.5
-// from the shore). The ground covers the rest.
-const DASH_B_GAP = [60, 50];
-const DASH_B_JITTER = [22.5, 17.5];
-const DASH_B_RADII = [4.75, 1.6];   // world units: the ellipse's half-length and half-width
+// Map B: the sea's strokes are small wave marks on a grid in world units, so they stay put while you
+// pan, only where the sea is open (further out than DASH_B_OFFSHORE from the shore; the ground covers
+// the rest). Their size on screen and their spacing do not follow the map (2026-11-02: zoomed in they
+// grew into big blots): the grid halves its spacing in octave steps as you come closer, so close up
+// the sea is covered in fine little waves, and zoomed out they all but vanish.
+const DASH_B_GAP = [60, 50];        // world units, the coarsest grid
+const DASH_B_JITTER = [0.375, 0.35];   // of the grid's spacing
+const DASH_B_SCREEN = 64;           // screen px the grid's spacing aims for (between this and twice it)
 const DASH_B_OFFSHORE = 22.5;       // world units from the shore
 
-/** The sea strokes of map B inside a world box, [[x, y], ...]. `coast(x, y)` is the signed distance
- * from the shore (land positive). Pure, for tests. */
-export function seaDashesB(box, coast) {
+/** How the strokes look at a zoom: `zoom` is 0 fully out, 1 fully in (on a log scale). */
+export function dashLookB(zoom) {
+  const t = clamp01(zoom);
+  const s = clamp01((t - 0.12) / 0.5);
+  return {
+    alpha: 0.03 + 0.27 * s * s * (3 - 2 * s),
+    half: 1.4 + 3.2 * t,     // screen px: the mark's half-length
+    thin: 0.55 + 0.35 * t,   // screen px: its half-width
+  };
+}
+
+/** The sea strokes of map B inside a world box, [[x, y], ...], on the grid `level` octaves finer than
+ * DASH_B_GAP. `coast(x, y)` is the signed distance from the shore (land positive). Pure, for tests. */
+export function seaDashesB(box, coast, level = 0) {
   const out = [];
-  const [gx, gy] = DASH_B_GAP;
+  const gx = DASH_B_GAP[0] / 2 ** level;
+  const gy = DASH_B_GAP[1] / 2 ** level;
   const r0 = Math.floor(box.minY / gy) - 1;
   const r1 = Math.ceil(box.maxY / gy) + 1;
   const c0 = Math.floor(box.minX / gx) - 1;
   const c1 = Math.ceil(box.maxX / gx) + 1;
+  const salt = level * 101;
   for (let r = r0; r <= r1; r += 1) {
     for (let c = c0; c <= c1; c += 1) {
-      const x = c * gx + (r & 1) * gx / 2 + (dashHash(c, r) - 0.5) * DASH_B_JITTER[0];
-      const y = r * gy + (dashHash(r + 7, c) - 0.5) * DASH_B_JITTER[1];
+      const x = c * gx + (r & 1) * gx / 2 + (dashHash(c + salt, r) - 0.5) * DASH_B_JITTER[0] * gx;
+      const y = r * gy + (dashHash(r + 7, c + salt) - 0.5) * DASH_B_JITTER[1] * gy;
       if (coast(x, y) > -DASH_B_OFFSHORE) continue;
       out.push([x, y]);
     }
@@ -158,23 +173,40 @@ export function seaDashesB(box, coast) {
 }
 
 function drawDashesB(ctx, view) {
-  const { toScreen, width, height, b } = view;
+  const { toScreen, width, height, b, minScale, maxScale } = view;
   const origin = toScreen(0, 0);
   const scale = toScreen(1, 0).x - origin.x;
   if (!(scale > 0)) return;
+  const zoom = minScale > 0 && maxScale > minScale ? Math.log(scale / minScale) / Math.log(maxScale / minScale) : 0.5;
+  const look = dashLookB(zoom);
   const box = {
     minX: -origin.x / scale, minY: -origin.y / scale,
     maxX: (width - origin.x) / scale, maxY: (height - origin.y) / scale,
   };
-  ctx.fillStyle = DASH_FILL;
-  ctx.beginPath();
-  seaDashesB(box, b.coastAt).forEach(([x, y]) => {
-    const px = origin.x + x * scale;
-    const py = origin.y + y * scale;
-    ctx.moveTo(px + DASH_B_RADII[0] * scale, py);
-    ctx.ellipse(px, py, DASH_B_RADII[0] * scale, DASH_B_RADII[1] * scale, 1.05, 0, Math.PI * 2);
+  // Octaves: `level` at full strength fading out while the next, twice as fine, fades in.
+  const octave = Math.max(0, Math.log2((DASH_B_GAP[0] * scale) / DASH_B_SCREEN));
+  const level = Math.floor(octave);
+  const f = octave - level;
+  // Each a little crest, a flat arch tilted a touch (slanted strokes read as rain).
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = look.thin * 2;
+  [[level, 1 - f], [level + 1, f]].forEach(([lv, weight]) => {
+    if (weight < 0.02) return;
+    ctx.globalAlpha = look.alpha * weight;
+    ctx.beginPath();
+    seaDashesB(box, b.coastAt, lv).forEach(([x, y]) => {
+      const px = origin.x + x * scale;
+      const py = origin.y + y * scale;
+      const tilt = (dashHash(Math.round(x), Math.round(y)) - 0.5) * 0.5;
+      const cx = Math.cos(tilt) * look.half;
+      const cy = Math.sin(tilt) * look.half;
+      ctx.moveTo(px - cx, py - cy);
+      ctx.quadraticCurveTo(px + cy * 0.9, py - cx * 0.9, px + cx, py + cy);
+    });
+    ctx.stroke();
   });
-  ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 function drawDashes(ctx, view) {
@@ -419,8 +451,106 @@ export function drift(sea, seed, time, { period = 420, reach = 0.4 } = {}) {
   return { x, y, angle: Math.atan2(vy, vx) };
 }
 
+// Map B (2026-11-02): the picture's stiff silhouette sliding fast across the sea was unpleasant. The
+// whale is drawn in code instead, its body bending with slow strokes of the tail, at its size in the
+// world (about two houses long), swimming slowly and now and then diving out of sight for a while.
+const WHALE_B = {
+  length: 13,       // world units, head to flukes (a house is 6 wide)
+  speed: 1.6,       // world units a second, about an eighth of its length
+  stroke: 3.6,      // seconds per beat of the tail
+  cycle: 75,        // seconds from one surfacing to the next ...
+  under: 22,        // ... of which this many it is down out of sight
+  fade: 5,          // seconds to sink out of sight or come up
+  minPx: 7,         // shorter than this on screen and it is not drawn
+};
+const WHALE_INK = 'rgb(18, 44, 82)';
+
+/** The whale's outline, head at +x, at `len` px long, its spine bent by the beat `beat` (radians). */
+export function whalePath(ctx, len, beat) {
+  const N = 14;
+  const spine = [];
+  for (let i = 0; i <= N; i += 1) {
+    const s = i / N;   // 0 head, 1 root of the flukes
+    spine.push([len * (0.5 - s * 0.86), len * 0.07 * s * s * Math.sin(beat - s * 2.6)]);
+  }
+  // Half the body's width along it: a blunt head, broadest a third of the way back, a slim tail stock.
+  const half = (s) => len * 0.105 * (s < 0.32 ? 0.45 + 0.55 * Math.sin((s / 0.32) * Math.PI / 2) : 1 - ((s - 0.32) / 0.68) ** 1.7 * 0.9);
+  const left = [];
+  const right = [];
+  spine.forEach(([x, y], i) => {
+    const [nx0, ny0] = spine[Math.max(0, i - 1)];
+    const [nx1, ny1] = spine[Math.min(N, i + 1)];
+    const dx = nx1 - nx0;
+    const dy = ny1 - ny0;
+    const d = Math.hypot(dx, dy) || 1;
+    const w = half(i / N);
+    left.push([x - (dy / d) * w, y + (dx / d) * w]);
+    right.push([x + (dy / d) * w, y - (dx / d) * w]);
+  });
+  ctx.beginPath();
+  ctx.moveTo(len * 0.53, 0);
+  left.forEach(([x, y]) => ctx.lineTo(x, y));
+  // The flukes: a crescent across the tail's last direction.
+  const [tx, ty] = spine[N];
+  const [px, py] = spine[N - 1];
+  const a = Math.atan2(ty - py, tx - px);
+  const span = len * 0.21;
+  const back = len * 0.12;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const at = (u, v) => [tx + u * cos - v * sin, ty + u * sin + v * cos];
+  const tipL = at(back * 1.1, -span);
+  const tipR = at(back * 1.1, span);
+  const notch = at(back * 0.8, 0);
+  ctx.quadraticCurveTo(...at(back * 0.05, -span * 0.85), ...tipL);
+  ctx.quadraticCurveTo(...at(back * 1.25, -span * 0.4), ...notch);
+  ctx.quadraticCurveTo(...at(back * 1.25, span * 0.4), ...tipR);
+  ctx.quadraticCurveTo(...at(back * 0.05, span * 0.85), ...right[N]);
+  for (let i = N; i >= 0; i -= 1) ctx.lineTo(...right[i]);
+  ctx.closePath();
+}
+
+function drawWhalesB(ctx, view, time) {
+  const { sea, toScreen, scale, width, height } = view;
+  const len = WHALE_B.length * scale;
+  if (len < WHALE_B.minPx) return;
+  const clock = REDUCED_MOTION ? 0 : time;
+  // A slow closed curve: its period from its size, so the whale swims at about WHALE_B.speed.
+  const period = (Math.PI * 2 * sea.w * 0.44 * 0.78) / WHALE_B.speed;
+  ctx.save();
+  ctx.fillStyle = WHALE_INK;
+  for (let i = 0; i < WHALE_COUNT; i += 1) {
+    const seed = 40503 * (i + 3);
+    const spot = drift(sea, seed, clock + noise(seed, 9) * period, { period, reach: 0.44 });
+    const point = toScreen(spot.x, spot.y);
+    if (point.x < -len || point.x > width + len || point.y < -len || point.y > height + len) continue;
+    const size = len * (0.85 + noise(seed, 10) * 0.3);
+    // Up for a while, then down out of sight.
+    const t = (clock + noise(seed, 11) * WHALE_B.cycle) % WHALE_B.cycle;
+    const up = WHALE_B.cycle - WHALE_B.under;
+    const seen = REDUCED_MOTION ? 1 : Math.min(1, t / WHALE_B.fade, Math.max(0, (up - t) / WHALE_B.fade));
+    if (seen <= 0.01) continue;
+    const beat = (clock / WHALE_B.stroke) * Math.PI * 2 + seed;
+    ctx.save();
+    ctx.translate(point.x, point.y);
+    ctx.rotate(spot.angle);
+    // A soft rim, then the body: a shadow a little under the surface.
+    ctx.globalAlpha = 0.1 * seen;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.5, size * 0.06);
+    ctx.strokeStyle = WHALE_INK;
+    whalePath(ctx, size, beat);
+    ctx.stroke();
+    ctx.globalAlpha = 0.3 * seen;
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 /** A few whale shadows moving through the water, under the land. */
 export function drawWhales(ctx, view, time) {
+  if (view.b) { drawWhalesB(ctx, view, time); return; }
   const { sea, toScreen, scale, width, height } = view;
   const clock = REDUCED_MOTION ? 0 : time;
   const length = Math.max(12, Math.min(55, sea.w * 0.014 * scale));

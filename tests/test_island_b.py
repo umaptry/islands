@@ -77,10 +77,14 @@ def test_map_b_base_route_and_config_feature(client):
     assert response.status_code == 200
     assert "max-age=3600" in response.headers["cache-control"]
     assert response.json()["grid"]["n"] == 260
-    assert client.get("/api/config").json()["features"]["map_b"] is False
+    assert client.get("/api/config").json()["features"]["map_b"] is True
 
 
-def test_islands_with_map_b_become_villages(fresh_client):
+def test_islands_with_map_b_become_villages(fresh_client, monkeypatch):
+    import app as application
+
+    # 旗はオフにして、?map=b の試し見と、そうでない今までの形を見比べる。
+    monkeypatch.setattr(application, "MAP_B_ENABLED", False)
     akari = Person(fresh_client, "akari@example.com", "あかり")
     akari.post(MOUNTAINS_A)
     plain = fresh_client.get("/api/islands").json()["islands"]
@@ -111,3 +115,22 @@ def test_a_name_already_ending_in_mura_gets_no_second_mura(fresh_client):
     out = application.as_map_b([{"name": "山村", "label": "山村島", "cx": 500, "cy": 500},
                                 {"name": "山", "label": "山島", "cx": 500, "cy": 500}])
     assert [i["label"] for i in out] == ["山村", "山村"]
+
+
+def test_when_the_base_cannot_be_made_the_map_still_answers(client, monkeypatch):
+    import app as application
+
+    def broken(_seed):
+        raise RuntimeError("no memory")
+
+    monkeypatch.setattr(island_b, "base", lambda: None)
+    monkeypatch.setattr(island_b, "build", broken)
+    monkeypatch.setattr(application, "_map_b_failed", {"at": None})
+    assert client.get("/api/map-b/base").status_code == 503
+    response = client.get("/api/islands")
+    assert response.status_code == 200
+    # 作れなかったあとは、しばらく作り直さない（毎回の /api/islands を遅くしない）
+    tried = []
+    monkeypatch.setattr(island_b, "build", lambda seed: tried.append(1))
+    assert application.ensure_map_b_base() is False
+    assert tried == []

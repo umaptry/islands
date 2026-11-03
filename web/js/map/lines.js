@@ -34,6 +34,8 @@ import { REDUCED_MOTION, hashId } from './decor.js';
 import { drawBoat, drawCar, drawPlane } from './vehicles.js';
 import { config, energyOf } from '../config.js';
 import { bActive, blockedBy, isLandAt, mixAt, runsOf, sampleLand } from './land.js';
+import { ROAD_BEND } from './roads-b.js';
+import { WALKER_HEIGHT, WALKER_LOOKS, WALK_FRAMES, WALK_TURNS, dogFaces, walkerFaces } from './props-mesh.js';
 
 const ROUTE = '#ffffff';
 const PATH = '#f1deb3';
@@ -492,8 +494,9 @@ function layout(view) {
       runs: sea ? runs : null,
       kind,
       world: Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]),
+      // Map B: the curve of the road in the ground (roads-b.js roadCurve), so a car keeps to it.
       arc: sameIsland
-        ? arc(p, q, 0, 0)
+        ? arc(p, q, 0, bActive() ? ROAD_BEND : 0)
         : arc(p, q, hashId(`${row.a}|${row.b}`), sea ? SEA_BEND : ARCH_BEND),
     });
   });
@@ -510,6 +513,8 @@ export function drawLinks(ctx, view) {
   const tick = performance.now();
   const grow = level === 'deep' ? 1.3 : 1;
   plan.lines.forEach(({ row, sameIsland, kind, arc: shape, runs }) => {
+    // Map B: a road is part of the ground (terrain-b.js lays it in, roads-b.js), not a stroke over it.
+    if (bActive() && kind === 'road') return;
     if (!onScreen(shape, width, height)) return;
     const share = growthOf(linkKey(row), tick);
     const tier = row.tier || 1;
@@ -644,7 +649,8 @@ function drawBoats(ctx, view, plan, time) {
     const count = Math.min(boatCount(tier), road ? roadRoom : seaRoom);
     if (road) roadRoom -= count; else seaRoom -= count;
     const seed = hashId(key);
-    const duration = crossingSeconds(world, span);
+    // Map B: people on foot take their time.
+    const duration = crossingSeconds(world, span) * (road && view.walk ? WALK_SLOWER : 1);
     for (let index = 0; index < count; index += 1) {
       const { t, forward, leg } = still
         ? { t: (index + 1) / (count + 1), forward: true, leg: 0.5 }
@@ -656,10 +662,77 @@ function drawBoats(ctx, view, plan, time) {
       // A car on the land stretches (and all of a road), a boat on the water: from
       // the clock and the ground alone, handing over across a short stretch at the beach.
       const [car, boat] = road ? [1, 0] : runs ? mixAt(runs, t, HANDOVER_PX / Math.max(1, shape.length)) : [0, 1];
-      if (car > 0.01) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
+      if (car > 0.01 && road && view.walk) {
+        // People come out of the house at one end and go into the one at the other: none
+        // is drawn over a house's walls (a road ends at the house's foot).
+        const along = Math.min(t, 1 - t) * shape.length;
+        const door = WALK_DOOR * view.unit;
+        const out = Math.max(0, Math.min(1, (along - door) / (WALK_FADE * view.unit)));
+        if (out > 0) drawWalkers(ctx, point.x, point.y, view.unit, heading, seed + index, time, alpha * car * out);
+      }
+      else if (car > 0.01) drawCar(ctx, point.x, point.y, carLength, heading, { alpha: alpha * car });
       if (boat > 0.01) drawBoat(ctx, point.x, point.y, boatLength, heading, { alpha: alpha * boat });
     }
   });
+}
+
+// Map B (2026-11-03, the user chose it with 案2): people walking the roads; since
+// 2026-11-04 (the user: make them more real) solid people like the houses
+// (props-mesh.js), who swing their arms and legs and grow and shrink with the
+// map. A road has one person, two side by side, a parent and child, or someone
+// walking a dog, picked by its seed.
+const WALK_SLOWER = 3;
+const WALK_STEPS = 0.85;   // strides a second (halved 2026-11-04: the user found the legs too quick)
+const WALK_MIN_PX = 7;     // a person shorter than this on the screen is left out
+const WALK_DOOR = 1.8;     // design units from a road's end where people are still indoors
+const WALK_FADE = 1.2;     // design units over which they step out
+const GROUPS = ['one', 'two', 'child', 'dog'];
+
+/** People walking at (x, y) on the screen towards `heading` (radians, 0 east, clockwise).
+ * `unit` is px per design unit (the houses' size / 3); `time` null: standing still. */
+export function drawWalkers(ctx, x, y, unit, heading, seed, time, alpha) {
+  if (!(unit > 0) || WALKER_HEIGHT * unit < WALK_MIN_PX) return;
+  const still = REDUCED_MOTION || time === null || time === undefined;
+  const turn = Math.round((heading / (Math.PI * 2)) * WALK_TURNS);
+  const s = Math.abs(seed | 0);
+  const group = GROUPS[s % GROUPS.length];
+  const look = (s >> 2) % (WALKER_LOOKS.length - 1);   // the last look is the child
+  const frameAt = (offset) => (still ? 0 : Math.floor((time * WALK_STEPS + offset) * WALK_FRAMES));
+  const side = [Math.cos(heading + Math.PI / 2), Math.sin(heading + Math.PI / 2)];
+  // Who walks, and where beside the road's middle (design units across it).
+  const walkers = group === 'one' ? [{ faces: (f) => walkerFaces(look, turn, f), across: 0, offset: 0 }]
+    : group === 'two' ? [{ faces: (f) => walkerFaces(look, turn, f), across: -0.45, offset: 0 }, { faces: (f) => walkerFaces((look + 1) % (WALKER_LOOKS.length - 1), turn, f), across: 0.45, offset: 0.4 }]
+      : group === 'child' ? [{ faces: (f) => walkerFaces(look, turn, f), across: -0.4, offset: 0 }, { faces: (f) => walkerFaces(WALKER_LOOKS.length - 1, turn, f), across: 0.4, offset: 0.25 }]
+        : [{ faces: (f) => walkerFaces(look, turn, f), across: -0.35, offset: 0 }, { faces: (f) => dogFaces(turn, f), across: 0.55, offset: 0.5, ahead: 0.7 }];
+  const squash = Math.sin((52 * Math.PI) / 180);
+  const placed = walkers.map((w) => {
+    const ahead = w.ahead || 0;
+    return {
+      ...w,
+      px: x + (side[0] * w.across + Math.cos(heading) * ahead) * unit,
+      py: y + (side[1] * w.across + Math.sin(heading) * ahead) * unit * squash,
+    };
+  }).sort((a, b) => a.py - b.py);
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  placed.forEach((w) => {
+    // A soft shadow at the feet, then the solid.
+    ctx.fillStyle = 'rgba(28, 52, 30, 0.22)';
+    ctx.beginPath();
+    ctx.ellipse(w.px + 0.12 * unit, w.py + 0.05 * unit, 0.42 * unit, 0.2 * unit, 0, 0, Math.PI * 2);
+    ctx.fill();
+    w.faces(frameAt(w.offset)).forEach(({ pts, fill }) => {
+      ctx.beginPath();
+      pts.forEach(([fx, fy], i) => (i ? ctx.lineTo(w.px + fx * unit, w.py + fy * unit) : ctx.moveTo(w.px + fx * unit, w.py + fy * unit)));
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = fill;
+      ctx.lineWidth = 0.5;
+      ctx.fill();
+      ctx.stroke();
+    });
+  });
+  ctx.restore();
 }
 
 /** Cars and boats on the sea routes and roads, planes on the arches that are alive now (over the towns). */

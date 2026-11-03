@@ -51,7 +51,19 @@ export function setIslandB(payload) {
     start: payload.start || null,
     extent: payload.extent || null,
     forest: payload.forest === 'mass' ? 'mass' : 'grove',
+    nearAny: null,
   };
+  // Which grid cells have a reference point near any corner: elsewhere the
+  // `near` read is exactly 0, so coastCore skips it.
+  const any = new Uint8Array(n * n);
+  const nearGrid = data.near;
+  for (let j = 0; j < n - 1; j += 1) {
+    for (let i = 0; i < n - 1; i += 1) {
+      const k = j * n + i;
+      any[k] = nearGrid[k] || nearGrid[k + 1] || nearGrid[k + n] || nearGrid[k + n + 1] ? 1 : 0;
+    }
+  }
+  data.nearAny = any;
 }
 
 /** The decoded island, or null when none is held. */
@@ -102,18 +114,29 @@ function postDistance(x, y, map, reach) {
   if (!map.size) return Infinity;
   const bi = Math.floor(x / POST_SAFE);
   const bj = Math.floor(y / POST_SAFE);
-  const span = Math.ceil(reach / POST_SAFE);
-  let best = reach * reach;
-  let found = false;
-  for (let j = bj - span; j <= bj + span; j += 1) {
-    for (let i = bi - span; i <= bi + span; i += 1) {
-      const list = map.get(bucketKey(i, j));
-      if (!list) continue;
-      for (let k = 0; k < list.length; k += 2) {
-        const d2 = (list[k] - x) ** 2 + (list[k + 1] - y) ** 2;
-        if (d2 <= best) { best = d2; found = true; }
+  // The posts in the buckets round (bi, bj), gathered once per bucket: a pixel
+  // row stays in one bucket for many pixels, so the Map is not asked 25 times
+  // for each of them. Same posts, same minimum.
+  let near = map.near;
+  if (!near || near.bi !== bi || near.bj !== bj || near.reach !== reach) {
+    const span = Math.ceil(reach / POST_SAFE);
+    const flat = [];
+    for (let j = bj - span; j <= bj + span; j += 1) {
+      for (let i = bi - span; i <= bi + span; i += 1) {
+        const list = map.get(bucketKey(i, j));
+        if (list) for (let k = 0; k < list.length; k += 1) flat.push(list[k]);
       }
     }
+    near = { bi, bj, reach, flat };
+    map.near = near;
+  }
+  const { flat } = near;
+  if (!flat.length) return Infinity;
+  let best = reach * reach;
+  let found = false;
+  for (let k = 0; k < flat.length; k += 2) {
+    const d2 = (flat[k] - x) ** 2 + (flat[k + 1] - y) ** 2;
+    if (d2 <= best) { best = d2; found = true; }
   }
   return found ? Math.sqrt(best) : Infinity;
 }
@@ -128,13 +151,13 @@ export function islandBForWorker() {
 /** What would change the ground, as one string (cache keys). */
 export function islandBKey() {
   if (!data) return '';
-  return [data.version, view.communityKey, view.postTotal, forestMode()].join('|');
+  return [data.version, view.communityKey, view.postTotal, forestMode(), view.roadsKey || ''].join('|');
 }
 
-/** 'grove' (trees one by one, the default) or 'mass' (one canopy). */
+/** 'mass' (one canopy, the default) or 'grove' (trees one by one: only when the payload or the view asks). */
 export function forestMode() {
   if (view.forest === 'mass' || view.forest === 'grove') return view.forest;
-  return data ? data.forest : 'grove';
+  return data ? data.forest : 'mass';
 }
 
 // ---- the map=b switch
@@ -174,37 +197,43 @@ export function mapBOn(cfg, place) {
 
 // ---- reading the grid
 
-// Bilinear read of a grid laid over the world (values at the cell centres).
-function gridAt(arr, x, y) {
-  const { x0, y0, cell, n } = data;
-  const fx = clamp((x - x0) / cell - 0.5, 0, n - 1.001);
-  const fy = clamp((y - y0) / cell - 0.5, 0, n - 1.001);
-  const i = fx | 0;
-  const j = fy | 0;
-  const u = fx - i;
-  const v = fy - j;
-  const k = j * n + i;
-  return (arr[k] * (1 - u) + arr[k + 1] * u) * (1 - v) + (arr[k + n] * (1 - u) + arr[k + n + 1] * u) * v;
-}
+// (The bilinear read of the coast and reference grids is inlined in coastCore.)
 
 function ih(x, y) {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
-function noise(x, y) {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  const xf = x - xi;
-  const yf = y - yi;
-  const u = xf * xf * (3 - 2 * xf);
-  const v = yf * yf * (3 - 2 * yf);
-  const a = ih(xi, yi);
-  const b = ih(xi + 1, yi);
-  const c = ih(xi, yi + 1);
-  const d = ih(xi + 1, yi + 1);
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+/** noise() that remembers the lattice cell it last read: a map pixel row moves
+ * through a cell for many pixels, so the four corner hashes are read once per
+ * cell instead of once per pixel. The numbers are exactly noise()'s. */
+export function memoNoise() {
+  let cx = NaN;
+  let cy = NaN;
+  let a = 0;
+  let b = 0;
+  let c = 0;
+  let d = 0;
+  return (x, y) => {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    if (xi !== cx || yi !== cy) {
+      cx = xi;
+      cy = yi;
+      a = ih(xi, yi);
+      b = ih(xi + 1, yi);
+      c = ih(xi, yi + 1);
+      d = ih(xi + 1, yi + 1);
+    }
+    const xf = x - xi;
+    const yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf);
+    const v = yf * yf * (3 - 2 * yf);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
 }
+const coastNoiseBig = memoNoise();
+const coastNoiseSmall = memoNoise();
 
 /** The signed distance to the coast at world (x, y): positive inland. With a
  * communityKey the coast is that community's own: bays and capes that fade out
@@ -224,12 +253,23 @@ export function coastWithPosts(points) {
 
 function coastCore(x, y, extra) {
   if (!data) return -1000;
-  let c = gridAt(data.coast, x, y);
+  // One look-up of the grid cell for both the coast and the reference points
+  // (they share their grid): the bilinear read is gridAt's, done once.
+  const { x0, y0, cell, n } = data;
+  const fx = clamp((x - x0) / cell - 0.5, 0, n - 1.001);
+  const fy = clamp((y - y0) / cell - 0.5, 0, n - 1.001);
+  const gi = fx | 0;
+  const gj = fy | 0;
+  const gu = fx - gi;
+  const gv = fy - gj;
+  const gk = gj * n + gi;
+  const arr = data.coast;
+  let c = (arr[gk] * (1 - gu) + arr[gk + 1] * gu) * (1 - gv) + (arr[gk + n] * (1 - gu) + arr[gk + n + 1] * gu) * gv;
   if (seed !== null && c <= 100) {
     const w = clamp((c + 62) / 50, 0, 1);
     if (w > 0) {
-      c += w * (85 * (noise(x * 0.008 + seed * 31.7, y * 0.008 + seed * 11.3) - 0.62)
-        + 20 * (noise(x * 0.024 + seed * 5, y * 0.024) - 0.5));
+      c += w * (85 * (coastNoiseBig(x * 0.008 + seed * 31.7, y * 0.008 + seed * 11.3) - 0.62)
+        + 20 * (coastNoiseSmall(x * 0.024 + seed * 5, y * 0.024) - 0.5));
     }
   }
   if (c >= 8) return c;
@@ -238,8 +278,11 @@ function coastCore(x, y, extra) {
   // near cell the bilinear weight is at least 0.25, which gives 8; the shore
   // is most of a cell out. Round a post: 8 within POST_SAFE, the shore
   // POST_SAFE further out. Further away nothing changes.
-  const w = gridAt(data.near, x, y);
-  if (w > 0) c = Math.max(c, 48 * w - 4);
+  if (data.nearAny[gk] === 1) {
+    const nr = data.near;
+    const w = (nr[gk] * (1 - gu) + nr[gk + 1] * gu) * (1 - gv) + (nr[gk + n] * (1 - gu) + nr[gk + n + 1] * gu) * gv;
+    if (w > 0) c = Math.max(c, 48 * w - 4);
+  }
   const d = Math.min(postDistance(x, y, postBuckets, 2 * POST_SAFE), extra !== null ? postDistance(x, y, extra, 2 * POST_SAFE) : Infinity);
   if (d < Infinity) c = Math.max(c, 8 * (2 - d / POST_SAFE));
   return c;

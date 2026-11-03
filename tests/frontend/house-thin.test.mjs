@@ -87,3 +87,14 @@ test('a faint house gives way to one at full strength, even a smaller tier', () 
   // Both faint: the usual order (the bigger tier).
   assert.deepEqual(thinHouses([castle, house('h2', 101, 100, 0, { faint: true })]).map((h) => h.id), ['c']);
 });
+
+test('covered: each house left out names the house that stays on its spot', () => {
+  const list = [];
+  for (let i = 0; i < 5; i += 1) list.push(house(`p${i}`, 100 + i * 0.5, 100, i === 3 ? 2 : 1));
+  list.push(house('far', 400, 400));
+  const covered = new Map();
+  const out = thinHouses(list, covered);
+  assert.deepEqual(ids(out), ['far', 'p3']);
+  assert.deepEqual([...covered.keys()].sort(), ['p0', 'p1', 'p2', 'p4']);
+  covered.forEach((stays) => assert.equal(stays, 'p3'));
+});

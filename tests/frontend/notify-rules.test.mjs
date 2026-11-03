@@ -119,15 +119,15 @@ test('a group names the newest person and counts the rest', () => {
 
 test('an island names itself and says what happened to it', () => {
   const island = { type: 'island', payload: { name: 'キャンプ島', cause: '2つの島がつながりました' }, actors: [] };
-  assert.equal(rules.headline(island), '島「キャンプ島」');
+  assert.equal(rules.headline(island), 'キャンプ村');
   assert.equal(rules.bodyText(island), '2つの島がつながりました。');
-  assert.equal(rules.headline({ type: 'island', payload: {} }), '島');
-  assert.equal(rules.bodyText({ type: 'island', payload: {} }), '島が変わりました。');
+  assert.equal(rules.headline({ type: 'island', payload: {} }), '村');
+  assert.equal(rules.bodyText({ type: 'island', payload: {} }), '村が変わりました。');
 });
 
 test('a quiet post reads as a recommendation', () => {
-  const quiet = { type: 'quiet_post', payload: { message: '近くの島に、話が合いそうな投稿があります。' }, actors: [] };
-  assert.equal(rules.bodyText(quiet), '近くの島に、話が合いそうな投稿があります。');
+  const quiet = { type: 'quiet_post', payload: { message: '近くの村に、話が合いそうな投稿があります。' }, actors: [] };
+  assert.equal(rules.bodyText(quiet), '近くの村に、話が合いそうな投稿があります。');
   assert.equal(rules.bodyText({ type: 'quiet_post', payload: {} }), rules.KIND_TEXT.quiet_post);
 });
 
@@ -422,7 +422,9 @@ test('a new-resident row says who moved onto which island, like its push', () =>
   assert.equal(rules.headline(row), '新しい住人');
   assert.equal(rules.bodyText(row), 'キャンプ島にはなさんが引っ越してきました');
   assert.equal(rules.isResident({ type: 'island', payload: { cause: 'x' } }), false);
-  assert.equal(rules.headline({ type: 'island', payload: { name: 'A島' } }), '島「A島」');
+  assert.equal(rules.headline({ type: 'island', payload: { name: 'A島' } }), 'A村');
+  assert.equal(rules.headline({ type: 'island', payload: { name: '焚き火' } }), '焚き火村');
+  assert.equal(rules.headline({ type: 'island', payload: { name: '島' } }), '島村');
 });
 
 test('match rows: filed under 反応, read as the reason the server wrote, with a fallback', () => {

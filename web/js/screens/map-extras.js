@@ -32,7 +32,7 @@ const snapshot = () => (typeof mapApi.mapSnapshot === 'function' ? mapApi.mapSna
 const finite = (value) => Number.isFinite(value);
 const hasCenter = (island) => finite(island.cx) && finite(island.cy);
 const islandKey = (island) => island.island_id || (island.name_pending ? `${island.label}@${island.cx},${island.cy}` : island.label);   // the same key map/index.js uses
-const islandName = (island) => island.label || island.name || '名前のない島';
+const islandName = (island) => island.label || island.name || '名前のない村';
 
 // ---------------------------------------------------------------- near islands
 
@@ -49,7 +49,7 @@ export function refreshNearIslands() {
   const picked = choosePicks();
   // Near my own island when I have one; otherwise just the islands around.
   const mine = myIslands(state.islands.filter(hasCenter), state.myPosts.map((post) => post.id)).length > 0;
-  const label = mine ? 'あなたに近い島' : 'まわりの島';
+  const label = mine ? 'あなたに近い村' : 'まわりの村';
   const signature = `${label}|${picked.map((island) => `${islandKey(island)}:${islandName(island)}`).join('|')}`;
   if (signature === nearSignature) return;
   nearSignature = signature;
@@ -135,10 +135,10 @@ function openIslandCard(island, key = islandKey(island)) {
   }
   // Far islands may not be loaded yet: say so instead of showing a thin list.
   if (recent.length < Math.min(2, ids.length)) {
-    card.append(el('p', { className: 'island-card-note', text: '島をのぞくと、ほかの投稿も見られます。' }));
+    card.append(el('p', { className: 'island-card-note', text: '村をのぞくと、ほかの投稿も見られます。' }));
   }
   const enter = el('button', {
-    className: 'btn island-card-enter', attrs: { type: 'button' }, text: '島をのぞく',
+    className: 'btn island-card-enter', attrs: { type: 'button' }, text: '村をのぞく',
     on: { click: () => {
       if (typeof mapApi.enterIsland === 'function') mapApi.enterIsland(key);
       closeIslandCard();

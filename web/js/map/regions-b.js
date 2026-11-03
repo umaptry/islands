@@ -57,17 +57,30 @@ export function thinBorders(points, toScreen, { width, height, top = 0, gap = BO
   return out;
 }
 
-/** White dots with a faint shadow, over the trees. `dots` from thinBorders. */
-export function drawBorders(ctx, dots) {
+/** The dots' size, spacing (screen px) and strength at `scale` px per world unit: they grow and shrink
+ * with the map like the trees, so zoomed out the border is a fine, faint line (2026-11-02, the user:
+ * the fixed-size dots were too big seen from far out). At 2 px per world unit, the old 1.5 and 7. */
+export function borderLook(scale) {
+  const s = Number.isFinite(scale) && scale > 0 ? scale : 2;
+  return {
+    r: Math.max(0.55, Math.min(1.8, 0.75 * s)),
+    gap: Math.max(4.5, Math.min(9, 3.5 * s)),
+    alpha: Math.max(0.55, Math.min(0.9, 0.4 + 0.25 * s)),
+  };
+}
+
+/** White dots with a faint shadow, over the trees. `dots` from thinBorders, `look` from borderLook. */
+export function drawBorders(ctx, dots, look = { r: 1.5, alpha: 0.9 }) {
   if (!dots.length) return;
+  const { r, alpha } = look;
   ctx.save();
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.shadowColor = 'rgba(20,50,25,0.5)';
-  ctx.shadowBlur = 2;
+  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+  ctx.shadowColor = `rgba(20,50,25,${0.5 * alpha})`;
+  ctx.shadowBlur = Math.min(2, r * 1.3);
   ctx.beginPath();
   dots.forEach(([x, y]) => {
-    ctx.moveTo(x + 1.5, y);
-    ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+    ctx.moveTo(x + r, y);
+    ctx.arc(x, y, r, 0, Math.PI * 2);
   });
   ctx.fill();
   ctx.restore();
@@ -117,7 +130,8 @@ export function placeNames({ start = null, regions = [], villages = [], far, cla
 }
 
 /** The text of a region's name on the map. */
-export const regionText = (region) => `${region.name} 地方`;
+// The names read like places (食の森, 音楽高原: the user, 2026-11-04), so no 「地方」 after them.
+export const regionText = (region) => region.name;
 
 /** The world box the whole-map camera frames and the sea decoration stays in: the island's outer box
  * { minX, minY, maxX, maxY } with a little room round it, as [minX, minY, maxX, maxY]. */

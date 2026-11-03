@@ -22,7 +22,7 @@ import { config, energyOf, radiusOf } from '../config.js';
 import { coastOf, reachFrom, reachTable } from './coast.js';
 import { coastLines } from './surf.js';
 import { islandBKey, mapBOn } from './island-b.js';
-import { computeB, scatterTreesB } from './terrain-b.js';
+import { computeB, computeBStrip, scatterTreesB, stripsB, surfB } from './terrain-b.js';
 
 // Map plan B (island-b.js, terrain-b.js): with the flag on and the island held,
 // the whole ground is computeB's. With it off nothing below changes.
@@ -421,8 +421,10 @@ function sameRegion(a, b) {
 // own resolution (up to DETAIL_MAX_UNIT texture pixels per world unit and
 // DETAIL_MAX_TEXTURE on a side). Not cached here: the map keeps the last one
 // while it still covers the screen, and builds it only once the camera stops.
-const DETAIL_MAX_UNIT = 48;   // 16 until the zoom went three times further (2026-10-18)
-const DETAIL_MAX_TEXTURE = 2048;
+export const DETAIL_MAX_UNIT = 48;   // 16 until the zoom went three times further (2026-10-18)
+// 2560 (2048 until 2026-11-02): a phone's screen at pixel ratio 2 is 1688 tall, and the sharp
+// texture also covers a margin round it; a smaller limit made it a size smaller than asked for, blurred.
+export const DETAIL_MAX_TEXTURE = 2560;
 
 export function buildDetail({ posts, cells = [], region, scale, pixelRatio = 1 }) {
   const built = detailPixels({ posts, cells, region, scale, pixelRatio });
@@ -431,14 +433,33 @@ export function buildDetail({ posts, cells = [], region, scale, pixelRatio = 1 }
 
 /** buildDetail without the canvas: plain pixels, so a Web Worker can build it
  * (terrain-worker.js, via offthread.js) and the page only puts them on a canvas. */
-export function detailPixels({ posts, cells = [], region, scale, pixelRatio = 1, surf = false }) {
+export function detailPixels({ posts, cells = [], region, scale, pixelRatio = 1, surf = false, strip = null }) {
   const unit = Math.min(DETAIL_MAX_UNIT, (scale || 1) * pixelRatio);
+  // Map plan B in strips (see detailPlan): only the rows of `strip`, without the surf.
+  if (strip && planB()) {
+    return computeBStrip({ posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, smooth: true }, strip.from, strip.to);
+  }
   const built = compute({
     posts, cells, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, smooth: true, surf,
   });
   if (!built) return null;
   const { field: _field, ...pixels } = built;
   return pixels;   // `coast` rides along: toCanvas ignores it, the page reads it
+}
+
+/** The sharp texture of plan B cut into `parts` strips that can be made apart
+ * (detailPixels with `strip`) and joined: { width, height, minX, minY, scale,
+ * strips: [{ from, to }] }, or null when it has to be made whole. */
+export function detailPlan({ region, scale, pixelRatio = 1, parts }) {
+  if (!planB()) return null;
+  const unit = Math.min(DETAIL_MAX_UNIT, (scale || 1) * pixelRatio);
+  return stripsB({ region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE, parts });
+}
+
+/** The surf lines of the sharp texture of plan B, made without its picture. */
+export function detailSurf({ posts, region, scale, pixelRatio = 1 }) {
+  const unit = Math.min(DETAIL_MAX_UNIT, (scale || 1) * pixelRatio);
+  return surfB({ posts, region, scale, unit, padding: 0, limit: DETAIL_MAX_TEXTURE });
 }
 
 // The sharp texture comes in two steps after a stop: a preview at

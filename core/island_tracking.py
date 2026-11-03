@@ -30,17 +30,17 @@ from core.config import (
 from core.notifications import parse_time
 
 CAUSES = {
-    "birth": "近い話題の投稿が集まって島ができた",
-    "merge": "あいだの投稿が増えて島がつながった",
-    "split": "話題が分かれて島が2つになった",
-    "rename": "島でよく使われる言葉が変わった",
-    "rename_ai": "島の話題が変わって名前が変わった",
+    "birth": "近い話題の投稿が集まって村ができた",
+    "merge": "あいだの投稿が増えて村がつながった",
+    "split": "話題が分かれて村が2つに分かれた",
+    "rename": "村でよく使われる言葉が変わった",
+    "rename_ai": "村の話題が変わって名前が変わった",
     "tier_up": "人・投稿・交流が増えた",
     "tier_down": "しばらく交流が少なかった",
-    "quiet_gone": "島の投稿がなくなった",
+    "quiet_gone": "村の投稿がなくなった",
     "quiet_idle": f"{ISLAND_QUIET_DAYS}日間 新しい投稿も交流もない",
-    "landmark_new": "島が育って目印が増えた",
-    "landmark_swap": "島の話題が変わって目印が入れ替わった",
+    "landmark_new": "村が育って目印が増えた",
+    "landmark_swap": "村の話題が変わって目印が入れ替わった",
 }
 
 

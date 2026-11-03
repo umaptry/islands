@@ -304,7 +304,7 @@ function paintList() {
     list.append(el('div', { className: 'empty-panel' },
       el('div', { className: 'empty-icon' }, icon('bellOff', 40)),
       el('p', { text: '通知はありません' }),
-      el('p', { className: 'empty-sub', text: 'メッセージや反応、島の変化が届くと、ここに表示されます。気になる投稿に「いいね」やメッセージを送ってみましょう。' }),
+      el('p', { className: 'empty-sub', text: 'メッセージや反応、村の変化が届くと、ここに表示されます。気になる投稿に「いいね」やメッセージを送ってみましょう。' }),
       el('div', { className: 'empty-actions' },
         el('button', {
           className: 'btn btn-small', attrs: { type: 'button', id: 'notifEmptyMap' },

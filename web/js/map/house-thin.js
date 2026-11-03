@@ -22,7 +22,7 @@ export const HOUSE_BOX = [
   { half: 0.54, up: 0.65, down: 0.35 },
   { half: 0.7, up: 0.98, down: 0.44 },
   { half: 0.9, up: 1.42, down: 0.83 },
-  { half: 1.31, up: 1.8, down: 0.96 },
+  { half: 1.14, up: 1.51, down: 0.75 },
 ];
 
 /** The screen box of a house { x, foot, size, tier }. */
@@ -57,8 +57,10 @@ const rank = (a, b) => (
  * faint: drawn faint by the search, the filter or 「参加者を見てみる」).
  * Returns the ones that stay (new array, same objects). A grid of cells as wide as
  * the widest box means each house only asks its eight neighbours' cells.
+ * `covered` (a Map, optional) is filled with the id of each house left out ->
+ * the id of the house that stays on its spot, so its post can join that one's "+N".
  */
-export function thinHouses(houses) {
+export function thinHouses(houses, covered = null) {
   if (houses.length < 2) return houses.slice();
   const sorted = houses.slice().sort(rank);
   const cell = Math.max(1, ...houses.map((h) => 2 * HOUSE_BOX[Math.max(0, Math.min(3, h.tier | 0))].half * h.size));
@@ -69,17 +71,20 @@ export function thinHouses(houses) {
     const cx = Math.floor((box.left + box.right) / 2 / cell);
     const cy = Math.floor((box.top + box.bottom) / 2 / cell);
     // A box can be taller than it is wide; look two cells up and down to be safe.
-    let blocked = false;
+    let blocked = null;
     for (let dx = -1; dx <= 1 && !blocked; dx += 1) {
       for (let dy = -2; dy <= 2 && !blocked; dy += 1) {
         const list = grid.get(`${cx + dx},${cy + dy}`);
-        if (list && list.some((other) => crowds(box, other.box))) blocked = true;
+        blocked = (list && list.find((other) => crowds(box, other.box))) || null;
       }
     }
-    if (blocked && !house.keep) return;
+    if (blocked && !house.keep) {
+      if (covered) covered.set(house.id, blocked.id);
+      return;
+    }
     const key = `${cx},${cy}`;
     if (!grid.has(key)) grid.set(key, []);
-    grid.get(key).push({ box });
+    grid.get(key).push({ box, id: house.id });
     kept.push(house);
   });
   return kept;
