@@ -2573,3 +2573,7 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 .ev-question-text { flex: 1; display: flex; flex-direction: column; }
 .ev-question-text small { font-size: 11.5px; opacity: .8; }
 .ev-question-x { flex: none; font-size: 18px; }
+
+/* events-b: settings（会の開催条件・主催者の画面・申し込みページ。担当③） */
+
+/* events-b: guest（限定ページ・受付・会のあと。担当④） */
