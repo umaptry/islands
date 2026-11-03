@@ -139,6 +139,8 @@ export function mapUrl(place) {
 export function applyView(info) {
   const closed = info && info.closed;
   if (closed === 'cancelled') return { state: 'cancelled', canApply: false, band: EVENT_WORDS.cancelledBand };
+  // 人数が集まらず中止（判定のあと）。帯の文は申し込みページ側（event-apply.js）が出す
+  if (closed === 'not_held' || (info && info.phase === 'not_held')) return { state: 'not_held', canApply: false, band: '' };
   if (closed === 'full') return { state: 'full', canApply: false, band: EVENT_WORDS.fullBand };
   if (closed === 'deadline') return { state: 'deadline', canApply: false, band: EVENT_WORDS.deadlineBand };
   return { state: 'open', canApply: true, band: '' };
