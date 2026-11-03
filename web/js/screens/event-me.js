@@ -157,7 +157,7 @@ export function setupEventMe() {
     const row = (person, near) => {
       const shown = personView(person);
       return el('li', { className: `evb-person${shown.isMe ? ' is-me' : ''}`, attrs: { 'data-person': shown.id || '' } },
-        avatar({ icon_id: person.icon_id }, 40, person.avatar_url || null),
+        avatar({ icon_id: person.icon_id, avatar_path: person.avatar_path }, 40, person.avatar_url || null),
         el('div', { className: 'evb-person-main' },
           el('div', { className: 'evb-person-name' }, el('b', { text: shown.name }),
             ...shown.badges.map((badge) => el('span', { className: `evb-badge is-${badge.key}`, text: badge.text }))),

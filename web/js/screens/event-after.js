@@ -89,7 +89,7 @@ export function setupEventAfter() {
     });
     const talk = person.canTalk ? talkOptionsForPerson(person.id, person.name) : null;
     return el('li', { className: 'evb-person', attrs: { 'data-person': person.id || '' } },
-      avatar({ icon_id: person.raw.icon_id }, 40, person.raw.avatar_url || null),
+      avatar({ icon_id: person.raw.icon_id, avatar_path: person.raw.avatar_path }, 40, person.raw.avatar_url || null),
       el('div', { className: 'evb-person-main' },
         el('div', { className: 'evb-person-name' }, el('b', { text: person.name })),
         person.sub ? el('div', { className: 'evb-person-sub', text: person.sub }) : null,
