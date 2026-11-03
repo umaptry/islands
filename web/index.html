@@ -728,7 +728,7 @@
     <h2 class="screen-title" id="eventComposeTitle">会の中身</h2>
   </div>
   <div class="compose-progress ev-progress" id="eventComposeProgress" role="progressbar" aria-label="会を作るステップ"
-       aria-valuemin="1" aria-valuemax="2" aria-valuenow="1"><i></i><i></i></div>
+       aria-valuemin="1" aria-valuemax="3" aria-valuenow="1"><i></i><i></i><i></i></div>
   <div class="scroller" id="eventComposeScroller">
     <div id="eventComposeStep1">
       <h2 class="screen-title">いつ、どこでやる会？</h2>
@@ -761,6 +761,27 @@
       </div>
     </div>
     <div id="eventComposeStep2" hidden>
+      <h2 class="screen-title">開催の条件は？</h2>
+      <p class="lede">空欄のままなら、人数に関係なく開催します。</p>
+      <label class="ev-field">
+        <span class="ev-label">最小開催人数</span>
+        <input class="ev-input" id="eventComposeMin" type="number" inputmode="numeric" min="2" step="1" placeholder="例：5" autocomplete="off">
+        <span class="ev-hint">空欄なら、人数に関係なく開催します。</span>
+      </label>
+      <label class="ev-field" id="eventComposeDecideField" hidden>
+        <span class="ev-label">判定日</span>
+        <input class="ev-input" id="eventComposeDecide" type="date">
+        <span class="ev-hint" id="eventComposeDecideHint">この日の終わりに、最小人数に届いていれば開催、届いていなければ中止です。</span>
+      </label>
+      <label class="ev-field">
+        <span class="ev-label">キャンセル期限</span>
+        <input class="ev-input" id="eventComposeCancel" type="datetime-local">
+        <span class="ev-hint">空欄なら、開始まで取り消せます。</span>
+      </label>
+      <h3 class="ev-ask">会のあとの入り方</h3>
+      <div class="ev-choices" id="eventComposeJoin" role="radiogroup" aria-label="会のあとのコミュニティへの入り方"></div>
+    </div>
+    <div id="eventComposeStep3" hidden>
       <h2 class="screen-title">申し込む人に聞きたいことは？</h2>
       <p class="lede" id="eventComposeQLede">メンバーは質問なしで申し込めます。ここで選ぶ質問は、あとで公開にしたときに使います。</p>
       <ul class="ev-questions" id="eventComposeQuestions"></ul>

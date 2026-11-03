@@ -2555,7 +2555,8 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 /* 会の中身（投稿画面の上に重なる） */
 .ev-progress { margin-top: 0; }
 .ev-progress[aria-valuenow="1"] i:nth-child(1),
-.ev-progress[aria-valuenow="2"] i { background: #fff; }
+.ev-progress[aria-valuenow="2"] i:nth-child(-n+2),
+.ev-progress[aria-valuenow="3"] i { background: #fff; }
 .ev-fixed { margin: 0 0 18px; font-size: 13px; color: var(--on-sea-2); }
 .ev-fixed:empty { display: none; }
 .ev-ask { margin: 8px 0 10px; font-size: 15px; font-weight: 800; }
@@ -2575,6 +2576,44 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 .ev-question-x { flex: none; font-size: 18px; }
 
 /* events-b: settings（会の開催条件・主催者の画面・申し込みページ。担当③） */
+.ev-hint.locked { color: var(--ink-3); }
+.ev-card .ev-hint { color: var(--ink-2); }
+.ev-input:disabled { background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
+.ev-card .ev-input:disabled { background: var(--surface-3); }
+.ev-field[hidden] { display: none; }
+.ev-goal-edit { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ev-goal-edit .ev-sub { margin: 0 0 10px; color: var(--ink); }
+.ev-card .ev-choice { border-color: var(--line); color: var(--ink); background: #fff; }
+.ev-card .ev-choice span { color: var(--ink-2); }
+.ev-card .ev-choice.on { border-color: var(--ui, #1B8ED5); background: #eaf4fc; }
+.ev-card .ev-choices { margin-bottom: 14px; }
+
+/* 状態の札（募集中／開催決定／中止）と、人数・判定日の二行 */
+.ev-go { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.ev-go.held { background: #e1f5e9; }
+.ev-go.not_held { background: #fbe3e1; }
+.ev-go-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12.5px; color: var(--ink-2); }
+.ev-go-lines b { font-size: 14px; color: var(--ink); }
+.ev-go-badge { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; background: #eef2f7; color: var(--ink-2); }
+.ev-go-badge.good { background: #1d7a45; color: #fff; }
+.ev-go-badge.bad { background: var(--bad); color: #fff; }
+.ev-go-line { margin: 6px 4px 0; font-size: 12px; font-weight: 800; text-align: center; color: var(--ink-2); }
+.ev-go-line.held { color: #1d7a45; }
+.ev-go-line.not_held { color: var(--bad); }
+.ev-cancel-note { margin-top: 2px; }
+
+/* 申し込みページの開催の条件 */
+.ev-goal .ev-line { color: var(--ink); margin: 6px 0 0; }
+.ev-goal .ev-line.ev-quiet { color: var(--ink-2); font-size: 13px; }
+.ev-goal-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ev-goal-count { font-size: 15px; }
+.ev-goal.held .ev-goal-count { color: #1d7a45; }
+
+/* 名簿の受付待ち：受付する・却下 */
+.ev-person-buttons { display: flex; gap: 8px; margin: 8px 0 0 46px; }
+.ev-person-buttons .btn { flex: 1; min-height: 40px; font-size: 14px; }
+.ev-person-buttons .ev-checkin { background: var(--ui, #1B8ED5); color: #fff; }
+.ev-checkin-menu { color: var(--ui, #1B8ED5); }
 
 /* events-b: guest（限定ページ・受付・会のあと。担当④） */
 
