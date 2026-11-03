@@ -1,5 +1,6 @@
 // 地図B案（1つの大きな島）。手元モードのサーバーに、ブラウザでつなぐ。
-// ①旗オフでは島の土台を取りに行かない ②?map=b で開くと地方が出てエラーが無い ③土台が503なら今の地図のまま
+// 2026-11-04 から旗（MAP_B_ENABLED）は既定でオン。①アドレスに何も付けなくても島の土台を読み、
+// 地方の名前が出る ②?map=b でも同じ ③土台が503なら今までの地図のまま
 import { test, expect } from '@playwright/test';
 
 const INVITE = 'demo-invite-code-local-0001';
@@ -18,7 +19,7 @@ async function newPerson(browser, testInfo, name) {
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
     await data.claimInvite(code);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
   }, { email: `${name}-${crypto.randomUUID()}@example.com`, name, code: INVITE });
   return { page, context, errors };
 }
@@ -29,17 +30,23 @@ const post = (who, body) => who.page.evaluate(async (body) => {
   return made.id;
 }, body);
 
-test('旗オフ（?map=b なし）の地図は、島の土台を一度も取りに行かない', async ({ browser }, testInfo) => {
+test('旗が既定でオン：?map=b を付けなくても島の土台を読み、地方の名前は地名ふう（「地方」を付けない）', async ({ browser }, testInfo) => {
   const me = await newPerson(browser, testInfo, 'はな');
   const asked = [];
   me.page.on('request', (request) => { if (request.url().includes('/api/map-b/base')) asked.push(request.url()); });
   await post(me, '朝のランニングを1年続けています。いっしょに走れる人を探しています');
   await me.page.goto('/?again=1#/map');
   await expect(me.page.locator('#map')).toHaveClass(/active/);
+  await expect.poll(() => asked.length, { timeout: 20000 }).toBeGreaterThan(0);
+  await expect.poll(() => me.page.evaluate(async () => (await import('/static/js/map/island-b.js')).regionsB().length), { timeout: 20000 }).toBe(16);
+  const texts = await me.page.evaluate(async () => {
+    const island = await import('/static/js/map/island-b.js');
+    const regions = await import('/static/js/map/regions-b.js');
+    return island.regionsB().map((r) => regions.regionText(r));
+  });
+  expect(texts).toContain('食の森');
+  texts.forEach((text) => expect(text).not.toContain('地方'));
   await me.page.waitForTimeout(3000);
-  expect(asked).toEqual([]);
-  const held = await me.page.evaluate(async () => (await import('/static/js/map/island-b.js')).islandB());
-  expect(held).toBeNull();
   expect(me.errors).toEqual([]);
   await me.context.close();
 });
