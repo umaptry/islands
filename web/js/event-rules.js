@@ -352,3 +352,216 @@ export function takeHostReturn(storage, now = Date.now()) {
     return now - saved.at <= RETURN_HOLD_MS ? eventHashFor(saved.code, 'host') : null;
   } catch { return null; }
 }
+
+// ================================================================ 第2回b：限定ページ・受付・会のあと（画面B）
+// 開催の段階・キャンセルの文・参加者リスト・「このコミュニティに参加する」・受付の出し分け・会のあと。
+// どれもページに触らない関数（node のテストは tests/frontend/event-rules.test.mjs）。サーバーが新しい項目を返さない
+// （SQL より先にコードが出ている）ときは、今までどおりの出し方に戻る。
+
+export const EVENT_B_WORDS = Object.freeze({
+  afterCancel: '期限後のキャンセルは主催者に連絡してください',
+  joined: 'メンバーになりました',
+  afterLink: '会った人を選ぶ',
+  checkinBlocked: '受付できませんでした。主催者に声をかけてください',
+  checkinCancelled: '申し込みを取り消しています。主催者に声をかけてください',
+  waitingNote: '主催者に声をかけてください。受付が終わると、この画面が自動で変わります。',
+  askJoinNote: 'コミュニティに参加すると「もっと話してみたい」も押せます',
+  closedCheckin: '受付の時間ではありません',
+  earlyCheckin: '受付はまだ始まっていません',
+});
+
+/** 受付の画面を数秒ごとに読み直す間隔（受付待ちのとき）。 */
+export const CHECKIN_POLL_MS = 4000;
+export const WALKIN_MAX = 32;
+
+/** "11月12日(木) 18:00" in Japan time, or ''. (The year is left out: a deadline is always close.) */
+export function deadlineText(value) {
+  const d = jst(value);
+  return d ? `${d.getUTCMonth() + 1}月${d.getUTCDate()}日(${WEEKDAYS[d.getUTCDay()]}) ${clockText(value)}` : '';
+}
+
+/** "11月12日" from a plain date ("2026-11-12"), or ''. */
+export function plainDayText(value) {
+  const found = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
+  return found ? `${Number(found[2])}月${Number(found[3])}日` : '';
+}
+
+/** 参加者リストを出してよい会か（中止の会には出さない）。 */
+export function listAllowed(event) {
+  if (!event) return false;
+  return !(event.cancelled || event.closed === 'cancelled' || event.closed === 'not_held' || event.phase === 'not_held');
+}
+
+/**
+ * 限定ページの上の「開催の状態」。最小人数が無い会（phase が null や無し）は null（何も足さない）。
+ * { phase, label, tone, note }  tone: 'ok' | 'wait' | 'bad'
+ */
+export function eventStageView(event) {
+  const phase = event && event.phase;
+  if (phase === 'held') return { phase, label: '開催決定', tone: 'ok', note: '' };
+  if (phase === 'not_held') return { phase, label: '中止', tone: 'bad', note: '人数が集まらなかったため、この会は中止になりました' };
+  if (phase !== 'recruiting') return null;
+  const needed = Number(event.needed);
+  const until = plainDayText(event.decide_on);
+  const note = [Number.isFinite(needed) && needed > 0 ? `あと${needed}人で開催決定` : '',
+    until && event.min_participants ? `${until}までに${event.min_participants}人集まれば開催` : ''].filter(Boolean).join('／');
+  return { phase, label: '募集中', tone: 'wait', note };
+}
+
+/**
+ * キャンセルの出し方。`me.can_cancel` があればそれに従い、無ければ（古いサーバー）今までの statusView の判断。
+ * { canCancel, note }  note：期限の文、または期限後の案内（ボタンなし）。
+ */
+export function cancelView(me, event, now = Date.now()) {
+  const status = (me && me.status) || 'none';
+  const base = statusView(me, event, now);
+  if (status !== 'applied' || base.tone === 'cancelled') return { canCancel: false, note: '' };
+  const canCancel = me && typeof me.can_cancel === 'boolean' ? me.can_cancel : base.canCancel;
+  const deadline = event && event.cancel_deadline;
+  const stamp = Date.parse(deadline);
+  if (canCancel) return { canCancel: true, note: Number.isFinite(stamp) ? `キャンセルは${deadlineText(deadline)}まで` : '' };
+  const closed = Number.isFinite(stamp) && now > stamp;
+  return { canCancel: false, note: closed ? EVENT_B_WORDS.afterCancel : '' };
+}
+
+/** 「このコミュニティに参加する」を出すか。me.can_join の通りで、無ければ出さない。 */
+export function joinView(me, event) {
+  const name = String((event && event.community_name) || '').trim();
+  const quoted = name ? `「${name}」` : 'このコミュニティ';
+  return {
+    show: Boolean(me && me.can_join === true), name,
+    lead: `${quoted}のメンバーになると、地図やほかの人の投稿が見られます`,
+    confirm: { title: `${quoted}に参加しますか？`, body: '参加すると、地図やほかの人の投稿が見られるようになります。', confirmLabel: '参加する' },
+    done: `${quoted}のメンバーになりました`,
+  };
+}
+
+/** 参加者リストの1人：名前の下の一行（会社・職種）と札・回答。年代は出さない。 */
+export function personView(person) {
+  const p = person || {};
+  const sub = [p.affiliation, p.job_title].map((v) => String(v || '').trim()).filter(Boolean).join('・');
+  const badges = [];
+  if (p.is_me) badges.push({ key: 'me', text: 'あなた' });
+  if (p.state === 'host') badges.push({ key: 'host', text: '主催者' });
+  if (p.state === 'attended') badges.push({ key: 'attended', text: '受付済み' });
+  if (!p.is_me && p.late_minutes) badges.push({ key: 'late', text: `${p.late_minutes === 60 ? '1時間以上' : `${p.late_minutes}分`}遅れ` });
+  const answers = (Array.isArray(p.answers) ? p.answers : [])
+    .map((a) => ({ label: String((a && a.label) || ''), body: String((a && a.body) || '').trim() })).filter((a) => a.body);
+  return { id: p.account_id, name: String(p.name || '名前なし'), sub, badges, answers, reason: nearReasonText(p.near), isMe: Boolean(p.is_me) };
+}
+
+/**
+ * 参加者リストを「近いかも（最大3人）」と「みんな」に分ける。サーバーの並び（自分→主催者→近い順→申し込み順）を保ち、
+ * near3 の人（自分以外）を上の組に移す。中止の会・リストが読めなかったときは null。
+ * { count, near: [person], rest: [person] }
+ */
+export function participantsView(data, event) {
+  if (!data || !Array.isArray(data.people) || !listAllowed(event)) return null;
+  const order = (p) => (p.is_me ? 0 : p.state === 'host' ? 1 : 2);
+  const sorted = data.people.map((p, i) => ({ p, i })).sort((a, b) => order(a.p) - order(b.p) || a.i - b.i).map((x) => x.p);
+  const ids = new Set(Array.isArray(data.near3) ? data.near3 : []);
+  const near = sorted.filter((p) => !p.is_me && ids.has(p.account_id)).slice(0, 3);
+  const taken = new Set(near.map((p) => p.account_id));
+  return { count: sorted.length, near, rest: sorted.filter((p) => !taken.has(p.account_id)) };
+}
+
+/** 会が終わったあとの「会った人を選ぶ」を、限定ページに出すか。 */
+export function afterLinkShown(me, event, now = Date.now()) {
+  return Boolean(me && me.status === 'attended') && listAllowed(event) && phaseOf(event, now) === 'after';
+}
+
+// ---------------------------------------------------------------- 受付（#/c/<checkin_code>）
+
+/**
+ * 受付の画面が何を出すか。`info` は GET /api/checkin/<code>（{ event, window, me, rejects, is_member }）。
+ * kind: 'early' | 'closed' | 'attended' | 'waiting' | 'rejected'（入れ直せる）| 'blocked'（お断り・3回却下）|
+ *       'cancelled' | 'ready'（「受付する」）| 'walkin'（名前と会社を入れる）
+ */
+export function checkinView(info) {
+  const me = (info && info.me) || 'none';
+  const rejects = Number(info && info.rejects) || 0;
+  const window = info && info.window;
+  if (me === 'attended') return { kind: 'attended' };
+  if (me === 'banned') return { kind: 'blocked', text: EVENT_B_WORDS.checkinBlocked };
+  if (me === 'waiting') return { kind: 'waiting', text: EVENT_B_WORDS.waitingNote };
+  if (me === 'rejected') return { kind: rejects >= 3 ? 'blocked' : 'rejected', text: EVENT_B_WORDS.checkinBlocked };
+  if (window === 'early') return { kind: 'early', text: EVENT_B_WORDS.earlyCheckin };
+  if (window === 'closed') return { kind: 'closed', text: EVENT_B_WORDS.closedCheckin };
+  if (me === 'cancelled') return { kind: 'cancelled', text: EVENT_B_WORDS.checkinCancelled };
+  if (me === 'applied' || (me === 'none' && info && info.is_member)) return { kind: 'ready' };
+  return { kind: 'walkin' };
+}
+
+/** 受付できたときの見出しと一行。joined（自動で加入）なら「『<コミュニティ名>』のメンバーになりました」（会の名前ではない）。 */
+export function checkinDoneView(result, event, displayName = '') {
+  const joined = Boolean(result && result.joined);
+  const name = String((event && event.community_name) || '').trim();
+  const who = String(displayName || '').trim();
+  const hello = who ? `ようこそ、${who}さん。` : '';
+  if (joined) return { title: EVENT_WORDS.attended, note: `${hello}${name ? `「${name}」` : 'コミュニティ'}のメンバーになりました。`, joined: true };
+  return { title: EVENT_WORDS.attended, note: hello, joined: false };
+}
+
+/** 飛び入りの入力（フルネーム・会社）を検める：{ ok, body, message }。同意は「受付をお願いする」を押すことで取る。 */
+export function cleanWalkin(name, affiliation) {
+  const display = String(name || '').replace(/\s+/g, ' ').trim();
+  const org = String(affiliation || '').replace(/\s+/g, ' ').trim();
+  if (!display || !org) return { ok: false, message: 'フルネームと会社・所属を入力してください。' };
+  if (Array.from(display).length > WALKIN_MAX || Array.from(org).length > WALKIN_MAX) {
+    return { ok: false, message: `${WALKIN_MAX}文字までで入力してください。` };
+  }
+  return { ok: true, body: { display_name: display, affiliation: org, agree_terms: true } };
+}
+
+const CHECKIN_RETURN_KEY = 'islands-event-checkin-return';
+
+/** ログインに出る前：どの受付の画面にいたかを覚える（メールのリンクは「/」に戻るため）。 */
+export function rememberCheckinReturn(storage, code, now = Date.now()) {
+  if (!storage || !validEventCode(code)) return false;
+  try {
+    storage.setItem(CHECKIN_RETURN_KEY, JSON.stringify({ code, at: now }));
+    return true;
+  } catch { return false; }
+}
+
+/** 覚えていた受付の画面を見るだけ（起動時）。 */
+export function peekCheckinReturn(storage, now = Date.now()) {
+  if (!storage) return null;
+  try {
+    const saved = JSON.parse(storage.getItem(CHECKIN_RETURN_KEY) || 'null');
+    if (!saved || !validEventCode(saved.code) || !Number.isFinite(saved.at)) return null;
+    return now - saved.at <= RETURN_HOLD_MS ? saved.code : null;
+  } catch { return null; }
+}
+
+/** 同じものを一度だけ取り出す（受付の画面が使う）。 */
+export function takeCheckinReturn(storage, now = Date.now()) {
+  const code = peekCheckinReturn(storage, now);
+  try { if (storage) storage.removeItem(CHECKIN_RETURN_KEY); } catch { /* nothing to do */ }
+  return code;
+}
+
+/** ゲストが開けるページか：#/e/<code>・#/e/<code>/me・#/e/<code>/after・#/c/<code> だけ。 */
+export const guestMayOpen = (pattern) => ['#/e/:code', '#/e/:code/me', '#/e/:code/after', '#/c/:code'].includes(String(pattern || ''));
+
+// ---------------------------------------------------------------- 会のあと（#/e/<code>/after）
+
+/**
+ * 会のあとの画面。`data` は GET /api/events/<code>/after（{ people, me_is_member, join_policy }）。
+ * 「もっと話してみたい」は2人ともメンバーのときだけ（canTalk）。メンバーでない人で ask の会には参加の案内。
+ */
+export function afterView(data) {
+  const people = Array.isArray(data && data.people) ? data.people : [];
+  const meMember = Boolean(data && data.me_is_member);
+  const askJoin = !meMember && Boolean(data) && data.join_policy === 'ask';
+  return {
+    people: people.map((p) => ({
+      id: p.account_id, name: String(p.display_name || p.name || '名前なし'),
+      sub: [p.affiliation, p.job_title].map((v) => String(v || '').trim()).filter(Boolean).join('・'),
+      met: Boolean(p.met), canTalk: meMember && Boolean(p.is_member), raw: p,
+    })),
+    empty: people.length === 0,
+    askJoin,
+    note: askJoin ? EVENT_B_WORDS.askJoinNote : '',
+  };
+}
