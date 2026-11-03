@@ -718,6 +718,17 @@ PROBE_COOKIE = "islands_probe"
 PROBE_FEW_MAX = 2                           # 1〜2人は「少し」、3人以上は数字（E の 8）
 EVENT_STATUSES = ("applied", "attended", "cancelled", "declined", "waiting")
 EVENT_LIVE_STATUSES = ("applied", "waiting", "attended")
+# 開催の条件・会のあとの入り方（2026-11-11 第2回b。設計 G）
+EVENT_MIN_PARTICIPANTS = (2, 1000)          # 最小開催人数の範囲（上は定員まで）
+EVENT_JOIN_POLICIES = ("auto", "ask", "none")   # 受付で自動加入／本人に確認／加入させない
+EVENT_JOIN_POLICY_DEFAULT = "ask"           # 新しい会の初期値（SQL より前の会は auto）
+EVENT_PARTICIPANTS_CACHE_SECONDS = 60
+# 参加者リストの「近い人」（回答どうしの中心化コサイン。仮：会で試して直す）
+EVENT_NEAR_HIGH = 0.55
+EVENT_NEAR_MID = 0.45
+EVENT_NEAR_LOW = 0.30                       # これより下は near なし
+EVENT_NEAR_TOP = 3
+EVENT_B_OFF_ERROR = "会の新しい機能は、まだ使えません。"
 
 # エラーコード（hint）→ HTTP の番号と日本語の文。D の 1-2。DB 関数・MemoryStore・API が同じ文を使う。
 EVENT_ERROR_TEXT = {
@@ -743,6 +754,13 @@ EVENT_ERROR_TEXT = {
     "event_use_apply": "会への参加は、申し込みから行ってください。",
     "event_invalid": "会の内容を確かめてください。",
     "terms_required": "新しい利用規約とプライバシーポリシーに同意してください。",
+    # 第2回b（設計 G）
+    "event_not_held": "人数が集まらなかったため、この会は中止になりました。",
+    "cancel_closed": "キャンセルの期限を過ぎました。期限後のキャンセルは主催者に連絡してください。",
+    "event_decided": "開催の判定が出たあとは、最小開催人数と判定日を変えられません。",
+    "join_not_allowed": "この会からは、コミュニティに参加できません。",
+    "event_not_attended": "受付が済んだ人だけが使えます。",
+    "participants_forbidden": "この会は見つかりません。",
 }
 EVENT_STATUS_OF = {
     "not_logged_in": 401, "event_not_found": 404, "event_cancelled": 409, "event_banned": 403,
@@ -751,6 +769,8 @@ EVENT_STATUS_OF = {
     "capacity_below_joins": 422, "answers_required": 422, "name_required": 422,
     "public_admin_only": 403, "probe_limit": 429, "recruit_closed": 409, "recruit_full": 409,
     "event_use_apply": 403, "event_invalid": 422, "terms_required": 422,
+    "event_not_held": 409, "cancel_closed": 409, "event_decided": 409, "join_not_allowed": 409,
+    "event_not_attended": 403, "participants_forbidden": 404,
 }
 EVENT_SHARE_ERROR = "会の投稿は、ほかのコミュニティに出せません。"
 EVENT_CAPACITY_ERROR = EVENT_ERROR_TEXT["capacity_below_joins"]

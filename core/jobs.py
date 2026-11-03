@@ -5,7 +5,8 @@ pg_cron が毎分、送るものがあるときだけ POST /api/jobs/tick を呼
 
   schedule_times   week_before（開始の7日前）・day_of（開始の3時間前）・after（終了時）の時刻。過ぎた分は作らない。
                    DB の event_apply と同じ計算（テストで両方を比べる）。
-  run_tick         outbound_claim → 1通ずつ送る → outbound_done。そのあと片付け。
+  run_tick         開催の判定（event_settle_due：判定日を過ぎた会を開催決定／中止に）→ outbound_claim →
+                   1通ずつ送る → outbound_done。そのあと片付け。
   run_cleanup      event_cleanup（保存期間：予約は会の7日後に全部、webhook は30日、probe は翌日）→
                    account_ids を管理 API で消す。
 
@@ -135,8 +136,29 @@ def run_cleanup(store, *, now=None):
     return {**result, "deleted_accounts": deleted}
 
 
+def settle_due(store, *, now=None):
+    """判定日を過ぎた会を判定する（中止になった会の未送信は DB 関数が消すので、このあと取り出されない）。
+    第2回b の SQL がまだの DB では何もしない。判定した会があれば公開ページのキャッシュを消す。"""
+    if not getattr(store, "supports_events_b", False):
+        return 0
+    try:
+        settled = store.event_settle_due(now) if now is not None and getattr(store, "backend", "") == "memory"             else store.event_settle_due()
+    except Exception:
+        log.exception("settling the events failed")
+        return 0
+    if settled:
+        try:
+            from core import events
+            events.clear_cache()
+        except Exception:
+            pass
+    return int(settled or 0)
+
+
 def run_tick(store, *, now=None, sender=None, base_url="", budget_seconds=20, cleanup=True):
-    """送る時刻が来た予約を送り、片付ける。戻りは {"sent","failed","skipped","cleaned"}。"""
+    """判定日を過ぎた会を判定し、送る時刻が来た予約を送り、片付ける。
+    戻りは {"sent","failed","skipped","cleaned","settled"}。"""
+    settled = settle_due(store, now=now)
     sender = sender or default_sender(store)
     sent = failed = skipped = 0
     if sender is None:
@@ -177,7 +199,7 @@ def run_tick(store, *, now=None, sender=None, base_url="", budget_seconds=20, cl
             cleaned = run_cleanup(store, now=now)
         except Exception:
             log.exception("event cleanup failed")
-    return {"sent": sent, "failed": failed, "skipped": skipped, "cleaned": cleaned}
+    return {"sent": sent, "failed": failed, "skipped": skipped, "cleaned": cleaned, "settled": settled}
 
 
 def _host():

@@ -43,6 +43,8 @@ def sql_columns(table):
 
 
 class Recorder(SupabaseStore):
+    supports_events_b = False                # このファイルは第2回a の SQL と見比べる（第2回b は test_events_b.py）
+
     def __init__(self):                      # 繋がない
         self.rpcs, self.reads = [], []
 
