@@ -332,7 +332,7 @@ test('受付の画面の出し分け', () => {
   assert.equal(k({ window: 'open', me: 'rejected', rejects: 1 }), 'rejected');
   assert.equal(k({ window: 'open', me: 'rejected', rejects: 3 }), 'blocked');
   assert.equal(k({ window: 'open', me: 'banned' }), 'blocked');
-  assert.equal(k({ window: 'open', me: 'cancelled' }), 'cancelled');
+  assert.equal(k({ window: 'open', me: 'cancelled' }), 'walkin');   // 取り消した人も受付待ちから主催者が選ぶ
   assert.equal(rules.checkinView({ me: 'rejected', rejects: 1 }).text, '受付できませんでした。主催者に声をかけてください');
 });
 

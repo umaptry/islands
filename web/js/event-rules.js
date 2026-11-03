@@ -489,7 +489,9 @@ export function checkinView(info) {
   if (me === 'rejected') return { kind: rejects >= 3 ? 'blocked' : 'rejected', text: EVENT_B_WORDS.checkinBlocked };
   if (window === 'early') return { kind: 'early', text: EVENT_B_WORDS.earlyCheckin };
   if (window === 'closed') return { kind: 'closed', text: EVENT_B_WORDS.closedCheckin };
-  if (me === 'cancelled') return { kind: 'cancelled', text: EVENT_B_WORDS.checkinCancelled };
+  // 自分で取り消したあとに会場に来た人は、飛び入りと同じく受付待ちになり、主催者が名簿で選ぶ
+  // （DB の event_walkin_request は取り消した行を waiting に戻す）
+  if (me === 'cancelled') return { kind: 'walkin' };
   if (me === 'applied' || (me === 'none' && info && info.is_member)) return { kind: 'ready' };
   return { kind: 'walkin' };
 }
