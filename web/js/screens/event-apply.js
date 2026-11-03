@@ -19,6 +19,7 @@ import {
   EVENT_WORDS, applyView, breakdownRows, calendarUrl, cleanInterests, communityOnlyView, countView, errorText, eventHashFor, probeDraft,
   probeView, rememberApplyReturn, saveProbeDraft, takeApplyReturn, validEventCode, windowText,
 } from '../event-rules.js';
+import { GO_WORDS, cancelNote, goState, joinNote } from '../event-host-rules.js';
 import {
   APPLY_WORDS, ANSWER_MAX, PRIVACY_PATH, QUESTION_EXAMPLES, TERMS_PATH, ageChoices, answersNeeded, applyBody,
   applySteps, canSubmit, cleanAnswer, collectAnswers, stepAfter, stepBefore, validateProfile,
@@ -138,6 +139,27 @@ export function setupEventApply() {
     return el('div', { className: `ev-band ${view.state === 'cancelled' ? 'is-red' : 'is-amber'}`, id: 'eventBand', text: view.band });
   }
 
+  /** 人数が集まらず中止になった会（判定のあと）。サーバーの closed が 'not_held'、または phase が not_held。 */
+  const notHeld = () => Boolean(info) && (info.closed === 'not_held' || info.phase === 'not_held');
+
+  /** 開催の条件：状態の札・現在の人数・「◯月◯日までに◯人集まれば開催」・キャンセル期限・会のあとの入り方。何も無ければ null。 */
+  function goalCard() {
+    const state = goState(info);
+    const cancel = cancelNote(info);
+    const join = joinNote(info.join_policy);
+    if (!state && !cancel && !join) return null;
+    const card = el('div', { className: `ev-card ev-goal${state ? ` ${state.phase}` : ''}`, id: 'eventGoal' });
+    if (state) {
+      card.append(el('div', { className: 'ev-goal-head' },
+        el('span', { className: `ev-go-badge ${state.tone}`, id: 'eventGoalBadge', text: state.label }),
+        el('b', { className: 'ev-goal-count', text: state.countText })),
+        el('div', { className: 'ev-line', text: state.conditionText }));
+    }
+    if (cancel) card.append(el('div', { className: 'ev-line ev-quiet', text: cancel }));
+    if (join) card.append(el('div', { className: 'ev-line ev-quiet', text: join }));
+    return card;
+  }
+
   /** 「コミュニティの中だけ」の会で、メンバーではないと分かっている（または分からないがログインしていない）か。 */
   function gateView() {
     let isMember = null;
@@ -153,15 +175,20 @@ export function setupEventApply() {
   function showInfo() {
     const view = applyView(info);
     const gate = gateView();
-    const content = [closedBand(view), brand(), ...titleBlock()];
+    const stopped = notHeld();
+    const content = [closedBand(view), stopped ? el('div', { className: 'ev-band is-red', id: 'eventBand', text: GO_WORDS.publicBand }) : null,
+      brand(), ...titleBlock(), goalCard()];
     if (gate.mustStop && view.state !== 'cancelled') {
       content.push(el('div', { className: 'ev-band is-amber', id: 'eventCommunityOnly', text: gate.note }));
     }
-    if (view.state !== 'cancelled') {
+    if (view.state !== 'cancelled' && !stopped) {
       content.push(el('h2', { className: 'ev-sub', text: 'どんな人が来る？' }), peopleCard());
     }
     const footer = [];
-    if (gate.mustStop) {
+    if (stopped) {
+      // 中止の会は申し込めない：メンバーが戻れるように
+      footer.push(mapButton());
+    } else if (gate.mustStop) {
       // メンバーしか申し込めない会：新しく申し込む道は出さない。ログイン前は入り口、ログイン後はマップへ。
       if (view.canApply && !session.signedIn()) footer.push(primary('ログインする', () => navigate('#/auth'), { id: 'eventLoginMember' }));
       footer.push(mapButton());
@@ -597,7 +624,7 @@ export function setupEventApply() {
       try { await loadAfterSignIn(); } catch { /* the steps ask again */ }
       if (mark !== turn) return;
     }
-    if (applyView(info).state === 'cancelled') { showInfo(); return; }
+    if (applyView(info).state === 'cancelled' || notHeld()) { showInfo(); return; }
     if (session.signedIn() && state.account && state.account.display_name) {
       // Somebody who has applied already has no business on this page: their own page is the guest page.
       try {
