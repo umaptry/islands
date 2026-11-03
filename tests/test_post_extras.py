@@ -61,8 +61,14 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
         {"key": "help", "text": "困ってること"},
     ]
     assert data["extra_prompts"] == [dict(item) for item in EXTRA_PROMPTS]
-    assert data["features"] == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
-                                "share": False, "map_b": True}
+    features = dict(data["features"])
+    # member_removal follows the clock (the day the new terms start, 2026-11-16): its own test is in test_join_approval.py
+    assert isinstance(features.pop("member_removal"), bool)
+    # 会（第2回a）：events・line_messaging・probe は tests/test_events.py が見る
+    for name in ("events", "line_messaging", "probe"):
+        assert isinstance(features.pop(name), bool)
+    assert features == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
+                        "share": False, "map_b": True}
 
 
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):

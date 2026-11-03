@@ -17,7 +17,7 @@ async function newPerson(browser, testInfo, name, extra = {}) {
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
     await data.claimInvite(code);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
   }, { email: `${name}-${crypto.randomUUID()}@example.com`, name, code: INVITE });
   return { page, context };
 }
@@ -74,9 +74,10 @@ test('地図の何もない所をダブルタップすると、その場所を�
   await me.page.waitForTimeout(60);
   await me.page.touchscreen.tap(spot.x, spot.y);
   await expect.poll(async () => (await camera()).scale / start.scale, { timeout: 5000 }).toBeCloseTo(4, 2);
-  // たたいた場所は、指の下に残る
+  // たたいた場所は、指の下に残る（地図の左上から測る。上に規約のお知らせの帯があると地図が下がる）
   const end = await camera();
-  const worldOf = (c) => ({ x: (spot.x - c.x) / c.scale, y: (spot.y - c.y) / c.scale });
+  const box = await me.page.locator('#stage').boundingBox();
+  const worldOf = (c) => ({ x: (spot.x - box.x - c.x) / c.scale, y: (spot.y - box.y - c.y) / c.scale });
   expect(worldOf(end).x).toBeCloseTo(worldOf(start).x, 0);
   expect(worldOf(end).y).toBeCloseTo(worldOf(start).y, 0);
   await me.context.close();

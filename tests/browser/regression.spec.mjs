@@ -122,7 +122,7 @@ test('draft survives navigation; panel cleanup and responsive modality', async (
     await session.verifyCode(email, otp.devCode);
     await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: '比較用', affiliation: 'テスト', icon_id: '1' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: '比較用', affiliation: 'テスト', name_confirmed: true, icon_id: '1' })).account;
     return (await api.post('/api/posts', { body: '週末はソロキャンプに出かけて、焚き火を眺めながら静かに過ごすのが好きです。', motivation: 50 })).id;
   });
   await page.reload();
@@ -204,7 +204,8 @@ test('a post image opens in the viewer with close and reactions, and closes by b
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
   });
   // the picture shows under the words on ①, as on the card
-  await expect(page.locator('#composeImagePreview')).toBeVisible();
+  // The preview shows once the squeezing is done: on a slow CI machine a big picture can take more than 5s
+  await expect(page.locator('#composeImagePreview')).toBeVisible({ timeout: 20000 });
   await page.locator('#composeNext').click();
   await page.locator('#composeMotivation').fill('70');
   await page.locator('#composeNext2').click();
@@ -277,7 +278,8 @@ test('a photo posts from a browser that cannot write WebP (Safari, iPhone includ
   await page.locator('#composeImageInput').setInputFiles({
     name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(noise, 'base64'),
   });
-  await expect(page.locator('#composeImagePreview')).toBeVisible();
+  // The preview shows once the squeezing is done: on a slow CI machine a big picture can take more than 5s
+  await expect(page.locator('#composeImagePreview')).toBeVisible({ timeout: 20000 });
   await page.locator('#composeNext').click();
   await page.locator('#composeMotivation').fill('70');
   await page.locator('#composeNext2').click();
@@ -378,7 +380,7 @@ async function signInForFirstPost(page, label) {
     await session.verifyCode(email, otp.devCode);
     await (await import('/static/js/net.js')).api.post('/api/local/invites/claim', { code: 'demo-invite-code-local-0001' });
     await (await import('/static/js/communities.js')).refreshCommunities();
-    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: '1' })).account;
+    state.account = (await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: '1' })).account;
   }, label);
 }
 
@@ -546,7 +548,7 @@ async function seedNeighbours(page, rows) {
     const otp = await (await page.request.post('/api/local/auth/otp', { data: { email } })).json();
     const got = await (await page.request.post('/api/local/auth/verify', { data: { email, code: otp.code } })).json();
     const headers = { Authorization: `Bearer ${got.access_token}` };
-    await page.request.put('/api/account/me', { data: { display_name: row.name, affiliation: 'テスト', icon_id: '1' }, headers });
+    await page.request.put('/api/account/me', { data: { display_name: row.name, affiliation: 'テスト', name_confirmed: true, icon_id: '1' }, headers });
     await page.request.post('/api/local/invites/claim', { data: { code: 'demo-invite-code-local-0001' }, headers });
     const mine = await (await page.request.get('/api/local/communities/mine', { headers })).json();
     const communityId = mine.communities[0].id || mine.communities[0].community_id;
@@ -767,7 +769,11 @@ test('an account with no affiliation is held on the affiliation screen, then goe
   await page.locator('#affiliationInput').fill('コクヨ');
   await expect(page.locator('#affiliationSave')).toBeEnabled();
   await page.locator('#affiliationSave').click();
-  // もともと行こうとしていた場所（#/me）へ。
+  // 2026-11-01: 所属のあとはフルネームの確認（名前は未確認のまま）。保存すると、もともと行こうとしていた場所（#/me）へ。
+  await expect(page.locator('#fullname')).toHaveClass(/active/);
+  await expect(page.locator('#fullnameAffiliation')).toHaveValue('コクヨ');
+  await page.locator('#fullnameName').fill('所属 なし');
+  await page.locator('#fullnameSave').click();
   await expect(page.locator('#me')).toHaveClass(/active/);
   await page.evaluate(() => { location.hash = '#/map'; });
   await expect(page.locator('#map')).toHaveClass(/active/);

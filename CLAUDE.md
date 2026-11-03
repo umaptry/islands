@@ -47,8 +47,9 @@
 - people layer：つながりの線・似ている人・新しい住人の通知（`connection_lines`・`similar_people`・`notify_resident`）
 - Web Push：プッシュ通知の送信（`dispatch_pushes`）
 - API：`/api/config`・`/api/islands`・`/api/connections`・`/api/posts`（作成・プレビュー・編集・共有・削除）・`/api/matches` など
-- local mode：`/api/local/*`（Supabase の代役）
+- local mode：`/api/local/*`（Supabase の代役）。末尾に「join approval」の見出しで承認制の道（承認の切り替え・申し込み状況・取り消し・一覧・決める）
 - account：`/api/account/me`（両方のモード）
+- 会：`app.include_router(events.router)`・`jobs.router`・`line.router`（起動前に `line.configure(lambda: state["store"])`）が先頭近くにある。`PostCreate.event`、会の投稿の編集・共有・参加ボタンの扱いは `events.is_event_post` で見る
 - static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`。`/privacy`・`/terms` は施行日（core/config.py の `POLICY_REVISION_EFFECTIVE`）の前は今の文、あとは `*-next.html` を自動で返す（`policy_now()` で時計を差し替えてテスト）。`/privacy/next`・`/terms/next` は新しい文。`/api/config` の `notice` が規約改定のお知らせ（期間の外は null）
 
 ### core/（サーバーの部品）
@@ -56,12 +57,14 @@
 - 島：clustering.py（島に分ける）、island_namer.py（Gemini で名前）、island_tracking.py（作り直しても同じ島として追う）、growth.py（島の育ち方）
 - 人のつながり：connections.py（線）、affinity.py（人どうしの似かた）、matching.py（新しい投稿が誰につながるか）、introductions.py（紹介の一文）、similarity.py（距離→似てる度%）
 - 投稿：post_extras.py（お題・募集）、prompts.py（今週のお題）、quiet.py（反応のない投稿をそっと見せる）、stopwords.py
-- 通知：notifications.py、webpush.py
+- 通知：notifications.py（`allows`。`ALWAYS_ON_NOTIFICATION_TYPES` の2種類は設定に関係なく常にオン）、webpush.py
+- 名前を出してよい人：visibility.py（`visible_ids`・`display_name_for`・`mask_person`。accounts を閉じたあとのブラウザと同じ見え方。サーバーが名前を返す所は通す：push の文・近い投稿のカード・島の住人の顔・人のカード・おかえり・手元の通知一覧。地図の中の線は今のメンバーに絞ってあるので通さない）
 - 土台：config.py（設定値はすべてここ）、auth.py（ログインの確認）、store.py（`MemoryStore` と `SupabaseStore`）
+- 会（イベント申し込み。2026-11-01〜）：events.py（`/e/{code}`・`/c/{code}`、`/api/public/events/*`・`/api/events/*`、会を作る〈`POST /api/posts` の `event`〉・申し込み・取り消し・遅れる・名簿・お断り・probe。純粋な関数 `clean_event`・`bucket`・`blur` など）、jobs.py（`POST /api/jobs/tick`：予約送信と片付け。`schedule_times`・`run_tick`・`run_cleanup`）、store_events.py（`EventsSupabaseMixin`＝DB 関数を呼ぶ／`EventsMemoryMixin`＝手元モード。メソッド名は DB 関数と同じ。`store.py` はこの 2 つを継承するだけ）。line.py（LINE 公式アカウント：`POST /api/line/webhook`・push・送る文 `build_message`・follow／postback）。ストアのメソッドと DB 関数の名前・引数は tests/test_events_db_contract.py が SQL と見比べる。設計は設計_イベント申し込み/D_関数の取り決め.md。受付・参加者リスト・会のあとは第2回b。
 
 ### web/（画面。ビルドなしの素の ES モジュール）
 - 入口：index.html（全画面のマークアップ）、style.css、js/app.js（起動）、js/router.js（画面の切り替えと下のナビ）、js/state.js、js/config.js
-- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）
+- 画面 js/screens/：map.js（地図画面と投稿シート）、map-extras.js（島カードなど地図の周り）、compose.js（投稿）、auth.js（ようこそ・ログイン・初回プロフィール・ガイダンス）、profile.js、notifications.js、dm.js、invite.js、community-edit.js、meet.js（留守のあいだの変化）、waiting.js（承認待ち・お断り・外された、#/waiting）、fullname.js（フルネームの確認、#/fullname。判断は fullname-rules.js）
 - 部品 js/components/：postcard.js、chat.js（投稿の下のメッセージ）、talk-button.js（もっと話してみたい）、image-viewer.js、heatobject.js
 - 地図の描画 js/map/：index.js（カメラ・操作・描画の中心）、terrain.js・terrain-worker.js（地面）、coast.js・land.js・landmass.js（陸と海）、buildings.js（家と町）、pins.js、lines.js（人の線）、kin.js（点線）、decor.js・surf.js・vehicles.js・sparkles.js（飾り）、palette.js（色）
 - 通信：net.js（`api` が Cloud Run、`data` が Supabase か手元）、session.js（ログイン）、realtime.js（通知をすぐ受け取る）、push.js・push-ask.js・sw.js（プッシュ）

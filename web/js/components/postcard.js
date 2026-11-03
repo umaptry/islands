@@ -20,6 +20,7 @@ import { attachLongPress } from '../longpress.js';
 import { openImageViewer } from './image-viewer.js';
 import { isRecruiting } from '../map/reads.js';
 import { joinTerms, joinWord, joinCount, showHelp } from '../recruit-rules.js';
+import { mountEventBlock } from './event-card.js';
 
 // One outside-click listener for every card menu, including cards removed with a sheet.
 let activeMenu = null;
@@ -153,6 +154,8 @@ export function postCard(post, options = {}) {
     const row = footer(post, options);
     const foot = el('div', { className: 'post-footer' }, row);
     if (row.joinButton) foot.append(row.joinButton);
+    // 会（イベント）の投稿なら、「参加」の代わりに申し込みのボタン（主催者には主催者メニュー）を出す。
+    mountEventBlock(post, foot, row.joinButton);
     if (options.onSeeParticipants && isRecruiting(post)) {
       foot.append(el('button', {
         className: 'post-participants-button',

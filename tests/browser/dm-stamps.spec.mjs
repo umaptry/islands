@@ -17,7 +17,7 @@ async function newPerson(browser, testInfo, name) {
     const { api } = await import('/static/js/net.js');
     const otp = await session.requestCode(email);
     await session.verifyCode(email, otp.devCode);
-    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', icon_id: 'photo' });
+    await api.put('/api/account/me', { display_name: name, affiliation: 'テスト', name_confirmed: true, icon_id: 'photo' });
   }, { email, name });
   await page.goto('/?again=1#/map');
   await expect(page.locator('#map')).toHaveClass(/active/);

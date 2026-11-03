@@ -38,6 +38,12 @@ import numpy as np
 
 from core.config import ENERGY_CELL_SIZE
 from core.config import (
+    APPROVAL_ERROR_DECIDE_ADMIN_ONLY,
+    APPROVAL_ERROR_INVITE_ADMIN_ONLY,
+    APPROVAL_ERROR_INVITE_UNKNOWN,
+    APPROVAL_ERROR_LIST_ADMIN_ONLY,
+    APPROVAL_ERROR_POST_NOT_IN_COMMUNITY,
+    JOIN_REQUEST_NOTIFY_HOURS,
     COMMUNITY_ERROR_NAME,
     COMMUNITY_ERROR_RENAME_ADMIN_ONLY,
     COMMUNITY_NAME_MAX,
@@ -120,8 +126,14 @@ POST_COLUMNS = POST_COLUMNS_BASE + "," + ",".join(EXTRA_COLUMNS)
 # database has them (see supports_share), like the extras above.
 SHARE_COLUMNS = ("share_group", "group_join_count")
 SHARE_CHECK_SECONDS = 60
-ACCOUNT_COLUMNS = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
-                   "updated_at,topics,goal,seeking,offering")
+ACCOUNT_COLUMNS_BASE = ("id,display_name,affiliation,bio,link_url,icon_id,avatar_path,created_at,"
+                        "updated_at,topics,goal,seeking,offering")
+# The 2026-11-01 column (フルネーム確認済み). A database that has not had the migration yet answers 400 (42703)
+# or 401/403 (42501) when it is named, so accounts are read without it until it shows up (see
+# SupabaseStore._account_columns) - the code may come out before the SQL, and nobody is shut out for it.
+ACCOUNT_NEW_COLUMNS = ("name_confirmed_at",)
+ACCOUNT_COLUMNS = ACCOUNT_COLUMNS_BASE + "," + ",".join(ACCOUNT_NEW_COLUMNS)
+ACCOUNT_COLUMNS_RECHECK_SECONDS = 60
 # The hidden profile vectors. Written by the server only, never selected for a client.
 PROFILE_VECTOR_COLUMNS = ("vec_topics", "vec_goal", "vec_seeking", "vec_offering")
 # Naming a landmass needs the words and the position, not the essays.
@@ -260,11 +272,22 @@ class InviteRequired(CommunityRefused):
         super().__init__(message, status)
 
 
+class EventRefused(Refused):
+    """A 会（イベント申し込み）rule said no. `code` is the hint the database function raises
+    (core/config.py EVENT_STATUS_OF), `status` its HTTP number. core/store_events.py has the rest."""
+
+    def __init__(self, message, status=422, code=None):
+        super().__init__(message, status)
+        self.code = code
+
+
+from core.store_events import EventsMemoryMixin, EventsSupabaseMixin   # noqa: E402  (needs the classes above)
+
 # ---------------------------------------------------------------------------
 # memory
 # ---------------------------------------------------------------------------
 
-class MemoryStore:
+class MemoryStore(EventsMemoryMixin):
     """In-process store for local development and tests.
 
     Every count and every notification the schema maintains with a trigger is
@@ -303,11 +326,16 @@ class MemoryStore:
         self._members = {}          # (community_id, account_id) -> {role, joined_at}
         self._invites = {}          # id -> {id, community_id, code, created_by, created_at, expires_at, revoked_at, uses}
         self._invite_claims = {}    # account_id -> {invite_id, claimed_at}: "may make an account"
+        self._join_requests = {}    # (community_id, account_id) -> a community_join_requests row (承認制)
+        self._removals = {}         # (community_id, account_id) -> a community_removals row (外した記録)
+        self._join_notified = {}    # (community_id, account_id) -> when the admins were last told (24h throttle)
+        self._auth_emails = {}      # account_id -> {"email", "provider"}: what auth.users knows (local mode)
         self._app_settings = {"invite_only": False, "members_only": False}   # both start false, like the migrations
         self._talk_wish_notices = {}  # (from_id, to_id) -> iso time a talk_wish notice was written
         self._push_config = {"vapid_public": None, "vapid_private": None, "dispatch_url": None}
         self._push_subscriptions = {}  # endpoint -> row
         self._presence = {}         # account_id -> datetime the app is on screen until
+        self._init_events()          # core/store_events.py: the tables of the 会
         self._lock = threading.RLock()
         # Stands in for the database trigger that pokes /api/push/dispatch.
         # Called with the lock held, so it must only raise a flag and return.
@@ -329,7 +357,8 @@ class MemoryStore:
             # The accounts BEFORE INSERT trigger: a NEW account needs an invite while
             # invite_only is on. An account that already has a row always passes.
             if (self._app_settings.get("invite_only") and account_id not in self._accounts
-                    and account_id not in self._invite_claims):
+                    and account_id not in self._invite_claims
+                    and not self._has_event_registration(account_id)):
                 raise InviteRequired()
             row = self._accounts.get(account_id) or {
                 "id": account_id,
@@ -343,6 +372,9 @@ class MemoryStore:
                 "goal": None,
                 "seeking": None,
                 "offering": None,
+                "age_band": None,
+                "job_title": None,
+                "name_confirmed_at": None,
                 "created_at": _now(),
             }
             # The vectors are kept apart, like the column grant that hides them.
@@ -355,6 +387,10 @@ class MemoryStore:
             row.update(fields)
             row["updated_at"] = _now()
             self._accounts[account_id] = row
+            # The accounts_join_request_notify trigger: a name now exists, so tell the admins about
+            # an application that was waiting for one.
+            if row.get("display_name"):
+                self._notify_waiting_requests(account_id)
             return dict(row)
 
     # -- posts -------------------------------------------------------------
@@ -485,6 +521,7 @@ class MemoryStore:
             if not row or row.get("deleted_at") or row["author_id"] != author_id:
                 return False
             row["deleted_at"] = _now()
+            self._event_on_post_deleted(post_id)   # events_on_post_delete (the trigger): a 会 is called off
             return True
 
     # -- the copies of one post in several communities (2026-10-29) --------------
@@ -1338,7 +1375,9 @@ class MemoryStore:
             community = {"id": str(uuid.uuid4()), "slug": slug or None, "name": name,
                          "created_by": admin_id, "created_at": _now()}
             self._communities[community["id"]] = community
-            self._members[(community["id"], admin_id)] = {"role": "admin", "joined_at": _now()}
+            self._members[(community["id"], admin_id)] = {
+                "role": "admin", "joined_at": _now(), "joined_via": "founder", "invite_id": None,
+                "event_post_id": None}
             return community["id"]
 
     def seed_demo_community(self):
@@ -1354,7 +1393,7 @@ class MemoryStore:
             invite = {"id": str(uuid.uuid4()), "community_id": community["id"],
                       "code": LOCAL_DEMO_INVITE_CODE, "created_by": None, "created_at": _now(),
                       "expires_at": (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat(),
-                      "revoked_at": None, "uses": 0}
+                      "revoked_at": None, "uses": 0, "needs_approval": False, "post_id": None}
             self._invites[invite["id"]] = invite
             return community["id"]
 
@@ -1390,22 +1429,42 @@ class MemoryStore:
                 return invite
         return None
 
-    def check_invite(self, code):
-        """{"valid", "community_name", "reason"} and nothing else (no ids, no counts)."""
+    def check_invite(self, code, me=None):
+        """{"valid", "community_name", "reason", "needs_approval", "post_id"} and nothing else (no
+        ids of people, no counts). needs_approval: the link is on, or `me` (when signed in) was
+        removed from / turned down by that community. A link that cannot be used says null for both."""
         with self._lock:
             invite = self._invite_by_code(code or "")
             if not invite:
-                return {"valid": False, "community_name": None, "reason": "unknown"}
+                return {"valid": False, "community_name": None, "reason": "unknown",
+                        "needs_approval": None, "post_id": None}
             name = self._communities[invite["community_id"]]["name"]
             if invite["revoked_at"]:
-                return {"valid": False, "community_name": name, "reason": "revoked"}
+                return {"valid": False, "community_name": name, "reason": "revoked",
+                        "needs_approval": None, "post_id": None}
             if _stamp(invite["expires_at"]) <= datetime.now(timezone.utc):
-                return {"valid": False, "community_name": name, "reason": "expired"}
-            return {"valid": True, "community_name": name, "reason": None}
+                return {"valid": False, "community_name": name, "reason": "expired",
+                        "needs_approval": None, "post_id": None}
+            return {"valid": True, "community_name": name, "reason": None,
+                    "needs_approval": self._must_approve(invite, me), "post_id": invite.get("post_id")}
 
-    def claim_invite(self, me, code):
-        """Join the community of a valid invite and record the claim (which is what lets a
-        NEW account be made while invite_only is on). Raises CommunityRefused."""
+    def _must_approve(self, invite, me):
+        """A link that is on, or a person who was removed from / turned down by that community
+        (those two are held for approval whatever the link says). Lock held."""
+        if invite.get("needs_approval"):
+            return True
+        if not me:
+            return False
+        key = (invite["community_id"], me)
+        request = self._join_requests.get(key)
+        return key in self._removals or bool(request and request["status"] == "rejected")
+
+    def claim_invite(self, me, code, consent=None):
+        """Join the community of a valid invite, or wait for approval, and record the claim (which is
+        what lets a NEW account be made while invite_only is on). Raises CommunityRefused.
+
+        {"community_id", "community_name", "status", "post_id"}. status: joined / already (was a
+        member) / pending (waiting for an admin). post_id: the post saved ON THE LINK only."""
         if not me:
             raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
         with self._lock:
@@ -1418,11 +1477,36 @@ class MemoryStore:
                 raise CommunityRefused(INVITE_ERROR_EXPIRED)
             community = self._communities[invite["community_id"]]
             key = (community["id"], me)
-            if key not in self._members:
-                self._members[key] = {"role": "member", "joined_at": _now()}
-                invite["uses"] += 1
+            result = {"community_id": community["id"], "community_name": community["name"],
+                      "post_id": invite.get("post_id")}
+            if key in self._members:
+                self._invite_claims.setdefault(me, {"invite_id": invite["id"], "claimed_at": _now()})
+                return {**result, "status": "already"}
+            if self._must_approve(invite, me):
+                request = self._join_requests.get(key)
+                removed = key in self._removals
+                if request is None or request["status"] == "rejected":
+                    self._join_requests[key] = {
+                        "community_id": community["id"], "account_id": me, "invite_id": invite["id"],
+                        "status": "pending", "was_removed": removed,
+                        "rejected_before": bool(request),
+                        "requested_at": _now(), "notified_at": None, "decided_at": None,
+                        "decided_by": None, "consent_version": consent}
+                    invite["uses"] += 1
+                elif consent:
+                    request["consent_version"] = consent
+                self._invite_claims.setdefault(me, {"invite_id": invite["id"], "claimed_at": _now()})
+                if (self._accounts.get(me) or {}).get("display_name"):
+                    self._notify_waiting_requests(me)
+                return {**result, "status": "pending"}
+            self._members[key] = {"role": "member", "joined_at": _now(), "joined_via": "invite",
+                                  "invite_id": invite["id"], "event_post_id": None}
+            invite["uses"] += 1
+            # A person who was waiting and then used a link that is off is simply in: the row and
+            # the admins' notice go (a person once turned down or removed never gets here).
+            self._drop_join_request(key)
             self._invite_claims.setdefault(me, {"invite_id": invite["id"], "claimed_at": _now()})
-            return {"community_id": community["id"], "community_name": community["name"]}
+            return {**result, "status": "joined"}
 
     @staticmethod
     def _end_of_day_jst(now=None):
@@ -1431,8 +1515,10 @@ class MemoryStore:
         jst_day = (now + timedelta(hours=9)).replace(hour=0, minute=0, second=0, microsecond=0)
         return jst_day + timedelta(days=1) - timedelta(minutes=1) - timedelta(hours=9)
 
-    def create_invite(self, me, community_id, minutes, until_end_of_day=False):
-        """{"code", "expires_at", "id"}. Admins of that community only."""
+    def create_invite(self, me, community_id, minutes, until_end_of_day=False,
+                      needs_approval=False, post=None):
+        """{"code", "expires_at", "id", "needs_approval", "post_id"}. Admins of that community only.
+        `post`: a live post of that community (a link that carries an event)."""
         if not me:
             raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
         with self._lock:
@@ -1448,13 +1534,19 @@ class MemoryStore:
                         or not 1 <= minutes <= INVITE_MINUTES_MAX:
                     raise CommunityRefused(INVITE_ERROR_MINUTES)
                 expires = now + timedelta(minutes=minutes)
+            if post:
+                row = self._posts.get(post)
+                if not row or row.get("deleted_at") or row.get("community_id") != community_id:
+                    raise CommunityRefused(APPROVAL_ERROR_POST_NOT_IN_COMMUNITY)
             code = uuid.uuid4().hex[:12] + uuid.uuid4().hex[:12]
             invite = {"id": str(uuid.uuid4()), "community_id": community_id,
                       "code": code, "created_by": me,
                       "created_at": now.isoformat(), "expires_at": expires.isoformat(),
-                      "revoked_at": None, "uses": 0}
+                      "revoked_at": None, "uses": 0,
+                      "needs_approval": bool(needs_approval), "post_id": post or None}
             self._invites[invite["id"]] = invite
-            return {"code": invite["code"], "expires_at": invite["expires_at"], "id": invite["id"]}
+            return {"code": invite["code"], "expires_at": invite["expires_at"], "id": invite["id"],
+                    "needs_approval": invite["needs_approval"], "post_id": invite["post_id"]}
 
     def list_invites(self, me, community_id):
         """Newest first, at most 100. Admins of that community only."""
@@ -1465,7 +1557,8 @@ class MemoryStore:
                 raise CommunityRefused(INVITE_ERROR_ADMIN_ONLY_LIST, status=403)
             rows = [i for i in reversed(list(self._invites.values())) if i["community_id"] == community_id]  # newest first even when the clock ticks coarsely
             rows.sort(key=lambda i: _stamp(i["created_at"]), reverse=True)
-            return [{key: i[key] for key in ("id", "code", "expires_at", "revoked_at", "uses", "created_at")}
+            return [{**{key: i[key] for key in ("id", "code", "expires_at", "revoked_at", "uses", "created_at")},
+                     "needs_approval": bool(i.get("needs_approval")), "post_id": i.get("post_id")}
                     for i in rows[:100]]
 
     def revoke_invite(self, me, invite_id):
@@ -1500,6 +1593,174 @@ class MemoryStore:
                 return False
             invite["expires_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
             return True
+
+    # -- join approval (2026-11-01) -------------------------------------------------
+    # Mirrors supabase/migrations M1 (join_approval): the same rules, the same Japanese words.
+    # States of one person in one community: member / pending / rejected / removed (see
+    # _join_requests and _removals). Local mode only; production runs the SQL functions.
+
+    def remember_auth(self, account_id, email, provider="email"):
+        """What auth.users would know about this person (local sign-in): the admins see the e-mail
+        of somebody waiting, and nobody else does."""
+        with self._lock:
+            self._auth_emails[account_id] = {"email": email, "provider": provider}
+
+    def set_invite_approval(self, me, invite_id, approval):
+        """Admins only. Turning it ON turns on every usable link of that community (the screen shows
+        one link; an old link that is off would be a hole). Turning it off changes this link only."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            invite = self._invites.get(invite_id)
+            if not invite:
+                raise CommunityRefused(APPROVAL_ERROR_INVITE_UNKNOWN, status=404)
+            if not self._is_admin(invite["community_id"], me):
+                raise CommunityRefused(APPROVAL_ERROR_INVITE_ADMIN_ONLY, status=403)
+            if approval:
+                now = datetime.now(timezone.utc)
+                for other in self._invites.values():
+                    if (other["community_id"] == invite["community_id"] and not other["revoked_at"]
+                            and _stamp(other["expires_at"]) > now):
+                        other["needs_approval"] = True
+                invite["needs_approval"] = True
+            else:
+                invite["needs_approval"] = False
+
+    def my_join_status(self, me):
+        """Where the signed-in person stands: [{community_id, community_name, status, at}], status
+        pending / rejected / removed (removed only when there is no pending or rejected row)."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            rows = []
+            for (cid, account), request in self._join_requests.items():
+                if account == me and cid in self._communities:
+                    rows.append({"community_id": cid, "community_name": self._communities[cid]["name"],
+                                 "status": request["status"],
+                                 "at": request["decided_at"] if request["status"] == "rejected" else request["requested_at"]})
+            for (cid, account), removal in self._removals.items():
+                if account == me and cid in self._communities and (cid, me) not in self._join_requests:
+                    rows.append({"community_id": cid, "community_name": self._communities[cid]["name"],
+                                 "status": "removed", "at": removal["removed_at"]})
+            rows.sort(key=lambda row: _stamp(row["at"]), reverse=True)
+            return rows
+
+    def cancel_join_request(self, me, community_id):
+        """Take back your own application: the row and the admins' notice go."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            request = self._join_requests.get((community_id, me))
+            if request and request["status"] == "pending":
+                self._drop_join_request((community_id, me))
+
+    def list_join_requests(self, me, community_id):
+        """Admins only: who is waiting (people with a name only), oldest first, with the e-mail and
+        the way they signed in. After a decision the e-mail can no longer be fetched."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            if not community_id or not self._is_admin(community_id, me):
+                raise CommunityRefused(APPROVAL_ERROR_LIST_ADMIN_ONLY, status=403)
+            rows = []
+            for (cid, account), request in self._join_requests.items():
+                person = self._accounts.get(account)
+                if cid != community_id or request["status"] != "pending" or not person or not person.get("display_name"):
+                    continue
+                auth_row = self._auth_emails.get(account) or {}
+                rows.append({
+                    "account_id": account, "display_name": person["display_name"],
+                    "affiliation": person.get("affiliation"), "icon_id": person.get("icon_id", "0"),
+                    "avatar_path": person.get("avatar_path"),
+                    "email": auth_row.get("email"), "provider": auth_row.get("provider"),
+                    "requested_at": request["requested_at"], "was_removed": request["was_removed"],
+                    "rejected_before": request["rejected_before"]})
+            rows.sort(key=lambda row: _stamp(row["requested_at"]))
+            return rows
+
+    def decide_join_request(self, me, community_id, person, approve):
+        """Admins only. 'approved' / 'rejected' / 'already' (nobody is waiting any more)."""
+        if not me:
+            raise CommunityRefused(TALK_ERROR_LOGIN, status=401)
+        with self._lock:
+            if not community_id or not self._is_admin(community_id, me):
+                raise CommunityRefused(APPROVAL_ERROR_DECIDE_ADMIN_ONLY, status=403)
+            key = (community_id, person)
+            request = self._join_requests.get(key)
+            if not request or request["status"] != "pending":
+                return "already"
+            self._join_notified.pop(key, None)   # a decision ends this round: a later application is news again
+            if not approve:
+                request.update({"status": "rejected", "decided_at": _now(), "decided_by": me})
+                self._drop_join_notices(key)
+                return "rejected"
+            removal = self._removals.pop(key, None)
+            self._members[key] = {
+                "role": "member", "joined_at": (removal or {}).get("joined_at_before") or _now(),
+                "joined_via": "approval", "invite_id": request.get("invite_id"), "event_post_id": None}
+            if removal:
+                for post_id in removal.get("hidden_post_ids") or []:
+                    if post_id in self._posts:
+                        self._posts[post_id]["deleted_at"] = None
+                for comment_id in removal.get("hidden_comment_ids") or []:
+                    if comment_id in self._comments:
+                        self._comments[comment_id]["deleted_at"] = None
+            self._drop_join_request(key)
+            if person in self._accounts:
+                self._notify(person, None, None, None, "join_approved", community_id=community_id,
+                             payload={"community_id": community_id,
+                                      "community_name": self._communities[community_id]["name"]})
+            return "approved"
+
+    def _drop_join_notices(self, key):
+        """The admins' 'waiting' notices about one person in one community. Lock held."""
+        community_id, person = key
+        for notice_id in [row["id"] for row in self._notifications.values()
+                          if row["type"] == "join_request" and row["actor_id"] == person
+                          and row["community_id"] == community_id]:
+            del self._notifications[notice_id]
+
+    def _drop_join_request(self, key):
+        self._join_requests.pop(key, None)
+        self._drop_join_notices(key)
+
+    def _notify_waiting_requests(self, account_id):
+        """The accounts_join_request_notify trigger: tell the admins about each application of this
+        person that has not been announced yet. Never raises (saving a profile must not fail). Lock held."""
+        try:
+            for key, request in list(self._join_requests.items()):
+                if key[1] == account_id and request["status"] == "pending" and not request["notified_at"]:
+                    self._join_request_notify(*key)
+                    request["notified_at"] = _now()
+        except Exception:
+            pass
+
+    def _join_request_notify(self, community_id, person):
+        """join_request_notify(): one 'waiting' notice per admin, at most once per
+        JOIN_REQUEST_NOTIFY_HOURS for the same person and community (the memory of it outlives the
+        notices, so cancelling and applying again does not tell them again). Lock held."""
+        now = datetime.now(timezone.utc)
+        last = self._join_notified.get((community_id, person))
+        if last and now - _stamp(last) < timedelta(hours=JOIN_REQUEST_NOTIFY_HOURS):
+            return
+        self._drop_join_notices((community_id, person))
+        self._join_notified[(community_id, person)] = now.isoformat()
+        name = self._communities[community_id]["name"]
+        for (cid, account), member in sorted(self._members.items(), key=lambda item: item[0][1]):
+            if cid == community_id and member["role"] == "admin" and account != person:
+                self._notify(account, person, None, None, "join_request", community_id=community_id,
+                             payload={"community_id": community_id, "community_name": name})
+
+    def dm_partner_ids(self, me):
+        with self._lock:
+            return {room["user_b"] if room["user_a"] == me else room["user_a"]
+                    for room in self._dm_rooms.values() if me in (room["user_a"], room["user_b"])}
+
+    def pending_applicant_ids(self, admin_id):
+        """Who waits to join a community this person administers (they may see those names)."""
+        with self._lock:
+            return {account for (cid, account), request in self._join_requests.items()
+                    if request["status"] == "pending" and self._is_admin(cid, admin_id)}
 
     def post_communities(self):
         """{post id: community id} for live posts that belong to a community."""
@@ -1813,7 +2074,7 @@ class MemoryStore:
 # supabase
 # ---------------------------------------------------------------------------
 
-class SupabaseStore:
+class SupabaseStore(EventsSupabaseMixin):
     """PostgREST client. Server-side only, with an elevated API key."""
 
     backend = "supabase"
@@ -1847,6 +2108,7 @@ class SupabaseStore:
         self._members_only_checked_at = None
         self._has_share = False            # until the database shows the 2026-10-29 columns
         self._share_checked_at = None
+        self._accounts_old_until = 0.0     # monotonic time until which accounts are read without the new columns
 
     def _send(self, method, path, *, label, headers=None, params=None, json=None,
               allow_statuses=()):
@@ -1911,17 +2173,53 @@ class SupabaseStore:
                    json={"cache_key": key, "embedding": value})
         return self.get_embedding(key)
 
+    # -- accounts without the 2026-11-01 column (the code may come out before the SQL) --------------
+
+    def _account_columns(self):
+        return ACCOUNT_COLUMNS_BASE if time.monotonic() < self._accounts_old_until else ACCOUNT_COLUMNS
+
+    @staticmethod
+    def _missing_account_column(response):
+        """True when a 400/401/403 says accounts has no (readable) name_confirmed_at yet."""
+        if response.status_code not in (400, 401, 403):
+            return False
+        text = response.text or ""
+        try:
+            code = str((response.json() or {}).get("code", ""))
+        except Exception:
+            code = ""
+        return code in ("42703", "PGRST204", "42501") and any(name in text for name in ACCOUNT_NEW_COLUMNS)
+
+    def _accounts_request(self, method, *, label, params, headers=None, json=None, allow_statuses=()):
+        """One accounts request that names the account columns. When the database does not have (or may not
+        read) the new column, asks again without it, and keeps asking without it for a minute."""
+        for attempt in (1, 2):
+            columns = self._account_columns()
+            response = self._send(method, ACCOUNTS, label=label, headers=headers, json=json,
+                                  params={**params, "select": columns},
+                                  allow_statuses=tuple(allow_statuses) + (400, 401, 403))
+            if response.status_code < 300:
+                return response
+            if attempt == 1 and columns == ACCOUNT_COLUMNS and self._missing_account_column(response):
+                print("[store] accounts has no readable " + ",".join(ACCOUNT_NEW_COLUMNS)
+                      + "; reading without it until the migration is run", flush=True)
+                self._accounts_old_until = time.monotonic() + ACCOUNT_COLUMNS_RECHECK_SECONDS
+                continue
+            if response.status_code in allow_statuses:
+                return response
+            print(f"[store] {label} failed: HTTP {response.status_code}: {(response.text or '')[:200]}", flush=True)
+            raise StoreError(label)
+        raise StoreError(label)  # pragma: no cover
+
     def get_account(self, account_id):
-        rows = self._get(ACCOUNTS, {
-            "select": ACCOUNT_COLUMNS, "id": f"eq.{account_id}", "limit": "1",
-        })
+        rows = self._accounts_request("GET", label="読み込み", params={"id": f"eq.{account_id}", "limit": "1"}).json()
         return rows[0] if rows else None
 
     def list_accounts(self, ids):
         if not ids:
             return []
         joined = ",".join(ids)
-        return self._get(ACCOUNTS, {"select": ACCOUNT_COLUMNS, "id": f"in.({joined})"})
+        return self._accounts_request("GET", label="読み込み", params={"id": f"in.({joined})"}).json()
 
     def upsert_account(self, account_id, fields):
         # fields arrives already filtered by the AccountPatch model, and a null
@@ -1938,21 +2236,21 @@ class SupabaseStore:
             # NULL on the row it would insert before it looks for the conflict, so the icon-photo
             # step after an e-mail sign-up (icon_id and avatar_path only) was refused with 23502
             # every time (2026-10-28, two new people stuck on 「次へ」).
-            response = self._send(
-                "PATCH", ACCOUNTS, label="プロフィールの保存",
+            response = self._accounts_request(
+                "PATCH", label="プロフィールの保存",
                 headers={"Prefer": "return=representation"},
-                params={"id": f"eq.{account_id}", "select": ACCOUNT_COLUMNS},
+                params={"id": f"eq.{account_id}"},
                 json={key: value for key, value in record.items() if key != "id"},
             )
             rows = response.json()
             if rows:
                 return rows[0]
             # No such account yet: the insert below refuses it the way it always did.
-        response = self._send(
-            "POST", ACCOUNTS, label="プロフィールの保存",
+        response = self._accounts_request(
+            "POST", label="プロフィールの保存",
             headers={"Prefer": "return=representation,resolution=merge-duplicates"},
             # select keeps the hidden vectors out of the answer.
-            params={"on_conflict": "id", "select": ACCOUNT_COLUMNS},
+            params={"on_conflict": "id"},
             json=record, allow_statuses=(400,),
         )
         if response.status_code == 400:
@@ -2319,6 +2617,35 @@ class SupabaseStore:
             if len(rows) < 1000:
                 return out
             last = rows[-1]["id"]
+
+    def dm_partner_ids(self, me):
+        """Everybody who shares a DM room with `me` (they stay visible to each other across
+        communities). {} when the talk tables are not there yet."""
+        if not me:
+            return set()
+        try:
+            rows = self._get("dm_rooms", {"select": "user_a,user_b",
+                                          "or": f"(user_a.eq.{me},user_b.eq.{me})"}, label="DM の確認")
+        except StoreError:
+            return set()
+        return {row["user_b"] if row["user_a"] == me else row["user_a"] for row in rows}
+
+    def pending_applicant_ids(self, admin_id):
+        """Who is waiting to join a community `admin_id` administers (an admin sees their names).
+        Empty before the join-approval migration."""
+        if not admin_id:
+            return set()
+        try:
+            mine = self._get(COMMUNITY_MEMBERS, {"select": "community_id", "account_id": f"eq.{admin_id}",
+                                                 "role": "eq.admin"}, label="コミュニティの確認")
+            if not mine:
+                return set()
+            ids = ",".join(row["community_id"] for row in mine)
+            rows = self._get("community_join_requests", {"select": "account_id", "status": "eq.pending",
+                                                        "community_id": f"in.({ids})"}, label="参加の申し込みの確認")
+        except StoreError:
+            return set()
+        return {row["account_id"] for row in rows}
 
     def is_community_member(self, community_id, account_id):
         rows = self._get(COMMUNITY_MEMBERS, {

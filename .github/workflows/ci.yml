@@ -36,7 +36,7 @@ env:
 jobs:
   audit:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'audit' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # 2026-11-01: ubuntu-latest が 26.04 になり Playwright 1.55 が入らないので固定（全ジョブ）
     environment: production
     permissions:
       contents: read
@@ -69,7 +69,7 @@ jobs:
             gcloud secrets versions list "$secret" --project "$GCP_PROJECT_ID" --format='table(name,state,createTime)' || true
           done
   frontend-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@v4
@@ -78,7 +78,7 @@ jobs:
           check-latest: true
       - run: node --test tests/frontend/*.test.mjs
   image-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -88,7 +88,7 @@ jobs:
           docker run --rm --network none islands-e5-check python -c "from core.embedder import load_embedder; from core.artifact_manifest import validate_manifest; validate_manifest('/app/artifacts','onnx'); assert load_embedder(provider='onnx').encode(['offline smoke']).shape == (1,384)"
           docker image inspect islands-e5-check --format='E5 image bytes: {{.Size}}' >> "$GITHUB_STEP_SUMMARY"
   python-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       EMBEDDING_PROVIDER: onnx
@@ -101,7 +101,7 @@ jobs:
       - run: pip install -r requirements-test.txt
       - run: python -m pytest tests/ -v --tb=short
   browser-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 20 was hit at 19m52s already (2026-10-26) and the catch-up / talk tests add about a minute.
     # 30 was hit twice on 2026-10-29 (380 tests): a slow runner took 4.6 s a test, against 3.2 s
     # on the PR run of the same commit, and was cut off at test 374-378 with nothing failing.
@@ -133,7 +133,7 @@ jobs:
             output/browser-tests/
             output/playwright-report/
   database-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       # The CLI's default, public.ecr.aws, refuses anonymous pulls from the shared runner IPs
@@ -158,7 +158,7 @@ jobs:
         (inputs.action == 'migration-candidate' ||
          (inputs.action == 'release' && vars.DEPLOY_ENABLED == 'true'))))
     needs: [frontend-test, python-test, browser-test, database-test, image-test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: production
     permissions:
