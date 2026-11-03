@@ -106,13 +106,19 @@ async function createEventByUi(host, testInfo, community) {
   await shot(page, testInfo, '02_会の中身');
   await page.locator('#eventComposeNext').click();
 
-  // ② 質問：固定の3つ。公開にして質問を1つにすると断られ、コミュニティの中だけに戻して作る
+  // ② 開催の条件（第2回b）：どれも空欄・初期値のままで次へ
+  await expect(page.locator('#eventComposeTitle')).toHaveText('開催の条件');
+  await page.locator('#eventComposeNext').click();
+
+  // ③ 質問：固定の3つ。公開にして質問を1つにすると断られ、コミュニティの中だけに戻して作る
   await expect(page.locator('#eventComposeQuestions .ev-question')).toHaveCount(3);
   await expect(page.locator('#eventComposeQuestions')).toContainText('今やってること');
   await expect(page.locator('#eventComposeQuestions')).not.toContainText('当日話したい');
   await shot(page, testInfo, '03_申し込む人への質問');
   await page.locator('#eventComposeBack').click();
+  await page.locator('#eventComposeBack').click();
   await page.locator('#eventComposePublic').click();
+  await page.locator('#eventComposeNext').click();
   await page.locator('#eventComposeNext').click();
   await page.locator('#eventComposeQuestions [data-prompt="past"]').click();
   await page.locator('#eventComposeQuestions [data-prompt="future"]').click();

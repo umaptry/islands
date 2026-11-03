@@ -136,7 +136,7 @@ function editForm() {
     className: 'ev-input', type: 'number', inputMode: 'numeric', attrs: { id: 'eventEditMin', min: '2', step: '1', placeholder: '例：5' },
   });
   const decide = el('input', { className: 'ev-input', type: 'date', attrs: { id: 'eventEditDecide' } });
-  const cancel = el('input', { className: 'ev-input', type: 'datetime-local', attrs: { id: 'eventEditCancel' } });
+  const cancel = el('input', { className: 'ev-input', type: 'datetime-local', attrs: { id: 'eventEditDeadline' } });
   min.value = event.min_participants ?? '';
   decide.value = event.decide_on || '';
   cancel.value = toLocalInput(event.cancel_deadline);
@@ -357,7 +357,8 @@ function paint() {
     return;
   }
   const event = view.event;
-  body.append(
+  // append(null) は「null」という文字になるので、無いものは外してから並べる
+  body.append(...[
     fresh ? el('div', { className: 'ev-fresh', attrs: { id: 'eventHostFresh' } },
       el('h2', { className: 'screen-title', text: '申し込みページができました' }),
       el('p', { className: 'lede', text: `${event.title}・${formatWhen(event.starts_at, event.ends_at)}` })) : null,
@@ -365,7 +366,7 @@ function paint() {
     event.cancelled ? null : checkinCard(),
     summaryCard(),
     view.is_host ? actionsCard() : null,
-    rosterCard());
+    rosterCard()].filter(Boolean));
 }
 
 async function load(code) {

@@ -29,6 +29,7 @@ test('hash を作る：申し込み・ゲスト・受付。コードが変なら
   assert.equal(rules.eventHashFor('abcdefgh'), '#/e/abcdefgh');
   assert.equal(rules.eventHashFor('abcdefgh', 'me'), '#/e/abcdefgh/me');
   assert.equal(rules.eventHashFor('abcdefgh', 'checkin'), '#/c/abcdefgh');
+  assert.equal(rules.eventHashFor('abcdefgh', 'after'), '#/e/abcdefgh/after');
   assert.equal(rules.eventHashFor('a b', 'me'), '#/map');
   assert.equal(rules.isEventPattern('#/e/:code'), true);
   assert.equal(rules.isEventPattern('#/e/:code/me'), true);
@@ -116,6 +117,17 @@ test('ゲスト用ページ：申し込み済みは遅れる・取り消せる�
   assert.equal(view.showNear, true);
   assert.equal(view.showFriend, true);
   assert.equal(rules.statusView({ status: 'applied', line_friend: true }, event).showFriend, false);
+});
+
+test('ゲスト用ページ：人数が集まらず中止の会は、遅れる・会場・友だち追加・申し込み済みの札を出さない', () => {
+  for (const stopped of [{ ...event, closed: 'not_held' }, { ...event, phase: 'not_held' }]) {
+    const view = rules.statusView({ status: 'applied', line_friend: false }, stopped, Date.parse('2099-11-01T00:00:00Z'));
+    assert.equal(view.tone, 'notHeld');
+    assert.equal(view.title, '');
+    assert.equal(view.canLate, false);
+    assert.equal(view.canCancel, false);
+    assert.equal(view.showFriend, false);
+  }
 });
 
 test('ゲスト用ページ：会が終わったら遅れる・取り消すは出ない', () => {

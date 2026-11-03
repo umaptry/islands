@@ -2656,3 +2656,8 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 @media (prefers-reduced-motion: reduce) { .evb-spinner { animation: none; } }
 .evb-mark { width: 64px; height: 64px; margin: 24px auto 16px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 800; }
 .evb-mark.is-bad { color: #c0392b; }
+
+/* events-b: 確認の直し（主催者の画面のカードの中の行は白地なので濃い字に。限定ページのカレンダーは文字のリンクに） */
+#eventHost .ev-card .ev-line { color: var(--ink); line-height: 1.6; }
+#eventHost .ev-card .ev-line.ev-quiet { color: var(--ink-2); font-size: 12.5px; text-decoration: none; padding: 0; background: none; }
+.ev-center a.ev-link { display: inline; width: auto; padding: 0; margin: 0; border: 0; border-radius: 0; background: none; color: #fff; font-size: 13px; }

@@ -47,11 +47,12 @@ export function parseEventPath(pathname) {
 
 export const validEventCode = (code) => CODE_PATTERN.test(String(code || ''));
 
-/** The hash of a page of a 会. kind: 'apply' (the public page), 'me' (the guest page), 'checkin'. */
+/** The hash of a page of a 会. kind: 'apply' (the public page), 'me' (the guest page), 'after' (会のあと), 'checkin'. */
 export function eventHashFor(code, kind = 'apply') {
   if (!validEventCode(code)) return '#/map';
   if (kind === 'checkin') return `#/c/${code}`;
   if (kind === 'host') return `#/e/${code}/host`;
+  if (kind === 'after') return `#/e/${code}/after`;
   return kind === 'me' ? `#/e/${code}/me` : `#/e/${code}`;
 }
 
@@ -242,6 +243,8 @@ export function statusView(me, event, now = Date.now()) {
     return { ...base, tone: 'cancelled', title: EVENT_WORDS.cancelledBand, note: EVENT_WORDS.cancelledNote };
   }
   if (status === 'declined') return { ...base, tone: 'declined', title: '', note: EVENT_WORDS.declined };
+  // 人数が集まらず中止（第2回b）：上の「中止」の札だけ。遅れる・会場への行き方・友だち追加は出さない
+  if (event && (event.closed === 'not_held' || event.phase === 'not_held')) return { ...base, tone: 'notHeld', title: '', note: '' };
   if (status === 'attended') {
     return { ...base, tone: 'attended', title: EVENT_WORDS.attended, note: '', showNear: false };
   }

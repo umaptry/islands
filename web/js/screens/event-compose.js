@@ -156,6 +156,8 @@ export function setupEventCompose() {
   $('eventComposeBack').addEventListener('click', back);
   $('eventComposeMin').addEventListener('input', paintGoal);
   $('eventComposeNext').addEventListener('click', next);
+  // 入れ直したら、前に出した断りの文は消す（直したあとも残って見えないように）
+  $('eventComposeScroller').addEventListener('input', () => { $('eventComposeError').textContent = ''; });
   $('eventComposePublic').addEventListener('click', () => {
     if (!session || !session.isAdmin) return;
     session.visibility = 'public';
