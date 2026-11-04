@@ -73,6 +73,14 @@ const SUN = (() => { const v = [-0.36, -0.49, 0.79]; const n = Math.hypot(...v);
 // (world units, how far), as the trees and houses do.
 const MASS_SHADOW = 4.5;
 const SCALLOP = 0.08;   // openness either side of the forest's edge where the crowns make it bumpy
+// One house opens about half as far as sigmaFor alone would (2026-11-04, the user: the clearing round one
+// new house was too wide), but never so little that its yard (homestead.js, up to about 14 world units
+// out) would stand on the forest.
+const POST_CLEAR = 0.5;
+const POST_CLEAR_MIN = 9;
+// No standing tree this close to the shore (prototype units of coast distance): on the grass strip by
+// the beach they looked out of place (2026-11-04, the user). The sand ends at 2.4.
+const SHORE_TREE = 7;
 const massStyle = () => (forestMode() === 'mass' ? { shadow: MASS_SHADOW } : null);
 
 /** How wide one post opens the forest: wide while posts are few, narrower as
@@ -127,7 +135,7 @@ function roadsIn(minX, minY, maxX, maxY) {
 
 /** The openness grid for a region, and the band function that reads it. */
 function makeGround({ posts, total, minX, minY, maxX, maxY, coastAt, bumpy = false }) {
-  const sigma = sigmaFor(total);
+  const sigma = Math.max(sigmaFor(total) * POST_CLEAR, POST_CLEAR_MIN);
   const reach = sigma * 3;
   let cs = CLEAR_CELL;
   const at0 = (v) => Math.floor((v - 2 * cs) / cs) * cs;
@@ -857,6 +865,7 @@ export function scatterTreesB(built) {
         }
         if (hash(xp * 3.1, yp * 7.7) > dens) continue;
         if (start && Math.hypot(start.x - x, start.y - y) < 5 * K) continue;
+        if (coastAt(x, y) / K < SHORE_TREE) continue;
         const k = 0.85 + hash(xp, yp * 2) * 0.7;
         if (mass && reachesForest(x, y, k)) continue;
         const isPine = pineAt(xp, yp) + (b === 6 ? 0.18 : 0) + (hash(xp * 5, yp) - 0.5) * 0.1 > 0.55;
