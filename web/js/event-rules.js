@@ -487,6 +487,10 @@ export function checkinView(info) {
   const rejects = Number(info && info.rejects) || 0;
   const window = info && info.window;
   if (me === 'attended') return { kind: 'attended' };
+  // 中止の会は、押してから断られるのではなく、先に文だけを出す
+  const event = (info && info.event) || {};
+  if (event.cancelled) return { kind: 'cancelled', text: EVENT_WORDS.cancelledBand };
+  if (event.phase === 'not_held') return { kind: 'cancelled', text: '人数が集まらなかったため、この会は中止になりました' };
   if (me === 'banned') return { kind: 'blocked', text: EVENT_B_WORDS.checkinBlocked };
   if (me === 'waiting') return { kind: 'waiting', text: EVENT_B_WORDS.waitingNote };
   if (me === 'rejected') return { kind: rejects >= 3 ? 'blocked' : 'rejected', text: EVENT_B_WORDS.checkinBlocked };

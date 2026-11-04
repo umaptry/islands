@@ -113,8 +113,11 @@ export function setupEventCheckin() {
       paint([brand(), el('div', { className: 'evb-mark is-bad', text: '!' }),
         el('h1', { className: 'ev-title is-mid is-center', attrs: { id: 'eventCheckinRejected' }, text: '受付できませんでした' }),
         el('p', { className: 'ev-lede is-center', text: '主催者に声をかけてください。' }),
-        el('p', { className: 'ev-fine ev-center', text: '名前や会社に間違いがあったときは、入れ直せます（3回まで）。' })],
-      [primary('名前を入れ直す', () => { again = true; show(); }, { id: 'eventCheckinAgain' })]);
+        el('p', { className: 'ev-fine ev-center', text: state.account && state.account.name_confirmed_at
+          ? '主催者に声をかけてから、もう一度お願いできます（3回まで）。'
+          : '名前や会社に間違いがあったときは、入れ直せます（3回まで）。' })],
+      [primary(state.account && state.account.name_confirmed_at ? 'もう一度お願いする' : '名前を入れ直す',
+        () => { again = true; show(); }, { id: 'eventCheckinAgain' })]);
       return;
     }
     if (view.kind === 'blocked') {
@@ -174,6 +177,9 @@ export function setupEventCheckin() {
     const affiliation = el('input', { className: 'input input-line', attrs: { id: 'eventCheckinAffiliation', autocomplete: 'organization', maxlength: '32', placeholder: '株式会社○○' } });
     name.value = (state.account && state.account.display_name) || '';
     affiliation.value = (state.account && state.account.affiliation) || '';
+    // フルネームを確認済みの人は、サーバーが登録済みの名前のまま受付する（入れ直しても変わらない）ので、書き換えられない形で見せる
+    const settled = Boolean(state.account && state.account.name_confirmed_at && name.value && affiliation.value);
+    if (settled) { name.readOnly = true; affiliation.readOnly = true; }
     const send = primary('受付をお願いする', async () => {
       const cleaned = cleanWalkin(name.value, affiliation.value);
       if (!cleaned.ok) { setError(cleaned.message); return; }
@@ -196,7 +202,9 @@ export function setupEventCheckin() {
       el('p', { className: 'ev-lede', text: 'この会の申し込みが見つかりません。\n名前と会社を入れると、主催者が受付します。' }),
       el('label', { className: 'field field-line' }, el('span', { className: 'label-text', text: 'フルネーム' }), name),
       el('label', { className: 'field field-line' }, el('span', { className: 'label-text', text: '会社・所属' }), affiliation),
-      el('p', { className: 'ev-fine', text: '質問はありません。この名前は、受付したあとメンバーに見えます。' }),
+      el('p', { className: 'ev-fine', text: settled
+        ? '登録済みの名前で受付をお願いします。違うときは、主催者に声をかけてください。'
+        : '質問はありません。この名前は、ほかの参加者に見えます。' }),
       errorBox()],
     [el('p', { className: 'ev-consent' }, EVENT_WORDS.consentLead.replace('申し込む', '受付をお願いする'), link('新しい利用規約', TERMS_PATH), 'と',
       link('プライバシーポリシー', PRIVACY_PATH), EVENT_WORDS.consentTail), send]);

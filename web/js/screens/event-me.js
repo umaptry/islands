@@ -166,13 +166,16 @@ export function setupEventMe() {
           ...shown.answers.map((answer) => el('div', { className: 'evb-person-answer' },
             answer.label ? el('small', { text: answer.label }) : null, el('span', { text: answer.body })))));
     };
-    const blocks = [];
+    // 見出しの人数は全員。近いかもの人は下の一覧には重ねて出さないので、そのときは「ほかの参加者」と書き分ける
+    const blocks = [el('h2', { className: 'ev-sub', attrs: { id: 'eventMePeopleTitle' }, text: `参加者 ${listed.count}人` })];
     if (listed.near.length) {
-      blocks.push(el('h2', { className: 'ev-sub', text: '近いかも' }),
+      blocks.push(el('p', { className: 'evb-people-label', text: 'あなたと近いかも' }),
         el('ul', { className: 'ev-card evb-people', attrs: { id: 'eventMeNear' } }, ...listed.near.map((person) => row(person, true))));
+      if (listed.rest.length) blocks.push(el('p', { className: 'evb-people-label', text: 'ほかの参加者' }));
     }
-    blocks.push(el('h2', { className: 'ev-sub', attrs: { id: 'eventMePeopleTitle' }, text: `参加者 ${listed.count}人` }),
-      el('ul', { className: 'ev-card evb-people', attrs: { id: 'eventMePeople' } }, ...listed.rest.map((person) => row(person, false))));
+    if (listed.rest.length) {
+      blocks.push(el('ul', { className: 'ev-card evb-people', attrs: { id: 'eventMePeople' } }, ...listed.rest.map((person) => row(person, false))));
+    }
     return blocks;
   }
 

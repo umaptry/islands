@@ -531,16 +531,15 @@ class EventsMemoryMixin:
         now = _utc(now)
         with self._lock:
             ev, post = self._event_live(event, allow_cancelled=True)
-            phase = self._event_settle(event, now)
+            self._event_settle(event, now)
             reg = self._event_regs.get((event, account))
             if reg and reg["status"] == "attended":
                 refuse("event_attended")
             if not reg or reg["status"] not in ("applied", "waiting"):
                 refuse("event_not_applied")
-            # キャンセル期限は申し込み（applied）にだけ。受付待ちの取り下げ・中止になった会は期限なし
-            called_off = bool(ev["cancelled_at"]) or not post or phase == "not_held"
-            if (reg["status"] == "applied" and ev.get("cancel_deadline") and not called_off
-                    and now > _utc(ev["cancel_deadline"])):
+            # キャンセル期限は申し込み（applied）にだけ（受付待ちの取り下げは期限なし）。期限の時刻ちょうどで締め切る（DB と同じ）
+            if (reg["status"] == "applied" and ev.get("cancel_deadline")
+                    and now >= _utc(ev["cancel_deadline"])):
                 refuse("cancel_closed")
             # 受付待ち（waiting）の本人の取り下げも cancelled にして行を残す（飛び入りのやり直し3回の数えを消さない）
             was = reg["status"]

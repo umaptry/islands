@@ -253,7 +253,11 @@ function actionsCard() {
 
 // ---------------------------------------------------------------- 名簿とお断り
 
+const checkingIn = new Set();   // 受付を送っている人の account_id（続けて押しても1回だけ送る）
+
 async function checkin(row) {
+  if (checkingIn.has(row.account_id)) return;
+  checkingIn.add(row.account_id);
   try {
     const result = await eventsApi.hostCheckin(view.event.code, row.account_id);
     toast(checkinToast(row, result));
@@ -262,6 +266,8 @@ async function checkin(row) {
     await load(view.event.code);
   } catch (failure) {
     toast(failure.message);
+  } finally {
+    checkingIn.delete(row.account_id);
   }
 }
 

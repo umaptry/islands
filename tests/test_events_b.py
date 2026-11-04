@@ -136,8 +136,8 @@ def test_cancel_open():
     assert events.cancel_open(event, start - timedelta(minutes=1))
     assert not events.cancel_open(event, start)
     limited = {**event, "cancel_deadline": (start - timedelta(days=1)).isoformat()}
-    assert events.cancel_open(limited, start - timedelta(days=1))
-    assert not events.cancel_open(limited, start - timedelta(days=1) + timedelta(seconds=1))
+    assert events.cancel_open(limited, start - timedelta(days=1) - timedelta(seconds=1))
+    assert not events.cancel_open(limited, start - timedelta(days=1))          # 期限の時刻ちょうどで締め切る（DB と同じ）
 
 
 def test_clean_event_rules_for_a_new_event():
@@ -607,13 +607,16 @@ def test_after_shows_talk_for_members(world):
 # 第2回b の SQL がまだの DB・手元だけの道
 # --------------------------------------------------------------------------
 
-def test_without_the_new_sql_new_apis_answer_503_and_rules_are_not_sent(world, monkeypatch):
+def test_without_the_new_sql_new_apis_answer_503_and_rules_are_refused(world, monkeypatch):
     admin, cid, people = world
     monkeypatch.setattr(store(), "supports_events_b", False, raising=False)
-    made = create_event(admin, cid, min_participants=2, decide_on=jst_day(3), join_policy="none")
+    # 開催の条件を頼む会は、黙って「自動で加入」にせず断る
+    refused = create_event(admin, cid, expect=503, join_policy="ask")
+    assert refused["detail"] == EVENT_B_OFF_ERROR
+    made = create_event(admin, cid, join_policy="auto")                          # 今までどおりの会は作れる
     code, qr = made["event"]["public_code"], made["event"]["checkin_code"]
     event = store().event_by_post(made["id"])
-    assert event["min_participants"] is None and event["join_policy"] == "auto"   # 新しい項目は送っていない
+    assert event["min_participants"] is None and event["join_policy"] == "auto"
     view = get(admin, f"/api/events/{code}").json()["event"]
     assert view["phase"] is None and view["join_policy"] == "auto"
     for method, path in (("get", f"/api/events/{code}/participants"), ("post", f"/api/events/{code}/join"),
@@ -622,7 +625,8 @@ def test_without_the_new_sql_new_apis_answer_503_and_rules_are_not_sent(world, m
         response = getattr(admin.client, method)(path, headers=admin.headers, **({"json": {}} if method == "post" else {}))
         assert response.status_code == 503 and response.json()["detail"] == EVENT_B_OFF_ERROR, path
     response = patch_(admin, f"/api/events/{code}", {"min_participants": 3, "decide_on": jst_day(3)})
-    assert response.status_code == 422                                          # 送らない → 変更点なし
+    assert response.status_code == 503 and response.json()["detail"] == EVENT_B_OFF_ERROR
+    assert patch_(admin, f"/api/events/{code}", {"place": "新宿", "join_policy": "auto"}).status_code == 200
 
 
 def test_local_force_is_local_only(world, monkeypatch):

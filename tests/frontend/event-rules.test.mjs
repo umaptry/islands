@@ -334,6 +334,9 @@ test('会が終わったあとの「会った人を選ぶ」は受付済みの�
 
 test('受付の画面の出し分け', () => {
   const k = (info) => rules.checkinView(info).kind;
+  assert.equal(k({ window: 'open', me: 'applied', event: { cancelled: true } }), 'cancelled');
+  assert.equal(k({ window: 'open', me: 'none', event: { phase: 'not_held' } }), 'cancelled');
+  assert.equal(k({ window: 'open', me: 'attended', event: { phase: 'not_held' } }), 'attended');
   assert.equal(k({ window: 'open', me: 'applied' }), 'ready');
   assert.equal(k({ window: 'open', me: 'none', is_member: true }), 'ready');
   assert.equal(k({ window: 'open', me: 'none', is_member: false }), 'walkin');

@@ -248,7 +248,9 @@ def clean_rules(raw, *, starts, now, current=None, starts_changed=False):
     if minimum is None and day is not None:
         raise ValueError("判定日は、最小開催人数を入れたときだけ入れられます。")
     start_day = starts.astimezone(JST).date().isoformat()
-    if day is not None and ("decide_on" in out or starts_changed):
+    # 判定のあと（decision あり）は判定日に意味がないので、開始日時を動かしても比べない（DB の event_update と同じ）
+    decided = bool((current or {}).get("decision"))
+    if day is not None and ("decide_on" in out or (starts_changed and not decided)):
         if "decide_on" in out and day != day_text((current or {}).get("decide_on")) \
                 and day < now.astimezone(JST).date().isoformat():
             raise ValueError("判定日は今日以降の日にしてください。")
@@ -275,6 +277,12 @@ def clean_rules(raw, *, starts, now, current=None, starts_changed=False):
 RULE_KEYS = ("min_participants", "decide_on", "cancel_deadline", "join_policy")
 
 
+def rules_requested(raw):
+    """開催の条件のどれかを、今までと違う値で頼んでいるか（空・null・"auto" は今までどおり）。"""
+    raw = raw if isinstance(raw, dict) else {}
+    return any(raw.get(key) not in (None, "", "auto") for key in RULE_KEYS)
+
+
 def go_state(event, live_count, now=None):
     """開催の段階。最小人数が無ければ None。{"phase","min","decide_on","deadline","needed"}。
     phase：記録済み（decision）ならそれ、届いていれば held、締め（判定日の翌 0:00 JST）を過ぎていれば not_held、
@@ -297,7 +305,7 @@ def cancel_open(event, now=None):
     """まだ自分で取り消せるか：期限があれば期限まで、無ければ会の開始まで。"""
     now = _utc(now)
     if event.get("cancel_deadline"):
-        return now <= _utc(event["cancel_deadline"])
+        return now < _utc(event["cancel_deadline"])         # 期限の時刻ちょうどで締め切る（DB と同じ）
     return now < _utc(event["starts_at"])
 
 
@@ -647,7 +655,9 @@ def prepare(store, user_id, raw, *, tags, capacity, community_id, agree_terms, n
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error))
     if not events_b_on(store):
-        # 第2回b の SQL がまだの DB：開催の条件は送らない（今までどおりの会になる）
+        # 第2回b の SQL がまだの DB：開催の条件を黙って捨てると「本人に確認」の会が自動で加入になるので、断る
+        if rules_requested(raw):
+            raise HTTPException(status_code=503, detail=EVENT_B_OFF_ERROR)
         clean = {key: value for key, value in clean.items() if key not in RULE_KEYS}
     elif clean.get("min_participants") is not None and clean["min_participants"] > capacity:
         raise HTTPException(status_code=422, detail="最小開催人数は、先着人数以下にしてください。")
@@ -971,6 +981,8 @@ def update_event(code: str, payload: EventPatch, request: Request):
         raise _fail("event_cancelled")
     sent = {key: getattr(payload, key) for key in payload.model_fields_set}
     if not events_b_on(store):
+        if rules_requested(sent):
+            raise HTTPException(status_code=503, detail=EVENT_B_OFF_ERROR)
         sent = {key: value for key, value in sent.items() if key not in RULE_KEYS}   # SQL がまだの DB には送らない
     if not sent:
         raise HTTPException(status_code=422, detail="変更点がありません。")
@@ -1113,6 +1125,7 @@ def set_late(code: str, payload: LateBody, request: Request):
     event = _event_or_404(store, code)
     with guarded("保存に失敗しました。もう一度お試しください。"):
         result = store.event_set_late(event=event["post_id"], account=user_id, minutes=payload.minutes)
+    clear_cache(event["public_code"])          # 参加者リストの「遅れ」の札をすぐ出す
     return {"late_minutes": result["late_minutes"]}
 
 
