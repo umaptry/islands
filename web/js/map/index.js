@@ -1032,10 +1032,7 @@ function drawFreshGlowB(places, motion) {
 function glintStar(x, y, level, size = 1) {
   const r = (4.2 + 1.6 * level) * size;
   ctx.save();
-  ctx.lineJoin = 'round';
-  // A dark rim, so it shows on the pale sand and grass of the villages too.
-  ctx.lineWidth = 1.4;
-  ctx.strokeStyle = 'rgba(40,55,80,0.75)';
+  // Fill only: the dark rim it had was in the way (2026-11-04, the user).
   ctx.globalAlpha *= 0.85 + 0.15 * level;
   ctx.beginPath();
   const k = r * 0.22;
@@ -1045,7 +1042,6 @@ function glintStar(x, y, level, size = 1) {
   ctx.quadraticCurveTo(x - k, y + k, x - r, y);
   ctx.quadraticCurveTo(x - k, y - k, x, y - r);
   ctx.closePath();
-  ctx.stroke();
   ctx.fillStyle = level > 0.5 ? '#FFFFFF' : '#FFE27A';
   ctx.fill();
   ctx.restore();
@@ -1434,6 +1430,7 @@ function renderMap(time) {
         x, foot, size: houseSize, tier, seed, calm: Boolean(island && island.quiet),
         alpha: own * (out ? FILTERED_OUT : faint ? DIM : 1),
         wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale,
+        mine: houseK > 1 && meId != null && post.author_id === meId && !faint,
       });
     });
     // Houses standing on each other are thinned the way the pins are: one stays
@@ -1510,7 +1507,10 @@ function renderMap(time) {
   houses.forEach((house) => {
     standing.push({
       foot: house.foot,
-      draw: () => drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed, tier: house.tier }),
+      draw: () => {
+        if (house.mine) mineRings(house);
+        drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed, tier: house.tier });
+      },
     });
   });
   props.forEach((prop) => {
@@ -2686,6 +2686,49 @@ function revealStage(now) {
 
 // ---------------------------------------------------------------- pins
 
+// Map B: your own house among the others (2026-11-04, the user chose 案C): rings spread over the ground
+// from its foot, as they do round your post zoomed out, and before the faces show it carries the
+// 「あなた」 tag its face has close up.
+
+/** Your house: orange rings spreading over the ground from its foot. */
+function mineRings(house) {
+  const t = performance.now() / 1000;
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = MINE;
+  [0, 0.5].forEach((phase) => {
+    const cycle = (t * 0.45 + phase) % 1;
+    const rx = house.size * (0.55 + cycle * 0.9);
+    ctx.globalAlpha = Math.max(0, 1 - cycle ** 1.5) * 0.85;
+    ctx.beginPath();
+    ctx.ellipse(house.x, house.foot - house.size * 0.12, rx, rx * 0.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/** Your house: the orange 「あなた」 tag of the pins, over its roof. Returns half its width. */
+function mineTag(x, y) {
+  ctx.save();
+  ctx.font = '700 10px system-ui, -apple-system, "Segoe UI", sans-serif';
+  const w = ctx.measureText('あなた').width + 10;
+  ctx.fillStyle = MINE;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x - w / 2, y - 8, w, 15, 7.5); else ctx.rect(x - w / 2, y - 8, w, 15);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x - 4, y + 7);
+  ctx.lineTo(x, y + 11);
+  ctx.lineTo(x + 4, y + 7);
+  ctx.fill();
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('あなた', x, y);
+  ctx.restore();
+  return w / 2;
+}
+
 /** Rings that spread from your post and fade: "you are here". Only for a post
  * hidden under a town, where it is a dot; a pin carries its own ring. */
 const MINE_DOT_R = 6;
@@ -3086,8 +3129,10 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       // Before faces show, the house alone; its "+N" and star on the roof's corners.
       if (!faces) {
         const top = roofPeak(house);
-        if (stack) stackChip(top.x + 14, top.y + 2, stack.length - 1);
-        if (anyFresh) glintStar(top.x + (stack ? -6 : 6), top.y - 2, postGlint(post, motion), 1.5);
+        // Your tag over the roof: the "+N" and the star go to either side of it.
+        const tag = mine && !dim ? mineTag(top.x, top.y - 9) : 0;
+        if (stack) stackChip(tag ? top.x + tag + 9 : top.x + 14, tag ? top.y - 9 : top.y + 2, stack.length - 1);
+        if (anyFresh) glintStar(tag ? top.x - tag - 7 : top.x + (stack ? -6 : 6), tag ? top.y - 9 : top.y - 2, postGlint(post, motion), 1.5);
         if (!dim) hits.push({ box, post, dot: true, ...(stack ? { stack } : {}) });
         return;
       }
