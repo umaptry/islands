@@ -10,12 +10,15 @@
 core/store.py と互いに読み込むので、store の名前は必要になったときに読む（`_s()`）。
 EventRefused は `from core.store_events import EventRefused` でも取れる。
 
-受付・参加者リスト・会のあと（M4）は第2回b。ここには入れていない（event_cleanup だけ、保存期間のために入れた）。
+第2回b（2026-11-11。設計 G）：開催の条件（最小開催人数・判定日・キャンセル期限・会のあとの入り方）と、
+受付（QR・飛び入り・主催者の受付）・参加者リスト・会のあと（会えてよかった）・コミュニティへの参加。
+DB は supabase/migrations/20261111000000_events_b.sql。その SQL が無い DB（supports_events_b が False）では、
+新しい項目を送らず、会を作るときは今の8引数で呼ぶ。
 """
 
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
@@ -30,7 +33,11 @@ from core.config import (
     LINE_WEBHOOK_KEEP_DAYS,
     EVENT_ANSWERS_MIN,
     AGE_BANDS,
+    CHECKIN_CLOSES_AFTER_HOURS,
+    CHECKIN_OPENS_BEFORE_HOURS,
     EVENT_CLEANUP_DAYS,
+    EVENT_JOIN_POLICIES,
+    EVENT_MIN_PARTICIPANTS,
     EVENT_PLACE_MAX,
     EVENT_QUESTIONS_MAX,
     EVENT_TITLE_MAX,
@@ -43,6 +50,7 @@ from core.config import (
     PROBE_PER_EVENT_PER_DAY,
     RECRUIT_TAG,
     REFERRAL_MAX,
+    WALKIN_REJECT_MAX,
 )
 from core.post_extras import CLOSED_DEADLINE, closed_state
 
@@ -87,6 +95,47 @@ def jst_day(moment):
     return (_utc(moment) + timedelta(hours=9)).date().isoformat()
 
 
+def decide_deadline(decide_on):
+    """判定の締め：判定日の翌日の 0:00（日本時間）を UTC で。decide_on は "YYYY-MM-DD"（date でもよい）。"""
+    day = decide_on if isinstance(decide_on, date) else date.fromisoformat(str(decide_on)[:10])
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1) - timedelta(hours=9)
+
+
+def day_text(value):
+    """判定日を "YYYY-MM-DD" に（None はそのまま）。"""
+    if value in (None, ""):
+        return None
+    return value.isoformat() if isinstance(value, date) else str(value)[:10]
+
+
+def rules_ok(*, min_participants, decide_on, cancel_deadline, join_policy, starts, capacity, now,
+             check_today=True):
+    """開催の条件が DB の event_create／event_update の検めに通るか（手元の代役。通らなければ False）。
+    最小人数は 2 以上・定員以下、判定日と組、判定日は今日以降（check_today のとき）かつ開始日より前の日、
+    キャンセル期限は開始より前。"""
+    if (min_participants is None) != (decide_on is None):
+        return False
+    if min_participants is not None:
+        low, high = EVENT_MIN_PARTICIPANTS
+        if isinstance(min_participants, bool) or not low <= int(min_participants) <= high:
+            return False
+        if capacity is not None and int(min_participants) > int(capacity):
+            return False
+        day = day_text(decide_on)
+        if (check_today and day < jst_day(now)) or day >= jst_day(starts):
+            return False
+    if cancel_deadline is not None and _utc(cancel_deadline) >= _utc(starts):
+        return False
+    return join_policy in EVENT_JOIN_POLICIES
+
+
+def in_checkin_window(event, now):
+    """受付の時間（開始3時間前〜終了2時間後）の中か。core/events.py の window_state と同じ。"""
+    opens = _utc(event["starts_at"]) - timedelta(hours=CHECKIN_OPENS_BEFORE_HOURS)
+    closes = _utc(event["ends_at"]) + timedelta(hours=CHECKIN_CLOSES_AFTER_HOURS)
+    return opens <= _utc(now) <= closes
+
+
 def clean_referral(value):
     text = str(value or "").strip()[:REFERRAL_MAX]
     return text or None
@@ -107,6 +156,7 @@ class EventsMemoryMixin:
 
     supports_events = True
     supports_probe = True
+    supports_events_b = True
 
     def _init_events(self):
         self._events = {}            # post id -> events の行（starts_at などは ISO 文字列）
@@ -222,8 +272,11 @@ class EventsMemoryMixin:
             del self._outbound[oid]
 
     def _event_schedule(self, event, account, now):
-        """案内の予定（週前・当日・終了時）。DB の event_queue_reminders と同じ。呼ぶのは channel='line' の人だけ。"""
+        """案内の予定（週前・当日・終了時）。DB の event_queue_reminders と同じ。呼ぶのは channel='line' の人だけ。
+        中止（not_held）の会は入れない。"""
         from core.jobs import schedule_times
+        if event.get("decision") == "not_held":
+            return
         for kind, when in schedule_times(event, now).items():
             self._outbound_put(event["post_id"], account, kind, when)
 
@@ -244,7 +297,7 @@ class EventsMemoryMixin:
                     continue
                 link = self._line_links.get(row["account_id"])
                 event = self._events.get(row["event_id"])
-                if not link or not link["is_friend"] or not event:
+                if not link or not link["is_friend"] or not event or event.get("decision") == "not_held":
                     continue
                 row["claimed_at"] = now.isoformat()
                 row["attempts"] += 1
@@ -281,7 +334,8 @@ class EventsMemoryMixin:
 
     # -- 会を作る・変える -------------------------------------------------------------
 
-    def event_create(self, *, post, actor, title, starts, ends, place, visibility, questions):
+    def event_create(self, *, post, actor, title, starts, ends, place, visibility, questions,
+                     min_participants=None, decide_on=None, cancel_deadline=None, join_policy="auto"):
         with self._lock:
             row = self._posts.get(post)
             if not row or row.get("deleted_at") or row["author_id"] != actor:
@@ -297,13 +351,20 @@ class EventsMemoryMixin:
                     or visibility not in ("public", "community") or not isinstance(questions, list)
                     or len(questions) > EVENT_QUESTIONS_MAX):
                 refuse("event_invalid")
+            if not rules_ok(min_participants=min_participants, decide_on=decide_on,
+                            cancel_deadline=cancel_deadline, join_policy=join_policy, starts=starts,
+                            capacity=row.get("recruit_capacity"), now=_utc()):
+                refuse("event_invalid")
             if visibility == "public" and not self._is_admin(row["community_id"], actor):
                 refuse("public_admin_only")
             event = {"post_id": post, "community_id": row["community_id"], "title": title,
                      "starts_at": starts.isoformat(), "ends_at": ends.isoformat(), "place": place,
                      "visibility": visibility, "questions": [dict(item) for item in questions],
                      "public_code": new_code(), "checkin_code": new_code(), "cancelled_at": None,
-                     "created_at": _utc().isoformat()}
+                     "created_at": _utc().isoformat(),
+                     "min_participants": None if min_participants is None else int(min_participants),
+                     "decide_on": day_text(decide_on), "cancel_deadline": _iso(cancel_deadline),
+                     "join_policy": join_policy, "decision": None, "decided_at": None}
             self._events[post] = event
             return {"post_id": post, "public_code": event["public_code"], "checkin_code": event["checkin_code"]}
 
@@ -312,6 +373,7 @@ class EventsMemoryMixin:
             event, row = self._event_live(post)
             if not row or row["author_id"] != actor:
                 refuse("event_not_host")
+            self._event_settle(post, _utc())          # 最初に判定（判定が出ていれば最小人数・判定日は変えられない）
             new = dict(event)
             for key in ("title", "place"):
                 if key in fields:
@@ -323,11 +385,29 @@ class EventsMemoryMixin:
                 if not isinstance(fields["questions"], list) or len(fields["questions"]) > EVENT_QUESTIONS_MAX:
                     refuse("event_invalid")
                 new["questions"] = [dict(item) for item in fields["questions"]]
+            if "min_participants" in fields:
+                value = fields["min_participants"]
+                new["min_participants"] = None if value is None else int(value)
+            if "decide_on" in fields:
+                new["decide_on"] = day_text(fields["decide_on"])
+            if "cancel_deadline" in fields:
+                new["cancel_deadline"] = _iso(fields["cancel_deadline"])
+            if "join_policy" in fields:
+                new["join_policy"] = fields["join_policy"]
             if (not 1 <= len(new["title"]) <= EVENT_TITLE_MAX or len(new["place"]) > EVENT_PLACE_MAX
                     or _utc(new["ends_at"]) <= _utc(new["starts_at"])):
                 refuse("event_invalid")
+            rule_changed = any(new.get(key) != event.get(key) for key in ("min_participants", "decide_on"))
+            if event.get("decision") and rule_changed:
+                refuse("event_decided")
+            # 開始日時を変えたときも、判定日・キャンセル期限と比べ直す（判定日の「今日以降」は変えたときだけ）
+            if not rules_ok(min_participants=new.get("min_participants"), decide_on=new.get("decide_on"),
+                            cancel_deadline=new.get("cancel_deadline"), join_policy=new.get("join_policy", "auto"),
+                            starts=new["starts_at"], capacity=row.get("recruit_capacity"), now=_utc(),
+                            check_today=new.get("decide_on") != event.get("decide_on")):
+                refuse("event_invalid")
             moved = any(new[key] != event[key] for key in ("starts_at", "ends_at", "place"))
-            changed = any(new[key] != event[key] for key in new)
+            changed = any(new.get(key) != event.get(key) for key in new)
             event.update(new)
             notified = 0
             if moved:
@@ -339,6 +419,7 @@ class EventsMemoryMixin:
                     self._event_schedule(event, account, now)
                     self._outbound_put(post, account, "event_changed", now)
                 notified = len(applied)
+            self._event_settle(post, _utc())          # 最後にも判定（最小人数を下げて届いたら、その場で開催決定）
             return {"changed": changed, "notified": notified}
 
     def event_set_times(self, code, starts_at, ends_at):
@@ -355,7 +436,8 @@ class EventsMemoryMixin:
         capacity = post.get("recruit_capacity") if post else None
         return {"status": status, "is_member": not was_guest, "was_guest": was_guest,
                 "created_account": created_account,
-                "remaining": None if capacity is None else max(0, capacity - int(post.get("join_count") or 0))}
+                "remaining": None if capacity is None else max(0, capacity - int(post.get("join_count") or 0)),
+                "phase": self._event_settle(event_id, _utc())}   # 最後にも判定（届いたら、その場で開催決定）
 
     def event_apply(self, *, event, account, profile=None, channel="email", referral=None,
                     answers=None, consent=None, now=None):
@@ -364,6 +446,8 @@ class EventsMemoryMixin:
         channel = channel if channel in ("line", "email") else "email"
         with self._lock:
             ev, post = self._event_live(event)
+            if self._event_settle(event, now) == "not_held":
+                refuse("event_not_held")
             key = (event, account)
             reg = self._event_regs.get(key)
             if self._event_banned(ev, account, reg):
@@ -447,11 +531,16 @@ class EventsMemoryMixin:
         now = _utc(now)
         with self._lock:
             ev, post = self._event_live(event, allow_cancelled=True)
+            self._event_settle(event, now)
             reg = self._event_regs.get((event, account))
             if reg and reg["status"] == "attended":
                 refuse("event_attended")
             if not reg or reg["status"] not in ("applied", "waiting"):
                 refuse("event_not_applied")
+            # キャンセル期限は申し込み（applied）にだけ（受付待ちの取り下げは期限なし）。期限の時刻ちょうどで締め切る（DB と同じ）
+            if (reg["status"] == "applied" and ev.get("cancel_deadline")
+                    and now >= _utc(ev["cancel_deadline"])):
+                refuse("cancel_closed")
             # 受付待ち（waiting）の本人の取り下げも cancelled にして行を残す（飛び入りのやり直し3回の数えを消さない）
             was = reg["status"]
             reg.update({"status": "cancelled", "cancelled_at": now.isoformat()})
@@ -467,6 +556,8 @@ class EventsMemoryMixin:
         now = _utc(now)
         with self._lock:
             ev, post = self._event_live(event)
+            if self._event_settle(event, now) == "not_held":
+                refuse("event_not_held")
             reg = self._event_regs.get((event, account))
             if not reg or reg["status"] != "applied":
                 refuse("event_not_applied")
@@ -503,6 +594,304 @@ class EventsMemoryMixin:
             if reg["channel"] == "line":     # お断りの LINE は LINE で申し込んだ人にだけ
                 self._outbound_put(event, account, "declined", now)
             return {"status": "declined"}
+
+    # -- 開催の判定（第2回b。DB の event_live_count・event_settle・event_settle_due と同じ） ----------------
+
+    def _event_live_count(self, event_id):
+        """生きている申し込みの数（applied と attended）。Lock held."""
+        return sum(1 for (eid, _a), reg in self._event_regs.items()
+                   if eid == event_id and reg["status"] in ("applied", "attended"))
+
+    def _event_settle(self, event_id, now):
+        """判定（設計 G の「共通」）。最小人数が無ければ None。記録済みならそれ、届いていれば held を記録、
+        締め（判定日の翌 0:00 JST）を過ぎていれば not_held を記録して未送信を消す、それ以外は recruiting。Lock held."""
+        event = self._events.get(event_id)
+        if not event or event.get("min_participants") is None:
+            return None
+        if event.get("decision"):
+            return event["decision"]
+        if self._event_live_count(event_id) >= int(event["min_participants"]):
+            event.update({"decision": "held", "decided_at": _utc(now).isoformat()})
+            return "held"
+        if _utc(now) >= decide_deadline(event["decide_on"]):
+            event.update({"decision": "not_held", "decided_at": _utc(now).isoformat()})
+            self._outbound_drop_unsent(event_id)
+            return "not_held"
+        return "recruiting"
+
+    def event_settle(self, *, event, now=None):
+        with self._lock:
+            return self._event_settle(event, _utc(now))
+
+    def event_settle_due(self, now=None):
+        """最小人数あり・未判定・締めを過ぎた会を全部判定する。判定した数。"""
+        now = _utc(now)
+        with self._lock:
+            due = [eid for eid, row in self._events.items()
+                   if row.get("min_participants") is not None and not row.get("decision")
+                   and now >= decide_deadline(row["decide_on"])]
+            for eid in due:
+                self._event_settle(eid, now)
+            return len(due)
+
+    def event_force(self, code, fields):
+        """手元だけのテスト用（POST /api/local/events/{code}/force）：判定日・期限・判定を検めずに入れる。"""
+        with self._lock:
+            event = next((row for row in self._events.values() if row["public_code"] == code), None)
+            if not event:
+                refuse("event_not_found")
+            for key, value in fields.items():
+                if key == "decide_on":
+                    event[key] = day_text(value)
+                elif key == "cancel_deadline":
+                    event[key] = _iso(value)
+                elif key == "min_participants":
+                    event[key] = None if value is None else int(value)
+                elif key == "decision":
+                    event["decision"] = value
+                    event["decided_at"] = _utc().isoformat() if value else None
+                elif key == "join_policy":
+                    event[key] = value
+
+    # -- コミュニティに入れる（DB の event_admit・event_after_attend と同じ） -----------------------------
+
+    def _event_admit(self, event_id, account, now):
+        """会のコミュニティのメンバーにする。外された・断られた記録があれば False。回答を posts へ写す
+        （event_answers は消さない。参加者リストが使い、片付けで消える）。承認待ちの行は消す。Lock held."""
+        event = self._events[event_id]
+        key = (event["community_id"], account)
+        if key in self._members:
+            return False
+        request = self._join_requests.get(key)
+        if key in self._removals or (request and request["status"] == "rejected"):
+            return False
+        self._members[key] = {"role": "member", "joined_at": _utc(now).isoformat(), "joined_via": "event",
+                              "invite_id": None, "event_post_id": event_id}
+        for (eid, who, prompt), row in sorted(self._event_answers.items()):
+            if eid != event_id or who != account:
+                continue
+            try:      # 投稿への写しが失敗しても加入は止めない（DB の event_admit と同じ）
+                self.insert_post({
+                    "author_id": account, "body": row["body"], "tags": [], "motivation": 50, "image_path": None,
+                    "prompt": prompt, "x": row["x"], "y": row["y"], "cluster_id": row["cluster_id"],
+                    "terms": list(row.get("terms") or []), "vec": row.get("vec"), "vec_c": row.get("vec_c"),
+                    "community_id": event["community_id"]})
+            except Exception:
+                pass
+        if request and request["status"] == "pending":
+            self._drop_join_request(key)
+        return True
+
+    def _event_after_attend(self, event_id, account, now):
+        """受付のあと：入り方が auto で、まだメンバーでなければコミュニティに入れる。入ったか。Lock held."""
+        event = self._events[event_id]
+        if event.get("join_policy", "auto") != "auto":
+            return False
+        return self._event_admit(event_id, account, now)
+
+    # -- 受付（DB の event_checkin・event_walkin_request・event_checkin_by_host・event_reject_walkin） -------
+
+    def _event_open_for_checkin(self, event_id, now, *, check_window=True):
+        """中止・not_held・受付時間の外を断る。(会, 投稿)。Lock held."""
+        ev, post = self._event_live(event_id)
+        if self._event_settle(event_id, now) == "not_held":
+            refuse("event_not_held")
+        if check_window and not in_checkin_window(ev, now):
+            refuse("checkin_closed")
+        return ev, post
+
+    def _event_attend(self, reg, now):
+        reg.update({"status": "attended", "checked_in_at": _utc(now).isoformat(), "cancelled_at": None})
+
+    def event_checkin(self, *, event, account, now=None):
+        """QR で受付する。{"result": attended|already|need_walkin|waiting, "joined": bool}。"""
+        now = _utc(now)
+        with self._lock:
+            ev, _post = self._event_open_for_checkin(event, now)
+            key = (event, account)
+            reg = self._event_regs.get(key)
+            if self._event_banned(ev, account, reg):
+                refuse("event_banned")
+            is_member = (ev["community_id"], account) in self._members
+            if reg and reg["status"] == "applied":
+                self._event_attend(reg, now)
+                return {"result": "attended", "joined": self._event_after_attend(event, account, now)}
+            if reg and reg["status"] == "attended":
+                return {"result": "already", "joined": False}
+            if reg and reg["status"] == "waiting":
+                return {"result": "waiting", "joined": False}
+            if reg and reg["status"] == "cancelled" and reg["channel"] != "walkin":
+                refuse("checkin_cancelled_reg")
+            # 申し込みが無い（か、飛び入りが却下された・取り下げた）人：メンバーはその場で受付、ほかは飛び入りへ
+            if not is_member:
+                return {"result": "need_walkin", "joined": False}
+            self._event_regs[key] = {
+                "event_id": event, "account_id": account, "status": "attended", "consent_version": None,
+                "was_guest": False, "created_account": False, "channel": "walkin", "referral": None,
+                "late_minutes": None, "late_at": None, "applied_at": now.isoformat(),
+                "checked_in_at": now.isoformat(), "cancelled_at": None, "declined_at": None,
+                "declined_by": None, "walkin_rejects": (reg or {}).get("walkin_rejects", 0)}
+            return {"result": "attended", "joined": False}
+
+    def event_walkin_request(self, *, event, account, profile=None, consent=None, now=None):
+        """飛び入りの受付待ちになる。{"status": "waiting"}（申し込み・受付済みの人はその状態）。"""
+        now = _utc(now)
+        profile = profile or {}
+        with self._lock:
+            ev, _post = self._event_open_for_checkin(event, now)
+            key = (event, account)
+            reg = self._event_regs.get(key)
+            if self._event_banned(ev, account, reg):
+                refuse("event_banned")
+            if reg and reg["status"] in ("applied", "attended", "waiting"):
+                return {"status": reg["status"]}
+            if reg and reg["walkin_rejects"] >= WALKIN_REJECT_MAX:
+                refuse("walkin_limit")
+            current = self._accounts.get(account)
+            confirmed = bool(current and current.get("name_confirmed_at"))
+            name = str(profile.get("display_name") or "").strip()
+            affiliation = str(profile.get("affiliation") or "").strip()
+            if (current is None or not confirmed) and (
+                    not name or len(name) > MAX_NAME_LENGTH
+                    or not affiliation or len(affiliation) > MAX_AFFILIATION_LENGTH):
+                refuse("name_required")
+            created = (current is None) or bool(reg and reg["created_account"])
+            if current is None or not confirmed:
+                self.upsert_account(account, {"display_name": name, "affiliation": affiliation,
+                                              "name_confirmed_at": now.isoformat()})
+            is_member = (ev["community_id"], account) in self._members
+            if reg:
+                reg.update({"status": "waiting", "cancelled_at": None, "consent_version": consent or reg["consent_version"]})
+            else:
+                self._event_regs[key] = {
+                    "event_id": event, "account_id": account, "status": "waiting", "consent_version": consent,
+                    "was_guest": not is_member, "created_account": created, "channel": "walkin", "referral": None,
+                    "late_minutes": None, "late_at": None, "applied_at": now.isoformat(), "checked_in_at": None,
+                    "cancelled_at": None, "declined_at": None, "declined_by": None, "walkin_rejects": 0}
+            return {"status": "waiting"}
+
+    def event_checkin_by_host(self, *, event, host, account, now=None):
+        """主催者が名簿で受付する（受付待ち・申し込み済みの人）。受付の時間は見ない。{"status","joined"}。"""
+        now = _utc(now)
+        with self._lock:
+            ev, post = self._event_live(event)
+            if not post or post["author_id"] != host:
+                refuse("event_not_host")
+            self._event_open_for_checkin(event, now, check_window=False)
+            reg = self._event_regs.get((event, account))
+            if not reg or reg["status"] not in ("waiting", "applied"):
+                refuse("not_waiting")
+            self._event_attend(reg, now)
+            return {"status": "attended", "joined": self._event_after_attend(event, account, now)}
+
+    def event_reject_walkin(self, *, event, host, account, now=None):
+        """主催者が受付待ちを却下する（「違う人」）。{"walkin_rejects": n}。"""
+        now = _utc(now)
+        with self._lock:
+            _ev, post = self._event_live(event, allow_cancelled=True)
+            if not post or post["author_id"] != host:
+                refuse("event_not_host")
+            reg = self._event_regs.get((event, account))
+            if not reg or reg["status"] != "waiting":
+                refuse("not_waiting")
+            reg.update({"status": "cancelled", "cancelled_at": now.isoformat(),
+                        "walkin_rejects": min(WALKIN_REJECT_MAX, reg["walkin_rejects"] + 1)})
+            return {"walkin_rejects": reg["walkin_rejects"]}
+
+    def event_join_community(self, *, event, account, now=None):
+        """「本人に確認」の会で、受付済みの人が自分でコミュニティに入る。{"status": joined|already}。"""
+        now = _utc(now)
+        with self._lock:
+            ev, _post = self._event_live(event, allow_cancelled=True)
+            if ev.get("join_policy", "auto") != "ask":
+                refuse("join_not_allowed")
+            reg = self._event_regs.get((event, account))
+            if not reg or reg["status"] != "attended":
+                refuse("event_not_attended")
+            if (ev["community_id"], account) in self._members:
+                return {"status": "already"}
+            if not self._event_admit(event, account, now):
+                refuse("event_banned")
+            return {"status": "joined"}
+
+    def event_banned_for(self, event_id, account_id):
+        """受付の画面の「お断り」：この会でお断りされた、またはメンバーでなく前に外された・断られた人か。"""
+        with self._lock:
+            event = self._events.get(event_id)
+            if not event:
+                return False
+            return self._event_banned(event, account_id, self._event_regs.get((event_id, account_id)))
+
+    # -- 参加者リスト・会のあと（DB の event_participants・event_participant_answers・event_after_people・event_meet）
+
+    def _event_person(self, event, account):
+        person = self._accounts.get(account) or {}
+        return {"account_id": account, "display_name": person.get("display_name") or "",
+                "affiliation": person.get("affiliation"), "job_title": person.get("job_title"),
+                "icon_id": person.get("icon_id", "0"), "avatar_path": person.get("avatar_path"),
+                "is_member": (event["community_id"], account) in self._members}
+
+    def event_participants(self, event_id):
+        """applied・attended の人と主催者（申し込みが無ければ status='host'）。申し込み順、主催者は最後。年代は返さない。"""
+        with self._lock:
+            event = self._events.get(event_id)
+            if not event:
+                return []
+            host = (self._posts.get(event_id) or {}).get("author_id")
+            regs = sorted(((account, reg) for (eid, account), reg in self._event_regs.items()
+                           if eid == event_id and reg["status"] in ("applied", "attended")),
+                          key=lambda item: _utc(item[1]["applied_at"]))
+            rows = [{**self._event_person(event, account), "status": reg["status"],
+                     "late_minutes": reg["late_minutes"], "is_host": account == host,
+                     "checked_in_at": reg["checked_in_at"]} for account, reg in regs]
+            if host and not any(row["account_id"] == host for row in rows):
+                rows.append({**self._event_person(event, host), "status": "host", "late_minutes": None,
+                             "is_host": True, "checked_in_at": None})
+            return rows
+
+    def event_participant_answers(self, event_id):
+        """[{account_id, prompt, body}]：applied・attended の人の回答。"""
+        with self._lock:
+            return [{"account_id": account, "prompt": prompt, "body": row["body"]}
+                    for (eid, account, prompt), row in sorted(self._event_answers.items())
+                    if eid == event_id and self._event_regs.get((eid, account), {}).get("status")
+                    in ("applied", "attended")]
+
+    def event_after_people(self, *, event, account):
+        """会のあと：自分以外の受付済みの人。met は自分→相手の「会えてよかった」があるか。"""
+        with self._lock:
+            ev = self._events.get(event)
+            if not ev:
+                refuse("event_not_found")
+            reg = self._event_regs.get((event, account))
+            if not reg or reg["status"] != "attended":
+                refuse("event_not_attended")
+            others = sorted(((who, row) for (eid, who), row in self._event_regs.items()
+                             if eid == event and who != account and row["status"] == "attended"),
+                            key=lambda item: _utc(item[1]["checked_in_at"] or item[1]["applied_at"]))
+            return [{**self._event_person(ev, who), "met": (event, account, who) in self._event_meetings}
+                    for who, _row in others]
+
+    def event_meet(self, *, event, from_id, to_id, on):
+        """「会えてよかった」を付ける・外す。2人とも受付済みでなければ event_not_attended。{"on": bool}。"""
+        with self._lock:
+            if event not in self._events:
+                refuse("event_not_found")
+            for who in (from_id, to_id):
+                reg = self._event_regs.get((event, who))
+                if not reg or reg["status"] != "attended":
+                    refuse("event_not_attended")
+            if from_id == to_id:
+                refuse("event_invalid")
+            if on:
+                self._event_meetings.add((event, from_id, to_id))
+            else:
+                self._event_meetings.discard((event, from_id, to_id))
+            return {"on": bool(on)}
+
+    def event_talk_targets(self, account_id):
+        """この人が「もっと話してみたい」を押している相手（押しただけ・両思いの両方）。会のあとの talk に使う。"""
+        return {row["target"] for row in self.talk_state(account_id)}
 
     def _event_on_post_deleted(self, post_id):
         """events_on_post_delete（トリガー）：会の投稿が消されたら会は中止。未送信を消し、申し込み中の人に
@@ -549,7 +938,7 @@ class EventsMemoryMixin:
                     "channel": reg["channel"], "status": reg["status"], "late_minutes": reg["late_minutes"],
                     "banned_before": bool(key in self._removals or (request and request["status"] == "rejected")),
                     "line_friend": bool(link and link["is_friend"]), "rejects": reg["walkin_rejects"],
-                    "was_guest": reg["was_guest"], "applied_at": reg["applied_at"],
+                    "was_guest": reg["was_guest"], "applied_at": reg["applied_at"], "is_member": member is not None,
                 })
             rows.sort(key=lambda row: (row["status"] != "waiting", _utc(row["applied_at"])))
             return rows
@@ -745,6 +1134,8 @@ class EventsSupabaseMixin:
     _has_events = False
     _events_checked_at = None
     _has_probe = False
+    _has_events_b = False
+    _events_b_checked_at = None
 
     def _event_rpc(self, name, payload, label):
         """RPC を呼ぶ。DB 関数の断り（400 + hint）は EventRefused に。本文は画面に出さない。"""
@@ -798,6 +1189,35 @@ class EventsSupabaseMixin:
     @property
     def supports_probe(self):
         return self.supports_events and self._has_probe
+
+    def events_b_ready(self):
+        """第2回b の SQL（20261111000000_events_b.sql）が流れているか：events に join_policy の列があるか。
+        events_ready と同じく1分ほど覚える。"""
+        now = time.monotonic()
+        if self._events_b_checked_at is not None and now - self._events_b_checked_at < EVENTS_CHECK_SECONDS:
+            return self._has_events_b
+        try:
+            response = self._send("GET", "events", label="会の列の確認", allow_statuses=(400, 404),
+                                  params={"select": "join_policy", "limit": "1"})
+        except _s().StoreError:
+            self._events_b_checked_at = now - EVENTS_CHECK_SECONDS + 10
+            raise
+        ready = response.status_code < 300
+        if ready != self._has_events_b or self._events_b_checked_at is None:
+            print("[store] events_b: " + ("columns found; 開催の条件・受付が使えます" if ready else
+                  "columns missing; 開催の条件・受付は supabase/migrations/20261111000000_events_b.sql を流すまで止まっています"),
+                  flush=True)
+        self._has_events_b, self._events_b_checked_at = ready, now
+        return ready
+
+    @property
+    def supports_events_b(self):
+        if not self.supports_events:
+            return False
+        try:
+            return self.events_b_ready()
+        except _s().StoreError:
+            return self._has_events_b
 
     # -- reads (tables) --------------------------------------------------------------------------
 
@@ -884,7 +1304,7 @@ class EventsSupabaseMixin:
                 "channel": reg["channel"], "status": reg["status"], "late_minutes": reg.get("late_minutes"),
                 "banned_before": reg["account_id"] in banned, "line_friend": reg["account_id"] in friends,
                 "rejects": reg.get("walkin_rejects", 0), "was_guest": reg.get("was_guest", False),
-                "applied_at": reg["applied_at"]})
+                "applied_at": reg["applied_at"], "is_member": reg["account_id"] in members})
         rows.sort(key=lambda row: (row["status"] != "waiting", row["applied_at"] or ""))
         return rows
 
@@ -895,13 +1315,24 @@ class EventsSupabaseMixin:
 
     # -- writes (RPC) ---------------------------------------------------------------------------------
 
-    def event_create(self, *, post, actor, title, starts, ends, place, visibility, questions):
-        return self._event_rpc("event_create", {
+    def event_create(self, *, post, actor, title, starts, ends, place, visibility, questions,
+                     min_participants=None, decide_on=None, cancel_deadline=None, join_policy="auto"):
+        payload = {
             "p_post": post, "p_actor": actor, "p_title": title, "p_starts": _iso(starts), "p_ends": _iso(ends),
-            "p_place": place, "p_visibility": visibility, "p_questions": questions}, "会の保存")
+            "p_place": place, "p_visibility": visibility, "p_questions": questions}
+        if self.supports_events_b:
+            # 第2回b の SQL が無い DB には送らない（今の8引数で呼ぶ）
+            payload.update({"p_min": min_participants, "p_decide_on": day_text(decide_on),
+                            "p_cancel_deadline": _iso(cancel_deadline), "p_join_policy": join_policy})
+        return self._event_rpc("event_create", payload, "会の保存")
 
     def event_update(self, *, post, actor, fields):
-        fields = {key: (_iso(value) if key in ("starts_at", "ends_at") else value) for key, value in fields.items()}
+        new_keys = ("min_participants", "decide_on", "cancel_deadline", "join_policy")
+        if not self.supports_events_b:
+            fields = {key: value for key, value in fields.items() if key not in new_keys}
+        fields = {key: (_iso(value) if key in ("starts_at", "ends_at", "cancel_deadline")
+                        else day_text(value) if key == "decide_on" else value)
+                  for key, value in fields.items()}
         return self._event_rpc("event_update", {"p_post": post, "p_actor": actor, "p_fields": fields}, "会の更新")
 
     def event_apply(self, *, event, account, profile=None, channel="email", referral=None,
@@ -922,6 +1353,77 @@ class EventsSupabaseMixin:
     def event_decline(self, *, event, host, account):
         return self._event_rpc("event_decline", {"p_event": event, "p_host": host, "p_account": account},
                                "お断りの保存")
+
+    # -- 第2回b（20261111000000_events_b.sql） -----------------------------------------------------------
+
+    def event_settle(self, *, event):
+        return self._event_rpc("event_settle", {"p_event": event}, "開催の判定")
+
+    def event_settle_due(self):
+        return int(self._event_rpc("event_settle_due", {}, "開催の判定") or 0)
+
+    def event_checkin(self, *, event, account):
+        return self._event_rpc("event_checkin", {"p_event": event, "p_account": account}, "受付")
+
+    def event_walkin_request(self, *, event, account, profile=None, consent=None):
+        return self._event_rpc("event_walkin_request", {
+            "p_event": event, "p_account": account, "p_profile": profile or {}, "p_consent": consent}, "受付待ち")
+
+    def event_checkin_by_host(self, *, event, host, account):
+        return self._event_rpc("event_checkin_by_host", {"p_event": event, "p_host": host, "p_account": account},
+                               "受付")
+
+    def event_reject_walkin(self, *, event, host, account):
+        return self._event_rpc("event_reject_walkin", {"p_event": event, "p_host": host, "p_account": account},
+                               "受付待ちの却下")
+
+    def event_join_community(self, *, event, account):
+        return self._event_rpc("event_join_community", {"p_event": event, "p_account": account},
+                               "コミュニティへの参加")
+
+    def event_participants(self, event_id):
+        return self._event_rpc("event_participants", {"p_event": event_id}, "参加者の読み込み") or []
+
+    def event_participant_answers(self, event_id):
+        return self._event_rpc("event_participant_answers", {"p_event": event_id}, "参加者の読み込み") or []
+
+    def event_after_people(self, *, event, account):
+        return self._event_rpc("event_after_people", {"p_event": event, "p_account": account},
+                               "会った人の読み込み") or []
+
+    def event_meet(self, *, event, from_id, to_id, on):
+        return self._event_rpc("event_meet", {"p_event": event, "p_from": from_id, "p_to": to_id, "p_on": bool(on)},
+                               "会えてよかったの保存")
+
+    def event_banned_for(self, event_id, account_id):
+        """受付の画面の「お断り」（DB 関数でなく表を読む。名簿と同じ読み方）。"""
+        event = self.event_by_post(event_id)
+        if not event:
+            return False
+        reg = self.event_registration(event_id, account_id)
+        if reg and reg.get("status") == "declined":
+            return True
+        community = event["community_id"]
+        if self.is_community_member(community, account_id):
+            return False
+        removed = self._get("community_removals", {
+            "select": "account_id", "community_id": f"eq.{community}", "account_id": f"eq.{account_id}",
+            "limit": "1"}, label="受付の確認")
+        rejected = self._get("community_join_requests", {
+            "select": "account_id", "community_id": f"eq.{community}", "account_id": f"eq.{account_id}",
+            "status": "eq.rejected", "limit": "1"}, label="受付の確認")
+        return bool(removed or rejected)
+
+    def event_talk_targets(self, account_id):
+        """この人が「もっと話してみたい」を押している相手と、両思いの相手（talk_wishes・dm_rooms を読む）。"""
+        pressed = self._get("talk_wishes", {"select": "to_id", "from_id": f"eq.{account_id}"},
+                            label="話してみたいの読み込み")
+        rooms = self._get("dm_rooms", {"select": "user_a,user_b",
+                                       "or": f"(user_a.eq.{account_id},user_b.eq.{account_id})"},
+                          label="話してみたいの読み込み")
+        out = {row["to_id"] for row in pressed}
+        out |= {row["user_b"] if row["user_a"] == account_id else row["user_a"] for row in rooms}
+        return out
 
     def event_probe_hit(self, *, event, device, ip):
         return self._event_rpc("event_probe_hit", {"p_event": event, "p_device": device, "p_ip": ip},

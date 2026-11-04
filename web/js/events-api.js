@@ -37,4 +37,26 @@ export const eventsApi = {
     api.post(`/api/events/${enc(code)}/registrations/${enc(accountId)}/decline`, {}),
   /** 会の中止＝会の投稿を消す（サーバーが会を中止にして、申し込んだ人に知らせる）。 */
   cancelEvent: (postId) => api.del(`/api/posts/${enc(postId)}`),
+  /** 主催者が名簿で受付する（受付待ちの人・申し込み済みの人）：{ status, joined }。 */
+  hostCheckin: (code, accountId) =>
+    api.post(`/api/events/${enc(code)}/registrations/${enc(accountId)}/checkin`, {}),
+  /** 受付待ちの人を却下する：{ walkin_rejects }。 */
+  rejectWalkin: (code, accountId) =>
+    api.post(`/api/events/${enc(code)}/registrations/${enc(accountId)}/reject-walkin`, {}),
+
+  // ---- 限定ページ・受付・会のあと（第2回b）
+  /** 参加者リスト：{ counts, people, near3 }。見られない人は 404。 */
+  participants: (code) => api.get(`/api/events/${enc(code)}/participants`),
+  /** 「本人に確認」の会で、受付済みの人がコミュニティに参加する：{ status, community_id }。 */
+  join: (code) => api.post(`/api/events/${enc(code)}/join`, {}),
+  /** 受付の画面の状態：{ event, window, me, rejects, is_member }（受付待ちの画面が数秒ごとに読む）。 */
+  checkinInfo: (checkinCode) => api.get(`/api/checkin/${enc(checkinCode)}`),
+  /** QR で受付する：{ result, joined }。result が need_walkin なら飛び入りの入力へ。 */
+  checkin: (checkinCode) => api.post(`/api/checkin/${enc(checkinCode)}`, {}),
+  /** 飛び入りの受付待ちになる：body は { display_name, affiliation, agree_terms }。 */
+  walkin: (checkinCode, body) => api.post(`/api/checkin/${enc(checkinCode)}/walkin`, body),
+  /** 会のあと：{ people, me_is_member, join_policy }。 */
+  after: (code) => api.get(`/api/events/${enc(code)}/after`),
+  /** 会えてよかった（on で付ける、false で外す）：{ on }。 */
+  met: (code, to, on) => api.post(`/api/events/${enc(code)}/met`, { to, on }),
 };

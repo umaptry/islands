@@ -10,7 +10,7 @@
 
 import { eventsApi } from '../events-api.js';
 import {
-  TERMS_NEXT, PRIVACY_NEXT, applyConfirm, applyFailure, applyLink, cancelConfirm, formatWhen, hostHash,
+  TERMS_NEXT, PRIVACY_NEXT, applyConfirm, applyFailure, applyLink, cancelConfirm, cancelNote, cardLine, formatWhen, hostHash,
   memberAction, needsFullnameFirst,
 } from '../event-host-rules.js';
 import { isRecruiting } from '../map/reads.js';
@@ -178,6 +178,8 @@ export function mountEventBlock(post, foot, joinButton) {
       text: event.cancelled ? '' : `${formatWhen(event.starts_at, event.ends_at)}　申し込み ${capacity}` });
     if (action.kind === 'host') {
       holder.append(hostMenu(), info);
+      const hostLine = cardLine(event);
+      if (hostLine) holder.append(el('p', { className: `ev-go-line ${event.phase || 'recruiting'}`, text: hostLine }));
       return;
     }
     const button = el('button', {
@@ -195,6 +197,11 @@ export function mountEventBlock(post, foot, joinButton) {
     if (action.kind === 'applied') button.addEventListener('click', once(cancelMine));
     holder.append(button);
     if (!event.cancelled) holder.append(info);
+    // 最小人数のある会：「あと◯人で開催決定」／「開催決定」／「中止」。申し込み済みの人にはキャンセル期限も
+    const goLine = cardLine(event);
+    if (goLine) holder.append(el('p', { className: `ev-go-line ${event.phase || 'recruiting'}`, text: goLine }));
+    const cancel = view.me && view.me.status === 'applied' ? cancelNote(event) : '';
+    if (cancel) holder.append(el('p', { className: 'ev-info ev-cancel-note', text: cancel }));
   }
 
   const afterName = () => {

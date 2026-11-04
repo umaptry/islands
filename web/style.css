@@ -2555,7 +2555,8 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 /* 会の中身（投稿画面の上に重なる） */
 .ev-progress { margin-top: 0; }
 .ev-progress[aria-valuenow="1"] i:nth-child(1),
-.ev-progress[aria-valuenow="2"] i { background: #fff; }
+.ev-progress[aria-valuenow="2"] i:nth-child(-n+2),
+.ev-progress[aria-valuenow="3"] i { background: #fff; }
 .ev-fixed { margin: 0 0 18px; font-size: 13px; color: var(--on-sea-2); }
 .ev-fixed:empty { display: none; }
 .ev-ask { margin: 8px 0 10px; font-size: 15px; font-weight: 800; }
@@ -2573,3 +2574,91 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 .ev-question-text { flex: 1; display: flex; flex-direction: column; }
 .ev-question-text small { font-size: 11.5px; opacity: .8; }
 .ev-question-x { flex: none; font-size: 18px; }
+
+/* events-b: settings（会の開催条件・主催者の画面・申し込みページ。担当③） */
+.ev-hint.locked { color: var(--ink-3); }
+.ev-card .ev-hint { color: var(--ink-2); }
+.ev-input:disabled { background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
+.ev-card .ev-input:disabled { background: var(--surface-3); }
+.ev-field[hidden] { display: none; }
+.ev-goal-edit { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ev-goal-edit .ev-sub { margin: 0 0 10px; color: var(--ink); }
+.ev-card .ev-choice { border-color: var(--line); color: var(--ink); background: #fff; }
+.ev-card .ev-choice span { color: var(--ink-2); }
+.ev-card .ev-choice.on { border-color: var(--ui, #1B8ED5); background: #eaf4fc; }
+.ev-card .ev-choices { margin-bottom: 14px; }
+
+/* 状態の札（募集中／開催決定／中止）と、人数・判定日の二行 */
+.ev-go { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.ev-go.held { background: #e1f5e9; }
+.ev-go.not_held { background: #fbe3e1; }
+.ev-go-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12.5px; color: var(--ink-2); }
+.ev-go-lines b { font-size: 14px; color: var(--ink); }
+.ev-go-badge { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; background: #eef2f7; color: var(--ink-2); }
+.ev-go-badge.good { background: #1d7a45; color: #fff; }
+.ev-go-badge.bad { background: var(--bad); color: #fff; }
+.ev-go-line { margin: 6px 4px 0; font-size: 12px; font-weight: 800; text-align: center; color: var(--ink-2); }
+.ev-go-line.held { color: #1d7a45; }
+.ev-go-line.not_held { color: var(--bad); }
+.ev-cancel-note { margin-top: 2px; }
+
+/* 申し込みページの開催の条件 */
+.ev-goal .ev-line { color: var(--ink); margin: 6px 0 0; }
+.ev-goal .ev-line.ev-quiet { color: var(--ink-2); font-size: 13px; }
+.ev-goal-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ev-goal-count { font-size: 15px; }
+.ev-goal.held .ev-goal-count { color: #1d7a45; }
+
+/* 名簿の受付待ち：受付する・却下 */
+.ev-person-buttons { display: flex; gap: 8px; margin: 8px 0 0 46px; }
+.ev-person-buttons .btn { flex: 1; min-height: 40px; font-size: 14px; }
+.ev-person-buttons .ev-checkin { background: var(--ui, #1B8ED5); color: #fff; }
+.ev-checkin-menu { color: var(--ui, #1B8ED5); }
+
+/* events-b: guest（限定ページ・受付・会のあと。担当④） */
+
+/* 限定ページ：状態の札（.ev-status は主催者の名簿の札と名前がぶつかるので、カードのほうを固める） */
+.ev-card.ev-status { flex: none; padding: 14px 16px; border-radius: 18px; background: #fff; color: var(--ink); font-size: inherit; font-weight: inherit; }
+.ev-card.ev-status.is-cancelled { background: rgba(255, 255, 255, .88); }
+.evb-stage { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 14px; padding: 10px 14px; border-radius: 12px; background: rgba(255, 255, 255, .22); color: #fff; font-size: 13px; line-height: 1.6; }
+.evb-stage b { font-size: 14px; }
+.evb-stage.is-ok { background: #e1f5e9; color: #1d7a45; }
+.evb-stage.is-bad { background: #c0392b; color: #fff; }
+
+/* このコミュニティに参加する */
+.evb-join .ev-status-note { margin: 0 0 12px; color: var(--ink); font-size: 14px; }
+.evb-join-btn { min-height: 48px; font-size: 15px; background: var(--ui, var(--sea)); color: #fff; }
+.evb-join.is-done .ev-status-title { color: #1f7a45; margin-bottom: 12px; }
+
+/* 参加者リスト・会のあと */
+.evb-people { list-style: none; margin: 0 0 18px; padding: 4px 16px; }
+.evb-people-label { margin: -4px 0 8px; font-size: 13px; font-weight: 700; color: rgba(255, 255, 255, .86); }
+.evb-person { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.evb-person:first-child { border-top: 0; }
+.evb-person .avatar { flex: none; }
+.evb-person-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.evb-person-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 15px; overflow-wrap: anywhere; }
+.evb-person-sub { font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+.evb-person-reason { font-size: 12px; color: var(--ui, var(--sea)); font-weight: 700; }
+.evb-person-answer { margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.evb-person-answer small { display: block; font-size: 11px; color: var(--ink-3); }
+.evb-person-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.evb-badge { padding: 1px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 800; background: #eef2f7; color: var(--ink-2); }
+.evb-badge.is-me { background: #d8ecf8; color: var(--sea-ink, #0b4a73); }
+.evb-badge.is-host { background: #ffe9a8; color: #5a3a00; }
+.evb-badge.is-attended { background: #e1f5e9; color: #1d7a45; }
+.evb-badge.is-late { background: #fff1d6; color: #8a5a10; }
+.evb-met { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink-2); font-size: 12px; font-weight: 800; cursor: pointer; }
+.evb-met.is-on { background: var(--ui, var(--sea)); border-color: var(--ui, var(--sea)); color: #fff; }
+
+/* 受付 */
+.evb-spinner { width: 56px; height: 56px; margin: 48px auto 20px; border-radius: 50%; border: 4px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: evb-spin 1s linear infinite; }
+@keyframes evb-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .evb-spinner { animation: none; } }
+.evb-mark { width: 64px; height: 64px; margin: 24px auto 16px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 800; }
+.evb-mark.is-bad { color: #c0392b; }
+
+/* events-b: 確認の直し（主催者の画面のカードの中の行は白地なので濃い字に。限定ページのカレンダーは文字のリンクに） */
+#eventHost .ev-card .ev-line { color: var(--ink); line-height: 1.6; }
+#eventHost .ev-card .ev-line.ev-quiet { color: var(--ink-2); font-size: 12.5px; text-decoration: none; padding: 0; background: none; }
+.ev-center a.ev-link { display: inline; width: auto; padding: 0; margin: 0; border: 0; border-radius: 0; background: none; color: #fff; font-size: 13px; }

@@ -38,8 +38,10 @@ import { mustWait, parseInviteHash } from './community-rules.js';
 // ---- 会：公開側（第2回a） ----
 import { setupEventApply } from './screens/event-apply.js';
 import { setupEventMe } from './screens/event-me.js';
+import { setupEventCheckin } from './screens/event-checkin.js';
+import { setupEventAfter } from './screens/event-after.js';
 import { forgetEventGuest, guestHome, refreshEventGuest } from './event-guest.js';
-import { eventHashFor, isEventPattern, parseEventPath, peekApplyReturn, rememberHostReturn, takeHostReturn } from './event-rules.js';
+import { eventHashFor, isEventPattern, parseEventPath, peekApplyReturn, peekCheckinReturn, rememberHostReturn, takeHostReturn } from './event-rules.js';
 // ---- 会：主催者とメンバー（第2回a） ----
 import { setupEventHost } from './screens/event-host.js';
 import { setupEventCompose } from './screens/event-compose.js';
@@ -66,6 +68,8 @@ route('#/community/:id', 'communityEdit');
 // ---- 会：公開側（第2回a） ----
 route('#/e/:code', 'eventApply');
 route('#/e/:code/me', 'eventMe');
+route('#/e/:code/after', 'eventAfter');
+route('#/c/:code', 'eventCheckin');
 // ---- 会：主催者とメンバー（第2回a） ----
 route('#/e/:code/host', 'eventHost');
 
@@ -188,6 +192,8 @@ async function boot() {
   setupFullname();
   setupEventApply();   // ---- 会：公開側（第2回a） ----
   setupEventMe();
+  setupEventCheckin();
+  setupEventAfter();
   // ---- 会：主催者とメンバー（第2回a） ----
   setupEventHost();
   setupEventCompose();
@@ -212,12 +218,15 @@ async function boot() {
   // (After the sign-in has been taken from the address, which a LINE sign-in leaves on this very path.) A sign-in that came
   // back to the front page while somebody was applying goes back to that 会.
   const eventPath = parseEventPath(window.location.pathname);
-  if (eventPath && eventPath.kind === 'apply') {
-    history.replaceState(null, '', `/${eventHashFor(eventPath.code, 'apply')}`);
+  if (eventPath) {
+    // /e/<code> is the public page, /c/<code> the check-in page (第2回b)
+    history.replaceState(null, '', `/${eventHashFor(eventPath.code, eventPath.kind)}`);
   } else if (redirect === 'adopted' && peekApplyReturn(browserStorage())) {
     history.replaceState(null, '', `/${eventHashFor(peekApplyReturn(browserStorage()), 'apply')}`);
+  } else if (redirect === 'adopted' && peekCheckinReturn(browserStorage())) {
+    history.replaceState(null, '', `/${eventHashFor(peekCheckinReturn(browserStorage()), 'checkin')}`);
   }
-  const onEventPage = /^#\/e\//.test(window.location.hash);
+  const onEventPage = /^#\/[ec]\//.test(window.location.hash);
 
   let invalidatedSession = false;
   let accountRead = false;

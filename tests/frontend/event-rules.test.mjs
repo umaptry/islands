@@ -29,6 +29,7 @@ test('hash を作る：申し込み・ゲスト・受付。コードが変なら
   assert.equal(rules.eventHashFor('abcdefgh'), '#/e/abcdefgh');
   assert.equal(rules.eventHashFor('abcdefgh', 'me'), '#/e/abcdefgh/me');
   assert.equal(rules.eventHashFor('abcdefgh', 'checkin'), '#/c/abcdefgh');
+  assert.equal(rules.eventHashFor('abcdefgh', 'after'), '#/e/abcdefgh/after');
   assert.equal(rules.eventHashFor('a b', 'me'), '#/map');
   assert.equal(rules.isEventPattern('#/e/:code'), true);
   assert.equal(rules.isEventPattern('#/e/:code/me'), true);
@@ -116,6 +117,17 @@ test('ゲスト用ページ：申し込み済みは遅れる・取り消せる�
   assert.equal(view.showNear, true);
   assert.equal(view.showFriend, true);
   assert.equal(rules.statusView({ status: 'applied', line_friend: true }, event).showFriend, false);
+});
+
+test('ゲスト用ページ：人数が集まらず中止の会は、遅れる・会場・友だち追加・申し込み済みの札を出さない', () => {
+  for (const stopped of [{ ...event, closed: 'not_held' }, { ...event, phase: 'not_held' }]) {
+    const view = rules.statusView({ status: 'applied', line_friend: false }, stopped, Date.parse('2099-11-01T00:00:00Z'));
+    assert.equal(view.tone, 'notHeld');
+    assert.equal(view.title, '');
+    assert.equal(view.canLate, false);
+    assert.equal(view.canCancel, false);
+    assert.equal(view.showFriend, false);
+  }
 });
 
 test('ゲスト用ページ：会が終わったら遅れる・取り消すは出ない', () => {
@@ -248,4 +260,138 @@ test('主催者の画面から来たログインの戻り先：覚えて一度�
   rules.rememberHostReturn(storage, 'abcdef', 0);
   assert.equal(rules.takeHostReturn(storage, rules.RETURN_HOLD_MS + 1), null);
   assert.equal(rules.rememberHostReturn(storage, 'x'), false);
+});
+
+// ---------------------------------------------------------------- 第2回b（画面B）
+
+test('開催の状態：決定・中止・募集中・最小人数なし', () => {
+  assert.deepEqual(rules.eventStageView({ phase: 'held' }), { phase: 'held', label: '開催決定', tone: 'ok', note: '' });
+  assert.equal(rules.eventStageView({ phase: 'not_held' }).tone, 'bad');
+  const wait = rules.eventStageView({ phase: 'recruiting', needed: 3, min_participants: 8, decide_on: '2026-11-10' });
+  assert.equal(wait.label, '募集中');
+  assert.equal(wait.note, 'あと3人で開催決定／11月10日までに8人集まれば開催');
+  assert.equal(rules.eventStageView({ phase: null }), null);
+  assert.equal(rules.eventStageView({}), null);
+});
+
+test('キャンセル：期限を具体的に、期限後はボタンなしの案内', () => {
+  const event = { starts_at: '2026-11-13T10:00:00Z', ends_at: '2026-11-13T13:00:00Z', cancel_deadline: '2026-11-12T09:00:00Z' };   // 11/12 18:00 JST
+  const before = Date.parse('2026-11-10T00:00:00Z');
+  assert.deepEqual(rules.cancelView({ status: 'applied', can_cancel: true }, event, before), { canCancel: true, note: 'キャンセルは11月12日(木) 18:00まで' });
+  const late = Date.parse('2026-11-12T10:00:00Z');
+  assert.deepEqual(rules.cancelView({ status: 'applied', can_cancel: false }, event, late), { canCancel: false, note: '期限後のキャンセルは主催者に連絡してください' });
+  // 期限のない会：ボタンだけ。キーが無い（古いサーバー）ときは今までの判断
+  assert.deepEqual(rules.cancelView({ status: 'applied', can_cancel: true }, { starts_at: event.starts_at, ends_at: event.ends_at }, before), { canCancel: true, note: '' });
+  assert.equal(rules.cancelView({ status: 'applied' }, { starts_at: event.starts_at, ends_at: event.ends_at }, before).canCancel, true);
+  // 受付済み・中止の会・申し込みなしにはボタンなし
+  assert.equal(rules.cancelView({ status: 'attended', can_cancel: false }, event, late).note, '');
+  assert.equal(rules.cancelView({ status: 'applied', can_cancel: true }, { ...event, cancelled: true }, before).canCancel, false);
+});
+
+test('「このコミュニティに参加する」は me.can_join のときだけ', () => {
+  assert.equal(rules.joinView({ can_join: true }, { community_name: 'Night BAR' }).show, true);
+  assert.equal(rules.joinView({ can_join: false }, {}).show, false);
+  assert.equal(rules.joinView({}, {}).show, false);
+  const view = rules.joinView({ can_join: true }, { community_name: 'Night BAR' });
+  assert.equal(view.lead, '「Night BAR」のメンバーになると、地図やほかの人の投稿が見られます');
+  assert.equal(view.done, '「Night BAR」のメンバーになりました');
+  assert.match(rules.joinView({ can_join: true }, {}).lead, /^このコミュニティのメンバー/);
+});
+
+test('参加者リスト：中止の会は出さない・近い3人を上に・年代は出ない', () => {
+  const people = [
+    { account_id: 'a', name: '山田', is_me: false, state: 'attended', near: { level: 'high', reason: 'どちらも「キャンプ」の話題です' } },
+    { account_id: 'm', name: '自分', is_me: true, state: 'applied', age_band: '30代' },
+    { account_id: 'h', name: '主催', is_me: false, state: 'host' },
+    { account_id: 'b', name: '佐藤', is_me: false, state: 'applied', near: { level: 'mid', reason: 'x' } },
+    { account_id: 'c', name: '鈴木', is_me: false, state: 'applied' },
+  ];
+  const view = rules.participantsView({ people, near3: ['a', 'b', 'm'] }, { phase: 'held' });
+  assert.deepEqual(view.near.map((p) => p.account_id), ['a', 'b']);
+  assert.deepEqual(view.rest.map((p) => p.account_id), ['m', 'h', 'c']);
+  assert.equal(view.count, 5);
+  assert.equal(rules.participantsView({ people, near3: [] }, { cancelled: true }), null);
+  assert.equal(rules.participantsView({ people, near3: [] }, { phase: 'not_held' }), null);
+  assert.equal(rules.participantsView(null, {}), null);
+  const one = rules.personView({ ...people[1], affiliation: '○○', job_title: 'デザイナー', answers: [{ label: '最近', body: '陶芸' }, { label: 'x', body: ' ' }] });
+  assert.equal(one.sub, '○○・デザイナー');
+  assert.deepEqual(one.badges.map((b) => b.text), ['あなた']);
+  assert.equal(one.answers.length, 1);
+  assert.equal('age_band' in one, false);
+  assert.equal(rules.personView(people[0]).reason, 'どちらも「キャンプ」の話題です');
+  assert.deepEqual(rules.personView(people[0]).badges.map((b) => b.text), ['受付済み']);
+  assert.deepEqual(rules.personView(people[2]).badges.map((b) => b.text), ['主催者']);
+});
+
+test('会が終わったあとの「会った人を選ぶ」は受付済みの人だけ', () => {
+  const event = { starts_at: '2026-11-21T10:00:00Z', ends_at: '2026-11-21T13:00:00Z' };
+  const after = Date.parse('2026-11-21T14:00:00Z');
+  assert.equal(rules.afterLinkShown({ status: 'attended' }, event, after), true);
+  assert.equal(rules.afterLinkShown({ status: 'applied' }, event, after), false);
+  assert.equal(rules.afterLinkShown({ status: 'attended' }, event, Date.parse('2026-11-21T11:00:00Z')), false);
+  assert.equal(rules.afterLinkShown({ status: 'attended' }, { ...event, cancelled: true }, after), false);
+});
+
+test('受付の画面の出し分け', () => {
+  const k = (info) => rules.checkinView(info).kind;
+  assert.equal(k({ window: 'open', me: 'applied', event: { cancelled: true } }), 'cancelled');
+  assert.equal(k({ window: 'open', me: 'none', event: { phase: 'not_held' } }), 'cancelled');
+  assert.equal(k({ window: 'open', me: 'attended', event: { phase: 'not_held' } }), 'attended');
+  assert.equal(k({ window: 'open', me: 'applied' }), 'ready');
+  assert.equal(k({ window: 'open', me: 'none', is_member: true }), 'ready');
+  assert.equal(k({ window: 'open', me: 'none', is_member: false }), 'walkin');
+  assert.equal(k({ window: 'early', me: 'applied' }), 'early');
+  assert.equal(k({ window: 'closed', me: 'none' }), 'closed');
+  assert.equal(k({ window: 'closed', me: 'attended' }), 'attended');
+  assert.equal(k({ window: 'open', me: 'waiting' }), 'waiting');
+  assert.equal(k({ window: 'open', me: 'rejected', rejects: 1 }), 'rejected');
+  assert.equal(k({ window: 'open', me: 'rejected', rejects: 3 }), 'blocked');
+  assert.equal(k({ window: 'open', me: 'banned' }), 'blocked');
+  assert.equal(k({ window: 'open', me: 'cancelled' }), 'walkin');   // 取り消した人も受付待ちから主催者が選ぶ
+  assert.equal(rules.checkinView({ me: 'rejected', rejects: 1 }).text, '受付できませんでした。主催者に声をかけてください');
+});
+
+test('受付できたあとの文：自動加入ならコミュニティ名（会の名前ではない）', () => {
+  const event = { title: 'BAR #2', community_name: 'The Night Office BAR' };
+  assert.equal(rules.checkinDoneView({ joined: true }, event, '佐々木 花').note, 'ようこそ、佐々木 花さん。「The Night Office BAR」のメンバーになりました。');
+  const plain = rules.checkinDoneView({ joined: false }, event, '');
+  assert.equal(plain.title, '受付しました');
+  assert.equal(plain.joined, false);
+});
+
+test('飛び入りの入力：フルネームと会社が要る', () => {
+  assert.equal(rules.cleanWalkin('', '○○').ok, false);
+  assert.equal(rules.cleanWalkin('佐々木 花', '').ok, false);
+  assert.equal(rules.cleanWalkin('x'.repeat(40), '○○').ok, false);
+  assert.deepEqual(rules.cleanWalkin(' 佐々木  花 ', '株式会社 ミナト').body, { display_name: '佐々木 花', affiliation: '株式会社 ミナト', agree_terms: true });
+});
+
+test('受付の戻り先：覚える・一度だけ取り出す・30分で切れる', () => {
+  const storage = memory();
+  assert.equal(rules.rememberCheckinReturn(storage, 'abcdefgh', 0), true);
+  assert.equal(rules.peekCheckinReturn(storage, 1000), 'abcdefgh');
+  assert.equal(rules.takeCheckinReturn(storage, 1000), 'abcdefgh');
+  assert.equal(rules.takeCheckinReturn(storage, 1000), null);
+  rules.rememberCheckinReturn(storage, 'abcdefgh', 0);
+  assert.equal(rules.peekCheckinReturn(storage, rules.RETURN_HOLD_MS + 1), null);
+  assert.equal(rules.rememberCheckinReturn(storage, 'x'), false);
+});
+
+test('ゲストが開けるのは限定ページ・公開ページ・会のあと・受付だけ', () => {
+  for (const pattern of ['#/e/:code', '#/e/:code/me', '#/e/:code/after', '#/c/:code']) assert.equal(rules.guestMayOpen(pattern), true);
+  for (const pattern of ['#/map', '#/e/:code/host', '#/dm', '']) assert.equal(rules.guestMayOpen(pattern), false);
+  assert.equal(rules.isEventPattern('#/e/:code/after'), true);
+});
+
+test('会のあと：2人ともメンバーのときだけ「もっと話してみたい」、ask の会には参加の案内', () => {
+  const people = [{ account_id: 'a', display_name: '山田', is_member: true, met: true }, { account_id: 'b', display_name: '佐藤', is_member: false, met: false }];
+  const member = rules.afterView({ people, me_is_member: true, join_policy: 'ask' });
+  assert.deepEqual(member.people.map((p) => p.canTalk), [true, false]);
+  assert.equal(member.askJoin, false);
+  const guest = rules.afterView({ people, me_is_member: false, join_policy: 'ask' });
+  assert.deepEqual(guest.people.map((p) => p.canTalk), [false, false]);
+  assert.equal(guest.askJoin, true);
+  assert.equal(guest.note, 'コミュニティに参加すると「もっと話してみたい」も押せます');
+  assert.equal(rules.afterView({ people: [], me_is_member: false, join_policy: 'none' }).askJoin, false);
+  assert.equal(rules.afterView(null).empty, true);
 });
