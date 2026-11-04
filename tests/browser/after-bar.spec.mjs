@@ -70,9 +70,12 @@ test('地図の何もない所をダブルタップすると、その場所を�
   await me.page.waitForTimeout(700);
   expect((await camera()).scale).toBeCloseTo(start.scale, 5);
 
-  await me.page.touchscreen.tap(spot.x, spot.y);
-  await me.page.waitForTimeout(60);
-  await me.page.touchscreen.tap(spot.x, spot.y);
+  // The two taps go out together: touchscreen.tap waits for the page to answer each one, and map B
+  // draws so slowly without a GPU that the second tap landed 0.5 s after the first, past the 320 ms
+  // of a double tap (2026-11-05).
+  const cdp = await me.context.newCDPSession(me.page);
+  const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+  await Promise.all([touch('touchStart', [spot]), touch('touchEnd', []), touch('touchStart', [spot]), touch('touchEnd', [])]);
   await expect.poll(async () => (await camera()).scale / start.scale, { timeout: 5000 }).toBeCloseTo(4, 2);
   // たたいた場所は、指の下に残る（地図の左上から測る。上に規約のお知らせの帯があると地図が下がる）
   const end = await camera();
