@@ -962,6 +962,7 @@ def test_push_rows_without_a_post_need_their_own_community(world):
 # Routes that are meant to answer a signed-out caller while members_only is on.
 OPEN_ROUTES = {
     ("GET", "/api/config"), ("GET", "/api/health"),
+    ("GET", "/api/map-b/base"),                        # 固定の地形の土台。コミュニティの投稿は含まない
     ("POST", "/api/push/dispatch"),                    # the database's poke: carries nothing
     ("POST", "/api/local/auth/otp"), ("POST", "/api/local/auth/verify"),
     ("GET", "/api/local/account/{account_id}"),        # accounts stay public

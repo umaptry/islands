@@ -765,7 +765,7 @@ export function setupCompose() {
       $('composeSubmit').textContent = submitLabel();
       $('composeMoveNotice').hidden = !editing;
       $('composeLede').textContent = first
-        ? 'ひとこと書いて、あなたの島を作りましょう。'
+        ? 'ひとこと書いて、あなたの家を建てましょう。'
         : `取り組みや活動内容を${config().limits.body_max}文字までで書いてください。`;
 
       body.value = draft?.body ?? (editing ? editing.body : '');
@@ -1075,7 +1075,7 @@ function showTrialReveal(result) {
     dot.style.background = islandColor(island.cluster_id);
     nameBox.append(dot);
   }
-  nameBox.append(el('span', { text: island ? island.label : 'まだ名前のない島' }));
+  nameBox.append(el('span', { text: island ? island.label : 'まだ名前のない村' }));
   const bodyBox = clear($('revealBody'));
   bodyBox.append(el('p', {
     className: 'trial-note',

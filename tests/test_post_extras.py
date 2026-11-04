@@ -68,7 +68,7 @@ def test_config_carries_the_extra_prompts_and_the_feature_flag(client):
     for name in ("events", "line_messaging", "probe"):
         assert isinstance(features.pop(name), bool)
     assert features == {"post_extras": True, "talk": True, "communities": True, "members_only": False,
-                        "share": False}
+                        "share": False, "map_b": True}
 
 
 def test_config_carries_the_first_post_starters_keyed_like_the_extra_prompts(client):

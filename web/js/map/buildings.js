@@ -15,6 +15,7 @@
 import { PALETTE, mixHex } from './palette.js';
 import { landmarkLights, landmarkMesh, landmarkSize } from './landmarks.js';
 import { HOUSE_TIERS, SHADOW_OF, facesOf, houseLights, houseTurn, partsOf, shadowOutline, tierIndex } from './mesh.js';
+import { PROP_KINDS, PROP_SHADOW, propParts } from './props-mesh.js';
 
 export const TIER_COUNT = 5;
 
@@ -737,6 +738,26 @@ export function drawHouse(ctx, x, foot, size, opts = {}) {
     scene: (p) => houseScene(p, turn, tier),
     shadows: (p) => solidShadowScene(p, kind),
     size: s, calm, night: false, dpr, fitMode: HOUSE_UNITS, fitKey: `h|${kind}`, sharp: s > STEP_MAX,
+  }));
+  return stamp(ctx, e, x, foot, alpha, size);
+}
+
+/** Draw one of the things round a house (props-mesh.js: a woodpile, a chicken, a
+ * well...) with its foot on (x, foot). `size` is the px of one design unit, the
+ * house's size / 3, so it stands in proportion to the house. `rot` turns it
+ * (kept in 16 steps, as each step is its own picture); `frame` 0 or 1 is an
+ * animal's pose. */
+export function drawProp(ctx, kind, x, foot, size, opts = {}) {
+  if (!ctx || !(size > 0) || !PROP_KINDS.includes(kind)) return null;
+  const { alpha = 1, calm = false, rot = 0, frame = 0 } = opts;
+  const dpr = scaleOf(ctx);
+  const turn = ((Math.round(rot / (Math.PI / 8)) % 16) + 16) % 16;
+  const pose = frame ? 1 : 0;
+  const shadow = PROP_SHADOW[kind];
+  const e = pickEntry({ shape: 'prop', id: `${kind}|${pose}`, calm, night: false, dpr, seed: turn }, size, (s) => render({
+    scene: (p) => solidFaces(p, propParts(kind, { rot: (turn * Math.PI) / 8, frame: pose })),
+    shadows: shadow ? (p) => p.shadow(shadowOutline(shadow[0], shadow[1])) : null,
+    size: s, calm, night: false, dpr, fitMode: 1, fitKey: `p|${kind}`, sharp: s > STEP_MAX,
   }));
   return stamp(ctx, e, x, foot, alpha, size);
 }

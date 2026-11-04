@@ -14,6 +14,9 @@ const marksUrl = `data:text/javascript;base64,${Buffer.from(marksSource).toStrin
 source = source.replace("import { PALETTE, mixHex } from './palette.js';", () => palette);
 source = source.replace("'./mesh.js'", () => `'${meshUrl}'`);
 source = source.replace("'./landmarks.js'", () => `'${marksUrl}'`);
+const propsSource = (await readFile(new URL('../../web/js/map/props-mesh.js', import.meta.url), 'utf8'))
+  .replace("'./mesh.js'", () => `'${meshUrl}'`);
+source = source.replace("'./props-mesh.js'", () => `'data:text/javascript;base64,${Buffer.from(propsSource).toString('base64')}'`);
 const B = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const CANDIDATES = ['灯台', '風車', '時計塔', '図書館', '工房', '温室', '天文台', '市場', '港の桟橋', '鍛冶場', '学び舎', '茶屋',

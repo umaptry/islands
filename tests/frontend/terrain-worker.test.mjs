@@ -10,8 +10,13 @@ const read = (path) => readFile(new URL(`../../web/js/${path}`, import.meta.url)
 const configUrl = asModule(await read('config.js'));
 const coastUrl = asModule((await read('map/coast.js')).replace("'../config.js'", `'${configUrl}'`));
 const surfUrl = asModule(await read('map/surf.js'));
+const islandUrl = asModule(await read('map/island-b.js'));
+const roadsUrl = asModule(await read('map/roads-b.js'));
+const terrainBUrl = asModule((await read('map/terrain-b.js'))
+  .replace("'./island-b.js'", `'${islandUrl}'`).replace("'./surf.js'", `'${surfUrl}'`).replace("'./roads-b.js'", `'${roadsUrl}'`));
 const terrainUrl = asModule((await read('map/terrain.js'))
-  .replace("'../config.js'", `'${configUrl}'`).replace("'./coast.js'", `'${coastUrl}'`).replace("'./surf.js'", `'${surfUrl}'`));
+  .replace("'../config.js'", `'${configUrl}'`).replace("'./coast.js'", `'${coastUrl}'`).replace("'./surf.js'", `'${surfUrl}'`)
+  .replace("'./island-b.js'", `'${islandUrl}'`).replace("'./terrain-b.js'", `'${terrainBUrl}'`));
 const { config, setReachFactor, useConfig } = await import(configUrl);
 const { PREVIEW_RATIO, detailPixels, groundPixels, sharpPlan } = await import(terrainUrl);
 

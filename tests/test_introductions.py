@@ -49,7 +49,7 @@ def test_a_weak_match_still_comes_with_a_reason():
 def test_the_first_line_follows_the_leading_reason():
     topics = [{"kind": "topics", "text": "共通の話題「焚き火」"}]
     assert introductions.opener(topics, {}, ["焚き火"]).startswith("私も「焚き火」が")
-    assert "同じ島" in introductions.opener([{"kind": "island", "text": ""}], {})
+    assert "同じ村" in introductions.opener([{"kind": "island", "text": ""}], {})
     assert introductions.opener([], {}) == "投稿を読んで声をかけました。よろしくお願いします。"
 
 

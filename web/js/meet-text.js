@@ -2,15 +2,22 @@
 // why a person was suggested went with 似ている人 and 人の札.) Pure functions,
 // no imports, so node can test them.
 
-const CONTINENT_MIN_POSTS = 50; // core/config.py CONTINENT_MIN_POSTS
+// 「キャンプ」 -> 「キャンプ村」; a name kept from the many-islands map (「キャンプ島」, 「キャンプ大陸」)
+// becomes 「キャンプ村」 too (the same rule as notify-rules.js villageName).
+function villageName(name) {
+  let text = String(name);
+  const old = ['大陸', '島'].find((end) => text.endsWith(end) && text.length > end.length);
+  if (old) text = text.slice(0, -old.length);
+  return text.endsWith('村') ? text : `${text}村`;
+}
 
-const REASON_TAGS = { mine: 'あなたの島', connected: 'つながりの人の島', big: '大きな変化' };
+const REASON_TAGS = { mine: 'あなたの村', connected: 'つながりの人の村', big: '大きな変化' };
 
-/** 「焚き火 / 山」 with 12 posts -> 「焚き火島」, as core/energy.py labels the map. */
+/** 「焚き火 / 山」 -> 「焚き火村」. A name that already ends in 村 stays as it is. */
 export function islandLabel(counts) {
   const name = String(counts?.name || '').split('/')[0].trim();
   if (!name) return '';
-  return `${name}${(counts.posts || 0) >= CONTINENT_MIN_POSTS ? '大陸' : '島'}`;
+  return villageName(name);
 }
 
 /** 「みおさん」, 「みおさんとけんたさん」, 「みおさんたち3人」. */
@@ -34,7 +41,7 @@ export function digestLabel(count) {
 
 function joinIslands(labels) {
   if (labels.length <= 2) return labels.join('と');
-  return `${labels[0]}など${labels.length}つの島`;
+  return `${labels[0]}など${labels.length}つの村`;
 }
 
 /**
@@ -46,14 +53,14 @@ function joinIslands(labels) {
 export function describeChange(change, { nameAt = () => '' } = {}) {
   const before = change?.before || {};
   const after = change?.after || {};
-  const here = islandLabel(after) || islandLabel(before) || nameAt(change?.place) || 'ある島';
+  const here = islandLabel(after) || islandLabel(before) || nameAt(change?.place) || 'ある村';
   let text = '';
   let numbers = '';
   switch (change?.kind) {
     case 'merge': {
       const parts = (before.islands || []).map(islandLabel).filter(Boolean);
       const unique = [...new Set(parts)];
-      text = unique.length >= 2 ? `${joinIslands(unique)}が合流しました。` : `${here}に島が合流しました。`;
+      text = unique.length >= 2 ? `${joinIslands(unique)}が合流しました。` : `${here}に村が合流しました。`;
       const first = (before.islands || [])[0];
       if (first && after.people != null) numbers = `人数 ${first.people}→${after.people}人`;
       break;
@@ -80,8 +87,8 @@ export function describeChange(change, { nameAt = () => '' } = {}) {
     }
     case 'tier':
       text = (after.tier || 0) > (before.tier || 0)
-        ? `${here}が${before.tier_name}から${after.tier_name}に育ちました。`
-        : `${here}が${before.tier_name}から${after.tier_name}に戻りました。`;
+        ? `${here}がにぎやかになりました。`
+        : `${here}が少し静かになりました。`;
       break;
     case 'landmark':
       text = before.landmark

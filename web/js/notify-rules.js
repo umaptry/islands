@@ -46,7 +46,7 @@ export const isTalkType = (type) => TALK_TYPES.includes(type);
 export const CATEGORIES = Object.freeze([
   { id: 'reply', title: '返信・メッセージ', note: 'あなたの投稿へのメッセージと、あなたへの返信' },
   { id: 'reaction', title: '反応', note: 'いいね・手伝えるかも・参加・つながりそうな投稿（10分ぶんをまとめます）' },
-  { id: 'island', title: '島の変化', note: 'あなたの投稿がある島の変化と、新しい住人のお知らせ（島の変化は1つの島につき1日1件まで、新しい住人は1つの島につき1日3件・全部で1日5件まで）' },
+  { id: 'island', title: '村の変化', note: 'あなたの投稿がある村の変化と、新しい住人のお知らせ（村の変化は1つの村につき1日1件まで、新しい住人は1つの村につき1日3件・全部で1日5件まで）' },
 ]);
 
 export const KIND_TEXT = Object.freeze({
@@ -57,9 +57,9 @@ export const KIND_TEXT = Object.freeze({
   reply: 'あなたのメッセージに返信しました。',
   connection: '初めてやりとりしました。地図に線が引かれます。',
   similar: '話題や目標が近い人が参加しました。',
-  island: '島が変わりました。',
+  island: '村が変わりました。',
   // Never "nobody answered": to the reader it is only a recommendation.
-  quiet_post: '近くの島に、話が合いそうな投稿があります。',
+  quiet_post: '近くの村に、話が合いそうな投稿があります。',
   match: 'あなたの投稿とつながりそうな投稿が見つかりました。',
   // Templates: {label} is the button's name from /api/config, {name} the other
   // person. The same words as PUSH_TEXT, so the lock screen and the list agree.
@@ -185,6 +185,15 @@ export function communityIdOf(entry, postCommunities = {}) {
   return entry.community_id || (entry.post_id && postCommunities[entry.post_id]) || '';
 }
 
+/** 「キャンプ」 -> 「キャンプ村」; 「キャンプ村」 stays; a name kept from the many-islands map
+ * (「キャンプ島」, 「キャンプ大陸」) becomes 「キャンプ村」 too. */
+export function villageName(name) {
+  let text = String(name);
+  const old = ['大陸', '島'].find((end) => text.endsWith(end) && text.length > end.length);
+  if (old) text = text.slice(0, -old.length);
+  return text.endsWith('村') ? text : `${text}村`;
+}
+
 /** Who to name: the newest person, "ほか N人" for the rest. An island names itself. */
 export function headline(entry, talkLabel = '') {
   if (isTalkType(entry.type)) return talkHeadline(entry, talkLabel);
@@ -192,7 +201,7 @@ export function headline(entry, talkLabel = '') {
   if (entry.type === 'join_approved') return String((entry.payload || {}).community_name || '').trim() || 'コミュニティ';
   if (entry.type === 'island') {
     const name = (entry.payload || {}).name;
-    return name ? `島「${name}」` : '島';
+    return name ? villageName(name) : '村';
   }
   const first = (entry.actors && entry.actors[0]) || {};
   // A requester is not in my community yet, so a name that cannot be read is not "outside" - it is a request.
@@ -209,7 +218,7 @@ export function bodyText(entry, talkLabel = '') {
     return fill(KIND_TEXT.join_request, { community: String(payload.community_name || '').trim() || 'コミュニティ' });
   }
   if (entry.type === 'join_approved') return KIND_TEXT.join_approved;
-  // Same words as the push (PUSH_TEXT in app.py): 「{島}に{名前}さんが引っ越してきました」.
+  // Same words as the push (PUSH_TEXT in app.py): 「{村}に{名前}さんが引っ越してきました」.
   if (isResident(entry)) {
     const named = String((entry.actors && entry.actors[0] && entry.actors[0].display_name) || '').trim();
     const who = named === OUTSIDE_NAME ? '' : named;

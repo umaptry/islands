@@ -108,10 +108,12 @@ jobs:
     timeout-minutes: 45
     # 45 was hit on 2026-11-01 (main already took 43m45s): the files are split over three runners,
     # each with its own server, so one shard takes about a third of the time.
+    # Five since 2026-11-04: map B became the map, and CI's browser draws it without a GPU at about half
+    # the frame rate of the old map, so a shard of three ran past 45 minutes.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@v4
@@ -124,7 +126,7 @@ jobs:
       - run: pip install -r requirements-test.txt
       - run: npm install --no-save @playwright/test@1.55.0
       - run: npx playwright install --with-deps chromium
-      - run: npx playwright test --shard=${{ matrix.shard }}/3
+      - run: npx playwright test --shard=${{ matrix.shard }}/5
       - uses: actions/upload-artifact@v4
         if: always()
         with:

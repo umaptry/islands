@@ -51,7 +51,7 @@ export function canOpenCatchup({
 export function slideTitle(name, island) {
   const text = String(name || '').trim();
   const plain = text.endsWith('さん') && text.length > 2 ? text.slice(0, -2) : text;
-  return `${plain || 'だれか'}さんが${island || 'この島'}の住人になりました`;
+  return `${plain || 'だれか'}さんが${island || 'この村'}の住人になりました`;
 }
 
 /** 「1 / 3」. */
