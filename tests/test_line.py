@@ -73,6 +73,9 @@ class FakeStore:
     def event_cancel_registration(self, **kw):
         self.calls.append(("cancel", kw))
 
+    def event_by_post(self, post_id):
+        return self.events.get(post_id) if hasattr(self, "events") else None
+
 
 def body_of(*events):
     return json.dumps({"destination": "U0", "events": list(events)}).encode()
@@ -205,6 +208,8 @@ def test_postback_store_refusal_is_answered(configured):
 
 def test_parse_postback():
     assert line.parse_postback("a=late&e=abc&m=10") == {"action": "late", "code": "abc", "minutes": 10}
+    assert line.parse_postback("a=late&e=abc") == {"action": "late", "code": "abc", "minutes": None}
+    assert line.parse_postback("a=page") == {"action": "page", "code": None, "minutes": None}
     assert line.parse_postback("a=cancel")["code"] is None
     assert line.parse_postback("a=late&m=5") is None
     assert line.parse_postback("a=late&e=a/b&m=10") is None
@@ -346,6 +351,156 @@ def test_rich_menu_payload():
     payload = line.rich_menu_payload()
     assert payload["size"] == {"width": 2500, "height": 843}
     datas = [a["action"]["data"] for a in payload["areas"]]
-    assert datas == ["a=late&m=10", "a=late&m=30", "a=late&m=60", "a=cancel"]
+    assert datas == ["a=late", "a=cancel", "a=page"]
     assert all(line.parse_postback(d) for d in datas)
     assert sum(a["bounds"]["width"] for a in payload["areas"]) == 2500
+    assert payload["areas"][-1]["bounds"]["x"] + payload["areas"][-1]["bounds"]["width"] == 2500
+    assert len(payload["chatBarText"]) <= 14
+
+
+def test_delete_other_rich_menus_only_touches_ours(configured):
+    class Menus(Recorder):
+        def request(self, method, url, **kw):
+            self.requests.append((method, url, kw))
+            if method == "GET":
+                return httpx.Response(200, json={"richmenus": [
+                    {"richMenuId": "new", "name": "islands イベント（遅れる・キャンセル・会のページ）"},
+                    {"richMenuId": "old", "name": "islands イベント（遅れる・キャンセル）"},
+                    {"richMenuId": "other", "name": "キャンペーン"}]}, request=httpx.Request(method, url))
+            return httpx.Response(200, json={}, request=httpx.Request(method, url))
+
+    http = Menus()
+    assert line.delete_other_rich_menus("new", client=http) == 1
+    assert [(m, u.rsplit("/", 1)[-1]) for m, u, _ in http.requests if m == "DELETE"] == [("DELETE", "old")]
+
+
+# --- ボタン（2026-11-05） -----------------------------------------------------
+def actions_of(messages):
+    return messages[0]["template"]["actions"]
+
+
+def test_applied_message_has_page_and_cancel():
+    messages = line.build_message("applied", EVENT, "https://x.test")
+    text = messages[0]["template"]["text"]
+    assert "申し込みを受け付けました" in text and "11/13(金) 19:00 から" in text and "〇〇ビル 3階" in text
+    actions = actions_of(messages)
+    assert [a["label"] for a in actions] == ["会のページを開く", "申し込みを取り消す"]
+    assert actions[0]["uri"] == "https://x.test/#/e/CODE123/me"
+    assert actions[1]["data"] == "a=cancel&e=CODE123"
+
+
+def test_week_and_day_buttons_carry_the_event_code():
+    week = actions_of(line.build_message("week_before", EVENT, "https://x.test"))
+    assert [a["label"] for a in week] == ["近い人を見る", "予定が合わなくなったら取り消す"]
+    assert week[1]["data"] == "a=cancel&e=CODE123"
+    day = line.build_message("day_of", EVENT, "https://x.test")
+    assert "トークの下" not in dump(day)
+    assert [a["label"] for a in actions_of(day)] == ["遅れる", "キャンセル", "会のページを開く"]
+    assert [a.get("data") for a in actions_of(day)][:2] == ["a=late&e=CODE123", "a=cancel&e=CODE123"]
+    for kind in line.KINDS:
+        for action in line.build_message(kind, EVENT, "https://x.test")[0].get("template", {}).get("actions", []):
+            assert len(action["label"]) <= 20
+            if action["type"] == "postback":
+                assert line.parse_postback(action["data"])["code"] == "CODE123"
+
+
+def test_no_cancel_button_after_the_deadline():
+    closed = dict(EVENT, cancel_deadline="2026-11-12T10:00:00+00:00")
+    before = datetime(2026, 11, 12, 9, 0, tzinfo=timezone.utc)
+    after = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
+    for kind in ("applied", "week_before", "day_of"):
+        assert "a=cancel" in dump(line.build_message(kind, closed, "https://x.test", before))
+        assert "a=cancel" not in dump(line.build_message(kind, closed, "https://x.test", after))
+    assert "a=cancel" not in dump(line.build_message("day_of", dict(EVENT, can_cancel=False), "https://x.test"))
+    assert [a["label"] for a in actions_of(line.build_message("day_of", closed, "https://x.test", after))] == [
+        "遅れる", "会のページを開く"]
+
+
+def test_late_without_minutes_asks_how_late(configured):
+    store, http = FakeStore(), Recorder(200)
+    line.handle_postback(postback("a=late&e=CODE123"), store, now=NOW, client=http)
+    assert not [c for c in store.calls if c[0] == "late"]
+    message = http.requests[-1][2]["json"]["messages"][0]
+    assert "どのくらい遅れますか" in message["text"]
+    items = [i["action"] for i in message["quickReply"]["items"]]
+    assert [i["label"] for i in items] == ["10分くらい", "30分くらい", "1時間以上"]
+    assert [i["data"] for i in items] == ["a=late&e=CODE123&m=10", "a=late&e=CODE123&m=30", "a=late&e=CODE123&m=60"]
+    line.handle_postback(postback(items[1]["data"]), store, now=NOW, client=http)
+    assert ("late", {"event": "ev-1", "account": "acc-1", "minutes": 30}) in store.calls
+
+
+def test_rich_menu_with_two_events_asks_which_one_first(configured):
+    later = dict(REG, event_id="ev-2", public_code="LATER", title="もう1つの会",
+                 starts_at="2026-11-20T10:00:00+00:00", ends_at="2026-11-20T13:00:00+00:00")
+    store, http = FakeStore(registrations=[later, REG]), Recorder(200)
+    for data in ("a=late", "a=cancel"):
+        line.handle_postback(postback(data), store, now=NOW, client=http)
+        message = http.requests[-1][2]["json"]["messages"][0]
+        assert message["text"] == "どの会ですか？"
+        items = [i["action"] for i in message["quickReply"]["items"]]
+        assert [i["data"] for i in items] == [f"{data}&e=CODE123", f"{data}&e=LATER"]
+        assert items[0]["label"].startswith("11/13(金) ") and all(len(i["label"]) <= 20 for i in items)
+    # どれも、選ぶまでは何も変えない
+    assert not [c for c in store.calls if c[0] in ("late", "cancel")]
+    # 会のページは、選んだらそのまま開くリンク
+    line.handle_postback(postback("a=page"), store, now=NOW, client=http, base_url="https://x.test")
+    items = [i["action"] for i in http.requests[-1][2]["json"]["messages"][0]["quickReply"]["items"]]
+    assert [i["uri"] for i in items] == ["https://x.test/#/e/CODE123/me", "https://x.test/#/e/LATER/me"]
+
+
+def test_rich_menu_with_one_event_goes_straight_on(configured):
+    store, http = FakeStore(), Recorder(200)
+    line.handle_postback(postback("a=page"), store, now=NOW, client=http, base_url="https://x.test")
+    template = http.requests[-1][2]["json"]["messages"][0]["template"]
+    assert template["actions"][0]["uri"] == "https://x.test/#/e/CODE123/me"
+    line.handle_postback(postback("a=cancel"), store, now=NOW, client=http)
+    template = http.requests[-1][2]["json"]["messages"][0]["template"]
+    assert template["type"] == "confirm" and template["text"] == "The Night Office BAR #2 の申し込みを取り消しますか？"
+
+
+def test_cancel_after_the_deadline_points_to_the_host(configured):
+    store, http = FakeStore(), Recorder(200)
+    store.events = {"ev-1": {"cancel_deadline": "2026-11-12T10:00:00+00:00"}}
+    for data in ("a=cancel&e=CODE123", "a=cancel_yes&e=CODE123"):
+        line.handle_postback(postback(data), store, now=NOW, client=http)
+        assert "期限後のキャンセルは主催者に連絡してください" in dump(http.requests[-1][2]["json"])
+    assert not [c for c in store.calls if c[0] == "cancel"]
+    # 期限の前なら、いつもどおり確認が出る
+    store.events = {"ev-1": {"cancel_deadline": "2026-11-13T09:00:00+00:00"}}
+    line.handle_postback(postback("a=cancel&e=CODE123"), store, now=NOW, client=http)
+    assert http.requests[-1][2]["json"]["messages"][0]["template"]["type"] == "confirm"
+
+
+def test_webhook_route_passes_the_page_link(configured, monkeypatch):
+    monkeypatch.setenv("ISLANDS_PUBLIC_BASE_URL", "https://islands.example/")
+    seen = {}
+    monkeypatch.setattr(line, "handle_webhook", lambda *a, **kw: seen.update(kw) or {"handled": 0})
+    app = FastAPI()
+    app.include_router(line.router)
+    line.configure(lambda: FakeStore())
+    body = body_of()
+    response = TestClient(app).post("/api/line/webhook", content=body, headers={"x-line-signature": sign(body)})
+    assert response.status_code == 200
+    assert seen["base_url"] == "https://islands.example"
+
+
+def test_old_rich_menu_minutes_survive_choosing_the_event(configured):
+    later = dict(REG, event_id="ev-2", public_code="LATER", starts_at="2026-11-20T10:00:00+00:00",
+                 ends_at="2026-11-20T13:00:00+00:00")
+    store, http = FakeStore(registrations=[later, REG]), Recorder(200)
+    line.handle_postback(postback("a=late&m=10"), store, now=NOW, client=http)
+    items = [i["action"] for i in http.requests[-1][2]["json"]["messages"][0]["quickReply"]["items"]]
+    assert [i["data"] for i in items] == ["a=late&e=CODE123&m=10", "a=late&e=LATER&m=10"]
+
+
+def test_public_base_url_uses_https_outside_this_machine(monkeypatch):
+    monkeypatch.delenv("ISLANDS_PUBLIC_BASE_URL", raising=False)
+
+    class Req:
+        def __init__(self, base):
+            self.base_url = base
+
+    assert line.public_base_url(Req("http://islands-x.a.run.app/")) == "https://islands-x.a.run.app"
+    assert line.public_base_url(Req("https://islands-x.a.run.app/")) == "https://islands-x.a.run.app"
+    assert line.public_base_url(Req("http://localhost:7860/")) == "http://localhost:7860"
+    assert line.public_base_url(Req("http://testserver/")) == "http://testserver"

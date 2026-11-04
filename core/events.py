@@ -1088,6 +1088,12 @@ def apply(code: str, payload: EventApply, request: Request):
             store.line_link_attach(user_id, sub)
         except Exception:
             host._logger.warning("could not attach the LINE friend to the account")
+    if channel == "line" and result.get("status") == "applied":
+        # LINE の「受け付けました」（会のページ／取り消すのボタンつき）。毎分の予約送信が送る
+        try:
+            store.event_queue_applied(event=event["post_id"], account=user_id)
+        except Exception:
+            host._logger.warning("could not queue the LINE message for the application")
     clear_cache()
     host.invalidate_connections()
     return {"status": result["status"], "is_member": result.get("is_member"), "remaining": result.get("remaining"),

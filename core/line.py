@@ -5,8 +5,12 @@
   follow（結ぶ）・unfollow・postback（遅れる・キャンセル）を振り分ける。
 - 規約（E の 1〜3・14）：message の本文は保存もログもしない。プロフィール API は呼ばない。
   送る文は会の名前・日時・場所・リンク（と近い人の数）だけで、人の名前を入れない。
-  案内の種類は 1週間前・開始3時間前・終了時・お断り・中止・変更だけ。
+  案内の種類は 受け付けました・1週間前・開始3時間前・終了時・お断り・中止・変更だけ。
 - 返事（reply）は通数に数えない。遅れる・キャンセルの自動の返事はこちらを使う。
+- ボタン（2026-11-05）：受け付けました＝会のページ／取り消す、1週間前＝会のページ／取り消す、
+  3時間前＝遅れる／キャンセル／会のページ。キャンセルは期限（cancel_deadline）を過ぎたら出さない。
+  ボタンの postback には会のコード（e=）を入れる。遅れるは押したあと分を quick reply で選ぶ。
+  リッチメニュー（e= なし）は、申し込み中の会が2つ以上なら先に会を選ばせる。
 
 webhook の関数は `store`（core/store_events.py のストア）を引数で受け取る。使うメソッドは D 3-6 の名前どおり：
 account_by_line_sub / line_link_save / line_link_unfollow / line_webhook_seen / my_event_registrations /
@@ -212,17 +216,25 @@ def _link(base_url, code, page):
     return f"{base_url.rstrip('/')}/#/e/{code}/{page}"
 
 
-def _template(text, label, uri):
+def _uri(label, uri):
+    return {"type": "uri", "label": label[:20], "uri": uri}
+
+
+def _postback(label, data, display=None):
+    return {"type": "postback", "label": label[:20], "data": data, "displayText": display or label}
+
+
+def _buttons(text, actions):
     text = _clip(text, TEXT_LIMIT)
     return [{
         "type": "template",
         "altText": _clip(text.replace("\n", " "), 400),
-        "template": {
-            "type": "buttons",
-            "text": text,
-            "actions": [{"type": "uri", "label": label[:20], "uri": uri}],
-        },
+        "template": {"type": "buttons", "text": text, "actions": actions[:4]},
     }]
+
+
+def _template(text, label, uri):
+    return _buttons(text, [_uri(label, uri)])
 
 
 def _near_line(event):
@@ -232,8 +244,17 @@ def _near_line(event):
     return ""
 
 
-def build_message(kind, event, base_url):
-    """種類ごとの文＋ボタン。event は title・starts_at・ends_at・place・public_code（と near_count）。
+def cancel_open(event, now=None):
+    """キャンセル期限（cancel_deadline）の前か。期限の無い会はいつでも True。"""
+    deadline = event.get("cancel_deadline")
+    if not deadline:
+        return True
+    return (now or datetime.now(timezone.utc)) < _dt(deadline)
+
+
+def build_message(kind, event, base_url, now=None):
+    """種類ごとの文＋ボタン。event は title・starts_at・ends_at・place・public_code（と near_count・
+    cancel_deadline）。キャンセルのボタンは期限の前だけ。
 
     人の名前は入れない。新しい文に「島」は使わない。
     """
@@ -245,6 +266,20 @@ def build_message(kind, event, base_url):
     start = _dt(event["starts_at"]) if event.get("starts_at") else None
     when = f"{_day(start)} {_clock(start)}" if start else ""
     near = _near_line(event)
+    page = _link(base_url, code, "me")
+    # core/jobs.py は送る時刻（テストでは決めた時刻）で決めた can_cancel を入れてくる
+    can_cancel = event["can_cancel"] if "can_cancel" in event else cancel_open(event, now)
+
+    if kind == "applied":
+        lines = [f"{title} の申し込みを受け付けました。"]
+        if when:
+            lines.append(f"{when} から")
+        if place:
+            lines.append(f"場所：{place}")
+        actions = [_uri("会のページを開く", page)]
+        if can_cancel:
+            actions.append(_postback("申し込みを取り消す", f"a=cancel&e={code}"))
+        return _buttons("\n".join(lines), actions)
 
     if kind == "week_before":
         lines = [f"{title} は来週 {when} から。"]
@@ -252,15 +287,20 @@ def build_message(kind, event, base_url):
             lines.append(f"場所：{place}")
         if near:
             lines.append(near)
-        label = "近い人を見る" if near else "会のページを開く"
-        return _template("\n".join(lines), label, _link(base_url, code, "me"))
+        actions = [_uri("近い人を見る" if near else "会のページを開く", page)]
+        if can_cancel:
+            actions.append(_postback("予定が合わなくなったら取り消す", f"a=cancel&e={code}"))
+        return _buttons("\n".join(lines), actions)
 
     if kind == "day_of":
         lines = [f"{title} は今日 {_clock(start)} から。"]
         if place:
             lines.append(f"場所：{place}")
-        lines.append("遅れるときは、トークの下のボタンを押してください。")
-        return _template("\n".join(lines), "会のページを開く", _link(base_url, code, "me"))
+        actions = [_postback("遅れる", f"a=late&e={code}")]
+        if can_cancel:
+            actions.append(_postback("キャンセル", f"a=cancel&e={code}"))
+        actions.append(_uri("会のページを開く", page))
+        return _buttons("\n".join(lines), actions)
 
     if kind == "after":
         lines = [f"{title} はお疲れさまでした。", "今日会った人を選んでみませんか。"]
@@ -285,7 +325,7 @@ def build_message(kind, event, base_url):
     return _template("\n".join(lines), "会のページを開く", _link(base_url, code, "me"))
 
 
-def send_outbound(row, *, base_url, client=None):
+def send_outbound(row, *, base_url, client=None, now=None):
     """outbound_claim の 1 行を送る。PushResult を返す。
 
     "blocked" のときは呼び出し側が line_link_unfollow を呼ぶ。
@@ -294,7 +334,7 @@ def send_outbound(row, *, base_url, client=None):
     if not configured():
         return PushResult("not_configured", "LINE の設定がありません")
     try:
-        messages = build_message(row["kind"], row, base_url)
+        messages = build_message(row["kind"], row, base_url, now)
     except (KeyError, ValueError, TypeError) as error:
         return PushResult("error", f"文を作れませんでした（{type(error).__name__}）")
     # 同じ行（予約の id）は、送り直しても LINE 側で 1 通にまとまる。
@@ -305,11 +345,17 @@ def send_outbound(row, *, base_url, client=None):
 # ---------------------------------------------------------------------------
 # postback
 # ---------------------------------------------------------------------------
+POSTBACK_ACTIONS = ("late", "cancel", "cancel_yes", "cancel_no", "page")
+LATE_LABELS = {10: "10分くらい", 30: "30分くらい", 60: "1時間以上"}
+CANCEL_CLOSED_TEXT = "キャンセルの期限を過ぎました。期限後のキャンセルは主催者に連絡してください。"
+
+
 def parse_postback(data):
     """"a=late&e=<code>&m=10" → {"action","code","minutes"}。決まりに合わなければ None。
 
-    action は late・cancel・cancel_yes・cancel_no。e（会のコード）は無くてもよい
-    （リッチメニューは会を決めずに押されるので、その人の今日か次の会を探す）。
+    action は late・cancel・cancel_yes・cancel_no・page。e（会のコード）は無くてもよい
+    （リッチメニューは会を決めずに押されるので、申し込み中の会が2つ以上なら先に選んでもらう）。
+    late の m（分）も無くてよい（押したあと quick reply で選んでもらう）。
     """
     if not isinstance(data, str) or len(data) > 300:
         return None
@@ -320,15 +366,15 @@ def parse_postback(data):
             return None
         pairs[key] = value
     action = pairs.get("a")
-    if action not in ("late", "cancel", "cancel_yes", "cancel_no"):
+    if action not in POSTBACK_ACTIONS:
         return None
     code = pairs.get("e") or None
     if code is not None and not all(ch.isalnum() or ch in "-_" for ch in code):
         return None
     minutes = None
-    if action == "late":
+    if action == "late" and pairs.get("m"):
         try:
-            minutes = int(pairs.get("m", ""))
+            minutes = int(pairs["m"])
         except ValueError:
             return None
         if minutes not in LATE_CHOICES:
@@ -340,15 +386,20 @@ def _text(text):
     return [{"type": "text", "text": text}]
 
 
+def _quick(text, actions):
+    """quick reply（トークの下に出る選択肢。返事なので通数に数えない）。13 個まで。"""
+    return [{"type": "text", "text": text,
+             "quickReply": {"items": [{"type": "action", "action": action} for action in actions[:13]]}}]
+
+
 def _registration_event_id(reg):
     return reg.get("event_id") or reg.get("post_id")
 
 
-def pick_registration(registrations, code=None, now=None):
-    """申し込み中（applied）で、まだ終わっていない会のうち、コードが合うもの。
-    コードが無ければ、始まりがいちばん近い（今日か次の）会。無ければ None。"""
+def open_registrations(registrations, code=None, now=None):
+    """申し込み中（applied）で、まだ終わっていない会（コードがあれば合うものだけ）。始まりの早い順。"""
     now = now or datetime.now(timezone.utc)
-    best = None
+    found = []
     for reg in registrations or []:
         if reg.get("status") != "applied" or reg.get("cancelled_at"):
             continue
@@ -357,9 +408,50 @@ def pick_registration(registrations, code=None, now=None):
         if code is not None and reg.get("public_code") != code:
             continue
         key = _dt(reg["starts_at"]) if reg.get("starts_at") else datetime.max.replace(tzinfo=JST)
-        if best is None or key < best[0]:
-            best = (key, reg)
-    return best[1] if best else None
+        found.append((key, reg))
+    found.sort(key=lambda pair: pair[0])
+    return [reg for _key, reg in found]
+
+
+def pick_registration(registrations, code=None, now=None):
+    """open_registrations のうち、始まりがいちばん近い（今日か次の）会。無ければ None。"""
+    found = open_registrations(registrations, code, now)
+    return found[0] if found else None
+
+
+def _choice_label(reg):
+    """会を選ぶ quick reply の文字（20 文字まで）：「11/13(金) 会の名前」。"""
+    title = str(reg.get("title") or "この会")
+    if reg.get("starts_at"):
+        title = f"{_day(_dt(reg['starts_at']))} {title}"
+    return _clip(title, 20)
+
+
+def _choose_event(regs, action, base_url, minutes=None):
+    """申し込み中の会が2つ以上のとき：どの会かを選んでもらう。会のページは選んだらそのまま開く。
+    遅れるの分が決まっていれば（前のリッチメニューの「10分くらい遅れる」など）引き継ぐ。"""
+    choices = []
+    extra = f"&m={minutes}" if action == "late" and minutes else ""
+    for reg in regs:
+        code = reg.get("public_code") or ""
+        label = _choice_label(reg)
+        if action == "page":
+            choices.append(_uri(label, _link(base_url, code, "me")))
+        else:
+            choices.append(_postback(label, f"a={action}&e={code}{extra}"))
+    return _quick("どの会ですか？", choices)
+
+
+def _cancel_deadline_passed(store, event_id, now):
+    """会の行のキャンセル期限を見る（読めなければ「過ぎていない」。最後は DB 関数が断る）。"""
+    reader = getattr(store, "event_by_post", None)
+    if reader is None:
+        return False
+    try:
+        event = reader(event_id) or {}
+    except Exception:
+        return False
+    return not cancel_open(event, now)
 
 
 def _refusal_text(error):
@@ -370,8 +462,12 @@ def _refusal_text(error):
     return "受け付けられませんでした。会のページから操作してください。"
 
 
-def handle_postback(event, store, *, now=None, client=None):
-    """遅れる・キャンセル。主催者への通知は DB 関数が入れる。返事は reply API（通数に数えない）。"""
+def handle_postback(event, store, *, now=None, client=None, base_url=""):
+    """遅れる・キャンセル・会のページ。主催者への通知は DB 関数が入れる。返事は reply API（通数に数えない）。
+
+    会のコード（e=）が無い（リッチメニュー）ときは、申し込み中の会が1つならその会、2つ以上なら先に選んでもらう。
+    遅れるの分（m=）が無ければ、分を選んでもらう。
+    """
     token = event.get("replyToken")
     user_id = (event.get("source") or {}).get("userId")
     parsed = parse_postback((event.get("postback") or {}).get("data"))
@@ -392,19 +488,36 @@ def handle_postback(event, store, *, now=None, client=None):
     if action == "cancel_no":
         say("そのままにしました。")
         return
-    reg = pick_registration(store.my_event_registrations(account), parsed["code"], now)
-    if reg is None:
+    regs = open_registrations(store.my_event_registrations(account), parsed["code"], now)
+    if not regs:
         say("申し込み中の会が見つかりませんでした。")
         return
+    if parsed["code"] is None and len(regs) > 1:
+        reply(token, _choose_event(regs, action, base_url, parsed["minutes"]), client=client)
+        return
+    reg = regs[0]
     event_id = _registration_event_id(reg)
     title = str(reg.get("title") or "この会")
+    code = reg.get("public_code") or ""
+
+    if action == "page":
+        reply(token, _template(f"{title} のページです。", "会のページを開く", _link(base_url, code, "me")),
+              client=client)
+        return
+    if action == "late" and parsed["minutes"] is None:
+        choices = [_postback(LATE_LABELS[m], f"a=late&e={code}&m={m}", f"{LATE_LABELS[m]}遅れる")
+                   for m in LATE_CHOICES]
+        reply(token, _quick(_clip(f"{title} に、どのくらい遅れますか？", 200), choices), client=client)
+        return
+    if action in ("cancel", "cancel_yes") and _cancel_deadline_passed(store, event_id, now):
+        say(CANCEL_CLOSED_TEXT)
+        return
 
     try:
         if action == "late":
             store.event_set_late(event=event_id, account=account, minutes=parsed["minutes"])
             say(f"受け取りました。{title} の主催者に伝えました。")
         elif action == "cancel":
-            code = reg.get("public_code") or ""
             confirm = [{
                 "type": "template",
                 "altText": f"{title} の申し込みを取り消しますか？",
@@ -464,7 +577,7 @@ class BadPayload(ValueError):
     pass
 
 
-def handle_webhook(body, signature, store, *, now=None, client=None, secret=None):
+def handle_webhook(body, signature, store, *, now=None, client=None, secret=None, base_url=""):
     """署名 → 各イベントを line_webhook_seen で二重除け → follow／unfollow／postback。
 
     署名が違えば InvalidSignature、JSON でなければ BadPayload。message などほかのイベントは
@@ -500,12 +613,25 @@ def handle_webhook(body, signature, store, *, now=None, client=None, secret=None
             elif kind == "unfollow":
                 handle_unfollow(event, store)
             else:
-                handle_postback(event, store, now=now, client=client)
+                handle_postback(event, store, now=now, client=client, base_url=base_url)
             result["handled"] += 1
         except Exception as error:  # 1 件の失敗で残りを止めない。理由の種類だけ記録
             log.warning("LINE webhook %s failed: %s", kind, type(error).__name__)
             result["failed"] += 1
     return result
+
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "testserver")
+
+
+def public_base_url(request):
+    """LINE に入れる会のページのリンクの頭（webhook と core/jobs.py の予約送信で共通）。
+    ISLANDS_PUBLIC_BASE_URL、無ければ届いた URL。Cloud Run の中では届いた URL が http に見えることがあるので、
+    手元以外は https にそろえる（本番は https の run.app）。"""
+    base = os.environ.get("ISLANDS_PUBLIC_BASE_URL", "").strip().rstrip("/") or str(request.base_url).rstrip("/")
+    if base.startswith("http://") and base[len("http://"):].split("/")[0].split(":")[0] not in LOCAL_HOSTS:
+        base = "https://" + base[len("http://"):]
+    return base
 
 
 router = APIRouter()
@@ -531,7 +657,8 @@ async def line_webhook(request: Request):
     signature = request.headers.get("x-line-signature", "")
     store = _store_getter()
     try:
-        result = await run_in_threadpool(handle_webhook, body, signature, store, secret=secret)
+        result = await run_in_threadpool(handle_webhook, body, signature, store, secret=secret,
+                                         base_url=public_base_url(request))
     except InvalidSignature:
         return JSONResponse({"detail": "bad signature"}, status_code=401)
     except BadPayload:
@@ -543,11 +670,11 @@ async def line_webhook(request: Request):
 # リッチメニュー（作るのは scripts/line_richmenu.py。API ではない）
 # ---------------------------------------------------------------------------
 RICH_MENU_SIZE = (2500, 843)
+# 会を決めずに押される（e= なし）。申し込み中の会が2つ以上なら、押したあと先に会を選んでもらう。
 RICH_MENU_BUTTONS = (
-    ("10分くらい遅れる", "a=late&m=10"),
-    ("30分くらい遅れる", "a=late&m=30"),
-    ("1時間以上遅れる", "a=late&m=60"),
+    ("遅れる", "a=late"),
     ("キャンセル", "a=cancel"),
+    ("会のページ", "a=page"),
 )
 
 
@@ -556,14 +683,16 @@ def rich_menu_payload():
     cell = width // len(RICH_MENU_BUTTONS)
     areas = []
     for index, (label, data) in enumerate(RICH_MENU_BUTTONS):
+        left = index * cell
+        right = width if index == len(RICH_MENU_BUTTONS) - 1 else left + cell
         areas.append({
-            "bounds": {"x": index * cell, "y": 0, "width": cell, "height": height},
+            "bounds": {"x": left, "y": 0, "width": right - left, "height": height},
             "action": {"type": "postback", "label": label[:20], "data": data, "displayText": label},
         })
     return {
         "size": {"width": width, "height": height},
         "selected": True,
-        "name": "islands イベント（遅れる・キャンセル）",
+        "name": "islands イベント（遅れる・キャンセル・会のページ）",
         "chatBarText": "遅れる・キャンセル",
         "areas": areas,
     }
@@ -572,9 +701,9 @@ def rich_menu_payload():
 def setup_rich_menu(image=None, *, client=None):
     """リッチメニューを作り、画像（PNG のバイト列）を付け、全員の既定にする。メニューの id を返す。
     実際に LINE へ送るので、呼ぶのは scripts/line_richmenu.py の --apply だけ。"""
-    if not configured():
+    if not access_token():
         raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN がありません。")
-    created = _request("POST", f"{LINE_API_BASE}/v2/bot/richmenu", client=client, json=rich_menu_payload(),
+    created =_request("POST", f"{LINE_API_BASE}/v2/bot/richmenu", client=client, json=rich_menu_payload(),
                        headers=_headers({"Content-Type": "application/json"}))
     created.raise_for_status()
     menu_id = created.json()["richMenuId"]
@@ -584,3 +713,17 @@ def setup_rich_menu(image=None, *, client=None):
     _request("POST", f"{LINE_API_BASE}/v2/bot/user/all/richmenu/{menu_id}", client=client,
              headers=_headers()).raise_for_status()
     return menu_id
+
+
+def delete_other_rich_menus(keep_id, *, client=None):
+    """このスクリプトが前に作ったメニュー（名前が「islands イベント」で始まる）のうち、keep_id 以外を消す。消した数。"""
+    listed = _request("GET", f"{LINE_API_BASE}/v2/bot/richmenu/list", client=client, headers=_headers())
+    listed.raise_for_status()
+    removed = 0
+    for menu in listed.json().get("richmenus", []):
+        if menu.get("richMenuId") == keep_id or not str(menu.get("name", "")).startswith("islands イベント"):
+            continue
+        _request("DELETE", f"{LINE_API_BASE}/v2/bot/richmenu/{menu['richMenuId']}", client=client,
+                 headers=_headers()).raise_for_status()
+        removed += 1
+    return removed

@@ -422,7 +422,7 @@ def test_update_event_notifies_and_reschedules(world):
     mail = people("g11b@example.test", "メールの人")
     apply(mail, code)                                   # メールの人には案内の予定を作らない（E の 14）
     kinds = sorted(row["kind"] for row in store()._outbound.values())
-    assert kinds == ["after", "day_of", "week_before"]
+    assert kinds == ["after", "applied", "day_of", "week_before"]
     assert {row["account_id"] for row in store()._outbound.values()} == {guest.id}
     r = post(guest, f"/api/events/{code}/cancel")      # 取り消しで予約は消える
     apply(guest, code, line=True)
@@ -755,7 +755,7 @@ def test_only_line_applications_get_reminders(world):
     apply(mail, code)
     assert store()._outbound == {}
     apply(via_line, code, line=True)
-    assert sorted(row["kind"] for row in store()._outbound.values()) == ["after", "day_of", "week_before"]
+    assert sorted(row["kind"] for row in store()._outbound.values()) == ["after", "applied", "day_of", "week_before"]
 
 
 def test_event_with_one_question_needs_one_answer(world):
