@@ -91,6 +91,44 @@ test('every tier gives faces and windows, and the bigger tiers have more of both
   });
   assert.ok(faceCounts[3] > faceCounts[2] && faceCounts[2] > faceCounts[1]);
   assert.ok(houseLights('castle', 0).length > houseLights('house', 0).length);
-  assert.deepEqual(houseLights('house', 0)[0].slice(2), [1.6]);
+  assert.deepEqual(houseLights('house', 0)[0].slice(2), [1.0]);
   assert.equal(HOUSE_WIDTH.length, 4);
 });
+
+test('the top tier is a long white two-storey house with a blue roof, not a castle (2026-11-04)', () => {
+  const blue = (c) => parseInt(c.slice(5, 7), 16) > parseInt(c.slice(1, 3), 16) + 40;
+  const faces = facesOf(partsOf('castle', 0));
+  assert.ok(faces.some((f) => blue(f.fill)), 'a blue roof');
+  const xs = faces.flatMap((f) => f.pts.map((p) => p[0]));
+  const top = Math.max(...xs) - Math.min(...xs);
+  assert.ok(top > 5.5 && top < 7.5, `about 5.6 wide, not a 7-wide castle (${top})`);
+  assert.equal(houseLights('castle', 0).length, 6, 'two rows of four windows face us, the two under the porch roof stay dark');
+});
+
+test('white walls keep their wall flag through turning and are not grey (2026-11-04)', () => {
+  const luma = (c) => parseInt(c.slice(1, 3), 16) + parseInt(c.slice(3, 5), 16) + parseInt(c.slice(5, 7), 16);
+  for (const kind of ['house', 'manor', 'castle']) {
+    for (let turn = 0; turn < 6; turn += 1) {
+      const walls = partsOf(kind, turn).filter((p) => p.wall);
+      assert.ok(walls.length >= 1, `${kind} ${turn} keeps wall parts`);
+      const lit = facesOf(walls).map((f) => luma(f.fill));
+      assert.ok(Math.min(...lit) > 600, `${kind} ${turn}: every wall seen is bright (${Math.min(...lit)})`);
+    }
+  }
+  assert.ok(!partsOf('hut', 0).some((p) => p.wall), 'the hut has wooden walls, not white ones');
+});
+
+test('night lights sit on the window panes at every turn, only on walls that face the viewer and are not covered', () => {
+  for (const kind of HOUSE_TIERS) {
+    for (let turn = 0; turn < 6; turn += 1) {
+      const panes = partsOf(kind, turn).filter((p) => p.glass && p.glass[1] > 0.001);
+      const lights = houseLights(kind, turn);
+      assert.ok(lights.length >= 1 && lights.length <= panes.length, `${kind} ${turn}: only panes that face us, none behind a roof`);
+      lights.forEach(([x, y]) => {
+        const near = panes.some((p) => Math.hypot(p.center[0] - x, p.center[1] * Math.sin((52 * Math.PI) / 180) - p.center[2] * Math.cos((52 * Math.PI) / 180) - y) < 0.1);
+        assert.ok(near, `${kind} ${turn}: a light with no pane under it`);
+      });
+    }
+  }
+});
+

@@ -28,17 +28,32 @@ import { beamProgress, beamStyle } from '../match-rules.js';
 import { sparkleLevel, sparkleSpots } from './sparkles.js';
 import { preloadSprites } from './sprites.js';
 import { drawPostPin, pinColor, pinGeometry, pinReach } from './pins.js';
-import { TIER_COUNT, drawHouse, drawLandmark, drawNightLights, drawTree, setSettled } from './buildings.js';
-import { PREVIEW_RATIO, buildDetail, buildTerrain, gridTerrain, sharpPlan, toCanvas } from './terrain.js';
+import { TIER_COUNT, drawHouse, drawLandmark, drawNightLights, drawProp, drawTree, setSettled } from './buildings.js';
+import { DETAIL_MAX_TEXTURE, DETAIL_MAX_UNIT, PREVIEW_RATIO, buildDetail, buildTerrain, gridTerrain, sharpPlan, toCanvas } from './terrain.js';
 import { drawSurf, surfShow } from './surf.js';
-import { offThread } from './offthread.js';
+import { offThread, offThreadDetail, offThreadWarm } from './offthread.js';
 import { groundOf } from './coast.js';
+import { bActive, useIslandB } from './land.js';
+import {
+  coastAt, extentB, isLandB, islandB, islandBKey, islandBView, mapBOn, previewParam, regionAt, regionsB, setIslandBView, startB,
+} from './island-b.js';
+import {
+  borderLook, borderPoints, drawBorders, drawFlag, flagSize, frameOf, makeFaceCrowd, placeNames, regionText, thinBorders,
+} from './regions-b.js';
+import { ROAD_WIDTH, hasRoadsB, nearRoadB, roadCurves, roadIndex, setRoadsB, demoPairs } from './roads-b.js';
+import { homestead, homesteadReach } from './homestead.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
 import { playSe } from '../audio.js';
-import { HOUSE_WIDTH, houseScore, houseSpot, houseTier } from './mesh.js';
-import { thinHouses } from './house-thin.js';
+import { HOUSE_TIERS, HOUSE_WIDTH, houseScore, houseSpot, houseTier, houseTurn, partsOf } from './mesh.js';
+import { houseBox, thinHouses } from './house-thin.js';
 import { PALETTE, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
+
+// Map B is on when the island's shape is here and the switch (features.map_b or ?map=b) is set.
+useIslandB({
+  active: () => Boolean(islandB()) && mapBOn(config()),
+  isLand: isLandB,
+});
 
 let canvas = null;
 let ctx = null;
@@ -179,6 +194,8 @@ let fitExtent = null;
 
 /** The world box the whole-map camera frames (also what the mini map shows). */
 function fitBounds(posts, extent) {
+  const island = frameB();
+  if (island) return island;
   const valid = posts.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
   return extent || (valid.length ? [
     Math.min(...valid.map((p) => p.x - radiusOf(p))), Math.min(...valid.map((p) => p.y - radiusOf(p))),
@@ -248,7 +265,16 @@ function clampScale(value) {
   return Math.max(fit * 0.5, Math.min(value, Math.max(18, fit * 24)));
 }
 
+/** Map B: the island's outer box with room round it, or null on the ordinary map. */
+function frameB() {
+  if (!bActive()) return null;
+  const extent = extentB();
+  return extent ? frameOf(extent) : null;
+}
+
 function seedBounds() {
+  const island = frameB();
+  if (island) return island;
   const world = config().world;
   const bounds = world.seed_bounds;
   if (Array.isArray(bounds) && bounds.length === 4 && bounds.every(Number.isFinite)) {
@@ -859,11 +885,25 @@ function liftLandAtNight(terrain, closeUp, grid, alpha) {
 
 /** Windows lit at night, over the dark layer: every house and landmark that
  * was drawn, with the seed it was drawn with. */
-function paintNightLights(places, townShow, calmOf, houses) {
+function paintNightLights(places, townShow, calmOf, houses, props = []) {
   ctx.save();
   houses.forEach((house) => {
     ctx.globalAlpha = house.alpha;
     drawNightLights(ctx, { house: true, seed: house.seed, tier: house.tier, calm: house.calm }, house.x, house.foot, house.size);
+  });
+  // A street lamp's light: a warm glow round its head.
+  props.forEach((prop) => {
+    if (prop.kind !== 'lamp') return;
+    const x = prop.x;
+    const y = prop.foot - LAMP_HEAD * prop.size;
+    const r = LAMP_GLOW * prop.size;
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, r);
+    glow.addColorStop(0, 'rgba(255, 226, 150, 0.85)');
+    glow.addColorStop(0.35, 'rgba(255, 210, 120, 0.35)');
+    glow.addColorStop(1, 'rgba(255, 200, 110, 0)');
+    ctx.globalAlpha = prop.alpha;
+    ctx.fillStyle = glow;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
   });
   if (townShow > 0) {
     places.forEach((place) => {
@@ -940,10 +980,12 @@ function drawFreshGlow(places, motion) {
   places.forEach((place) => {
     const key = islandKey(place.island);
     if (!freshIslands.has(key)) return;
+    // Map B: a village of two or more posts, one glint each: all over the island it was noise.
+    if (bActive() && place.members.size < 2) return;
     const spot = toScreen(place.island.cx, place.island.cy);
     // The island's edge, guessed from its town's size.
     const edge = Math.max(30, Math.min(110, place.size * 0.9 + 22));
-    sparkleSpots(key).forEach((glint) => {
+    (bActive() ? sparkleSpots(key).slice(0, 1) : sparkleSpots(key)).forEach((glint) => {
       const level = sparkleLevel(motion, glint.phase);
       const r = (6 + 6 * glint.size) * (0.6 + 0.4 * level);
       const x = spot.x + Math.cos(glint.angle) * edge * glint.ring;
@@ -964,6 +1006,53 @@ function drawFreshGlow(places, motion) {
   });
   ctx.restore();
 }
+
+/** Map B, zoomed out: one small glint on each village of two or more posts with something new -
+ * at the top right of its name when it has one, else just over its houses (2026-11-02: the
+ * glints round the island's edge, some out at sea, did not say which village). */
+function drawFreshGlowB(places, motion) {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(40,55,80,0.45)';
+  places.forEach((place) => {
+    const key = islandKey(place.island);
+    if (!freshIslands.has(key) || place.members.size < 2) return;
+    const name = place.labelBox;
+    const spot = toScreen(place.island.cx, place.island.cy);
+    const x = name ? name.right - 1 : spot.x + 7;
+    const y = name ? name.top + 2 : spot.y - 12;
+    glintStar(x, y, sparkleLevel(motion, sparkleSpots(key)[0].phase));
+  });
+  ctx.restore();
+}
+
+/** Map B's mark for "not opened yet", the same at every zoom: a small twinkling star at (x, y).
+ * `level` 0 to 1 is how lit it is now (sparkleLevel); `size` scales it. */
+function glintStar(x, y, level, size = 1) {
+  const r = (4.2 + 1.6 * level) * size;
+  ctx.save();
+  ctx.lineJoin = 'round';
+  // A dark rim, so it shows on the pale sand and grass of the villages too.
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = 'rgba(40,55,80,0.75)';
+  ctx.globalAlpha *= 0.85 + 0.15 * level;
+  ctx.beginPath();
+  const k = r * 0.22;
+  ctx.moveTo(x, y - r);
+  ctx.quadraticCurveTo(x + k, y - k, x + r, y);
+  ctx.quadraticCurveTo(x + k, y + k, x, y + r);
+  ctx.quadraticCurveTo(x - k, y + k, x - r, y);
+  ctx.quadraticCurveTo(x - k, y - k, x, y - r);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = level > 0.5 ? '#FFFFFF' : '#FFE27A';
+  ctx.fill();
+  ctx.restore();
+}
+
+/** How lit a post's star is now. */
+const postGlint = (post, motion) => sparkleLevel(motion, sparkleSpots(String(post.id))[0].phase);
 
 // ---------------------------------------------------------------- outside views
 
@@ -1048,6 +1137,8 @@ const TOWN_PX = [14, 20];
 const MINE = PALETTE.accent;
 const LABEL_FONT = '700 13px system-ui, sans-serif';
 const SMALL_FONT = '600 11px system-ui, sans-serif';
+// Map B zoomed out: a village's name under the regions' (11px), so the whole island still reads (2026-11-02).
+const VILLAGE_FAR_FONT = '600 10px system-ui, sans-serif';
 
 // While searching or filtering, the posts that do not match stay on the map at
 // this strength and cannot be tapped. The islands - ground, towns, names - are
@@ -1082,7 +1173,8 @@ function worldLines(ground) {
       state.removed.forEach((id) => byId.delete(id));
       posts = [...byId.values()];
     }
-    const index = membership(detectLandmasses(posts));
+    // Map B is one island: no pieces of land to tell apart.
+    const index = bActive() ? new Map() : membership(detectLandmasses(posts));
     worldKept = { ground, worldPosts: state.worldPosts, posts, landOf: (id) => index.get(id) || null, water: new Map() };
   }
   return worldKept;
@@ -1111,7 +1203,7 @@ function kinPlan(meId, sifting, world) {
   // Same world as the roads (worldLines), so a dotted line is straight or an arch at every zoom.
   const islands = state.worldIslands || state.islands;
   const listed = new Set(islands.flatMap((island) => island.post_ids || []));
-  const waterGap = world.posts ? (post, row) => !(listed.has(post.id) && listed.has(row.id))
+  const waterGap = world.posts && !bActive() ? (post, row) => !(listed.has(post.id) && listed.has(row.id))
     && cachedWater(world.posts, [post.x, post.y], [row.x, row.y]) : null;
   const lines = kinLines({
     mine: state.myPosts, neighbors, islandOf: islandFinder(islands), linked, me: meId, waterGap,
@@ -1125,8 +1217,11 @@ function renderMap(time) {
   // The same posts and coarse layer the ground is drawn from, so the sea's
   // moving things can keep off the land the way the routes do.
   const ground = withTrialGround(groundPosts());
+  syncRoadsB();
   const view = {
-    sea: seaBox(), toScreen, width, height, scale: state.camera.scale, maxScale: clampScale(Infinity),
+    sea: seaBox(), toScreen, width, height, scale: state.camera.scale, maxScale: clampScale(Infinity), minScale: clampScale(0),
+    // Map B: the sea's marks and boats ask the island's shape instead of the posts' ground.
+    b: bActive() ? { isLand: isLandB, coastAt } : null,
     posts: ground, cells: state.saturated ? state.cells : NO_CELLS,
   };
   const { scale } = state.camera;
@@ -1226,6 +1321,7 @@ function renderMap(time) {
   // the dark layer it also washed over the buildings and trees, which then
   // looked half transparent.
   if (tod === 'night') liftLandAtNight(terrain, closeUp, grid, before ? stage.land : 1);
+  // Map B: the roads between regions lie on the ground, under the trees and houses.
 
   // Where each island's settlement stands. Placed before the trees so the trees
   // can keep out of the way.
@@ -1279,10 +1375,15 @@ function renderMap(time) {
   // A face keeps one size in px at every zoom while the house grows with the
   // map, so the house's nearest corner keeps whatever the face - its unread dot
   // included - or, before faces show, the dot takes up, off to the north east.
-  const houseSize = scale * HOUSE_UNITS;
+  // Map B: houses stand as large against its large trees as in prototype F (HOUSE_B times).
+  const houseK = bActive() ? HOUSE_B : 1;
+  const houseSize = scale * HOUSE_UNITS * houseK;
   let houses = [];
+  housesById = new Map();
+  housesGone = new Map();
+  allHouses = [];
   // The smallest tier is drawn from HOUSE_MIN px wide; a bigger one is wider, so it shows no later.
-  if (scale * HOUSE_WIDTH[0] >= HOUSE_MIN) {
+  if (scale * HOUSE_WIDTH[0] * houseK >= HOUSE_MIN) {
     const faces = scale >= faceScale();
     const pinSize = level === 'deep' ? PIN_DEEP : PIN_NEAR;
     // Houses are drawn out to `room` past the screen but gathered from a wider
@@ -1297,11 +1398,21 @@ function renderMap(time) {
       // Hut, house, manor, castle by what the post has gathered; a tier too small
       // on screen (under HOUSE_MIN px wide) is not drawn.
       const tier = houseTier(post);
-      if (scale * HOUSE_WIDTH[tier] < HOUSE_MIN) return;
+      if (scale * HOUSE_WIDTH[tier] * houseK < HOUSE_MIN) return;
       const point = toScreen(post.x, post.y);
       const clear = HOUSE_GAP + (faces ? unreadReach(pinGeometry(pinSize, post.motivation).headR) : HOUSE_DOT_CLEAR);
       const seed = hashId(post.id);
-      const { x, foot } = houseSpot(point.x, point.y, clear, houseSize, tier, seed);
+      // Map B: the house is the post, standing on its point, so roads and lines
+      // end at its door (2026-11-03, the user: they ended where the face was).
+      const { x, foot } = houseK > 1 ? { x: point.x, foot: point.y } : houseSpot(point.x, point.y, clear, houseSize, tier, seed);
+      // Map B: every house, in view or not, keeps the trees' layer clear of it.
+      if (houseK > 1) {
+        allHouses.push({
+          wx: post.x + (x - point.x) / scale, wy: post.y + (foot - point.y) / scale, tier,
+          // Its yard (homestead.js), in world units: a design unit is houseK of them.
+          reach: homesteadReach(houseScore(post), tier) * houseK,
+        });
+      }
       if (outside(x, foot, band)) return;
       // Only the landing post's own house comes up with it; the island's other
       // houses stay as they are (they used to fade out with its ground and back).
@@ -1316,7 +1427,8 @@ function renderMap(time) {
       houses.push({
         id: post.id, score: houseScore(post), faint,
         // The open post and the one landing keep their house when houses crowd.
-        keep: (state.selected != null && post.id === state.selected.id) || (stage != null && post.id === reveal.id),
+        keep: (state.selected != null && post.id === state.selected.id) || (stage != null && post.id === reveal.id)
+          || (houseK > 1 && meId != null && post.author_id === meId),
         // Quiet from its island on the whole map, not only the islands near the
         // screen: the colour no longer comes and goes as the map pans.
         x, foot, size: houseSize, tier, seed, calm: Boolean(island && island.quiet),
@@ -1326,14 +1438,24 @@ function renderMap(time) {
     });
     // Houses standing on each other are thinned the way the pins are: one stays
     // (see house-thin.js). Trees and night lights below use what is left.
-    houses = thinHouses(houses).filter((house) => !outside(house.x, house.foot, room));
+    const gathered = houses;
+    const covered = new Map();
+    houses = thinHouses(houses, covered).filter((house) => !outside(house.x, house.foot, room));
+    housesById = new Map(houses.map((house) => [house.id, house]));
+    // Map B: a post whose house gave way to another shows no face of its own; it
+    // is one of the "+N" on the house that stayed (drawFaces).
+    if (houseK > 1) gathered.forEach((house) => { if (!housesById.has(house.id)) housesGone.set(house.id, covered.get(house.id)); });
   }
+  // Map B: the things round each house that is drawn (a woodpile, chickens, a well...).
+  const props = houseK > 1 && houses.length ? placeProps(houses, motion) : [];
 
   if (terrain && terrain.trees) {
     const marks = places.flatMap((place) => place.marks);
     if (before && before.trees) {
       drawTrees(before.trees, houses, marks, far ? [] : visible, far, 1);
       drawTrees(sproutedTrees(before.trees, terrain.trees), houses, marks, far ? [] : visible, far, stage.land);
+    } else if (bActive()) {
+      drawTreeLayer(terrain.trees, marks, far, now - cameraStill >= GROUND_SETTLE_MS);
     } else {
       drawTrees(terrain.trees, houses, marks, far ? [] : visible, far, 1);
     }
@@ -1354,6 +1476,8 @@ function renderMap(time) {
     span: config().world.max - config().world.min, phone: width < 700,
     // Vehicles shrink with the map: their size is by scale / maxScale.
     scale, maxScale: clampScale(Infinity),
+    // Map B: its roads are walked by people, not driven by cars, as big as the houses (px per design unit).
+    walk: bActive(), unit: bActive() ? scale * HOUSE_B : 0,
   };
   const linePlan = drawLinks(ctx, lineView);
   lastLineKinds = linePlan ? linePlan.lines.map((line) => [`${line.row.a_post}|${line.row.b_post}`, line.kind]) : null;
@@ -1389,15 +1513,23 @@ function renderMap(time) {
       draw: () => drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed, tier: house.tier }),
     });
   });
+  props.forEach((prop) => {
+    standing.push({
+      foot: prop.foot,
+      draw: () => drawProp(ctx, prop.kind, prop.x, prop.foot, prop.size, { alpha: prop.alpha, calm: prop.calm, rot: prop.rot, frame: prop.frame }),
+    });
+  });
   standing.sort((a, b) => a.foot - b.foot).forEach((item) => item.draw());
+  // Map B: the region borders and the flag over the trees and houses.
+  if (bActive()) paintRegionsB();
   drawPlanes(ctx, lineView, linePlan, time);
   // The fog goes under the time-of-day layers so its edge takes the evening or
   // night colour with the rest of the sea.
   drawFog(ctx, view);
   paintTimeOfDay();
-  if (tod === 'night') paintNightLights(places, townShow, calmOf, houses);
+  if (tod === 'night') paintNightLights(places, townShow, calmOf, houses, props);
   // Over the time-of-day tint, so the glints stay white at any hour.
-  if (far && freshIslands.size) drawFreshGlow(places, motion);
+  if (far && freshIslands.size && !bActive()) drawFreshGlow(places, motion);
 
   const claim = makeLabelSpace();
   chromeBoxes().forEach((box) => claim.block(box.x, box.y, box.w, box.h));
@@ -1415,14 +1547,19 @@ function renderMap(time) {
   const minePosts = new Set(visible.filter((entry) => entry.mine).map((entry) => entry.post.id));
   const weight = (place) => Number(place.island.people) || place.members.size;
   nameBoxes = [];
+  // Map B: はじまりの村 and the regions' names claim their room before the villages'.
+  if (bActive()) claimNamesB(claim, label, far);
   ctx.save();
   [...places].sort((a, b) => weight(b) - weight(a)).forEach((place) => {
     const { island, box } = place;
     if (box.bottom < ceiling - 4) return;
-    ctx.font = LABEL_FONT;
+    const nameFont = bActive() && far ? VILLAGE_FAR_FONT : LABEL_FONT;
+    ctx.font = nameFont;
     const textWidth = ctx.measureText(island.label).width;
     const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
     const mine = [...place.members].some((id) => minePosts.has(id));
+    // Map B: a village of one or two posts is not named from afar (three and over), nor of one close in.
+    if (bActive() && !lit && !mine && place.members.size < (far ? 3 : 2)) return;
     let anchor = box.top - 10;
     if (!far) {
       // Zoomed in, the name rides above the island's highest face, so it is
@@ -1440,7 +1577,7 @@ function renderMap(time) {
         // screen) a name may rise to the top edge.
         const spotX = keepOnScreen(place.x + shift * textWidth, textWidth);
         const candidate = Math.max(14, anchor + offset);
-        if (claim(spotX, candidate, textWidth, 15)) {
+        if (claim(spotX, candidate, textWidth, nameFont === LABEL_FONT ? 15 : 12)) {
           x = spotX;
           y = candidate;
           break spots;
@@ -1454,12 +1591,14 @@ function renderMap(time) {
     }
     place.labelBox = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 10, bottom: y + 10 };
     nameBoxes.push(place.labelBox);
-    label(island.label, x, y, LABEL_FONT, {
+    label(island.label, x, y, nameFont, {
       alpha: place.fade * nameDim(place),
       ...(lit ? { lit: islandColor(island.cluster_id), width: textWidth } : {}),
     });
   });
   ctx.restore();
+  // Map B: the glint sits on the village it means, after the names have found their places.
+  if (far && freshIslands.size && bActive()) drawFreshGlowB(places, motion);
 
   const talk = [];   // faces about to say what they wrote, painted last
   if (far) {
@@ -1482,7 +1621,7 @@ function renderMap(time) {
     }
     drawFaces(visible, claim, level, motion, talk, stage, z >= DETAIL_AT);
     if (level === 'near') landmarkNames(places, claim, label);
-    regionNames(places, claim, label);
+    if (!bActive()) regionNames(places, claim, label);
   }
 
   drawBirds(ctx, view, time);
@@ -1501,7 +1640,7 @@ function renderMap(time) {
     if (entry.alpha !== undefined) ctx.globalAlpha *= entry.alpha;
     if (entry.lit) litPill(entry);
     ctx.font = entry.font;
-    ctx.lineWidth = entry.font === LABEL_FONT ? 4.5 : 3.5;
+    ctx.lineWidth = entry.font === LABEL_FONT ? 4.5 : entry.font === REGION_FONT || entry.font === VILLAGE_FAR_FONT ? 2.5 : 3.5;
     ctx.strokeStyle = INK.halo;
     ctx.strokeText(entry.text, entry.x, entry.y);
     ctx.fillStyle = entry.soft ? 'rgba(255,255,255,.9)' : INK.label;
@@ -1510,6 +1649,101 @@ function renderMap(time) {
   });
   ctx.restore();
   drawTalk(talk);
+}
+
+// ---------------------------------------------------------------- map B
+
+const REGION_FONT = '600 11px system-ui, sans-serif';
+let bordersKept = { key: null, points: [] };
+
+/** The region borders in world units, made once per island and community (the shore moves with it). */
+function bordersB() {
+  const island = islandB();
+  const extent = extentB();
+  const key = island && extent ? `${island.version}|${islandBView().communityKey}` : null;
+  if (bordersKept.key !== key) {
+    bordersKept = { key, points: key ? borderPoints(extent, regionAt, coastAt) : [] };
+  }
+  return bordersKept.points;
+}
+
+function paintRegionsB() {
+  const look = borderLook(state.camera.scale);
+  const dots = thinBorders(bordersB(), toScreen, { width, height, top: 0, gap: look.gap });
+  drawBorders(ctx, dots, look);
+  const start = startB();
+  if (!start) return;
+  const at = toScreen(start.x, start.y);
+  if (at.x < -40 || at.x > width + 40 || at.y < -40 || at.y > height + 60) return;
+  drawFlag(ctx, at.x, at.y, flagSize(state.camera.scale));
+}
+
+/** はじまりの村 and (zoomed out) the regions' names, in the label space, most important first. */
+function claimNamesB(claim, label, far) {
+  const start = startB();
+  const onScreen = (p) => p.x > -60 && p.x < width + 60 && p.y > frame.top + 10 && p.y < height + 20;
+  const startAt = start ? toScreen(start.x, start.y) : null;
+  const regions = regionsB().map((region) => {
+    const p = toScreen(region.x, region.y);
+    return { text: regionText(region), x: p.x, y: p.y, font: REGION_FONT, soft: true };
+  }).filter(onScreen);
+  ctx.save();
+  const placed = placeNames({
+    start: startAt && onScreen(startAt) ? { text: 'はじまりの村', x: startAt.x + 4, y: startAt.y + 14, font: far ? VILLAGE_FAR_FONT : LABEL_FONT } : null,
+    regions, far, claim,
+    measure: (entry) => { ctx.font = entry.font; return ctx.measureText(entry.text).width; },
+  });
+  ctx.restore();
+  placed.forEach((entry) => label(entry.text, entry.x, entry.y, entry.font, entry.soft ? { soft: true } : {}));
+}
+
+// Map B: the lines between people who met are roads laid into the ground itself (terrain-b.js cuts
+// the forest back along them and paints the path like the villages' open ground), not strokes over
+// the map (2026-11-02: drawn over the forest they looked stuck on). Every line counts, whatever the
+// filter. ?roads=demo: a few example roads between regions instead.
+let roadsSeen = null;
+let roadsShort = '';       // roadsSeen hashed, for the trees' layer key
+let roadsFrom = null;      // the connections roadsSeen was made from
+function roadsHash(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return `${text.length}.${(h >>> 0).toString(36)}`;
+}
+function syncRoadsB() {
+  if (!bActive()) {
+    if (roadsSeen !== null) { setRoadsB(null); roadsSeen = null; roadsShort = ''; roadsFrom = null; }
+    return;
+  }
+  const demo = previewParam('roads') === 'demo';
+  let pairs;
+  let key;
+  if (demo) {
+    const posts = state.worldPosts && state.worldPosts.length ? state.worldPosts : state.posts;
+    key = `demo|${islandBView().communityKey}|${posts.length}`;
+    if (roadsSeen === key) return;
+    pairs = posts.length ? demoPairs(posts, (post) => regionAt(post.x, post.y)) : [];
+  } else {
+    // Asked on every frame: the key is made again only when the connections are a new list.
+    if (roadsFrom !== null && roadsFrom === state.connections && roadsSeen !== null && !roadsSeen.startsWith('demo|')) return;
+    roadsFrom = state.connections;
+    const rows = (state.connections || []).filter((row) => row.a_at && row.b_at);
+    key = rows.map((row) => `${row.a_at[0]},${row.a_at[1]},${row.b_at[0]},${row.b_at[1]},${row.tier || 1}`).join(';');
+    if (roadsSeen === key) return;
+    pairs = rows.map((row) => {
+      // From the end with the smaller id, so A to B and B to A bend the same way.
+      const flip = String(row.a) > String(row.b);
+      const [p, q] = flip ? [row.b_at, row.a_at] : [row.a_at, row.b_at];
+      return { a: { x: p[0], y: p[1] }, b: { x: q[0], y: q[1] }, tier: row.tier || 1 };
+    });
+  }
+  roadsSeen = key;
+  roadsShort = roadsHash(key);
+  setRoadsB(pairs.length ? pairs : null);
+  // The ground is built from these (in the worker too), and rebuilt when they change.
+  setIslandBView({
+    roads: pairs.map(({ a, b, tier }) => [a.x, a.y, b.x, b.y, tier || 1]),
+    roadsKey: pairs.length ? roadsHash(key) : '',
+  });
 }
 
 /** The ground texture, at an opacity (it fades in while a new post lands).
@@ -1645,6 +1879,8 @@ function withTrialGround(list) {
 }
 
 function groundRegion(list) {
+  const island = frameB();
+  if (island) return { minX: island[0], minY: island[1], maxX: island[2], maxY: island[3] };
   if (!list.length) return postsRegion();
   let minX = Infinity;
   let minY = Infinity;
@@ -1660,9 +1896,13 @@ function groundRegion(list) {
   return { minX, minY, maxX, maxY };
 }
 const SHARP_RATIO_CAP = 2;
-const SHARP_MARGIN = 0.25;   // of the screen's size, on every side
+const SHARP_MARGIN = 0.15;   // of the screen's size, on every side (at most: see sharpWindow)
+const SHARP_MARGIN_TIGHT = 0.05;   // the same for the preview, which is there to be quick: about half the pixels
 let sharp = null;            // { ...texture, surf, rev, cells, unit, preview }
 let sharpTimer = 0;
+let sharpWarmed = false;     // the workers have been woken for plan B (offThreadWarm)
+const SHARP_PAST = 1;        // earlier full-quality sharp textures kept (a canvas of up to ~10 MB each: phones)
+let sharpPast = [];          // newest first: coming back to the same place and zoom shows one at once
 let sharpBaseScale = null;   // the whole-map ground's scale, as of the last frame
 let sharpFade = { from: null, at: 0 };   // the picture a new sharp texture fades in over
 let cameraMark = '';
@@ -1670,11 +1910,17 @@ let cameraStill = 0;
 
 /** The world rectangle on screen, widened by SHARP_MARGIN and snapped to a grid
  * of that size, so small pans do not ask for a new texture. */
-function sharpWindow() {
+function sharpWindow(need, tight = false) {
   const a = toWorld(0, 0);
   const b = toWorld(width, height);
-  const stepX = (b.x - a.x) * SHARP_MARGIN;
-  const stepY = (b.y - a.y) * SHARP_MARGIN;
+  // The window is at most the screen and four steps wide, and the texture has at
+  // most DETAIL_MAX_TEXTURE pixels on a side: past that it would be made at a
+  // lower resolution than asked for (blurred, which the margin is not worth).
+  const unit = Math.min(DETAIL_MAX_UNIT, need);
+  const room = (span) => Math.max(span * 0.02, (DETAIL_MAX_TEXTURE / unit - span) / 4);
+  const margin = tight ? SHARP_MARGIN_TIGHT : SHARP_MARGIN;
+  const stepX = Math.min((b.x - a.x) * margin, room(b.x - a.x));
+  const stepY = Math.min((b.y - a.y) * margin, room(b.y - a.y));
   return {
     minX: (Math.floor(a.x / stepX) - 1) * stepX, minY: (Math.floor(a.y / stepY) - 1) * stepY,
     maxX: (Math.ceil(b.x / stepX) + 1) * stepX, maxY: (Math.ceil(b.y / stepY) + 1) * stepY,
@@ -1695,8 +1941,18 @@ function sharpFadeAt(texture) {
 
 /** A new sharp texture (or none) takes over; the one it replaces fades out. */
 function setSharp(next) {
+  if (next !== sharp) rememberSharp(sharp);
   sharpFade = next ? { from: sharp, at: performance.now() } : { from: null, at: 0 };
   sharp = next;
+  if (next) sharpPast = sharpPast.filter((texture) => texture !== next);
+}
+
+/** Keep a finished sharp texture that is being replaced (not a preview, and only
+ * of the same ground as the ones kept) for SHARP_PAST turns. */
+function rememberSharp(texture) {
+  if (!texture || texture.preview) return;
+  sharpPast = [texture, ...sharpPast.filter((past) => past !== texture && past.rev === texture.rev && past.cells === texture.cells)]
+    .slice(0, SHARP_PAST);
 }
 
 /** Ask for the sharp texture when the screen needs one and the camera has been
@@ -1704,6 +1960,10 @@ function setSharp(next) {
  * quarter of the pixels, no surf) that is there quickly, then the full one. One
  * job at a time. */
 function requestSharp(posts) {
+  if (!sharpWarmed && bActive()) {
+    sharpWarmed = true;
+    offThreadWarm();
+  }
   if (sharpTimer || sharpBaseScale === null) return;
   const scale = state.camera.scale;
   const ratio = Math.min(dpr, SHARP_RATIO_CAP);
@@ -1715,15 +1975,23 @@ function requestSharp(posts) {
   if (performance.now() - cameraStill < SHARP_SETTLE_MS) return;
   // An empty list is the same as none: state.cells is a new [] on every fetch.
   const cells = state.saturated && state.cells.length ? state.cells : NO_CELLS;
-  const rev = groundRev;
+  // Map B's ground also depends on the community, the post total and the forest (islandBKey), and on A/B.
+  const rev = `${groundRev}|${bActive() ? islandBKey() : ''}`;
   const a = toWorld(0, 0);
   const b = toWorld(width, height);
-  const { stage } = sharpPlan({ sharp, rev, cells, need, surf, view: { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y } });
+  const view = { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y };
+  const { stage } = sharpPlan({ sharp, rev, cells, need, surf, view });
   if (!stage) return;
+  // Back at a place and zoom made before (zoomed in, out and in again): its texture is still here.
+  const past = sharpPast.find((texture) => sharpPlan({ sharp: texture, rev, cells, need, surf, view }).stage === 0);
+  if (past) {
+    setSharp(past);
+    return;
+  }
   const preview = stage === 1;
   const pixelRatio = preview ? ratio * PREVIEW_RATIO : ratio;
   const job = {
-    posts, cells, region: sharpWindow(), scale, pixelRatio, surf: !preview && surf,
+    posts, cells, region: sharpWindow(need, preview), scale, pixelRatio, surf: !preview && surf,
   };
   const make = (texture, coast) => {
     // The preview has no surf of its own: keep the one traced on the texture it
@@ -1735,7 +2003,7 @@ function requestSharp(posts) {
   };
   // In the worker when there is one (offthread.js): the map keeps moving
   // while it is made. One job at a time; the answer clears sharpTimer.
-  const sent = offThread('detail', job, (built, ok) => {
+  const sent = offThreadDetail(job, (built, ok) => {
     sharpTimer = 0;
     if (ok) make(built ? toCanvas(built) : null, built && built.coast);
   });
@@ -1756,6 +2024,7 @@ function sharpGround(base) {
   // surf is showing, which is traced on the sharp one.
   if (state.camera.scale * Math.min(dpr, SHARP_RATIO_CAP) <= base.scale * 1.3
       && surfShow(state.camera.scale, width, height) <= 0) {
+    rememberSharp(sharp);
     sharp = null;
     sharpFade = { from: null, at: 0 };
     return null;
@@ -1781,12 +2050,14 @@ const homeCache = new Map();
 function townHome(island, members, span, grown) {
   const posts = [...members].map((id) => state.postsById.get(id)).filter(Boolean);
   const key = islandKey(island);
-  const sig = `${island.cx},${island.cy},${posts.length},${span.toFixed(2)},${grown ? 1 : 0}`;
+  const sig = `${island.cx},${island.cy},${posts.length},${span.toFixed(2)},${grown ? 1 : 0}${bActive() ? `,b${islandBView().communityKey}` : ''}`;
   const held = homeCache.get(key);
   if (held && held.sig === sig) return held.home;
   const { biome_order: order, biome_thresholds: thresholds } = config().energy;
   const sand = thresholds[order[1]];
+  const onB = bActive();
   const land = (x, y) => {
+    if (onB) return isLandB(x, y);
     let sum = 0;
     posts.forEach((post) => { sum += groundOf(post, x, y); });
     return sum >= sand;
@@ -1877,6 +2148,7 @@ function landmarksOf(island, place) {
 let landIndexOf = null;
 
 function landAtWorld(list, x, y) {
+  if (bActive()) return isLandB(x, y);
   if (!landIndexOf || landIndexOf.list !== list) {
     let cell = 1;
     list.forEach((post) => { cell = Math.max(cell, radiusOf(post)); });
@@ -1906,7 +2178,108 @@ function landAtWorld(list, x, y) {
  * a pale ring of broken water). Zoomed out, every other one. */
 const TREE_WORLD = 2.2;   // world units across a tree of size 1 (a round tree or a pine)
 const TREE_MIN = 3;       // px: smaller than this is not drawn
+const TREE_B = 2.5;       // map B: trees this many times larger, as in prototype F
 const TREE_MAX = 400;     // px: a ceiling for the largest zoom
+const HOUSE_B = 2;        // map B: houses this many times larger (HOUSE_CLEAR grows with them)
+let allHouses = [];       // map B: where every house stands, { wx, wy, tier, reach (its yard, world units) }
+
+// ---------------------------------------------------------------- map B: round the houses
+// The things round a house (homestead.js) stand in proportion to it at every
+// zoom (2026-11-04, the user: they grow and shrink with the map like the houses,
+// trees and waves). One smaller than PROP_MIN_PX on the screen is left out, so a
+// far view is not a scatter of dots. One that would stand on another house, on
+// another house's things or on a road is left out too; the busiest yards place first.
+const PROP_MIN_PX = 5;
+const PROP_CELL = 48;                     // px: the grid the boxes are kept in
+const LAMP_HEAD = 3.2 * Math.cos((52 * Math.PI) / 180);   // design units up to a lamp's head on the picture
+const LAMP_GLOW = 1.4;                    // design units: how far its light reaches
+let propRoads = { curves: null, near: () => false };
+
+function placeProps(list, motion) {
+  const curves = roadCurves();
+  if (propRoads.curves !== curves) propRoads = { curves, near: roadIndex(curves, ROAD_WIDTH / 2 + 1) };
+  const scale = state.camera.scale;
+  const squash = Math.sin((52 * Math.PI) / 180);
+  const grid = new Map();
+  const cells = (b) => {
+    const out = [];
+    for (let gx = Math.floor(b.left / PROP_CELL); gx <= Math.floor(b.right / PROP_CELL); gx += 1) {
+      for (let gy = Math.floor(b.top / PROP_CELL); gy <= Math.floor(b.bottom / PROP_CELL); gy += 1) out.push(`${gx},${gy}`);
+    }
+    return out;
+  };
+  const take = (b, owner) => cells(b).forEach((key) => {
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push({ b, owner });
+  });
+  // Free of everything but the house's own walls and things.
+  const free = (b, id) => cells(b).every((key) => !(grid.get(key) || []).some((o) => o.owner !== id && o.owner !== `p${id}`
+    && o.b.left < b.right && o.b.right > b.left && o.b.top < b.bottom && o.b.bottom > b.top));
+  list.forEach((house) => take(houseBox(house), house.id));
+  const out = [];
+  list.slice().sort((a, b) => (b.score || 0) - (a.score || 0)).forEach((house) => {
+    const k = house.size / HOUSE_UNITS;      // px per design unit
+    homestead(house.score, house.tier, house.seed).forEach((it) => {
+      if (it.min * k < PROP_MIN_PX) return;
+      const x = house.x + it.dx * k;
+      const foot = house.foot + it.dy * squash * k;
+      const r = it.r * k;
+      const box = { left: x - r, right: x + r, top: foot - r * 1.2, bottom: foot + r * squash };
+      // Another house, or what already stands round another; its own house's walls are clear by HOMESTEAD.
+      if (!free(box, house.id)) return;
+      const wx = house.wx + (x - house.x) / scale;
+      const wy = house.wy + (foot - house.foot) / scale;
+      const rw = r / scale;
+      if (propRoads.near(wx, wy) || (rw > 1.5 && [[rw, 0], [-rw, 0], [0, rw], [0, -rw]].some(([dx, dy]) => propRoads.near(wx + dx, wy + dy)))) return;
+      take(box, `p${house.id}`);
+      out.push({ kind: it.kind, x, foot, size: k, rot: it.rot, frame: 0, alpha: house.alpha, calm: house.calm, seed: house.seed + it.index * 7 });
+    });
+  });
+  if (motion !== null) out.forEach((prop) => animateProp(prop, motion));
+  return out;
+}
+
+/** Chickens wander a little and peck, a dog shifts, a sheep grazes along; the rest keep still. */
+function animateProp(prop, time) {
+  const phase = (prop.seed % 997) / 997 * Math.PI * 2;
+  const k = prop.size;
+  if (prop.kind === 'chicken') {
+    const a = time * 0.35 + phase;
+    prop.x += Math.cos(a) * 0.35 * k;
+    prop.foot += Math.sin(a) * 0.25 * k;
+    prop.rot = Math.atan2(Math.cos(a) * 0.25, -Math.sin(a) * 0.35);
+    prop.frame = Math.sin(time * 2.3 + phase * 3) > 0.55 ? 1 : 0;
+  } else if (prop.kind === 'dog') {
+    prop.frame = Math.floor(time / 1.5 + phase) % 2;
+  } else if (prop.kind === 'sheep') {
+    prop.x += Math.sin(time * 0.08 + phase) * 0.3 * k;
+  }
+}
+let housesById = new Map();   // the houses drawn this frame, by post id (map B: the post's own icon)
+// The middle of each house's ridge on its picture, per tier and turn, design
+// units from its foot: the face sits there (2026-11-04: placed by the highest of
+// the six turns, a face hung up to a third of the house's height above some roofs).
+const peaks = new Map();
+const PEAK_SINE = Math.sin((52 * Math.PI) / 180);
+const PEAK_COSE = Math.cos((52 * Math.PI) / 180);
+function roofPeak(house) {
+  const tier = Math.max(0, Math.min(3, house.tier | 0));
+  const turn = houseTurn(house.seed);
+  const key = `${tier}|${turn}`;
+  let top = peaks.get(key);
+  if (!top) {
+    const points = partsOf(HOUSE_TIERS[tier], turn).flatMap((part) => part.tris.flat());
+    const high = Math.max(...points.map((pt) => pt[2]));
+    const ridge = points.filter((pt) => pt[2] > high - 1e-6);
+    const mx = ridge.reduce((sum, pt) => sum + pt[0], 0) / ridge.length;
+    const my = ridge.reduce((sum, pt) => sum + pt[1], 0) / ridge.length;
+    top = { x: mx, y: my * PEAK_SINE - high * PEAK_COSE };
+    peaks.set(key, top);
+  }
+  const k = house.size / HOUSE_UNITS;
+  return { x: house.x + top.x * k, y: house.foot + top.y * k };
+}
+let housesGone = new Map();   // map B: post id whose house was thinned away this frame -> the post id of the house that stayed there
 const HOUSE_UNITS = 3;    // world units a house is wide (drawHouse's size)
 const HOUSE_MIN = 4;      // px: a house smaller than this is not drawn
 const HOUSE_GAP = 3;      // px between a pin and its house's nearest corner
@@ -1950,13 +2323,131 @@ const MARK_BEHIND = 0.9;
 const MARK_FRONT = 0.1;
 const CROWN_TALL = 1.3;   // a crown's height, in its width
 
+// ---- map B: the forest as one baked layer
+//
+// Map B has some 15,000 trees. Stamping each one every frame was 11 fps zoomed to where they all show, so
+// the trees (and rocks) are drawn once into an offscreen canvas that covers twice the screen, at a zoom
+// rounded to a step of TREE_STEP, and the frame only pastes it, stretched by what is left of the zoom. It is
+// made again when the camera has been still and the view has left it, the step changed, or what keeps trees
+// off (houses, landmarks, roads) did. Trees stand behind houses and pins on map B.
+const TREE_STEP = 1.25;
+const LAYER_PIXELS = 8e6;    // the most pixels one layer may have (an iPhone's canvas memory)
+let treeLayer = null;
+const layerCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+
+function bakeTreeLayer(trees, marks, thin, step, key) {
+  const built = TREE_STEP ** step;
+  const topLeft = toWorld(0, 0);
+  const bottomRight = toWorld(width, height);
+  const worldW = (bottomRight.x - topLeft.x) * 2;
+  const worldH = (bottomRight.y - topLeft.y) * 2;
+  const minX = (topLeft.x + bottomRight.x) / 2 - worldW / 2;
+  const minY = (topLeft.y + bottomRight.y) / 2 - worldH / 2;
+  const cssW = worldW * built;
+  const cssH = worldH * built;
+  const ratio = Math.min(dpr, 2, Math.sqrt(LAYER_PIXELS / Math.max(1, cssW * cssH)));
+  layerCanvas.width = Math.max(1, Math.round(cssW * ratio));
+  layerCanvas.height = Math.max(1, Math.round(cssH * ratio));
+  const lctx = layerCanvas.getContext('2d');
+  lctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  // In cells as wide as the farthest a house keeps trees off (its clearing or its yard, homestead.js,
+  // plus the biggest crown), so a tree asks only the nine round it.
+  const grown = trees.reduce((most, tree) => Math.max(most, 0.5 * (tree.k || 0)), 0);
+  const cell = allHouses.reduce((most, house) => Math.max(most, Math.max(HOUSE_CLEAR[house.tier] * HOUSE_B, house.reach || 0) + grown + 0.5), 6);
+  const bins = new Map();
+  allHouses.forEach((house) => {
+    const k = `${Math.floor(house.wx / cell)},${Math.floor(house.wy / cell)}`;
+    if (!bins.has(k)) bins.set(k, []);
+    bins.get(k).push(house);
+  });
+  const nearHouse = (tree) => {
+    const gx = Math.floor(tree.x / cell);
+    const gy = Math.floor(tree.y / cell);
+    const grow = 0.5 * tree.k;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const list = bins.get(`${gx + dx},${gy + dy}`);
+        if (list && list.some((house) => Math.hypot(house.wx - tree.x, house.wy - tree.y) < Math.max(HOUSE_CLEAR[house.tier] * HOUSE_B, house.reach || 0) + grow)) return true;
+      }
+    }
+    return false;
+  };
+  const nearMark = (tree) => {
+    const crown = TREE_WORLD * TREE_B * tree.k;
+    return marks.some((mark) => Math.abs(tree.x - mark.wx) < MARK_HALF * mark.span + crown / 2
+      && tree.y > mark.wy - MARK_BEHIND * mark.span
+      && tree.y < mark.wy + MARK_FRONT * mark.span + CROWN_TALL * crown);
+  };
+  const roads = hasRoadsB();
+  const shown = [];
+  trees.forEach((tree) => {
+    if (thin && tree.k < 1.3) return;
+    if (tree.x < minX || tree.x > minX + worldW || tree.y < minY || tree.y > minY + worldH) return;
+    const size = Math.min(TREE_MAX, built * TREE_WORLD * TREE_B * tree.k);
+    if (size < TREE_MIN) return;
+    if (bins.size && nearHouse(tree)) return;
+    if (marks.length && nearMark(tree)) return;
+    if (roads && nearRoadB(tree.x, tree.y)) return;
+    shown.push({ tree, p: { x: (tree.x - minX) * built, y: (tree.y - minY) * built }, size });
+  });
+  lctx.fillStyle = REEF_RING;
+  shown.forEach(({ tree, p }) => {
+    if (!tree.wet) return;
+    const r = (tree.k * 1.35 + 0.3) * built;
+    lctx.beginPath();
+    lctx.ellipse(p.x, p.y, r, r * 0.8, 0, 0, Math.PI * 2);
+    lctx.fill();
+  });
+  shown.forEach(({ tree, p, size }) => {
+    drawTree(lctx, tree.name, p.x, p.y, size, { alpha: 1, seed: Math.round(tree.x * 7 + tree.y * 13) });
+  });
+  treeLayer = { canvas: layerCanvas, trees, key, minX, minY, maxX: minX + worldW, maxY: minY + worldH, worldW, worldH };
+}
+
+/** Where the houses stand and how big, as one string: the layer is made again when a house moves or grows. */
+function housesPrint() {
+  let h = 2166136261;
+  allHouses.forEach((house) => {
+    h = Math.imul(h ^ Math.round(house.wx * 2), 16777619);
+    h = Math.imul(h ^ Math.round(house.wy * 2), 16777619);
+    h = Math.imul(h ^ house.tier, 16777619);
+    h = Math.imul(h ^ Math.round((house.reach || 0) * 2), 16777619);
+  });
+  return `${allHouses.length}:${h >>> 0}`;
+}
+
+function drawTreeLayer(trees, marks, thin, settled) {
+  if (!layerCanvas) return;
+  const scale = state.camera.scale;
+  const step = Math.round(Math.log(scale) / Math.log(TREE_STEP));
+  const key = `${step}|${thin ? 1 : 0}|${housesPrint()}|${marks.length}|${roadsShort}|${Math.round(dpr * 4)}`;
+  const topLeft = toWorld(0, 0);
+  const bottomRight = toWorld(width, height);
+  const covers = treeLayer && treeLayer.minX <= topLeft.x && treeLayer.minY <= topLeft.y
+    && treeLayer.maxX >= bottomRight.x && treeLayer.maxY >= bottomRight.y;
+  const stale = !treeLayer || treeLayer.trees !== trees || treeLayer.key !== key || !covers;
+  if (stale && (!treeLayer || treeLayer.trees !== trees || settled)) bakeTreeLayer(trees, marks, thin, step, key);
+  if (!treeLayer) return;
+  const origin = toScreen(treeLayer.minX, treeLayer.minY);
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(treeLayer.canvas, origin.x, origin.y, treeLayer.worldW * scale, treeLayer.worldH * scale);
+  ctx.restore();
+}
+
 function drawTrees(trees, houses, marks, posts, thin, alpha = 1) {
   // A tree is a length in the world, like the houses: it grows with the map, and
   // one too small to see on screen is not drawn - zoomed out there are no trees.
   const scale = state.camera.scale;
-  const base = scale * TREE_WORLD;
   // With the coarse layer in play some land is not any post's cone: skip the check.
-  const check = !state.saturated && groundList.length > 0;
+  const onB = bActive();
+  // Map B grows a whole forest on a wider grid (terrain-b.js), so each tree is drawn larger to close the canopy.
+  const base = scale * TREE_WORLD * (onB ? TREE_B : 1);
+  // Map B: its trees are placed on land by the ground itself (terrain-b.js); asking the coast three times
+  // for each of its ~15,000 trees every frame is what is left out.
+  const check = !onB && !state.saturated && groundList.length > 0;
+  const roads = onB && hasRoadsB();
   // Houses in 6 x 6 world cells, so a tree asks a few houses, not all of them.
   const bins = new Map();
   houses.forEach((house) => {
@@ -1971,7 +2462,7 @@ function drawTrees(trees, houses, marks, posts, thin, alpha = 1) {
     for (let dx = -1; dx <= 1; dx += 1) {
       for (let dy = -1; dy <= 1; dy += 1) {
         const list = bins.get(`${gx + dx},${gy + dy}`);
-        if (list && list.some((house) => Math.hypot(house.wx - tree.x, house.wy - tree.y) < HOUSE_CLEAR[house.tier] + grow)) return true;
+        if (list && list.some((house) => Math.hypot(house.wx - tree.x, house.wy - tree.y) < HOUSE_CLEAR[house.tier] * (onB ? HOUSE_B : 1) + grow)) return true;
       }
     }
     return false;
@@ -1991,6 +2482,7 @@ function drawTrees(trees, houses, marks, posts, thin, alpha = 1) {
     if (size < TREE_MIN) return;
     if (bins.size && nearHouse(tree)) return;
     if (marks.length && nearMark(tree)) return;
+    if (roads && nearRoadB(tree.x, tree.y)) return;
     if (posts.some(({ point }) => Math.abs(point.x - p.x) < 15 && Math.abs(point.y - p.y) < 18)) return;
     if (check && !tree.wet) {
       const reach = tree.name === 'rock' ? 0.2 : 0.35;
@@ -2462,6 +2954,8 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     tie: hashId(entry.post.id),
   })).sort((a, b) => (a.dim - b.dim) || a.rank - b.rank || b.busy - a.busy || a.tie - b.tie);
   const gap = deep ? FACE_GAP.deep : FACE_GAP.near;
+  // Map B (2026-11-03, the user chose 案2): a post is its house, with a small face over the roof.
+  const houseOf = (entry) => (bActive() ? housesById.get(entry.post.id) || null : null);
   const stacking = deep && state.camera.scale >= clampScale(Infinity) * STACK_AT;
   // Before faceScale every post is a dot; only the open post and a landing one
   // are kept as pins, so the post on show matches its dot's card.
@@ -2478,13 +2972,43 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     return { y: entry.point.y + (top + bottom) / 2, h: bottom - top };
   };
 
+  // Map B: close in, a face that would cover another is left out; its house stays.
+  const crowd = bActive() && faces ? makeFaceCrowd() : null;
   ctx.save();
   ranked.forEach((entry) => {
     const { point, post } = entry;
     entry.box = roomBox(entry);
-    const room = faces
+    entry.house = houseOf(entry);
+    if (entry.house) {
+      entry.room = true;
+      entry.size = full;
+      entry.stack = null;
+      if (entry.dim || !(named || entry.mine)) return;
+      // The name under the house.
+      ctx.save();
+      ctx.font = SMALL_FONT;
+      const name = clip(post.display_name, 6);
+      const nameY = houseBox(entry.house).bottom + 7;
+      if (claim(entry.house.x, nameY, ctx.measureText(name).width, 12) || entry.mine) {
+        entry.name = name;
+        entry.nameY = nameY;
+      }
+      ctx.restore();
+      return;
+    }
+    if (bActive() && housesGone.has(post.id)) {   // another house stands on its spot
+      entry.hidden = true;
+      entry.room = false;
+      entry.size = full;
+      entry.stack = null;
+      return;
+    }
+    const crowded = crowd && entry.rank > 1 && crowd.crowded(point.x, point.y);
+    const room = crowded ? false : faces
       ? claim(point.x, entry.box.y, roomW, entry.box.h) || entry.rank <= 1
       : post.id === selectedId || post.id === landingId;
+    if (crowded) entry.hidden = true;
+    else if (crowd && room) crowd.keep(point.x, point.y);
     entry.room = room;
     entry.size = full;
     entry.stack = null;
@@ -2522,6 +3046,19 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       entry.stacked = true;
     });
   }
+  // Map B: a post whose house gave way joins the "+N" of the house on its spot,
+  // at every zoom the houses show - as the faces did at full zoom (2026-11-03).
+  if (bActive()) {
+    const housed = new Map(ranked.filter((entry) => entry.house).map((entry) => [entry.post.id, entry]));
+    ranked.forEach((entry) => {
+      if (!entry.hidden || entry.stacked || entry.dim) return;
+      const under = housed.get(housesGone.get(entry.post.id));
+      if (!under) return;
+      if (!under.stack) under.stack = [under.post];
+      under.stack.push(entry.post);
+      entry.stacked = true;
+    });
+  }
   rollTalk(ranked, stage);
 
   // Only the people nearest the middle of the screen move; the rest of a crowd
@@ -2537,6 +3074,63 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     const { post, point, mine, size, name, nameY, dim, out } = entry;
     if (entry.stacked) return;   // in the list of the pin it is under
     const phase = (hashId(post.id) % 628) / 100;
+    const fresh = !mine && !dim && freshIds.has(post.id);
+    const { house } = entry;
+    if (house) {
+      const landing = stage && post.id === reveal.id ? stage : null;
+      const selected = post.id === selectedId;
+      const box = houseBox(house);
+      const { stack } = entry;
+      // Not opened yet: this post or one of those under its "+N".
+      const anyFresh = fresh || Boolean(stack && !dim && stack.some((one) => freshIds.has(one.id)));
+      // Before faces show, the house alone; its "+N" and star on the roof's corners.
+      if (!faces) {
+        const top = roofPeak(house);
+        if (stack) stackChip(top.x + 14, top.y + 2, stack.length - 1);
+        if (anyFresh) glintStar(top.x + (stack ? -6 : 6), top.y - 2, postGlint(post, motion), 1.5);
+        if (!dim) hits.push({ box, post, dot: true, ...(stack ? { stack } : {}) });
+        return;
+      }
+      ctx.save();
+      if (dim) ctx.globalAlpha = out ? FILTERED_OUT : DIM;
+      if (landing) ctx.globalAlpha *= landing.marker;
+      const peak = roofPeak(house);
+      const shown = drawPostPin(ctx, peak.x, peak.y + 3, {
+        heat: post.motivation, initial: initialOf(post.display_name), face: faceOf(post),
+        size: mine || selected ? 20 : 16, time: null, phase, mine: mine && !dim, selected,
+        openedFor: selected ? openedFor(post.id, motion) : null,
+        recruit: isUnreadRecruit(post, meId) && !dim, recruitQuiet: mine && !dim && isRecruiting(post), night,
+      });
+      ctx.restore();
+      const r = shown.headR;
+      if (stack) stackChip(peak.x + r * 1.05, shown.headY - r * 0.85, stack.length - 1);
+      if (anyFresh) glintStar(peak.x + (stack ? -1 : 1) * r * UNREAD_AT, shown.headY - r * UNREAD_AT, postGlint(post, motion), 1.5);
+      if (name) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+        ctx.font = SMALL_FONT;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = INK.halo;
+        ctx.strokeText(name, house.x, nameY);
+        ctx.fillStyle = INK.label;
+        ctx.fillText(name, house.x, nameY);
+        ctx.restore();
+      }
+      if (bubbles.has(post.id) && !dim) talk.push({ post, x: peak.x, y: shown.top - 16 });
+      if (!dim && (!landing || landing.marker > 0.5)) {
+        // The whole house and the face over it.
+        hits.push({ box: { left: box.left, right: box.right, top: shown.top, bottom: box.bottom }, post, ...(stack ? { stack } : {}) });
+      }
+      return;
+    }
+    if (entry.hidden) {          // map B: no face, no dot; the house is there, and a tap still opens it
+      // Not opened yet: its star all the same, or nothing would say so (2026-11-02).
+      if (fresh) glintStar(point.x + 7, point.y - 8, postGlint(post, motion), 1.5);
+      if (!dim) hits.push({ x: point.x, y: point.y, r: 12, post, dot: true });
+      return;
+    }
     const moving = motion !== null && (alive.has(post.id) || (mine && !dim));
     const own = moving ? motion : null;
     const landing = stage && post.id === reveal.id ? stage : null;
@@ -2565,8 +3159,10 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       ctx.lineWidth = yours ? 2 : 1.2;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
-      // Not opened yet on this device: an orange ring round the dot.
-      if (!yours && !dim && freshIds.has(post.id)) {
+      // Not opened yet on this device: an orange ring round the dot (map B: the star the village had).
+      if (!yours && !dim && freshIds.has(post.id) && bActive()) {
+        glintStar(point.x + 7, point.y - 8, postGlint(post, motion), 1.5);
+      } else if (!yours && !dim && freshIds.has(post.id)) {
         ctx.beginPath();
         ctx.arc(point.x, point.y, (deep ? 3.5 : 3) + 2.2, 0, Math.PI * 2);
         ctx.lineWidth = 1.8;
@@ -2595,7 +3191,12 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
     // Not opened yet on this device (2026-10-31, the user: inside an island there
     // was no telling which posts were new): a dot on the head's top right corner,
     // the top left when a "+N" is there.
-    if (!mine && !dim && freshIds.has(post.id)) unreadDot(point.x + (stack ? -1 : 1) * r * UNREAD_AT, headY - r * UNREAD_AT, r);
+    if (!mine && !dim && freshIds.has(post.id)) {
+      const ux = point.x + (stack ? -1 : 1) * r * UNREAD_AT;
+      const uy = headY - r * UNREAD_AT;
+      if (bActive()) glintStar(ux, uy, postGlint(post, motion), Math.max(1.5, r / 10));
+      else unreadDot(ux, uy, r);
+    }
 
     if (name) {
       ctx.save();

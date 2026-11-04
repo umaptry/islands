@@ -64,6 +64,7 @@ from core import auth
 from core import connections as lines
 from core import growth
 from core import introductions
+from core import island_b
 from core import island_namer
 from core import topic_check
 from core import visibility
@@ -80,6 +81,7 @@ from core.prompts import weekly_prompt
 from core import post_extras
 from core.config import (
     AGE_BANDS,
+    MAP_B_ENABLED,
     POLICY_NOTICE_AFTER,
     POLICY_NOTICE_BEFORE,
     POLICY_NOTICE_END,
@@ -367,6 +369,9 @@ async def lifespan(_app):
     state.update(load_artifacts())
     _gemini = os.environ.get("EMBEDDING_PROVIDER", "onnx") == "gemini"
     _label = f"Gemini API ({GEMINI_MODEL_NAME})" if _gemini else "ONNX (multilingual-e5-small)"
+    # 地図B案の土台：旗がオンのときだけ起動時に作る。オフのときは最初に使われたとき（ensure_map_b_base）。
+    if MAP_B_ENABLED:
+        ensure_map_b_base()
     print(f"埋め込みモデルを読み込み中: {_label}", flush=True)
     state["model"] = load_embedder()
     state["store"] = create_store()
@@ -1654,6 +1659,17 @@ def notify_islands(events, states, now, community=None):
     return rows
 
 
+def _village_name(name):
+    """A village's name for a lock screen: 「キャンプ村」 stays, 「キャンプ」 becomes 「キャンプ村」, and a
+    name kept from the many-islands map, 「キャンプ島」 or 「キャンプ大陸」, becomes 「キャンプ村」."""
+    name = str(name)
+    for old in ("大陸", "島"):
+        if name.endswith(old) and len(name) > len(old):
+            name = name[: -len(old)]
+            break
+    return name if name.endswith("村") else f"{name}村"
+
+
 def _plain_name(display_name):
     """A display name without a trailing 「さん」, so that 「さん」 can be added once."""
     name = display_name or "だれか"
@@ -1905,7 +1921,7 @@ PUSH_TEXT = {
     "reply": "あなたのメッセージに返信しました。",
     "connection": "初めてやりとりしました。地図に線が引かれます。",
     "similar": "話題や目標が近い人が参加しました。",
-    "island": "島が変わりました。",
+    "island": "村が変わりました。",
     # 2026-10-26. talk_wish names nobody (the row has no actor); dm never carries the text.
     "talk_wish": f"誰かが、あなたと{TALK_LABEL}と言っています",
     "talk_match": "{name}さんと、お互いに『" + TALK_LABEL + "』でした。DMが開きました",
@@ -2000,10 +2016,10 @@ def push_message(entry, hashed_tag=False):
         first = (entry.get("actors") or [None])[0] or {}
         who = _plain_name(first.get("display_name")) if first.get("display_name") else "だれか"
         title = "新しい住人"
-        body = f"{payload.get('name') or '島'}に{who}さんが引っ越してきました"
+        body = f"{_village_name(payload['name']) if payload.get('name') else '村'}に{who}さんが引っ越してきました"
         url = PUSH_URL_RESIDENT
     elif entry["type"] == "island":
-        title = f"島「{payload['name']}」" if payload.get("name") else "島"
+        title = (_village_name(payload["name"]) if payload.get("name") else "村")
         body = f"{payload['cause']}。" if payload.get("cause") else PUSH_TEXT["island"]
     elif entry["type"] == "talk_wish":
         # Never reads the actors: whoever pressed is not in the row, and must not get in.
@@ -2343,7 +2359,7 @@ def config():
         # share: a post can be put on other communities' maps too (posts.share_group, 2026-10-29).
         "features": {"post_extras": post_extras_on(), "talk": talk_on(),
                      "communities": communities_on(), "members_only": members_only_quiet(),
-                     "share": share_on(),
+                     "share": share_on(), "map_b": MAP_B_ENABLED,
                      # 2026-11-01: 管理者の画面の「外す」ボタン。新しい規約の施行日から（サーバーの時計）。
                      "member_removal": today_jst() >= MEMBER_REMOVAL_FROM,
                      # 2026-11-01 第2回a：会の申し込み・LINE の送信・「近い人が来るか見てみる」
@@ -2475,8 +2491,60 @@ def health():
     }
 
 
+_map_b_lock = threading.Lock()
+_map_b_failed = {"at": None}
+MAP_B_RETRY_SECONDS = 300   # 作れなかったら、この間は作り直さない（毎回の /api/islands を遅くしない）
+
+
+def ensure_map_b_base():
+    """地図B案の土台を（まだなければ）作る。同時に呼ばれたら2回目は待つ。作れなければ False（起動は止めない）。"""
+    if island_b.base() is not None:
+        return True
+    failed = _map_b_failed["at"]
+    if failed is not None and time.monotonic() - failed < MAP_B_RETRY_SECONDS:
+        return False
+    with _map_b_lock:
+        if island_b.base() is not None:
+            return True
+        try:
+            island_b.build(state["seed_map"]["seed"])
+        except Exception as error:  # noqa: BLE001
+            _map_b_failed["at"] = time.monotonic()
+            logging.getLogger(__name__).warning("地図B案の土台を作れませんでした: %s", error)
+            return False
+    _map_b_failed["at"] = None
+    return True
+
+
+def as_map_b(islands_list):
+    """地図B案：島は「開拓村」。地方の名前とぶつかるので、島の中の地方（regions）は空にする。"""
+    out = []
+    ensure_map_b_base()
+    for island in islands_list:
+        island = dict(island)
+        rid = island_b.region_of(island.get("cx", 0), island.get("cy", 0))
+        island["region_id"] = rid
+        island["region_name"] = island_b.region_name(rid) if rid is not None else None
+        island["regions"] = []
+        if island.get("name"):
+            island["label"] = island["name"] if island["name"].endswith("村") else f"{island['name']}村"
+        out.append(island)
+    return out
+
+
+@app.get("/api/map-b/base")
+def map_b_base(response: Response):
+    """地図B案の島の土台（外形・地方・お手本の近く）。誰でも同じ答え。"""
+    data = island_b.payload() if ensure_map_b_base() else None
+    if data is None:
+        raise HTTPException(status_code=503, detail="地図の土台がまだありません。")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return data
+
+
 @app.get("/api/islands")
-def islands(response: Response, request: Request, community: str = ""):
+def islands(response: Response, request: Request, community: str = "", map: str = ""):
+    map_b = MAP_B_ENABLED or map == "b"
     if members_only_on():
         # Islands are made from, and shown to, the members of ONE community.
         user_id = current_user(request)
@@ -2488,12 +2556,16 @@ def islands(response: Response, request: Request, community: str = ""):
         except StoreError:
             raise HTTPException(status_code=503, detail="読み込みに失敗しました。")
         response.headers["Cache-Control"] = "private, no-store"
+        if map_b:
+            payload = as_map_b(payload)
         return {"islands": payload, "radius_factor": current_reach_factor(cid)}
     maybe_track_islands()
     payload = with_tracked_state(live_islands())
     # Everyone looking at the map wants the same answer, and it changes on a
     # timer rather than per viewer. Worth a CDN hop if one is ever put in front.
     response.headers["Cache-Control"] = "public, max-age=30"
+    if map_b:
+        payload = as_map_b(payload)
     # The browser's ground follows the map's reach factor, which moves as the map
     # fills: a page open for hours picks it up here (web/js/config.js).
     return {"islands": payload, "radius_factor": current_reach_factor()}

@@ -46,7 +46,7 @@ test('new profile reaches guidance before the first post, including after reload
   const slides = await page.locator('#guidanceTrack > *').count();
   for (let i = 1; i < slides; i++) await page.locator('#guidanceNext').click();
   await expect(page.locator('#compose')).toHaveClass(/active/);
-  await expect(page.locator('#composeLede')).toHaveText('ひとこと書いて、あなたの島を作りましょう。');
+  await expect(page.locator('#composeLede')).toHaveText('ひとこと書いて、あなたの家を建てましょう。');
   await expect(page.locator('#bottomNav')).toBeHidden();
   // 入力欄は最初から開いている。例文は出ない。
   await expect(page.locator('#composeBody')).toBeVisible();
@@ -75,7 +75,7 @@ test('reference registration saves profile and completes the first post', async 
   await expect(page.locator('#guidance h2').first()).toHaveText('islandsへようこそ');
   const pages = await page.locator('#guidanceTrack > .slide').count();
   expect(pages).toBe(5);
-  await expect(page.locator('#guidanceTrack > .slide').nth(3).locator('h2')).toHaveText('島の中で盛り上がる');
+  await expect(page.locator('#guidanceTrack > .slide').nth(3).locator('h2')).toHaveText('村の中で盛り上がる');
   // 5枚目（2026-10-27）: 1対1で話せること。そこから最初のひとことへ。
   await expect(page.locator('#guidanceTrack > .slide').nth(4).locator('h2')).toHaveText('1対1でもじっくり話せる');
   await expect(page.locator('#guidanceTrack > .slide').nth(4).locator('.guidance-first-only')).toContainText('では、実際にひとこと書いてみましょう');
@@ -672,10 +672,10 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
     await expect(page.locator('#map')).toHaveClass(/active/);
   };
   await tryOnce();
-  await expect(page.locator('#trialBanner')).toContainText('ここがあなたの島になる場所です。まわりの島をタップして覗いてみよう');
-  await expect(page.locator('#nearIslands .near-label')).toHaveText('まわりの島');
+  await expect(page.locator('#trialBanner')).toContainText('ここにあなたの家が建ちます。まわりの村をタップしてのぞいてみよう');
+  await expect(page.locator('#nearIslands .near-label')).toHaveText('まわりの村');
   await expect(page.locator('#trialHint')).toBeVisible({ timeout: 10000 });
-  await expect(page.locator('#trialHint')).toHaveText('島をタップ');
+  await expect(page.locator('#trialHint')).toHaveText('村をタップ');
   // Shown for real, so it counts as seen.
   expect(await page.evaluate(() => localStorage.getItem('islands.trialHint'))).toBe('1');
 
@@ -687,7 +687,7 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
     state.islands = state.islands.map((island, i) => (i === 0 ? { ...island, post_ids: ['mine-1'] } : island));
     extras.refreshNearIslands();
   });
-  await expect(page.locator('#nearIslands .near-label')).toHaveText('あなたに近い島');
+  await expect(page.locator('#nearIslands .near-label')).toHaveText('あなたに近い村');
 
   // The weekly switch is gone (new islands glow by themselves instead).
   await expect(page.locator('#busyToggle')).toHaveCount(0);
@@ -696,7 +696,7 @@ test('trial map: banner, nearby label, one-time hint, weekly switch and island c
   // A name chip opens the island card, worded "島をのぞく".
   await page.locator('#nearIslands .near-chip').first().click();
   await expect(page.locator('#islandCard')).toBeVisible();
-  await expect(page.locator('#islandCard')).toContainText('島をのぞく');
+  await expect(page.locator('#islandCard')).toContainText('村をのぞく');
   await expect(page.locator('#trialHint')).toBeHidden();
 
   // Second tryout: the hint stays away.

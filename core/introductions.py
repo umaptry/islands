@@ -97,7 +97,7 @@ def opener(reason_list, other, shared_topics=()):
     if kind == "topics" and shared_topics:
         return f"私も「{shared_topics[0]}」が好きです。最近はどんなことをしていますか？"
     if kind == "island":
-        return "同じ島にいたので声をかけました。どんなことをしているか聞いてもいいですか？"
+        return "同じ村にいたので声をかけました。どんなことをしているか聞いてもいいですか？"
     if kind == "seeking":
         return "私の探していることに詳しそうだったので、少し教えてもらえませんか？"
     if kind == "offering":

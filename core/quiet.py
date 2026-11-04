@@ -31,7 +31,7 @@ from core.config import (
 from core.notifications import parse_time
 
 REACTION_COLUMNS = ("like_count", "help_count", "join_count", "comment_count")
-MESSAGE = "近くの島に、話が合いそうな投稿があります。"
+MESSAGE = "近くの村に、話が合いそうな投稿があります。"
 
 
 def is_quiet(post, now):

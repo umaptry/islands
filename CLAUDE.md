@@ -53,7 +53,7 @@
 - static：`/`・`/how`・`/privacy`・`/terms`・`/sw.js`。`/privacy`・`/terms` は施行日（core/config.py の `POLICY_REVISION_EFFECTIVE`）の前は今の文、あとは `*-next.html` を自動で返す（`policy_now()` で時計を差し替えてテスト）。`/privacy/next`・`/terms/next` は新しい文。`/api/config` の `notice` が規約改定のお知らせ（期間の外は null）
 
 ### core/（サーバーの部品）
-- 地図の計算：features.py（文章→448次元）、embedder.py（E5 を ONNX で動かす）、encoder.py（→座標）、placement.py、geometry.py、energy.py・terrain.py（地形）
+- 地図の計算：features.py（文章→448次元）、embedder.py（E5 を ONNX で動かす）、encoder.py（→座標）、placement.py、geometry.py、energy.py・terrain.py（地形）、island_b.py（地図B案の島の土台）
 - 島：clustering.py（島に分ける）、island_namer.py（Gemini で名前）、island_tracking.py（作り直しても同じ島として追う）、growth.py（島の育ち方）
 - 人のつながり：connections.py（線）、affinity.py（人どうしの似かた）、matching.py（新しい投稿が誰につながるか）、introductions.py（紹介の一文）、similarity.py（距離→似てる度%）
 - 投稿：post_extras.py（お題・募集）、prompts.py（今週のお題）、quiet.py（反応のない投稿をそっと見せる）、stopwords.py

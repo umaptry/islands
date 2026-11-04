@@ -107,7 +107,9 @@ test('最初の投稿のあとカードが出て、めくると 2 / 3 になり�
   await expect(page.locator('#sheet')).not.toHaveClass(/full/);
 
   await page.locator('#matchClose').click();
-  await expect(page.locator('#sheet')).not.toHaveClass(/on/);
+  // The cards go. (The ask below may already have taken the sheet by the time this looks: on a slow machine
+  // the click itself can outlast its 700ms wait.)
+  await expect(page.locator('#matchTrack')).toHaveCount(0);
   // The ask to take notifications comes after the cards just as it did after the nearby posts.
   await expect(page.locator('#sheet.on #pushAsk')).toBeVisible({ timeout: 10000 });
 });
@@ -133,6 +135,8 @@ for (const [label, install] of FALLBACKS) {
 }
 
 test('2回目の投稿：差し替えありならカード、なしなら自分の投稿カード', async ({ page }) => {
+  // Four posts, each landing on the map: on CI's software-drawn map B that outlasts one minute.
+  test.slow();
   const tag = Math.random().toString(36).slice(2, 6);
   const rows = await seedMatches(page, tag);
   await signIn(page, `match2-${tag}`);

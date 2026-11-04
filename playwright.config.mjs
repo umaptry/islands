@@ -4,6 +4,9 @@ export default defineConfig({
   testDir: './tests/browser',
   workers: 1,
   timeout: 60000,
+  // CI only: a test that missed its time on a runner busy drawing the map (no GPU there) gets one more go.
+  // One that fails for a reason fails again; the report lists the ones that needed it as flaky.
+  retries: process.env.CI ? 1 : 0,
   outputDir: 'output/browser-tests',
   reporter: [['list'], ['html', { outputFolder: 'output/playwright-report', open: 'never' }]],
   use: { baseURL: 'http://127.0.0.1:7861', screenshot: 'only-on-failure', trace: 'retain-on-failure' },

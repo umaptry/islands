@@ -43,6 +43,9 @@ export const isLocal = () => config().mode === 'local';
 export const membersOnly = () => Boolean(cache && cache.features && cache.features.communities === true
   && cache.features.members_only === true);
 
+/** features.map_b: the map is one big island with regions (the server's switch; the page's ?map=b is read in map/island-b.js). */
+export const mapB = () => Boolean(cache && cache.features && cache.features.map_b === true);
+
 /** A settings payload whose members_only switch (or communities feature) differs from the one in use. */
 export function switchChanged(before, after) {
   const read = (settings) => Boolean(settings && settings.features

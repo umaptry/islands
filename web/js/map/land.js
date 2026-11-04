@@ -11,6 +11,19 @@
 import { config, energyOf, radiusOf } from '../config.js';
 import { groundOf } from './coast.js';
 
+// Map B (one big island, island-b.js): index.js hands in the island's questions when the page starts
+// (`active()`: the switch is on and the island's shape has arrived; `isLand(x, y)`). Until it does, and
+// whenever `active()` is false, everything below is the ground of the posts, exactly as before.
+let islandHook = null;
+
+export function useIslandB(hook) {
+  islandHook = hook;
+}
+
+export function bActive() {
+  return Boolean(islandHook) && Boolean(islandHook.active());
+}
+
 // The coarse layer's cell size (ENERGY_CELL_SIZE, as in terrain.js).
 export const CELL_SIZE = 20;
 
@@ -72,6 +85,7 @@ export const beachThreshold = () => config().energy.biome_thresholds.desert;
 /** Is (x, y) land? One spot; for a few per frame (a line is sampled with
  * sampleLand). `cells` is the coarse layer, or none. */
 export function isLandAt(posts, cells, x, y) {
+  if (bActive()) return islandHook.isLand(x, y);
   const spot = [x, y];
   const near = postsNear(posts, spot, spot);
   return groundSum(near, conesNear(conesOf(cells || NO_CELLS), spot, spot), x, y) >= beachThreshold();
@@ -89,6 +103,7 @@ const MAX_SAMPLES = 260;
  * must be found along the way the route is drawn, or its road would run past the
  * shore by the width of the bow. */
 export function sampleLand(posts, from, to, cells = NO_CELLS, bendTo = null) {
+  if (bActive()) return sampleLandB(from, to, bendTo);
   const beach = beachThreshold();
   const pts = bendTo ? [from, to, bendTo] : [from, to];
   const lo = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1]))];
@@ -108,6 +123,21 @@ export function sampleLand(posts, from, to, cells = NO_CELLS, bendTo = null) {
       ? u * u * from[1] + 2 * u * t * bendTo[1] + t * t * to[1]
       : from[1] + (to[1] - from[1]) * t;
     land.push(groundSum(near, cones, x, y) >= beach);
+  }
+  return land;
+}
+
+/** Map B: the same samples, asked of the island's shape. */
+function sampleLandB(from, to, bendTo) {
+  const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+  const samples = Math.max(MIN_SAMPLES, Math.min(MAX_SAMPLES, Math.ceil(length / STEP)));
+  const land = [];
+  for (let i = 0; i < samples; i += 1) {
+    const t = (i + 0.5) / samples;
+    const u = 1 - t;
+    const x = bendTo ? u * u * from[0] + 2 * u * t * bendTo[0] + t * t * to[0] : from[0] + (to[0] - from[0]) * t;
+    const y = bendTo ? u * u * from[1] + 2 * u * t * bendTo[1] + t * t * to[1] : from[1] + (to[1] - from[1]) * t;
+    land.push(islandHook.isLand(x, y));
   }
   return land;
 }

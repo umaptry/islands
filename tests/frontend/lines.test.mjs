@@ -20,6 +20,9 @@ source = source
      const drawBoat = (...args) => { (globalThis.boatsDrawn ||= []).push(args); return true; };
      const drawCar = (...args) => { (globalThis.carsDrawn ||= []).push(args); return true; };`)
   .replace("from './land.js';", () => `from '${landUrl}';`)
+  .replace("import { ROAD_BEND } from './roads-b.js';", () => 'const ROAD_BEND = 0.12;')
+  .replace("import { WALKER_HEIGHT, WALKER_LOOKS, WALK_FRAMES, WALK_TURNS, dogFaces, walkerFaces } from './props-mesh.js';", () =>
+    'const WALKER_HEIGHT = 1.9; const WALKER_LOOKS = [{}, {}, {}]; const WALK_FRAMES = 8; const WALK_TURNS = 16; const walkerFaces = () => []; const dogFaces = () => [];')
   .replace("import { config, energyOf } from '../config.js';", () =>
     "const config = () => ({ energy: { radius_factor: 1 } }); const energyOf = (post) => post.energy;");
 const lines = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);

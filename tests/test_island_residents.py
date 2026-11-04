@@ -130,7 +130,7 @@ def test_the_notice_is_found_by_the_feed_and_pushes_with_the_new_words(fresh_cli
     entry = next(e for e in feed if e["type"] == "island")
     message = application.push_message(entry)
     assert message["title"] == "新しい住人"
-    assert message["body"] == f"{entry['payload']['name']}にビーさんが引っ越してきました"
+    assert message["body"] == f"{application._village_name(entry['payload']['name'])}にビーさんが引っ越してきました"
     assert message["url"] == "/#/map"
     assert notices.allows(notices.merge_settings([]), "island", "push")
     switched_off = notices.merge_settings([{"category": "island", "push": False, "in_app": True}])
@@ -142,7 +142,7 @@ def test_push_words_do_not_double_san_and_other_pushes_keep_their_url():
              "payload": {"kind": "resident", "name": "キャンプ島"},
              "actors": [{"id": "x", "display_name": "ミナさん"}], "others": 0, "post_id": "p1"}
     message = application.push_message(entry)
-    assert message["body"] == "キャンプ島にミナさんが引っ越してきました" and message["url"] == "/#/map"
+    assert message["body"] == "キャンプ村にミナさんが引っ越してきました" and message["url"] == "/#/map"
     plain = dict(entry, payload={"kind": "tier", "name": "キャンプ", "cause": "島が育ちました"})
     assert application.push_message(plain)["url"] == "/#/notifications"
     assert application.push_message(dict(entry, type="like", category="reaction"))["url"] == "/#/notifications"
