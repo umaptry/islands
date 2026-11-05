@@ -105,6 +105,22 @@ def _with_near(store, row):
     return {**row, "near_count": count}
 
 
+CANCEL_BUTTON_KINDS = ("applied", "week_before", "day_of")
+
+
+def _with_cancel(store, row, now=None):
+    """取り消しのボタンを付ける種類の行に can_cancel（キャンセル期限の前か）を足す。outbound_claim は期限を
+    出さないので、会の行を読む。読めなければ付ける（押されたときに DB 関数が期限を見て断る）。"""
+    if row.get("kind") not in CANCEL_BUTTON_KINDS:
+        return row
+    try:
+        event = store.event_by_post(row["event_id"]) or {}
+    except Exception:
+        log.exception("could not read the cancel deadline")
+        return row
+    return {**row, "can_cancel": line.cancel_open(event, _utc(now))}
+
+
 def _fake_sender(store):
     def send(row, *, base_url="", client=None):
         store.record_sent(row, line.build_message(row["kind"], row, base_url))
@@ -170,7 +186,7 @@ def run_tick(store, *, now=None, sender=None, base_url="", budget_seconds=20, cl
         for row in store.outbound_claim(OUTBOUND_BATCH, **kwargs):
             if time.monotonic() - started > budget_seconds:
                 break      # 残りは貸し出しの期限（5分）がすぎたら次の tick が取り戻す
-            row = _with_near(store, row)
+            row = _with_cancel(store, _with_near(store, row), now)
             try:
                 result = sender(row, base_url=base_url)
             except Exception as error:
@@ -213,5 +229,4 @@ def jobs_tick(request: Request):
         raise HTTPException(status_code=404, detail="not found")
     if not verify_secret(request.headers.get("x-jobs-secret"), secret):
         raise HTTPException(status_code=401, detail=JOBS_AUTH_ERROR)
-    base_url = os.environ.get("ISLANDS_PUBLIC_BASE_URL", "").strip().rstrip("/") or str(request.base_url).rstrip("/")
-    return run_tick(_host().state["store"], base_url=base_url)
+    return run_tick(_host().state["store"], base_url=line.public_base_url(request))

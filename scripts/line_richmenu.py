@@ -1,16 +1,17 @@
 """LINE のリッチメニュー（トークの下のボタン）を作る運用スクリプト。
 
-遅れる 10分／30分／1時間以上／キャンセル の 4 つ。押すと postback が islands に届く
-（core/line.py の handle_postback が受ける）。
+遅れる／キャンセル／会のページ の 3 つ。押すと postback が islands に届く
+（core/line.py の handle_postback が受ける）。遅れるは押したあと分を選び、申し込み中の会が2つ以上なら先に会を選ぶ。
 
 使い方（何も送らない確認から）：
     python scripts/line_richmenu.py                       # 定義を表示し、画像を out/richmenu.png に作る
     python scripts/line_richmenu.py --image 自作.png      # 自分で作った 2500x843 の PNG を使う
     LINE_CHANNEL_ACCESS_TOKEN=... python scripts/line_richmenu.py --apply   # LINE に作って既定にする
+                                                                             # （前の既定のメニューは消す）
 
 --apply を付けたときだけ LINE に送る。画像を作るには Pillow が要る（本番のサーバーには入れない。
 このスクリプトを動かす手元だけで `python -m pip install pillow`）。入れたくなければ --image で
-自分の PNG を渡す。画像の決まり：PNG か JPEG、2500x843、1MB 以下、左から等しい幅（625px）で 4 つの枠。
+自分の PNG を渡す。画像の決まり：PNG か JPEG、2500x843、1MB 以下、左から等しい幅（833px）で 3 つの枠。
 """
 
 import argparse
@@ -36,7 +37,7 @@ BACKGROUND = "#EEF3F8"
 BORDER = "#C9D6E2"
 TEXT = "#1B2A3A"
 TEXT_CANCEL = "#C0392B"
-LABELS = (("10分くらい", "遅れる"), ("30分くらい", "遅れる"), ("1時間以上", "遅れる"), ("キャンセル", ""))
+LABELS = (("遅れる", ""), ("キャンセル", ""), ("会のページ", ""))
 
 
 def make_image():
@@ -50,14 +51,14 @@ def make_image():
     if font_path is None:
         raise RuntimeError("日本語のフォントが見つかりません。--image で自分の PNG を渡してください。")
     width, height = line.RICH_MENU_SIZE
-    cell = width // 4
+    cell = width // len(LABELS)
     image = Image.new("RGB", (width, height), BACKGROUND)
     draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype(font_path, 84)
+    font = ImageFont.truetype(font_path, 96)
     for index, (first, second) in enumerate(LABELS):
         left = index * cell
         draw.rectangle([left + 20, 20, left + cell - 20, height - 20], outline=BORDER, width=6)
-        color = TEXT_CANCEL if index == 3 else TEXT
+        color = TEXT_CANCEL if LABELS[index][0] == "キャンセル" else TEXT
         rows = [row for row in (first, second) if row]
         total = len(rows) * 110
         top = (height - total) // 2
@@ -92,11 +93,13 @@ def main(argv=None):
     if not args.apply:
         print("（--apply が無いので、LINE には何も送っていません）")
         return 0
-    if not line.configured():
-        print("LINE_CHANNEL_SECRET と LINE_CHANNEL_ACCESS_TOKEN を環境変数に入れてください。", file=sys.stderr)
+    if not line.access_token():
+        print("LINE_CHANNEL_ACCESS_TOKEN を環境変数に入れてください。", file=sys.stderr)
         return 1
     menu_id = line.setup_rich_menu(image)
     print(f"作りました。richMenuId = {menu_id}（全員の既定にしました）")
+    removed = line.delete_other_rich_menus(menu_id)
+    print(f"前のメニューを {removed} 個消しました。")
     return 0
 
 

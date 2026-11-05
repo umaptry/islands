@@ -119,16 +119,18 @@ def test_tick_sends_each_message_once_at_its_time(world):
     start, end = start_of(code)
     sent_before = lambda: [m["kind"] for m in store().sent_messages()]
 
+    # 申し込み直後の「受け付けました」は、次の tick ですぐ送る（core/events.py が予約する）
+    assert jobs.run_tick(store(), now=datetime.now(timezone.utc) + timedelta(seconds=1), cleanup=False)["sent"] == 1
     early = jobs.run_tick(store(), now=start - timedelta(days=8), cleanup=False)
-    assert early["sent"] == 0 and sent_before() == []
+    assert early["sent"] == 0 and sent_before() == ["applied"]
     week = start - timedelta(days=7)
     first = jobs.run_tick(store(), now=week + timedelta(minutes=1), cleanup=False)
-    assert first["sent"] == 1 and sent_before() == ["week_before"]
+    assert first["sent"] == 1 and sent_before() == ["applied", "week_before"]
     assert jobs.run_tick(store(), now=week + timedelta(minutes=2), cleanup=False)["sent"] == 0   # 二度は送らない
     day_of = start - timedelta(hours=3)
     assert jobs.run_tick(store(), now=day_of + timedelta(minutes=1), cleanup=False)["sent"] == 1
     assert jobs.run_tick(store(), now=end + timedelta(minutes=1), cleanup=False)["sent"] == 1
-    assert sent_before() == ["week_before", "day_of", "after"]
+    assert sent_before() == ["applied", "week_before", "day_of", "after"]
     assert all(m["line_user_id"] == f"U-{guest.id[:8]}" for m in store().sent_messages())
     assert {m["to"] for m in store().sent_messages()} == {guest.id}
     assert all(row["sent_at"] for row in outbound(code) if row["account_id"] == guest.id)
@@ -369,12 +371,14 @@ def test_whole_flow_in_local_mode(world, monkeypatch):
     assert {(row["account_id"], row["kind"]) for row in outbound(code) if row["sent_at"] is None} >= {
         (banned.id, "declined"), (guest.id, "week_before"), (guest.id, "day_of"), (guest.id, "after")}
     assert [row for row in outbound(code) if row["account_id"] == mail.id] == []
-    # tick：お断りはすぐ、1週間前は時刻が来たとき、偽の LINE に積まれる
-    assert application_tick(store(), datetime.now(timezone.utc))["sent"] == 1
+    # tick：お断りと「受け付けました」はすぐ、1週間前は時刻が来たとき、偽の LINE に積まれる
+    # （お断りした人の「受け付けました」は、お断りで消える）
+    assert application_tick(store(), datetime.now(timezone.utc))["sent"] == 2
     start, _ = start_of(code)
     assert application_tick(store(), start - timedelta(days=7) + timedelta(minutes=1))["sent"] == 1
     sent = store().sent_messages()
-    assert {(m["line_user_id"], m["kind"]) for m in sent} == {("U-banned", "declined"), ("U-guest", "week_before")}
+    assert {(m["line_user_id"], m["kind"]) for m in sent} == {
+        ("U-banned", "declined"), ("U-guest", "applied"), ("U-guest", "week_before")}
     # HTTP の道も通る（秘密のヘッダーあり）
     response = admin.client.post("/api/jobs/tick", json={}, headers={"X-Jobs-Secret": "s3cret"})
     assert response.status_code == 200 and {"sent", "failed", "skipped", "cleaned"} <= set(response.json())
@@ -409,3 +413,96 @@ def test_week_before_gets_the_near_count_from_the_jobs(world):
     seen.clear()
     jobs.run_tick(store(), now=start - timedelta(hours=3) + timedelta(minutes=1), sender=spy, cleanup=False)
     assert set(seen.values()) == {None}
+
+
+# --------------------------------------------------------------------------
+# LINE の「受け付けました」とキャンセルのボタン（2026-11-05）
+# --------------------------------------------------------------------------
+
+def test_cancel_button_follows_the_deadline_at_send_time(world):
+    """outbound_claim はキャンセル期限を出さない。jobs が会の行を読み、送る時刻で can_cancel を決める。"""
+    admin, cid, people = world
+    made = create_event(admin, cid, visibility="public")
+    code = made["event"]["public_code"]
+    guest = people("dl@example.test", "ゲスト")
+    apply(guest, code, line=True)
+    friend(guest)
+    start, _ = start_of(code)
+    store()._events[made["id"]]["cancel_deadline"] = (start - timedelta(days=1)).isoformat()
+    jobs.run_tick(store(), now=datetime.now(timezone.utc) + timedelta(seconds=1), cleanup=False)
+    jobs.run_tick(store(), now=start - timedelta(days=7) + timedelta(minutes=1), cleanup=False)
+    jobs.run_tick(store(), now=start - timedelta(hours=3) + timedelta(minutes=1), cleanup=False)
+    sent = {m["kind"]: str(m["messages"]) for m in store().sent_messages()}
+    assert set(sent) == {"applied", "week_before", "day_of"}
+    assert f"a=cancel&e={code}" in sent["applied"] and f"a=cancel&e={code}" in sent["week_before"]
+    assert "a=cancel" not in sent["day_of"] and f"a=late&e={code}" in sent["day_of"]   # 期限（前日）を過ぎた
+
+
+def test_email_applications_and_failed_queueing(world, monkeypatch):
+    """メールの申し込みには「受け付けました」を予約しない。予約に失敗しても申し込みは通る。"""
+    admin, cid, people = world
+    code = create_event(admin, cid, visibility="public")["event"]["public_code"]
+    mail = people("ap1@example.test", "メール")
+    apply(mail, code)
+    assert outbound(code, "applied") == []
+
+    def broken(**kw):
+        raise RuntimeError("the SQL is not there yet")
+    monkeypatch.setattr(store(), "event_queue_applied", broken)
+    via_line = people("ap2@example.test", "ライン")
+    assert apply(via_line, code, line=True)["status"] == "applied"
+    assert outbound(code, "applied") == []
+    assert {row["kind"] for row in outbound(code) if row["account_id"] == via_line.id} == {"week_before", "day_of", "after"}
+
+
+def test_queue_applied_rpc_matches_the_sql():
+    """Python が呼ぶ event_queue_applied の名前・引数が、20261112000000_line_applied.sql と同じか。"""
+    import re
+    from pathlib import Path
+    from core.store import SupabaseStore
+
+    sql = (Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "20261112000000_line_applied.sql"
+           ).read_text(encoding="utf-8")
+    match = re.search(r"create or replace function public\.event_queue_applied\((.*?)\)\s*returns", sql, re.S)
+    assert match
+    args = {part.strip().split()[0] for part in match.group(1).split(",")}
+    assert "'applied'" in sql and "'week_before'" in sql
+
+    class Recorder(SupabaseStore):
+        def __init__(self):
+            self.rpcs = []
+
+        def _send(self, method, path, label=None, json=None, allow_statuses=(), **kwargs):
+            self.rpcs.append((path, json))
+
+            class Response:
+                status_code = 200
+                content = b"true"
+
+                @staticmethod
+                def json():
+                    return True
+            return Response()
+
+    recorder = Recorder()
+    assert recorder.event_queue_applied(event="e", account="a") is True
+    assert recorder.rpcs == [("rpc/event_queue_applied", {"p_event": "e", "p_account": "a"})]
+    assert set(recorder.rpcs[0][1]) == args
+
+
+def test_applying_again_sends_applied_again_with_a_new_row(world):
+    """LINE の再送キーは行の id から作る（24時間は同じキーを送り直しとみなす）。申し込み直しは新しい id の行に。"""
+    admin, cid, people = world
+    code = create_event(admin, cid, visibility="public")["event"]["public_code"]
+    guest = people("again@example.test", "ゲスト")
+    apply(guest, code, line=True)
+    friend(guest)
+    now = datetime.now(timezone.utc) + timedelta(seconds=1)
+    assert jobs.run_tick(store(), now=now, cleanup=False)["sent"] == 1
+    first = [row["id"] for row in outbound(code, "applied")]
+    assert first and outbound(code, "applied")[0]["sent_at"]
+    store().event_cancel_registration(event=store().event_by_code(code)["post_id"], account=guest.id)
+    apply(guest, code, line=True)
+    rows = outbound(code, "applied")
+    assert len(rows) == 1 and rows[0]["id"] not in first and rows[0]["sent_at"] is None
+    assert jobs.run_tick(store(), now=datetime.now(timezone.utc) + timedelta(seconds=2), cleanup=False)["sent"] == 1
