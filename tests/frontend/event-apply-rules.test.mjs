@@ -122,3 +122,14 @@ test('画面の文に「島」を使わない', () => {
 test('きっかけの説明は、主催者と管理者だけに見えると言う（規約の約束）', () => {
   assert.equal(rules.APPLY_WORDS.referralNote, '主催者と管理者だけに見えます');
 });
+
+test('質問の説明：「仕事でも趣味でも」を2回書かない。ほかの補足はかっこで足す', () => {
+  assert.equal(rules.questionLede('仕事でも趣味でも'), '仕事でも趣味でもOK、ひとつに絞って書いてください');
+  assert.equal(rules.questionLede(''), '仕事でも趣味でもOK、ひとつに絞って書いてください');
+  assert.equal(rules.questionLede('最近のことで'), '仕事でも趣味でもOK、ひとつに絞って書いてください（最近のことで）');
+});
+
+test('申し込みリンクのシェア：公開ページの /e/<code>', () => {
+  assert.deepEqual(rules.eventShareData({ title: 'BAR #2' }, 'abc', 'https://x.test'),
+    { title: 'BAR #2', text: 'BAR #2 の申し込みページ', url: 'https://x.test/e/abc' });
+});

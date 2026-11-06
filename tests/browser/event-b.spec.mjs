@@ -376,13 +376,19 @@ test('④ 限定ページ：参加者リスト・キャンセル期限の文 →
   const { page } = ann;
   await expect(page.locator('#eventMeStatus')).toContainText('申し込み済み');
   await expect(page.locator('#eventMeStage')).toContainText('開催決定');
-  // 参加者リスト：自分（あなた）・主催者・もう1人。会社・職種・回答。年代は出ない
+  // 参加者リスト：自分（あなた）・主催者・もう1人。年代は出ない。
+  // まだ会っていない人（受付が済んでいない）は、氏名と会社を出さず、職種と回答だけ（2026-11-06）
   await expect(page.locator('#eventMePeopleTitle')).toHaveText('参加者 3人');
   const people = page.locator('#eventMePeople, #eventMeNear');
   await expect(people.locator('.evb-person', { hasText: '山田 花子' })).toContainText('あなた');
   await expect(people.locator('.evb-person', { hasText: '主催のひろ' })).toContainText('主催者');
-  await expect(people.locator('.evb-person', { hasText: '佐藤 次郎' })).toContainText('テスト会社・エンジニア');
-  await expect(people.locator('.evb-person', { hasText: '佐藤 次郎' })).toContainText('キャンプ道具を集めています');
+  const other = people.locator('.evb-person.is-hidden');
+  await expect(other).toHaveCount(1);
+  await expect(other).toContainText('名前は会場で受付したあとに');
+  await expect(other).toContainText('エンジニア');
+  await expect(other).toContainText('キャンプ道具を集めています');
+  await expect(other).not.toContainText('テスト会社');
+  await expect(page.locator('#eventMeBody')).not.toContainText('佐藤 次郎');
   await expect(page.locator('#eventMeBody')).not.toContainText('30代');
   // キャンセル：ボタンと期限の文
   await expect(page.locator('#eventMeCancel')).toBeVisible();

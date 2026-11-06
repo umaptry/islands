@@ -26,8 +26,8 @@ export const APPLY_WORDS = Object.freeze({
   jobPlaceholder: '例：エンジニア、店舗スタッフ',
   referralTitle: 'このイベントを知ったきっかけ',
   referralNote: '主催者と管理者だけに見えます',
-  questionLead: '仕事でも趣味でも',
-  questionOne: '1つに絞って書いてください',
+  questionLead: '仕事でも趣味でもOK',
+  questionOne: 'ひとつに絞って書いてください',
   early: '2問答えたので、ここで申し込めます',
   applyHere: 'ここまでで申し込む',
   next: '次へ',
@@ -36,6 +36,19 @@ export const APPLY_WORDS = Object.freeze({
   memberNote: '質問はありません。1週間前と当日に LINE でお知らせが届きます。',
   fullnameLead: '会場でお互いに誰か分かるように、フルネームを教えてください。',
 });
+
+/** 質問の下の説明。主催者の補足が「仕事でも趣味でも」なら、同じことを2回書かない（2026-11-06）。 */
+export function questionLede(hint) {
+  const lead = `${APPLY_WORDS.questionLead}、${APPLY_WORDS.questionOne}`;
+  const extra = String(hint || '').trim();
+  return extra && !APPLY_WORDS.questionLead.startsWith(extra) ? `${lead}（${extra}）` : lead;
+}
+
+/** 申し込みリンクのシェアの中身（公開ページ /e/<code>）。 */
+export function eventShareData(info, code, origin) {
+  const title = String((info && info.title) || '').trim();
+  return { title, text: title ? `${title} の申し込みページ` : '会の申し込みページ', url: `${origin}/e/${code}` };
+}
 
 export const QUESTION_EXAMPLES = Object.freeze({
   now: '例：社内で新規事業の企画をしている',

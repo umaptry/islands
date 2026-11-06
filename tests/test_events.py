@@ -489,6 +489,7 @@ def test_deleting_the_post_calls_the_event_off(world):
     assert guest.unread(["event_cancelled"]) == []
     # ゲスト用ページは 200 で closed=cancelled、中身は出さない。新しい申し込みは 409
     public = get(guest, f"/api/public/events/{code}").json()
+    assert public["description"] == ""                                 # 中止の会は概要も出さない
     assert public["closed"] == "cancelled" and public["applied_count"] == 0 and public["host_name"] == ""
     late = people("g14@example.test", "おそい")
     assert apply(late, code, expect=409)["detail"] == EVENT_ERROR_TEXT["event_cancelled"]
@@ -557,6 +558,8 @@ def test_public_summary_blurs_small_groups_and_hides_people(world):
     body = response.json()
     assert body["applied_count"] == 5 and body["capacity"] == 20 and body["closed"] is None
     assert body["host_name"] == "かんり" and body["community_name"] == "夜のBAR"
+    assert body["description"] == "夜の会をひらきます。話してみたい人は来てください。"
+    assert get(admin, f"/api/events/{code}").json()["event"]["description"] == body["description"]
     assert body["breakdown"]["age"] == [{"label": "30代", "count": 3}, {"label": "ほか", "count": 2}]
     assert body["breakdown"]["job"] == [{"label": "デザイナー", "count": 3}, {"label": "ほか", "count": 2}]
     labels = [row["label"] for row in body["breakdown"]["genre"]]
