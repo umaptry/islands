@@ -203,7 +203,10 @@ export const session = {
     const redirect = `${window.location.origin}${/^\/[\w\-/]*$/.test(returnPath) ? returnPath : '/'}`;
     window.location.href =
       `${url}/auth/v1/authorize?provider=${encodeURIComponent(SUPABASE_PROVIDERS[provider] || provider)}` +
-      `&redirect_to=${encodeURIComponent(redirect)}`;
+      `&redirect_to=${encodeURIComponent(redirect)}` +
+      // 2026-11-06: LINE のログイン画面で公式アカウントの友だち追加も聞く（Supabase はこの指定をそのまま LINE に渡す）。
+      // LINE Developers でログインのチャネルに公式アカウントをつないでいないときは、LINE が黙って無視する。
+      (provider === 'line' ? '&bot_prompt=aggressive' : '');
   },
 
   /** Pick up an OAuth redirect: 'adopted' when it signed somebody in, 'failed'

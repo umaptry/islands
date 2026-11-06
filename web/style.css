@@ -145,6 +145,10 @@ body.kb-open .island-card { bottom: calc(env(safe-area-inset-bottom) + 12px); }
   animation: spin .9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+#booting { flex-direction: column; gap: 18px; }
+.boot-slow { display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 14px; visibility: hidden; animation: boot-slow 0s linear 10s forwards; }
+.boot-slow p { margin: 0; }
+@keyframes boot-slow { to { visibility: visible; } }
 
 .screen-title { font-size: 21px; font-weight: 700; margin: 0 0 6px; letter-spacing: .01em; }
 .lede { color: var(--on-sea-2); font-size: 14px; margin: 0 0 22px; }
@@ -2428,6 +2432,19 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .ev-why { width: 100%; background: #fff; color: var(--ink); border-radius: 14px; padding: 12px 14px; font-size: 12px; line-height: 1.7; }
 .ev-why b { display: block; font-size: 13px; margin-bottom: 2px; }
 .ev-why ul { list-style: none; margin: 0; padding: 0; }
+/* 2026-11-07: 吹き出しにして LINE のボタンを指す。「おすすめ」タグと離すため下をあける */
+.ev-why { position: relative; margin-bottom: 14px; }
+.ev-why::after { content: ""; position: absolute; left: 50%; bottom: -9px; margin-left: -10px; border: 10px solid transparent; border-bottom: 0; border-top-color: #fff; }
+.ev-why-promise { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--ink-2); white-space: pre-line; }
+/* LINE の中のブラウザは上下のバーで低くなる（iPhone SE で約 560px）。下の帯が伸びて見出しと会の名前が隠れないよう詰める */
+@media (max-height: 620px) {
+  .ev-brand { margin-bottom: 10px; }
+  .ev-foot { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .ev-foot .ev-fine { margin-top: 0; }
+  .ev-why { padding: 10px 14px; line-height: 1.55; }
+  .ev-line-btn { min-height: 50px; }
+  .ev-mail-btn { min-height: 40px; }
+}
 .ev-consent { margin: 0; font-size: 11.5px; line-height: 1.7; color: var(--on-sea-2); text-align: center; text-wrap: pretty; word-break: auto-phrase; }
 
 /* the probe */
@@ -2436,6 +2453,7 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .ev-chip.is-on { background: #fff; color: var(--ui, var(--sea)); }
 .ev-add { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 16px; }
 .ev-add .input { flex: 1; min-width: 0; }
+.ev-add-btn { flex: none; min-width: 72px; padding: 10px 18px; border: 0; border-radius: 999px; background: #fff; color: var(--ui, var(--sea)); font-size: 15px; font-weight: 800; cursor: pointer; }   /* 2026-11-06: 押すと条件に入ると分かるボタンに */
 .ev-result { text-align: center; margin-top: 8px; }
 .ev-result-lead { font-size: 13px; color: var(--ink-2); line-height: 1.6; }
 .ev-result-n { font-size: 44px; font-weight: 800; line-height: 1.2; color: var(--ui, var(--sea)); }
@@ -2469,6 +2487,22 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .ev-late-btn { padding: 12px 4px; border-radius: 12px; border: 0; background: rgba(255, 255, 255, .22); color: #fff; font-size: 12px; font-weight: 800; line-height: 1.4; cursor: pointer; }
 .ev-late-btn.is-on { background: #fff; color: var(--ui, var(--sea)); }
 a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: none; }
+/* 2026-11-06: 主催者の画面の .ev-quiet（灰色）が下で上書きしていて、海の色の上の「もどる」「キャンセルする」が見えなかった */
+#eventApply .ev-foot .ev-quiet, #eventMe .ev-quiet, #eventApply .ev-body > .ev-quiet { color: #fff; font-size: 14px; font-weight: 700; }
+/* 会の概要（会の投稿の本文） */
+.ev-desc { margin: 4px 0 18px; font-size: 14px; line-height: 1.8; color: var(--on-sea); white-space: pre-line; overflow-wrap: anywhere; }
+.ev-body-end { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 18px; }
+.ev-body-end .ev-fine { margin: 0; }
+/* 申し込み完了：スクショで記録になるカード */
+.ev-record { margin-top: 6px; }
+.ev-record-title { font-size: 17px; font-weight: 800; line-height: 1.5; overflow-wrap: anywhere; }
+.ev-record-desc { margin: 6px 0 10px; font-size: 13px; line-height: 1.7; color: var(--ink-2); white-space: pre-line; overflow-wrap: anywhere; }
+.ev-record-row { display: flex; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.6; }
+.ev-record-row small { flex: none; width: 3em; color: var(--ink-3); font-size: 12px; line-height: 1.9; }
+.ev-record-row span { overflow-wrap: anywhere; }
+.ev-share-btn { min-height: 48px; font-size: 15px; background: rgba(255, 255, 255, .22); color: #fff; box-shadow: none; }
+/* 氏名・所属を会うまで出さない参加者 */
+.evb-person.is-hidden .evb-person-name b { color: var(--ink-2); font-weight: 700; font-size: 13px; }
 /* ---- 会：公開側 ここまで ---- */
 /* ---------------------------------------------------------------- 会：主催者とメンバー（第2回a） */
 
@@ -2607,7 +2641,7 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 
 /* 申し込みページの開催の条件 */
 .ev-goal .ev-line { color: var(--ink); margin: 6px 0 0; }
-.ev-goal .ev-line.ev-quiet { color: var(--ink-2); font-size: 13px; }
+.ev-goal .ev-line.ev-quiet { color: var(--ink-2); font-size: 13px; text-decoration: none; padding: 0; cursor: default; }   /* ただの文：リンクに見せない */
 .ev-goal-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ev-goal-count { font-size: 15px; }
 .ev-goal.held .ev-goal-count { color: #1d7a45; }

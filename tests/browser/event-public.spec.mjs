@@ -109,8 +109,8 @@ test('ログインなしで会のページが開く：集計だけで、名前�
   await expect(page.locator('#eventApplyBody')).toContainText('主催：主催の坂内');
   await expect(page.locator('#eventCount')).toContainText('0');
   await expect(page.locator('#eventCount')).toContainText('参加予定');
-  // ログインなしで見えるのは、この会のことだけ：マップや投稿の本文は出ない
-  await expect(page.locator('#eventApplyBody')).not.toContainText('夜の会をひらきます');
+  // 会の概要（2026-11-06）：主催者が書いた会の投稿の本文は出す。名前の下・日時の上
+  await expect(page.locator('#eventDesc')).toContainText('夜の会をひらきます');
   await expect(page.locator('#bottomNav')).toBeHidden();
   await noSideScroll(page);
   await shot(page, testInfo, '申し込みページ_ログインなし');
@@ -461,6 +461,36 @@ test('ログインしないで主催者の画面を開くと、ログインの�
   await expect(page.locator('#auth')).toHaveClass(/active/, { timeout: 15000 });
   const stored = await page.evaluate(() => sessionStorage.getItem('islands-event-host-return') || localStorage.getItem('islands-event-host-return'));
   expect(stored).toContain(code);
+  await guest.context.close();
+  await host.context.close();
+});
+
+test('LINE から会のページに戻ると、時間がかかっても「あなたについて」から続く（出るときに覚えた戻り先が切れていても）', async ({ browser }, testInfo) => {
+  const host = await signedIn(browser, testInfo, 'しゅさい');
+  const { code } = await makeEvent(host);
+  const guest = await guestPage(browser, testInfo);
+  await guest.page.goto(`/e/${code}`);
+  await expect(guest.page.locator('#eventApplyNow')).toBeVisible();
+  // LINE から戻るときと同じ形のトークン（手元のサーバーで新しいアカウントを作り、ブラウザからは消しておく）。
+  // 出るときに覚えた戻り先は、11/5 の本番のように 36 分たって切れている
+  const tokens = await guest.page.evaluate(async ({ email, code }) => {
+    const { session } = await import('/static/js/session.js');
+    const otp = await session.requestCode(email);
+    await session.verifyCode(email, otp.devCode);
+    const saved = JSON.parse(localStorage.getItem('kasanari-session'));
+    localStorage.removeItem('kasanari-session');
+    localStorage.setItem('islands-event-apply-return', JSON.stringify({ code, at: Date.now() - 36 * 60 * 1000 }));
+    return { access: saved.access_token, refresh: saved.refresh_token };
+  }, { email: `line-${crypto.randomUUID()}@example.com`, code });
+  await guest.page.goto('about:blank');
+  await guest.page.goto(`/e/${code}#access_token=${tokens.access}&refresh_token=${tokens.refresh}&expires_in=3600`);
+  await expect(guest.page.locator('#eventName')).toBeVisible();
+  expect(guest.page.url()).not.toContain('access_token');
+  // ふつうに開き直したとき（戻りではない）は、会の案内のまま
+  await guest.page.goto('about:blank');
+  await guest.page.goto(`/e/${code}`);
+  await expect(guest.page.locator('#eventApplyNow')).toBeVisible();
+  await expect(guest.page.locator('#eventName')).toHaveCount(0);
   await guest.context.close();
   await host.context.close();
 });

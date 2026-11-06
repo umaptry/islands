@@ -39,6 +39,11 @@
      their session is being restored. app.js picks the real first screen. -->
 <section id="booting" class="screen active">
   <div class="spinner" role="status" aria-label="読み込み中"></div>
+  <!-- 2026-11-06: 回線が遅いと画面のファイルを読み終えるまで長くかかる。10秒たったら CSS だけで出す（JS より先に読める） -->
+  <div class="boot-slow">
+    <p>読み込みに時間がかかっています</p>
+    <button class="btn btn-small" type="button" onclick="location.reload()">再読み込み</button>
+  </div>
 </section>
 
 <!-- ============ 1. welcome ============ -->

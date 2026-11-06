@@ -250,6 +250,37 @@ def test_participants_payload_order_and_fields():
     assert all("age_band" not in person for person in out["people"])
 
 
+def test_participants_payload_hides_name_until_met():
+    event = {"questions": QUESTIONS}
+    rows = [
+        {"account_id": "me", "status": "applied", "display_name": "わたし", "affiliation": "甲", "is_host": False},
+        {"account_id": "a", "status": "applied", "display_name": "A", "affiliation": "乙", "job_title": "設計",
+         "icon_id": "3", "avatar_path": "a.png", "is_host": False},
+        {"account_id": "b", "status": "attended", "display_name": "B", "affiliation": "丙", "avatar_path": "b.png",
+         "is_host": False},
+        {"account_id": "h", "status": "host", "display_name": "主催", "affiliation": "丁", "avatar_path": "h.png",
+         "is_host": True},
+    ]
+    people = {p["account_id"]: p for p in events.participants_payload(event, rows, [], [], "me")["people"]}
+    assert people["me"]["hidden"] is False and people["me"]["name"] == "わたし"
+    assert people["h"]["hidden"] is False and people["h"]["name"] == "主催" and people["h"]["avatar_path"] == "h.png"
+    for key in ("a", "b"):                                   # 申し込み中の自分から見て、他の人は隠す
+        assert people[key]["hidden"] is True and people[key]["name"] == "" and people[key]["affiliation"] == ""
+        assert people[key]["avatar_path"] is None
+    assert people["a"]["job_title"] == "設計" and people["a"]["icon_id"] == "3" and people["a"]["state"] == "applied"
+    # 受付済みどうしは見える。受付済みでも申し込み中の人は隠れたまま
+    seen = {p["account_id"]: p for p in events.participants_payload(event, [
+        {**rows[0], "status": "attended"}, *rows[1:]], [], [], "me")["people"]}
+    assert seen["b"]["hidden"] is False and seen["b"]["name"] == "B" and seen["b"]["avatar_path"] == "b.png"
+    assert seen["a"]["hidden"] is True and seen["a"]["name"] == ""
+    # 主催者から見ると全員見える
+    host_view = {p["account_id"]: p for p in events.participants_payload(event, rows, [], [], "h")["people"]}
+    assert all(not p["hidden"] for p in host_view.values()) and host_view["a"]["name"] == "A"
+    # 参加者でない人（メンバー）には、主催者以外は隠れる
+    outsider = {p["account_id"]: p for p in events.participants_payload(event, rows, [], [], "zz")["people"]}
+    assert outsider["h"]["hidden"] is False and outsider["b"]["hidden"] is True
+
+
 # --------------------------------------------------------------------------
 # 開催の判定（手元モード）
 # --------------------------------------------------------------------------
@@ -547,7 +578,13 @@ def test_participants_who_may_look_and_what_they_see(world):
     host_row = out["people"][1]
     assert host_row["state"] == "host" and host_row["is_host"] and host_row["near"] is None
     other = next(p for p in out["people"] if p["account_id"] == b.id)
-    assert other["name"] == "びー 太郎" and other["affiliation"] == "○○株式会社" and other["job_title"] == "デザイナー"
+    assert other["hidden"] is True and other["name"] == "" and other["affiliation"] == ""      # 会うまで隠す
+    assert other["avatar_path"] is None and other["job_title"] == "デザイナー"
+    me_row = out["people"][0]
+    assert me_row["hidden"] is False and me_row["name"] == "えー 太郎" and me_row["affiliation"] == "○○株式会社"
+    assert host_row["hidden"] is False and host_row["name"]
+    seen = get(admin, f"/api/events/{code}/participants").json()                              # 主催者には見える
+    assert next(p for p in seen["people"] if p["account_id"] == b.id)["name"] == "びー 太郎"
     assert [item["label"] for item in other["answers"]] == ["最近やってること", "やってみたいこと"]
     assert "age_band" not in other and "30s" not in str(out)
     assert other["near"] is not None and out["near3"] == [b.id]                 # 同じ回答どうしは近い

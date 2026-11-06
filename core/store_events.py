@@ -552,6 +552,23 @@ class EventsMemoryMixin:
                 self._notify(post["author_id"], account, event, None, "event_cancel", payload={})
             return {"status": "cancelled"}
 
+    def event_queue_applied(self, *, event, account, now=None):
+        """申し込み直後の「受け付けました」の予約（DB の event_queue_applied と同じ）。LINE で申し込み中の人だけ。
+        中止・not_held・終わった会には入れない。入れたら True。"""
+        now = _utc(now)
+        with self._lock:
+            ev = self._events.get(event)
+            reg = self._event_regs.get((event, account))
+            if (not ev or not reg or reg["status"] != "applied" or reg["channel"] != "line"
+                    or ev.get("cancelled_at") or ev.get("decision") == "not_held" or _utc(ev["ends_at"]) <= now):
+                return False
+            # DB と同じく行を作り直す（id から LINE の再送キーを作るので、使い回すと申し込み直しの2通目が届かない）
+            for oid in [oid for oid, row in self._outbound.items()
+                        if (row["event_id"], row["account_id"], row["kind"]) == (event, account, "applied")]:
+                del self._outbound[oid]
+            self._outbound_put(event, account, "applied", now)
+            return True
+
     def event_set_late(self, *, event, account, minutes, now=None):
         now = _utc(now)
         with self._lock:
@@ -1345,6 +1362,11 @@ class EventsSupabaseMixin:
     def event_cancel_registration(self, *, event, account):
         return self._event_rpc("event_cancel_registration", {"p_event": event, "p_account": account},
                                "申し込みの取り消し")
+
+    def event_queue_applied(self, *, event, account):
+        """20261112000000_line_applied.sql の関数。まだ流していない DB では 404 → StoreError（呼ぶ側が記録して続ける）。"""
+        return bool(self._event_rpc("event_queue_applied", {"p_event": event, "p_account": account},
+                                    "受け付けの案内の予約"))
 
     def event_set_late(self, *, event, account, minutes):
         return self._event_rpc("event_set_late", {"p_event": event, "p_account": account, "p_minutes": minutes},

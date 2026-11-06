@@ -16,13 +16,13 @@ import { browserStorage } from '../talk.js';
 import { eventsApi } from '../events-api.js';
 import { noteEventGuest, refreshEventGuest } from '../event-guest.js';
 import {
-  EVENT_WORDS, applyView, breakdownRows, calendarUrl, cleanInterests, communityOnlyView, countView, errorText, eventHashFor, probeDraft,
+  EVENT_WORDS, applyView, breakdownRows, cleanInterests, communityOnlyView, countView, errorText, eventHashFor, probeDraft,
   probeView, rememberApplyReturn, saveProbeDraft, takeApplyReturn, validEventCode, windowText,
 } from '../event-rules.js';
 import { GO_WORDS, cancelNote, goState, joinNote } from '../event-host-rules.js';
 import {
   APPLY_WORDS, ANSWER_MAX, PRIVACY_PATH, QUESTION_EXAMPLES, TERMS_PATH, ageChoices, answersNeeded, applyBody,
-  applySteps, canSubmit, cleanAnswer, collectAnswers, stepAfter, stepBefore, validateProfile,
+  applySteps, canSubmit, cleanAnswer, collectAnswers, eventShareData, questionLede, stepAfter, stepBefore, validateProfile,
 } from '../event-apply-rules.js';
 
 const link = (text, href) => el('a', { text, attrs: { href, target: '_blank', rel: 'noopener' } });
@@ -98,7 +98,10 @@ export function setupEventApply() {
     if (when) lines.push(el('div', { className: 'ev-line', text: when }));
     if (info.place) lines.push(el('div', { className: 'ev-line', text: `会場：${info.place}` }));
     if (info.host_name) lines.push(el('div', { className: 'ev-line', text: `主催：${info.host_name}` }));
-    return [el('h1', { className: 'ev-title', text: info.title }), el('div', { className: 'ev-lines' }, ...lines)];
+    // 会の名前 → 概要 → 日時 → 場所 → 主催（2026-11-06：概要は会の投稿の本文）
+    return [el('h1', { className: 'ev-title', text: info.title }),
+      info.description ? el('p', { className: 'ev-desc', attrs: { id: 'eventDesc' }, text: info.description }) : null,
+      el('div', { className: 'ev-lines' }, ...lines)];
   }
 
   function smallTitle() {
@@ -198,7 +201,8 @@ export function setupEventApply() {
       footer.push(probeOn
         ? quiet(EVENT_WORDS.applyNow, () => proceed(), { id: 'eventApplyNow' })
         : primary(EVENT_WORDS.applyTo, () => proceed(), { id: 'eventApplyNow' }));
-      footer.push(el('p', { className: 'ev-fine ev-center', text: 'このページは検索エンジンには載りません。' }));
+      // 下の帯は小さく：注意書きはページの一番下へ
+      content.push(el('p', { className: 'ev-fine ev-center', text: 'このページは検索エンジンには載りません。' }));
     } else {
       // 満員・締切・中止など、押せるボタンがないとき：メンバーが戻れるように
       footer.push(mapButton());
@@ -246,7 +250,7 @@ export function setupEventApply() {
       el('p', { className: 'ev-lede', text: '入れると、近そうな人の数が分かります。' }),
       chips,
       flow.interests.length < 2 ? el('div', { className: 'ev-add' }, input, el('button', {
-        className: 'ev-chip', text: '＋ ひとつ足す', attrs: { type: 'button', id: 'eventInterestAdd' }, on: { click: add } })) : null,
+        className: 'ev-add-btn', text: '追加', attrs: { type: 'button', id: 'eventInterestAdd' }, on: { click: add } })) : null,
       resultCard,
       el('p', { className: 'ev-fine', text: '入れた興味は、申し込むときにそのまま引き継ぎます。' }),
     ], [
@@ -283,7 +287,9 @@ export function setupEventApply() {
     if (lineOn) {
       footer.push(el('div', { className: 'ev-why' },
         el('b', { text: 'LINE で申し込むと' }),
-        el('ul', {}, ...['1週間前と当日にリマインドが届く', '遅刻・取り消しはボタン1つで連絡できる', '近い人をいつでも見られる'].map((t) => el('li', { text: `✓ ${t}` })))));
+        el('ul', {}, ...['1週間前と当日にリマインドが届く', '遅刻・取り消しはボタン1つで連絡できる', '近い人をいつでも見られる'].map((t) => el('li', { text: `✓ ${t}` }))),
+        // LINE で送るのは core/line.py の申し込んだ会の連絡だけ（OUTBOUND_KINDS）。増やすならこの約束も見直す
+        el('p', { className: 'ev-why-promise', text: '届くのは申し込んだ会の連絡だけ。\n新しい会のお知らせや宣伝は送りません。' })));
       footer.push(el('div', { className: 'ev-line-wrap' },
         el('span', { className: 'ev-tag', text: 'おすすめ' }),
         el('button', {
@@ -495,8 +501,6 @@ export function setupEventApply() {
   function showQuestion(prompt) {
     const question = (flow.questions || []).find((item) => item.prompt === prompt) || { label: '', hint: '' };
     const id = `q:${prompt}`;
-    const index = flow.steps.filter((step) => step.startsWith('q:')).indexOf(id);
-    const total = flow.steps.filter((step) => step.startsWith('q:')).length;
     const need = answersNeeded((flow.questions || []).length);
     const area = el('textarea', {
       className: 'ev-answer', attrs: { id: 'eventAnswer', rows: '4', maxlength: String(ANSWER_MAX), placeholder: 'ここに書く', autocomplete: 'off' },
@@ -530,9 +534,10 @@ export function setupEventApply() {
     const note = el('div', { className: 'ev-early', text: APPLY_WORDS.early, hidden: true });
     area.addEventListener('input', sync);
     paint([
-      progress(id), el('div', { className: 'ev-qno num', text: `${index + 1} / ${total}` }), note,
+      // 番号は上のバーと同じ数え方（きっかけ・あなたについても1つ）
+      progress(id), el('div', { className: 'ev-qno num', text: `${stepNumber(id) + 1} / ${flow.steps.length}` }), note,
       el('h1', { className: 'ev-title is-mid', text: question.label || '' }),
-      el('p', { className: 'ev-lede', text: question.hint ? `${APPLY_WORDS.questionLead}、${APPLY_WORDS.questionOne}（${question.hint}）` : `${APPLY_WORDS.questionLead}\n${APPLY_WORDS.questionOne}` }),
+      el('p', { className: 'ev-lede', text: questionLede(question.hint) }),
       area, count, el('p', { className: 'ev-hint', text: QUESTION_EXAMPLES[prompt] || '' }), errorBox(),
     ], [next, early, consentFor(id), quiet('もどる', () => goBack(id))]);
     sync();
@@ -569,7 +574,10 @@ export function setupEventApply() {
       } catch { /* 次に開いたときに読み直す */ }
       noteEventGuest({ code, title: info.title, starts_at: info.starts_at, status: result.status || 'applied' });
       refreshEventGuest().catch(() => {});
-      showDone();
+      // LINE のログイン画面で友だち追加が済んでいれば、完了画面に友だち追加のボタンは出さない。分からなければ出す。
+      let lineFriend = false;
+      try { lineFriend = Boolean(((await eventsApi.get(code)).me || {}).line_friend); } catch { /* 出す */ }
+      showDone(lineFriend);
     } catch (error) {
       setError(errorText(error));
       buttons.forEach((button) => { button.disabled = false; });
@@ -583,18 +591,38 @@ export function setupEventApply() {
 
   // ---------------------------------------------------------------- done
 
-  function showDone() {
-    const friend = canAddFriend();
-    const calendar = calendarUrl({ ...info, code }, window.location.origin);
+  // 2026-11-06：スクショを撮れば記録になるように、会の名前・概要・日時・場所・主催を1枚のカードに
+  function recordCard() {
+    const row = (label, value) => (value ? el('div', { className: 'ev-record-row' }, el('small', { text: label }), el('span', { text: value })) : null);
+    return el('div', { className: 'ev-card ev-record', attrs: { id: 'eventDoneRecord' } },
+      el('div', { className: 'ev-record-title', text: info.title }),
+      info.description ? el('p', { className: 'ev-record-desc', text: info.description }) : null,
+      row('日時', windowText(info)), row('場所', info.place), row('主催', info.host_name));
+  }
+
+  async function shareEvent() {
+    const data = eventShareData(info, code, window.location.origin);
+    if (typeof navigator.share === 'function') {
+      try { await navigator.share(data); return; } catch (failure) { if (failure && failure.name === 'AbortError') return; }
+    }
+    try {
+      await navigator.clipboard.writeText(data.url);
+      toast('申し込みリンクをコピーしました');
+    } catch {
+      toast(data.url);
+    }
+  }
+
+  function showDone(lineFriend = false) {
+    const friend = canAddFriend() && !lineFriend;
     paint([
       el('div', { className: 'ev-check', attrs: { 'aria-hidden': 'true' } }, '✓'),
       el('h1', { className: 'ev-title is-center', id: 'eventDoneTitle', text: '申し込みました' }),
-      el('p', { className: 'ev-lede is-center', text: windowText(info) }),
-      el('p', { className: 'ev-lede is-center', text: info.title }),
-      calendar ? el('p', { className: 'ev-center' }, link('カレンダーに追加', calendar)) : null,
+      recordCard(),
     ], [
-      friend ? el('a', { className: 'btn btn-block ev-line-btn', text: 'LINE で islands を友だち追加', attrs: { href: friendUrl(), target: '_blank', rel: 'noopener', id: 'eventFriend' } }) : null,
-      friend ? el('p', { className: 'ev-fine ev-center', text: '1週間前と当日に、LINE でお知らせが届きます' }) : null,
+      friend ? el('a', { className: 'btn btn-block ev-line-btn', text: 'LINE でリマインドを受け取る', attrs: { href: friendUrl(), target: '_blank', rel: 'noopener', id: 'eventFriend' } }) : null,
+      friend ? el('p', { className: 'ev-fine ev-center', text: 'islands の LINE を友だち追加すると、1週間前と当日にお知らせが届きます' }) : null,
+      el('button', { className: 'btn btn-block ev-share-btn', text: '申し込みリンクをシェアする', attrs: { type: 'button', id: 'eventShare' }, on: { click: () => shareEvent() } }),
       primary('会のページを見る', () => navigate(eventHashFor(code, 'me'), { replace: true }), { id: 'eventToMe' }),
     ]);
   }
