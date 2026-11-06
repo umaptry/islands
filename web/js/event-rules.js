@@ -373,6 +373,7 @@ export const EVENT_B_WORDS = Object.freeze({
   askJoinNote: 'コミュニティに参加すると「もっと話してみたい」も押せます',
   closedCheckin: '受付の時間ではありません',
   earlyCheckin: '受付はまだ始まっていません',
+  hiddenName: '名前は会場で受付したあとに',
 });
 
 /** 受付の画面を数秒ごとに読み直す間隔（受付待ちのとき）。 */
@@ -452,7 +453,12 @@ export function personView(person) {
   if (!p.is_me && p.late_minutes) badges.push({ key: 'late', text: `${p.late_minutes === 60 ? '1時間以上' : `${p.late_minutes}分`}遅れ` });
   const answers = (Array.isArray(p.answers) ? p.answers : [])
     .map((a) => ({ label: String((a && a.label) || ''), body: String((a && a.body) || '').trim() })).filter((a) => a.body);
-  return { id: p.account_id, name: String(p.name || '名前なし'), sub, badges, answers, reason: nearReasonText(p.near), isMe: Boolean(p.is_me) };
+  // 会うまで（受付が済むまで）氏名・所属はサーバーが返さない（2026-11-06）。職種と回答だけ出す
+  const hidden = Boolean(p.hidden) && !p.is_me;
+  return {
+    id: p.account_id, name: hidden ? EVENT_B_WORDS.hiddenName : String(p.name || '名前なし'), sub, badges, answers,
+    reason: nearReasonText(p.near), isMe: Boolean(p.is_me), hidden,
+  };
 }
 
 /**

@@ -393,14 +393,21 @@ def participants_payload(event, rows, answers, vectors, me, genres=None):
     for items in said.values():
         items.sort(key=lambda item: order_of.get(item["prompt"], len(order_of)))   # 質問の順に
     near = near_map(vectors, me, genres)
+    mine = next((row for row in rows if row["account_id"] == me), None)
+    viewer_host = bool(mine and (mine.get("is_host") or mine["status"] == "host"))
+    viewer_attended = bool(mine and mine["status"] == "attended")
     people = []
     for order, row in enumerate(rows):
         account = row["account_id"]
         found = near.get(account) if account != me else None
+        # 氏名・所属・写真は、会うまで（受付済みどうし）は隠す。自分・主催者・見る人が主催者なら見せる
+        shown = (account == me or row["status"] == "host" or bool(row.get("is_host")) or viewer_host
+                 or (viewer_attended and row["status"] == "attended"))
         people.append((order, found["score"] if found else None, {
-            "account_id": account, "name": row.get("display_name") or "", "affiliation": row.get("affiliation"),
+            "account_id": account, "name": (row.get("display_name") or "") if shown else "",
+            "affiliation": row.get("affiliation") if shown else "",
             "job_title": row.get("job_title"), "icon_id": row.get("icon_id") or "0",
-            "avatar_path": row.get("avatar_path"),
+            "avatar_path": row.get("avatar_path") if shown else None, "hidden": not shown,
             "state": row["status"], "is_me": account == me, "is_host": bool(row.get("is_host")),
             "is_member": bool(row.get("is_member")), "late_minutes": row.get("late_minutes"),
             "answers": said.get(account, []),
@@ -499,6 +506,7 @@ def event_view(event, post=None, *, host=None, community_name=None, applied_coun
         "host": {"id": host.get("id"), "display_name": host.get("display_name") or ""} if host else None,
         "capacity": capacity, "applied_count": applied_count, "closed": closed, "cancelled": cancelled,
         "visibility": event["visibility"], "questions": event.get("questions") or [],
+        "description": "" if cancelled else str((post or {}).get("body") or "").strip(),
         **rules,
     }
     return view
@@ -764,7 +772,7 @@ def public_payload(store, event):
         # 中止された会は、中身を出さない（ゲスト用ページが「中止になりました」を出す）
         return {**base, "host_name": "", "community_name": "", "applied_count": 0, "capacity": None,
                 "closed": "cancelled", "questions": [], "breakdown": {"age": [], "job": [], "genre": []},
-                **rule_fields(event, 0)}
+                "description": "", **rule_fields(event, 0)}
     roster = store.event_roster(event["post_id"])
     answers = store.event_answer_vectors(event["post_id"])
     host = store.get_account(post["author_id"]) or {}
@@ -778,6 +786,7 @@ def public_payload(store, event):
         "closed": "not_held" if rules["phase"] == "not_held" else closed_state(
             post.get("recruit_deadline"), post.get("recruit_capacity"), post.get("join_count")),
         "questions": event.get("questions") or [],
+        "description": str(post.get("body") or "").strip(),
         "breakdown": breakdown_of(roster, answers),
         **rules,
     }

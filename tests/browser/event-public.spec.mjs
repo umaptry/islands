@@ -109,8 +109,8 @@ test('ログインなしで会のページが開く：集計だけで、名前�
   await expect(page.locator('#eventApplyBody')).toContainText('主催：主催の坂内');
   await expect(page.locator('#eventCount')).toContainText('0');
   await expect(page.locator('#eventCount')).toContainText('参加予定');
-  // ログインなしで見えるのは、この会のことだけ：マップや投稿の本文は出ない
-  await expect(page.locator('#eventApplyBody')).not.toContainText('夜の会をひらきます');
+  // 会の概要（2026-11-06）：主催者が書いた会の投稿の本文は出す。名前の下・日時の上
+  await expect(page.locator('#eventDesc')).toContainText('夜の会をひらきます');
   await expect(page.locator('#bottomNav')).toBeHidden();
   await noSideScroll(page);
   await shot(page, testInfo, '申し込みページ_ログインなし');

@@ -14,7 +14,7 @@ import { refreshEventGuest } from '../event-guest.js';
 import { refreshCommunities } from '../communities.js';
 import { refreshTalk } from '../talk.js';
 import {
-  EVENT_B_WORDS, EVENT_WORDS, afterLinkShown, calendarUrl, cancelView, errorText, eventHashFor, eventStageView, joinView, lateChoices,
+  EVENT_B_WORDS, EVENT_WORDS, afterLinkShown, cancelView, errorText, eventHashFor, eventStageView, joinView, lateChoices,
   listAllowed, mapUrl, meRedirect, participantsView, personView, statusView, validEventCode, windowText,
 } from '../event-rules.js';
 import { canAddFriend, friendUrl } from './event-apply.js';
@@ -75,14 +75,18 @@ export function setupEventMe() {
     } else if (view.showFriend && canAddFriend()) {
       content.push(el('div', { className: 'ev-band is-amber is-row', attrs: { id: 'eventMeFriendBand' } },
         el('div', {}, el('b', { text: EVENT_WORDS.friendBand }), el('span', { text: EVENT_WORDS.friendNote })),
-        el('a', { className: 'ev-band-btn', text: 'LINE で\n友だち追加', attrs: { href: friendUrl(), target: '_blank', rel: 'noopener', id: 'eventMeFriend' } })));
+        el('a', { className: 'ev-band-btn', text: 'LINE で\n受け取る', attrs: { href: friendUrl(), target: '_blank', rel: 'noopener', id: 'eventMeFriend' } })));
     }
 
+    // 会の名前 → 概要 → 日時 → 場所 → 主催（2026-11-06）
+    const hostName = (event.host && event.host.display_name) || '';
     content.push(el('div', { className: 'ev-brand', text: 'islands' }),
       el('h1', { className: 'ev-title', attrs: { id: 'eventMeTitle' }, text: `${event.title} にようこそ` }),
+      event.description ? el('p', { className: 'ev-desc', attrs: { id: 'eventMeDesc' }, text: event.description }) : null,
       el('div', { className: 'ev-lines' },
         el('div', { className: 'ev-line', text: windowText(event) }),
-        event.place ? el('div', { className: 'ev-line', text: `場所：${event.place}` }) : null));
+        event.place ? el('div', { className: 'ev-line', text: `場所：${event.place}` }) : null,
+        hostName ? el('div', { className: 'ev-line', text: `主催：${hostName}` }) : null));
 
     // 開催の段階（最小人数のある会だけ）
     const stage = eventStageView(event);
@@ -125,30 +129,32 @@ export function setupEventMe() {
     const listed = participantsView(peopleData, event);
     if (listed) content.push(...peopleList(listed));
 
+    // 下に固定するのは大きなボタンだけ（2026-11-06：帯が大きくて「遅れるときは」や参加者が見えなかった）。
+    // 受付の案内・キャンセル・マップはページの一番下に。カレンダーに追加はやめた。
     const footer = [];
+    const end = [];
     const place = mapUrl(event.place);
     if (view.tone === 'ok' || view.tone === 'attended') {
       if (place) footer.push(el('a', { className: 'btn btn-block ev-primary', text: '会場への行き方', attrs: { href: place, target: '_blank', rel: 'noopener', id: 'eventMePlace' } }));
-      if (view.tone === 'ok') footer.push(el('p', { className: 'ev-fine ev-center', text: '受付は会場の QR で' }));
-      const calendar = calendarUrl(event, window.location.origin);
-      if (calendar) footer.push(el('p', { className: 'ev-center' }, el('a', { className: 'ev-link', text: 'カレンダーに追加', attrs: { href: calendar, target: '_blank', rel: 'noopener' } })));
+      if (view.tone === 'ok') end.push(el('p', { className: 'ev-fine ev-center', text: '受付は会場の QR で' }));
     }
     if (view.canReapply) {
       footer.push(el('button', { className: 'btn btn-block ev-primary', text: 'もう一度申し込む', attrs: { type: 'button', id: 'eventMeReapply' },
         on: { click: () => navigate(eventHashFor(code, 'apply')) } }));
     }
     const cancelling = cancelView(me, event);
-    if (cancelling.note) footer.push(el('p', { className: 'ev-fine ev-center', attrs: { id: 'eventMeCancelNote' }, text: cancelling.note }));
+    if (cancelling.note) end.push(el('p', { className: 'ev-fine ev-center', attrs: { id: 'eventMeCancelNote' }, text: cancelling.note }));
     if (cancelling.canCancel) {
-      footer.push(el('button', { className: 'ev-quiet', text: 'キャンセルする', attrs: { type: 'button', id: 'eventMeCancel' }, on: { click: () => cancel(event) } }));
+      end.push(el('button', { className: 'ev-quiet', text: 'キャンセルする', attrs: { type: 'button', id: 'eventMeCancel' }, on: { click: () => cancel(event) } }));
     }
     if (afterLinkShown(me, event)) {
       footer.unshift(el('button', { className: 'btn btn-block ev-primary', text: EVENT_B_WORDS.afterLink, attrs: { type: 'button', id: 'eventMeAfter' },
         on: { click: () => navigate(eventHashFor(code, 'after')) } }));
     }
     if (me.is_member && state.communities.length) {
-      footer.push(el('button', { className: 'ev-quiet', text: 'マップを開く', attrs: { type: 'button', id: 'eventMeMap' }, on: { click: () => navigate('#/map') } }));
+      end.push(el('button', { className: 'ev-quiet', text: 'マップを開く', attrs: { type: 'button', id: 'eventMeMap' }, on: { click: () => navigate('#/map') } }));
     }
+    if (end.length) content.push(el('div', { className: 'ev-body-end' }, ...end));
     paint(content, footer);
   }
 
@@ -156,7 +162,7 @@ export function setupEventMe() {
   function peopleList(listed) {
     const row = (person, near) => {
       const shown = personView(person);
-      return el('li', { className: `evb-person${shown.isMe ? ' is-me' : ''}`, attrs: { 'data-person': shown.id || '' } },
+      return el('li', { className: `evb-person${shown.isMe ? ' is-me' : ''}${shown.hidden ? ' is-hidden' : ''}`, attrs: { 'data-person': shown.id || '' } },
         avatar({ icon_id: person.icon_id, avatar_path: person.avatar_path }, 40, person.avatar_url || null),
         el('div', { className: 'evb-person-main' },
           el('div', { className: 'evb-person-name' }, el('b', { text: shown.name }),

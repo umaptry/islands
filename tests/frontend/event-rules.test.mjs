@@ -395,3 +395,14 @@ test('会のあと：2人ともメンバーのときだけ「もっと話して�
   assert.equal(rules.afterView({ people: [], me_is_member: false, join_policy: 'none' }).askJoin, false);
   assert.equal(rules.afterView(null).empty, true);
 });
+
+test('参加者：会うまで隠された人は名前の代わりに案内を出す。自分は隠さない', () => {
+  const hidden = rules.personView({ account_id: 'b', name: '', affiliation: '', job_title: 'デザイナー', hidden: true, answers: [] });
+  assert.equal(hidden.hidden, true);
+  assert.equal(hidden.name, '名前は会場で受付したあとに');
+  assert.equal(hidden.sub, 'デザイナー');
+  const me = rules.personView({ account_id: 'a', name: '私', is_me: true, hidden: true });
+  assert.equal(me.hidden, false);
+  assert.equal(me.name, '私');
+  assert.equal(rules.personView({ account_id: 'c', name: '坂内', hidden: false }).hidden, false);
+});
