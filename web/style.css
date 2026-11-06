@@ -2613,6 +2613,7 @@ a.ev-primary, a.ev-line-btn, .ev-band-btn, a.btn.ev-primary { text-decoration: n
 .ev-hint.locked { color: var(--ink-3); }
 .ev-card .ev-hint { color: var(--ink-2); }
 .ev-input:disabled { background: var(--surface-3); color: var(--ink-3); cursor: not-allowed; }
+.ev-textarea { min-height: 104px; line-height: 1.6; resize: vertical; font-family: inherit; }
 .ev-card .ev-input:disabled { background: var(--surface-3); }
 .ev-field[hidden] { display: none; }
 .ev-goal-edit { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }

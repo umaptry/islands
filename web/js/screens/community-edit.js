@@ -1,18 +1,21 @@
 // The community edit screen (#/community/:id), for an admin of that community: its name (and a form
-// to change it) and 「メンバーを招待する」: one link per community, shown as a QR code (LINE-style).
+// to change it), 「メンバーを招待する」: one link per community, shown as a QR code (LINE-style), and
+// 「イベントを作成する」 (2026-11-07): the 会 is made here, by an admin, without writing a post first.
 //
 // Reached from the community sheet on the map (「編集」 beside a community I administer). Anybody else
 // who opens the address is told it is for admins; the database refuses them in any case.
 
-import { data } from '../net.js';
-import { navigate, screen } from '../router.js';
-import { notify, state } from '../state.js';
+import { api, data } from '../net.js';
+import { navigate, screen, show } from '../router.js';
+import { notify, state, upsertPost } from '../state.js';
 import { $, avatar, clear, confirmAction, el, toast } from '../ui.js';
-import { communitiesActive, refreshCommunities } from '../communities.js';
+import { communitiesActive, currentScope, refreshCommunities } from '../communities.js';
 import { icon } from '../icons.js';
 import { config } from '../config.js';
 import { qrPng, qrSvg } from '../qr.js';
-import { isRecruiting } from '../map/reads.js';
+import { RECRUIT_TAG, isRecruiting } from '../map/reads.js';
+import { hostHash } from '../event-host-rules.js';
+import { askEventDraft } from './event-compose.js';
 import { recruitState } from '../recruit-rules.js';
 import {
   COMMUNITY_NAME_MAX, DEFAULT_EXPIRY, EXPIRY_CHOICES, activeInvites, checkCommunityName,
@@ -454,6 +457,48 @@ function invitePanel(entry) {
   return panel;
 }
 
+// ---------------------------------------------------------------- making a 会
+
+/**
+ * 「イベントを作成する」: the three steps of 会を作る (event-compose.js), with 先着人数 and 会の説明 asked on the
+ * first. The 会 is still a post (参加者募集中, on this community's map) with the 会 on it, as from the post screen,
+ * which keeps making them too. Then the host page, as after a post.
+ */
+function eventPanel(entry) {
+  let key = '';
+  let sent = '';
+  async function submit({ event, body, capacity }) {
+    const payload = {
+      body, tags: [RECRUIT_TAG], community_id: entry.id, recruit_capacity: capacity, event: { ...event, agree_terms: true },
+    };
+    // The same 会 sent again (a lost answer) is the same request: the server makes it once.
+    const fingerprint = JSON.stringify(payload);
+    if (sent !== fingerprint) { key = crypto.randomUUID(); sent = fingerprint; }
+    const made = await api.post('/api/posts', payload, { headers: { 'Idempotency-Key': key } });
+    state.myPosts = state.myPosts.filter((post) => post.id !== made.id).concat(made);
+    // Onto the map that is open only when it is this community's (another map must not get it).
+    const scope = currentScope();
+    if (scope.mode === 'community' && scope.id === entry.id) upsertPost(made);
+    if (!made.event || !made.event.public_code) throw new Error('会を作れませんでした。もう一度お試しください。');
+    toast('会を作りました。');
+    await navigate(hostHash(made.event.public_code, { fresh: true }));
+  }
+  const open = async () => {
+    const done = await askEventDraft({ capacity: null, isAdmin: true, submit });
+    // やめたら編集に戻る。ただし、その間にほかの画面へ移っていたら（別の「会を作る」に替わったときも）そのまま
+    if (!done && window.location.hash.startsWith(`#/community/${entry.id}`) && $('eventCompose').classList.contains('active')) {
+      show('communityEdit');
+    }
+  };
+  return el('section', { className: 'community-card community-events', attrs: { 'data-community-id': entry.id } },
+    el('div', { className: 'section-label', text: 'イベントを作成する' }),
+    el('p', { className: 'invite-note', text: '申し込みページと受付の QR ができます。会はこのコミュニティの地図にも載ります。' }),
+    el('button', {
+      className: 'btn btn-block invite-open', attrs: { type: 'button', id: 'communityEventCreate' }, text: 'イベントを作成する',
+      on: { click: open },
+    }));
+}
+
 // ---------------------------------------------------------------- people waiting to join
 
 /**
@@ -615,6 +660,7 @@ async function render(id) {
     el('section', { className: 'community-card community-invites', attrs: { 'data-community-id': entry.id } },
       el('div', { className: 'section-label', text: 'メンバーを招待する' }),
       invitePanel(entry)),
+    ...(config().features?.events ? [eventPanel(entry)] : []),
   );
 }
 

@@ -755,6 +755,16 @@
         <input class="ev-input" id="eventComposePlace" type="text" placeholder="例：渋谷 ○○ビル 3F" autocomplete="off">
       </label>
       <p class="ev-fixed" id="eventComposeCapacity"></p>
+      <!-- コミュニティの編集から作るときだけ（投稿画面からは、先着人数と本文を前の画面で決めている） -->
+      <label class="ev-field" id="eventComposeLimitField" hidden>
+        <span class="ev-label">先着人数</span>
+        <input class="ev-input" id="eventComposeLimit" type="number" inputmode="numeric" min="1" max="999" step="1" placeholder="例：20" autocomplete="off">
+      </label>
+      <label class="ev-field" id="eventComposeAboutField" hidden>
+        <span class="ev-label">会の説明</span>
+        <textarea class="ev-input ev-textarea" id="eventComposeAbout" rows="4" placeholder="例：仕事帰りに立ち寄れる夜の会です。初めての人も歓迎します。"></textarea>
+        <span class="ev-hint" id="eventComposeAboutHint">申し込みページの概要と、地図の投稿になります。</span>
+      </label>
       <h3 class="ev-ask">だれが申し込める？</h3>
       <div class="ev-choices" role="radiogroup" aria-label="だれが申し込めるか">
         <button class="ev-choice" id="eventComposePublic" type="button" role="radio" aria-checked="false">
