@@ -287,7 +287,9 @@ export function setupEventApply() {
     if (lineOn) {
       footer.push(el('div', { className: 'ev-why' },
         el('b', { text: 'LINE で申し込むと' }),
-        el('ul', {}, ...['1週間前と当日にリマインドが届く', '遅刻・取り消しはボタン1つで連絡できる', '近い人をいつでも見られる'].map((t) => el('li', { text: `✓ ${t}` })))));
+        el('ul', {}, ...['1週間前と当日にリマインドが届く', '遅刻・取り消しはボタン1つで連絡できる', '近い人をいつでも見られる'].map((t) => el('li', { text: `✓ ${t}` }))),
+        // LINE で送るのは core/line.py の申し込んだ会の連絡だけ（OUTBOUND_KINDS）。増やすならこの約束も見直す
+        el('p', { className: 'ev-why-promise', text: '届くのは申し込んだ会の連絡だけ。\n新しい会のお知らせや宣伝は送りません。' })));
       footer.push(el('div', { className: 'ev-line-wrap' },
         el('span', { className: 'ev-tag', text: 'おすすめ' }),
         el('button', {
