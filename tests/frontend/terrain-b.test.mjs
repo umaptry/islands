@@ -34,7 +34,7 @@ const ENERGY = {
 const setFlag = (on) => useConfig({ energy: ENERGY, features: { map_b: on } });
 
 // The same made-up island as island-b.test.mjs: coast = 2 * (60 - distance from
-// the middle), capped at 120. The start village is up in the north.
+// the middle), capped at 120.
 const N = 40;
 function payload(extra = {}) {
   const coast = new Int8Array(N * N);
@@ -52,7 +52,7 @@ function payload(extra = {}) {
   const b64 = (a) => Buffer.from(a.buffer).toString('base64');
   return {
     version: 'v1', grid: { x0: -100, y0: -100, cell: 5, n: N }, coast: b64(coast), region: b64(region), near: b64(near),
-    regions: [], start: { x: 0, y: -48 }, extent: { minX: -100, minY: -100, maxX: 100, maxY: 100 }, forest: 'grove', ...extra,
+    regions: [], extent: { minX: -100, minY: -100, maxX: 100, maxY: 100 }, forest: 'grove', ...extra,
   };
 }
 
@@ -104,8 +104,8 @@ test('under a post the ground is open (grass or a square), far from one it is fo
   assert.ok(built.field[(110 * 200) + 130] > 0.32, 'openness is in `field`');
   const far = nearest(rgbAt(built, -40, 20));
   assert.ok(['forest', 'deep'].includes(far), far);
-  // The start village is open too, with no post near it.
-  assert.ok(['grass', 'square'].includes(nearest(rgbAt(built, 0, -48))));
+  // No open ground where no post is (はじまりの村 is gone, 2026-11-07).
+  assert.ok(['forest', 'deep'].includes(nearest(rgbAt(built, 0, -48))), nearest(rgbAt(built, 0, -48)));
 });
 
 test('outside the island is sea; the shore is sand, then shallows', () => {
@@ -167,6 +167,24 @@ test('forest "mass": one canopy in the pixels, trees only along its rim', () => 
   // The payload's own choice is used when the view has none.
   reset({ forest: 'mass' });
   assert.equal(island.forestMode(), 'mass');
+});
+
+test('a road opens the forest by its tier: a track not at all, a footpath a little, a road well back', () => {
+  const fieldAt = (built, x, y) => built.field[Math.floor((y - built.minY) * built.scale) * built.width + Math.floor((x - built.minX) * built.scale)];
+  const withRoad = (tier) => {
+    reset();
+    island.setIslandBView({ forest: 'mass', roads: tier ? [[-40, -20, -40, 40, tier]] : [], roadsKey: `t${tier}` });
+    return computeB(options);
+  };
+  // 6 world units beside the road's middle (it bows a little: roads-b.js ROAD_BEND), in the forest.
+  const [none, track, path, road] = [0, 1, 2, 3].map((tier) => withRoad(tier));
+  const beside = (built) => fieldAt(built, -40 + 3.6 + 6, 10);
+  assert.equal(beside(track), beside(none), 'a track does not open the forest');
+  assert.ok(beside(path) > beside(none), 'a footpath opens it a little');
+  assert.ok(beside(road) > beside(path), 'a road more');
+  assert.ok(beside(road) > 0.32 && beside(path) < 0.32, `${beside(road)} ${beside(path)}`);
+  // The track is cut into the canopy instead: the pixels differ from the ground without it.
+  assert.ok(!Buffer.from(track.pixels.buffer).equals(Buffer.from(none.pixels.buffer)), 'the track shows');
 });
 
 test('the same inputs give the same ground and the same trees', () => {

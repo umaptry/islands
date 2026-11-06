@@ -35,16 +35,18 @@ import { offThread, offThreadDetail, offThreadWarm } from './offthread.js';
 import { groundOf } from './coast.js';
 import { bActive, useIslandB } from './land.js';
 import {
-  coastAt, extentB, isLandB, islandB, islandBKey, islandBView, mapBOn, previewParam, regionAt, regionsB, setIslandBView, startB,
+  coastAt, extentB, isLandB, islandB, islandBKey, islandBView, mapBOn, previewParam, regionAt, regionsB, setIslandBView,
 } from './island-b.js';
 import {
-  borderLook, borderPoints, drawBorders, drawFlag, flagSize, frameOf, makeFaceCrowd, placeNames, regionText, thinBorders,
+  borderLook, borderPoints, drawBorders, frameOf, makeFaceCrowd, placeNames, regionText, thinBorders,
 } from './regions-b.js';
 import { ROAD_WIDTH, hasRoadsB, nearRoadB, roadCurves, roadIndex, setRoadsB, demoPairs } from './roads-b.js';
 import { homestead, homesteadReach } from './homestead.js';
 import { isRecruiting, isUnreadRecruit } from './reads.js';
 import { buzz } from '../feedback.js';
-import { playSe } from '../audio.js';
+import { playSe, setSeaLevel } from '../audio.js';
+import { seaLevel } from '../ambience.js';
+import { reliefLift, reliefOn } from './terrain-b.js';
 import { HOUSE_TIERS, HOUSE_WIDTH, houseScore, houseSpot, houseTier, houseTurn, partsOf } from './mesh.js';
 import { houseBox, thinHouses } from './house-thin.js';
 import { PALETTE, SUN, TIMES, addressParam, timeOfDay } from './palette.js';
@@ -88,8 +90,33 @@ const DEEP_AT = 4;
 // between the overview and there, the map showed so much text at once on a
 // phone that nothing stood out.
 const DETAIL_AT = 2.9;
+const REGION_ZOOM = 2.2;   // map B: a tap on a region's name (seen from afar) comes in this close (x the whole-island view)
 // Zoom per pixel of wheel or trackpad-pinch movement (see the wheel handler).
 const WHEEL_ZOOM = 0.00375;
+
+// Map B: the waves and gulls are as loud as the view is near the sea (ambience.js seaLevel), asked a
+// few times a second from how much of the screen is sea.
+let seaHeardAt = 0;
+function followSea(z) {
+  const now = performance.now();
+  if (now - seaHeardAt < 400) return;
+  seaHeardAt = now;
+  if (!bActive()) {
+    setSeaLevel(1);
+    return;
+  }
+  const rows = 8;
+  const cols = 6;
+  const tall = height - frame.top - frame.bottom;
+  let sea = 0;
+  for (let j = 0; j < rows; j += 1) {
+    for (let i = 0; i < cols; i += 1) {
+      const at = toWorld(((i + 0.5) / cols) * width, frame.top + ((j + 0.5) / rows) * tall);
+      if (coastAt(at.x, at.y) < 0) sea += 1;
+    }
+  }
+  setSeaLevel(seaLevel({ z, seaShare: sea / (rows * cols) }));
+}
 
 function zoomLevel() {
   const fit = state.camera.fit || state.camera.scale;
@@ -299,10 +326,21 @@ function seaBox() {
   return box;
 }
 
+// TRIAL ?relief=1 (terrain-b.js reliefOn): what stands on the island is drawn as high as the ground under
+// it. The ground's own pictures are lifted already, so they are placed with toScreenFlat.
+let reliefNow = false;   // reliefOn(), asked once a frame (render)
 const toScreen = (x, y) => ({
+  x: x * state.camera.scale + state.camera.x,
+  y: (reliefNow ? y - reliefLift(x, y) : y) * state.camera.scale + state.camera.y,
+});
+const toScreenFlat = (x, y) => ({
   x: x * state.camera.scale + state.camera.x,
   y: y * state.camera.scale + state.camera.y,
 });
+
+/** The y a point is drawn at, in world units: lifted onto the relief. The camera aims there (zoomTo,
+ * focusOn), or a house on high ground came to rest above where it was meant to be (2026-11-06). */
+const shownY = (x, y) => (reliefNow ? y - reliefLift(x, y) : y);
 
 const toWorld = (x, y) => ({
   x: (x - state.camera.x) / state.camera.scale,
@@ -329,12 +367,15 @@ export function viewport(margin = 120) {
   };
 }
 
-/** Ease the camera onto a post without changing the zoom. */
-export function focusOn(post, { lift = 0.34 } = {}) {
+/** Ease the camera onto a post without changing the zoom. `card`: where a tapped post goes, clear of its
+ * card (tapSpot), instead of `lift` of the way down. */
+export function focusOn(post, { lift = 0.34, card = false } = {}) {
   if (!post) return;
   const { scale } = state.camera;
-  const targetX = width / 2 - post.x * scale;
-  const targetY = height * lift - post.y * scale;
+  const spot = card ? tapSpot() : null;
+  const aimY = post.id != null ? houseMiddle(post) : shownY(post.x, post.y);
+  const targetX = (spot ? spot.x : width / 2) - post.x * scale;
+  const targetY = (spot && spot.y != null ? spot.y : height * lift) - aimY * scale;
   if (REDUCED_MOTION) {
     state.camera.x = targetX;
     state.camera.y = targetY;
@@ -364,7 +405,7 @@ let tween = 0;
  * Reduced motion jumps straight there. (`t` never goes below 0: a frame's clock
  * can be older than the moment of the call, which used to start with a shrink.)
  */
-export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = null, then } = {}) {
+export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = null, then, lifted = false } = {}) {
   cancelAnimationFrame(tween);
   frame = insets();
   const from = { ...state.camera };
@@ -373,7 +414,8 @@ export function zoomTo(worldX, worldY, targetScale, { lift = 0.5, x = null, y = 
   // `y`, in canvas px, puts the point exactly there instead of `lift` of the
   // way down the free frame.
   const anchorY = y ?? frame.top + Math.max(120, height - frame.top - frame.bottom) * lift;
-  const goal = viewHolding(worldX, worldY, anchorX, anchorY, to);
+  // `lifted`: worldY is where the thing is drawn already (houseMiddle).
+  const goal = viewHolding(worldX, lifted ? worldY : shownY(worldX, worldY), anchorX, anchorY, to);
   const duration = REDUCED_MOTION ? 0 : 480;
   const began = performance.now();
   const step = (now) => {
@@ -421,6 +463,50 @@ function zoomToIsland(island) {
   // Short of where faces start (faceScale): opening an island is a look at it,
   // and the posts are still dots; a small island then stays a little small.
   zoomTo((minX + maxX) / 2, (minY + maxY) / 2, Math.min(clampScale(room), faceScale() * 0.9), { lift: 0.5 });
+}
+
+/** The village a change is about: by its id when that village is still on the map, otherwise the
+ * village of the nearest post within CHANGE_NEAR of (x, y). */
+function villageAt(x, y, id = null) {
+  const same = id ? (state.islands || []).find((island) => island.island_id === id) : null;
+  if (same) return same;
+  const posts = state.worldPosts && state.worldPosts.length ? state.worldPosts : state.posts;
+  let best = null;
+  posts.forEach((post) => {
+    const d = Math.hypot(post.x - x, post.y - y);
+    if (d < CHANGE_NEAR && (!best || d < best.d)) best = { d, post };
+  });
+  return best ? islandOfPost(best.post.id) : null;
+}
+
+/** From the list of what changed (meet.js): come in on the village at (x, y), as a tap on its name does,
+ * framed in the map left showing over the half-height sheet (2026-11-06, the user: the row only slid
+ * the map, at the zoom it had). */
+export function zoomToChange(x, y, id = null) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const island = villageAt(x, y, id);
+  const spot = tapSpot();
+  frame = insets();
+  const top = frame.top;
+  const bottom = spot.y == null ? height - frame.bottom : spot.y * 2 - top;
+  if (!island) {
+    zoomTo(x, y, Math.max(state.camera.scale, faceScale() * 0.6), spot);
+    return;
+  }
+  emphasis = { id: islandKey(island), until: performance.now() + 1800 };
+  // Every house of it, not only the posts loaded for the view the map had.
+  const ids = new Set(island.post_ids || []);
+  const members = (state.worldPosts && state.worldPosts.length ? state.worldPosts : state.posts).filter((post) => ids.has(post.id));
+  let [minX, maxX, minY, maxY] = [island.cx, island.cx, island.cy, island.cy];
+  members.forEach((post) => {
+    const r = bActive() ? CHANGE_GLOW_R * 1.6 : radiusOf(post);
+    minX = Math.min(minX, post.x - r);
+    maxX = Math.max(maxX, post.x + r);
+    minY = Math.min(minY, post.y - r);
+    maxY = Math.max(maxY, post.y + r);
+  });
+  const room = Math.min(Math.max(120, width - 32) / Math.max(1, maxX - minX), Math.max(80, bottom - top - 16) / Math.max(1, maxY - minY));
+  zoomTo((minX + maxX) / 2, (minY + maxY) / 2, Math.min(clampScale(room), faceScale() * 0.9), spot);
 }
 
 // Posts are dots until the map is zoomed in this far, as a share of the largest
@@ -698,21 +784,40 @@ function zoomAround(point, requested, absolute = false) {
   state.camera.y = cy - localY * next;
 }
 
-// Tapped with no post open, the face slides to the middle of the screen, a
-// quarter of the way down (25vh), clear of the half-height sheet opening under
-// it. With a post already open the map stays put, so you can go from face to
-// face without the ground moving each time (2026-10-16).
-const TAP_SPOT = 0.25;
+// Tapped with no post open, the post slides to the middle of the map left
+// showing over the half-height sheet opening under it: halfway from the bar at
+// the top to the sheet's top edge (2026-11-06, the user: a quarter of the way
+// down the screen left the house high, under the bar's chips). With a post
+// already open the map stays put, so you can go from face to face without the
+// ground moving each time (2026-10-16).
+const SHEET_SHARE = 0.5;   // the sheet's height on a phone, of the screen's (style.css .sheet)
 
 function tapSpot() {
   const box = canvas.getBoundingClientRect();
-  let x = width / 2;
   if (desktopSheet()) {
     // A window just wide enough for the side panel has its middle under it.
     const panel = document.getElementById('sheet').getBoundingClientRect();
-    x = Math.max(x, panel.right - box.left + 48);
+    return { x: Math.max(width / 2, panel.right - box.left + 48), y: null };
   }
-  return { x, y: window.innerHeight * TAP_SPOT - box.top };
+  frame = insets();
+  const screenH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const sheetTop = screenH * (1 - SHEET_SHARE) - box.top;
+  return { x: width / 2, y: (frame.top + sheetTop) / 2 };
+}
+
+// Map B: a house rises from its post's spot, so its middle is this far up (world units, about a
+// third of its width): that is what goes to the middle, not its foot.
+const HOUSE_MIDDLE = 0.35;
+
+/** The world y the camera aims at for a post: its house's middle on map B, lifted onto the relief. */
+function houseMiddle(post) {
+  const y = shownY(post.x, post.y);
+  return bActive() ? y - HOUSE_UNITS * HOUSE_B * HOUSE_MIDDLE : y;
+}
+
+/** Fly to a post at `scale`, its house into the tap spot. */
+function zoomToPost(post, scale, then) {
+  zoomTo(post.x, houseMiddle(post), scale, { ...tapSpot(), then, lifted: true });
 }
 
 function pick(event) {
@@ -727,7 +832,10 @@ function pick(event) {
       ? x >= hit.box.left && x <= hit.box.right && y >= hit.box.top && y <= hit.box.bottom
       : Math.hypot(hit.x - x, hit.y - y) <= hit.r;
     if (!inside) continue;
-    if (hit.islandName) {
+    if (hit.region) {
+      playSe('pop');
+      zoomTo(hit.region.x, hit.region.y, (state.camera.fit || state.camera.scale) * REGION_ZOOM);
+    } else if (hit.islandName) {
       // The name of an island seen from near or deep: the card, never a fly-in.
       if (islandTapHandler) islandTapHandler({ key: islandKey(hit.islandName), island: hit.islandName, x, y });
     } else if (hit.island) {
@@ -739,21 +847,21 @@ function pick(event) {
       // Your own post from far away: come in close first, then open it.
       const { post } = hit;
       playSe('pop');
-      zoomTo(post.x, post.y, postZoom(), { ...tapSpot(), then: () => onPick(post) });
+      zoomToPost(post, postZoom(), () => onPick(post));
     } else if (hit.stack) {
       // Several posts on one spot at full zoom: the list of them.
       playSe('pop');
-      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, state.camera.scale, tapSpot());
+      if (!sheetOpen()) zoomToPost(hit.post, state.camera.scale);
       onStack(hit.stack);
     } else if (hit.dot) {
       // A dot is a face still waiting for room: come closer - its face shows
       // up on the way, or steps aside at full zoom - and open it there.
       const { post } = hit;
       playSe('pop');
-      zoomTo(post.x, post.y, postZoom(), { ...tapSpot(), then: () => onPick(post) });
+      zoomToPost(post, postZoom(), () => onPick(post));
     } else {
       playSe('pop');
-      if (!sheetOpen()) zoomTo(hit.post.x, hit.post.y, postZoom(), tapSpot());
+      if (!sheetOpen()) zoomToPost(hit.post, postZoom());
       onPick(hit.post);
     }
     return true;
@@ -796,6 +904,7 @@ function render() {
   if (!ctx || !width || !height) return;
   const time = (performance.now() - started) / 1000;
   hits = [];
+  reliefNow = bActive() && reliefOn();
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = config().energy.biome_colors.sea;
   ctx.fillRect(0, 0, width, height);
@@ -873,7 +982,7 @@ function liftLandAtNight(terrain, closeUp, grid, alpha) {
   ctx.globalCompositeOperation = 'screen';
   if (grid) {
     ctx.globalAlpha = NIGHT_LAND;
-    const origin = toScreen(grid.minX, grid.minY);
+    const origin = toScreenFlat(grid.minX, grid.minY);
     const { scale } = state.camera;
     ctx.drawImage(grid.canvas, origin.x, origin.y, (grid.maxX - grid.minX) * scale, (grid.maxY - grid.minY) * scale);
   }
@@ -1133,8 +1242,6 @@ const TOWN_PX = [14, 20];
 const MINE = PALETTE.accent;
 const LABEL_FONT = '700 13px system-ui, sans-serif';
 const SMALL_FONT = '600 11px system-ui, sans-serif';
-// Map B zoomed out: a village's name under the regions' (11px), so the whole island still reads (2026-11-02).
-const VILLAGE_FAR_FONT = '600 10px system-ui, sans-serif';
 
 // While searching or filtering, the posts that do not match stay on the map at
 // this strength and cannot be tapped. The islands - ground, towns, names - are
@@ -1214,6 +1321,7 @@ function renderMap(time) {
   // moving things can keep off the land the way the routes do.
   const ground = withTrialGround(groundPosts());
   syncRoadsB();
+  syncVillagesB();
   const view = {
     sea: seaBox(), toScreen, width, height, scale: state.camera.scale, maxScale: clampScale(Infinity), minScale: clampScale(0),
     // Map B: the sea's marks and boats ask the island's shape instead of the posts' ground.
@@ -1222,6 +1330,7 @@ function renderMap(time) {
   };
   const { scale } = state.camera;
   const { z, level } = zoomLevel();
+  followSea(z);
   const far = level === 'far';
   const meId = state.account ? state.account.id : null;
   const ceiling = frame.top + 10;
@@ -1294,7 +1403,7 @@ function renderMap(time) {
   }
   if (grid) {
     lastGround = { canvas: grid.canvas, minX: grid.minX, minY: grid.minY, maxX: grid.maxX, maxY: grid.maxY };
-    const origin = toScreen(grid.minX, grid.minY);
+    const origin = toScreenFlat(grid.minX, grid.minY);
     ctx.drawImage(grid.canvas, origin.x, origin.y, (grid.maxX - grid.minX) * scale, (grid.maxY - grid.minY) * scale);
   }
   if (before) paintGround(before, 1);
@@ -1482,6 +1591,8 @@ function renderMap(time) {
   // and not while the map is showing who joined a post.
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
   if (matchBeams) paintMatchBeams(lineView);
+  // Map B: a village where something changed has its ground lit, under its houses.
+  if (bActive() && changeStyle() === 'glow') paintChangeGlow(time, 'ground');
 
   // Houses and landmarks, back to front. (There is no town any more: an island
   // keeps a small box where its town stood, for its name, its tap and its glints.)
@@ -1508,7 +1619,7 @@ function renderMap(time) {
     standing.push({
       foot: house.foot,
       draw: () => {
-        if (house.mine) mineRings(house);
+        if (house.mine) mineGlow(house);
         drawHouse(ctx, house.x, house.foot, house.size, { alpha: house.alpha, calm: house.calm, seed: house.seed, tier: house.tier });
       },
     });
@@ -1520,13 +1631,15 @@ function renderMap(time) {
     });
   });
   standing.sort((a, b) => a.foot - b.foot).forEach((item) => item.draw());
-  // Map B: the region borders and the flag over the trees and houses.
+  // Map B: the region borders over the trees and houses.
   if (bActive()) paintRegionsB();
   drawPlanes(ctx, lineView, linePlan, time);
   // The fog goes under the time-of-day layers so its edge takes the evening or
   // night colour with the rest of the sea.
   drawFog(ctx, view);
   paintTimeOfDay();
+  // The light over the evening and night tint, as the windows' are: under it the glow went dark.
+  if (bActive() && changeStyle() === 'glow') paintChangeGlow(time, 'light');
   if (tod === 'night') paintNightLights(places, townShow, calmOf, houses, props);
   // Over the time-of-day tint, so the glints stay white at any hour.
   if (far && freshIslands.size && !bActive()) drawFreshGlow(places, motion);
@@ -1547,19 +1660,22 @@ function renderMap(time) {
   const minePosts = new Set(visible.filter((entry) => entry.mine).map((entry) => entry.post.id));
   const weight = (place) => Number(place.island.people) || place.members.size;
   nameBoxes = [];
-  // Map B: はじまりの村 and the regions' names claim their room before the villages'.
+  // Map B: the regions' names claim their room before the villages'.
   if (bActive()) claimNamesB(claim, label, far);
   ctx.save();
-  [...places].sort((a, b) => weight(b) - weight(a)).forEach((place) => {
+  // Map B zoomed out: the regions' names only. With the villages' too the map could not be seen, and a
+  // village's name over a region's often missed the tap (2026-11-06, the user): pick a region first,
+  // and the villages are named once you come in.
+  if (!(bActive() && far)) [...places].sort((a, b) => weight(b) - weight(a)).forEach((place) => {
     const { island, box } = place;
     if (box.bottom < ceiling - 4) return;
-    const nameFont = bActive() && far ? VILLAGE_FAR_FONT : LABEL_FONT;
+    const nameFont = LABEL_FONT;
     ctx.font = nameFont;
     const textWidth = ctx.measureText(island.label).width;
     const lit = emphasis.id === islandKey(island) && performance.now() < emphasis.until;
     const mine = [...place.members].some((id) => minePosts.has(id));
-    // Map B: a village of one or two posts is not named from afar (three and over), nor of one close in.
-    if (bActive() && !lit && !mine && place.members.size < (far ? 3 : 2)) return;
+    // Map B: a village of one post is not named.
+    if (bActive() && !lit && !mine && place.members.size < 2) return;
     let anchor = box.top - 10;
     if (!far) {
       // Zoomed in, the name rides above the island's highest face, so it is
@@ -1577,7 +1693,7 @@ function renderMap(time) {
         // screen) a name may rise to the top edge.
         const spotX = keepOnScreen(place.x + shift * textWidth, textWidth);
         const candidate = Math.max(14, anchor + offset);
-        if (claim(spotX, candidate, textWidth, nameFont === LABEL_FONT ? 15 : 12)) {
+        if (claim(spotX, candidate, textWidth, 15)) {
           x = spotX;
           y = candidate;
           break spots;
@@ -1612,6 +1728,7 @@ function renderMap(time) {
       hits.push({ box: around, island: place.island });
     });
     drawPinsFar(visible, places, claim, meId, motion);
+    if (bActive()) hits.push(...regionHitsB);
   } else {
     // Under the faces in the hit list, so a post on a name wins the tap.
     if (islandTapHandler) {
@@ -1640,7 +1757,17 @@ function renderMap(time) {
     if (entry.alpha !== undefined) ctx.globalAlpha *= entry.alpha;
     if (entry.lit) litPill(entry);
     ctx.font = entry.font;
-    ctx.lineWidth = entry.font === LABEL_FONT ? 4.5 : entry.font === REGION_FONT || entry.font === VILLAGE_FAR_FONT ? 2.5 : 3.5;
+    if (entry.spaced) {
+      // A region's name: spread out and pale, like the name of an area on a paper map.
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = 'rgba(29, 95, 144, .38)';
+      spacedText(entry.text, entry.x, entry.y, entry.spaced, true);
+      ctx.fillStyle = 'rgba(255,255,255,.82)';
+      spacedText(entry.text, entry.x, entry.y, entry.spaced, false);
+      ctx.restore();
+      return;
+    }
+    ctx.lineWidth = entry.font === LABEL_FONT ? 4.5 : entry.font === REGION_FONT ? 2.5 : 3.5;
     ctx.strokeStyle = INK.halo;
     ctx.strokeText(entry.text, entry.x, entry.y);
     ctx.fillStyle = entry.soft ? 'rgba(255,255,255,.9)' : INK.label;
@@ -1654,6 +1781,27 @@ function renderMap(time) {
 // ---------------------------------------------------------------- map B
 
 const REGION_FONT = '600 11px system-ui, sans-serif';
+// Zoomed out, the regions' names are spread out and pale, like the name of an area on a paper map.
+const REGION_FONT_FAR = '500 12px system-ui, sans-serif';
+const REGION_SPACING = 3;   // px between the letters of a region's name
+
+/** The width of a name drawn with `spacing` px between its letters (ctx.font set). */
+function spacedWidth(text, spacing) {
+  return [...text].reduce((sum, ch) => sum + ctx.measureText(ch).width, 0) + spacing * Math.max(0, [...text].length - 1);
+}
+
+/** Strokes or fills a name letter by letter round its middle x (canvas letterSpacing is not in every Safari). */
+function spacedText(text, x, y, spacing, stroke) {
+  const chars = [...text];
+  let at = x - spacedWidth(text, spacing) / 2;
+  ctx.textAlign = 'left';
+  chars.forEach((ch) => {
+    if (stroke) ctx.strokeText(ch, at, y); else ctx.fillText(ch, at, y);
+    at += ctx.measureText(ch).width + spacing;
+  });
+  ctx.textAlign = 'center';
+}
+
 let bordersKept = { key: null, points: [] };
 
 /** The region borders in world units, made once per island and community (the shore moves with it). */
@@ -1667,34 +1815,48 @@ function bordersB() {
   return bordersKept.points;
 }
 
-function paintRegionsB() {
-  const look = borderLook(state.camera.scale);
-  const dots = thinBorders(bordersB(), toScreen, { width, height, top: 0, gap: look.gap });
-  drawBorders(ctx, dots, look);
-  const start = startB();
-  if (!start) return;
-  const at = toScreen(start.x, start.y);
-  if (at.x < -40 || at.x > width + 40 || at.y < -40 || at.y > height + 60) return;
-  drawFlag(ctx, at.x, at.y, flagSize(state.camera.scale));
+// The border's points lifted onto the relief once, not every frame: there are thousands of them.
+let bordersLifted = { from: null, points: null };
+function bordersShownB() {
+  const points = bordersB();
+  if (!reliefNow) return points;
+  if (bordersLifted.from !== points) bordersLifted = { from: points, points: points.map(([x, y]) => [x, y - reliefLift(x, y)]) };
+  return bordersLifted.points;
 }
 
-/** はじまりの村 and (zoomed out) the regions' names, in the label space, most important first. */
+function paintRegionsB() {
+  const look = borderLook(state.camera.scale);
+  const dots = thinBorders(bordersShownB(), toScreenFlat, { width, height, top: 0, gap: look.gap });
+  drawBorders(ctx, dots, look);
+}
+
+// The regions' names as tap targets: added to the hits after the villages and faces (render), so a
+// name wins over the unnamed village or the house it is written over.
+let regionHitsB = [];
+
+/** Zoomed out, the regions' names, in the label space. */
 function claimNamesB(claim, label, far) {
-  const start = startB();
+  regionHitsB = [];
   const onScreen = (p) => p.x > -60 && p.x < width + 60 && p.y > frame.top + 10 && p.y < height + 20;
-  const startAt = start ? toScreen(start.x, start.y) : null;
+  ctx.save();
+  ctx.font = REGION_FONT_FAR;
   const regions = regionsB().map((region) => {
     const p = toScreen(region.x, region.y);
-    return { text: regionText(region), x: p.x, y: p.y, font: REGION_FONT, soft: true };
+    const text = regionText(region);
+    return { text, x: p.x, y: p.y, font: REGION_FONT_FAR, soft: true, spaced: REGION_SPACING, w: spacedWidth(text, REGION_SPACING) + 4, region };
   }).filter(onScreen);
+  ctx.restore();
   ctx.save();
   const placed = placeNames({
-    start: startAt && onScreen(startAt) ? { text: 'はじまりの村', x: startAt.x + 4, y: startAt.y + 14, font: far ? VILLAGE_FAR_FONT : LABEL_FONT } : null,
     regions, far, claim,
     measure: (entry) => { ctx.font = entry.font; return ctx.measureText(entry.text).width; },
   });
   ctx.restore();
-  placed.forEach((entry) => label(entry.text, entry.x, entry.y, entry.font, entry.soft ? { soft: true } : {}));
+  placed.forEach((entry) => {
+    label(entry.text, entry.x, entry.y, entry.font, entry.soft ? { soft: true, spaced: entry.spaced, kind: entry.kind } : {});
+    // A region's name brings you into the region (its villages answer a tap; the region did not).
+    if (entry.region) regionHitsB.push({ box: { left: entry.x - entry.w / 2 - 6, right: entry.x + entry.w / 2 + 6, top: entry.y - 12, bottom: entry.y + 12 }, region: entry.region });
+  });
 }
 
 // Map B: the lines between people who met are roads laid into the ground itself (terrain-b.js cuts
@@ -1742,8 +1904,43 @@ function syncRoadsB() {
   // The ground is built from these (in the worker too), and rebuilt when they change.
   setIslandBView({
     roads: pairs.map(({ a, b, tier }) => [a.x, a.y, b.x, b.y, tier || 1]),
-    roadsKey: pairs.length ? roadsHash(key) : '',
+    roadsKey: pairs.length ? roadsHash(`${key}|${previewParam('trail') || ''}`) : '',
+    trail: previewParam('trail'),   // TRIAL (terrain-b.js trailStyle)
+    relief: previewParam('relief'), // TRIAL (terrain-b.js reliefOn)
   });
+}
+
+// A village's houses are joined on the ground (2026-11-06, the user: with the clearings narrower they no
+// longer read as one place) - the clearing runs between neighbours (the shortest links that join
+// them all, none longer than VILLAGE_LINK_MAX), so a village is one patch of grass.
+const VILLAGE_LINK_MAX = 70;   // world units
+let villagesFrom = null;
+function syncVillagesB() {
+  const on = bActive();
+  const islands = on ? state.worldIslands || state.islands : null;
+  if (islands === villagesFrom) return;
+  villagesFrom = islands;
+  if (!on) { setIslandBView({ villageLinks: null, villageKey: '' }); return; }
+  const posts = state.worldPosts && state.worldPosts.length ? state.worldPosts : state.posts;
+  const at = new Map(posts.map((post) => [post.id, post]));
+  const links = [];
+  (islands || []).forEach((island) => {
+    const members = (island.post_ids || []).map((id) => at.get(id)).filter(Boolean);
+    // Prim's: from the first house, each time the nearest house not yet joined.
+    const joined = members.slice(0, 1);
+    const rest = members.slice(1);
+    while (rest.length) {
+      let best = null;
+      rest.forEach((q, qi) => joined.forEach((p) => {
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (!best || d < best.d) best = { d, p, qi };
+      }));
+      const [q] = rest.splice(best.qi, 1);
+      joined.push(q);
+      if (best.d <= VILLAGE_LINK_MAX) links.push([best.p.x, best.p.y, q.x, q.y]);
+    }
+  });
+  setIslandBView({ villageLinks: links, villageKey: roadsHash(links.map((l) => l.map(Math.round).join(',')).join(';')) });
 }
 
 /** The ground texture, at an opacity (it fades in while a new post lands).
@@ -1751,11 +1948,11 @@ function syncRoadsB() {
  * coarser coastline would show round the edges of the sharp one. */
 function paintGround(terrain, alpha, hole = null) {
   if (alpha <= 0) return;
-  const origin = toScreen(terrain.minX, terrain.minY);
+  const origin = toScreenFlat(terrain.minX, terrain.minY);
   ctx.save();
   if (hole) {
-    const from = toScreen(hole.minX, hole.minY);
-    const to = toScreen(hole.minX + hole.width / hole.scale, hole.minY + hole.height / hole.scale);
+    const from = toScreenFlat(hole.minX, hole.minY);
+    const to = toScreenFlat(hole.minX + hole.width / hole.scale, hole.minY + hole.height / hole.scale);
     ctx.beginPath();
     ctx.rect(0, 0, width, height);
     ctx.rect(from.x, from.y, to.x - from.x, to.y - from.y);
@@ -2388,7 +2585,7 @@ function bakeTreeLayer(trees, marks, thin, step, key) {
     if (bins.size && nearHouse(tree)) return;
     if (marks.length && nearMark(tree)) return;
     if (roads && nearRoadB(tree.x, tree.y)) return;
-    shown.push({ tree, p: { x: (tree.x - minX) * built, y: (tree.y - minY) * built }, size });
+    shown.push({ tree, p: { x: (tree.x - minX) * built, y: (tree.y - minY - (reliefNow ? reliefLift(tree.x, tree.y) : 0)) * built }, size });
   });
   lctx.fillStyle = REEF_RING;
   shown.forEach(({ tree, p }) => {
@@ -2428,7 +2625,7 @@ function drawTreeLayer(trees, marks, thin, settled) {
   const stale = !treeLayer || treeLayer.trees !== trees || treeLayer.key !== key || !covers;
   if (stale && (!treeLayer || treeLayer.trees !== trees || settled)) bakeTreeLayer(trees, marks, thin, step, key);
   if (!treeLayer) return;
-  const origin = toScreen(treeLayer.minX, treeLayer.minY);
+  const origin = toScreenFlat(treeLayer.minX, treeLayer.minY);
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
@@ -2686,24 +2883,29 @@ function revealStage(now) {
 
 // ---------------------------------------------------------------- pins
 
-// Map B: your own house among the others (2026-11-04, the user chose 案C): rings spread over the ground
-// from its foot, as they do round your post zoomed out, and before the faces show it carries the
-// 「あなた」 tag its face has close up.
+// Map B: your own house among the others. The ground round its foot glows warm (2026-11-06, the user
+// chose this over orange rings, which looked like a cheap digital effect beside the rest, and over a
+// flag), and before the faces show it carries the 「あなた」 tag its face has close up.
 
-/** Your house: orange rings spreading over the ground from its foot. */
-function mineRings(house) {
+/** Your house: the ground round its foot lit warm, as by a lamp at dusk, breathing slowly. */
+function mineGlow(house) {
   const t = performance.now() / 1000;
+  const breathe = REDUCED_MOTION ? 0.5 : (Math.sin(t * 1.6) + 1) / 2;
+  const r = house.size * (1.05 + 0.08 * breathe);
+  const cy = house.foot - house.size * 0.12;
   ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = MINE;
-  [0, 0.5].forEach((phase) => {
-    const cycle = (t * 0.45 + phase) % 1;
-    const rx = house.size * (0.55 + cycle * 0.9);
-    ctx.globalAlpha = Math.max(0, 1 - cycle ** 1.5) * 0.85;
-    ctx.beginPath();
-    ctx.ellipse(house.x, house.foot - house.size * 0.12, rx, rx * 0.5, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  });
+  ctx.translate(house.x, cy);
+  ctx.scale(1, 0.55);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+  g.addColorStop(0, 'rgba(255, 214, 120, 0.85)');
+  g.addColorStop(0.45, 'rgba(255, 190, 90, 0.5)');
+  g.addColorStop(1, 'rgba(255, 170, 70, 0)');
+  ctx.globalAlpha *= 0.6 + 0.3 * breathe;
+  ctx.globalCompositeOperation = 'screen';
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -3143,6 +3345,7 @@ function drawFaces(visible, claim, level, motion, talk, stage, named) {
       const shown = drawPostPin(ctx, peak.x, peak.y + 3, {
         heat: post.motivation, initial: initialOf(post.display_name), face: faceOf(post),
         size: mine || selected ? 20 : 16, time: null, phase, mine: mine && !dim, selected,
+        ring: false,   // the ground under your house glows instead (mineGlow)
         openedFor: selected ? openedFor(post.id, motion) : null,
         recruit: isUnreadRecruit(post, meId) && !dim, recruitQuiet: mine && !dim && isRecruiting(post), night,
       });
@@ -3468,7 +3671,7 @@ function drawRipples() {
  * until you look at it from the list. */
 function drawChangeMarks(time) {
   const marks = state.changeMarks || [];
-  if (!marks.length) return;
+  if (!marks.length || (bActive() && changeStyle() === 'glow')) return;
   const breathe = REDUCED_MOTION ? 0 : (Math.sin(time * 2) + 1) / 2;
   ctx.save();
   marks.forEach((mark) => {
@@ -3487,6 +3690,90 @@ function drawChangeMarks(time) {
     ctx.globalAlpha = 1;
   });
   ctx.restore();
+}
+
+// TRIAL ?change= (2026-11-06, the user: the red rings did not go with the rest; better the village's own
+// ground a little lit): glow (default on map B) | ring (as before).
+const changeStyle = () => (previewParam('change') === 'ring' ? 'ring' : 'glow');
+// Stronger than at first (2026-11-07, the user: so faint it could not be seen at a glance): a warm gold
+// laid over the ground, then lightened, and reaching a little past the clearing onto the forest's edge.
+// It grows and shrinks with the map like the clearing it lights (the user: zoomed out, a floor of 18px
+// made it far bigger than the village).
+const CHANGE_GLOW_R = 12;      // world units of light round each house (its clearing and a little more)
+const CHANGE_GLOW_MIN = 4;     // px: only so that a far-out village still has a speck
+const CHANGE_GLOW_MAX = 84;    // px: close in, round the houses, not a fog over the village
+const CHANGE_NEAR = 30;        // world units: a change this close to a house is that house's village's
+let changeCanvas = null;
+let changeBox = null;       // where the ground pass put changeCanvas, for the light pass
+
+/** The ground of each village with something changed (state.changeMarks), lit warm and breathing: soft
+ * light round its houses and along the grass between them, the overlaps not adding up. */
+function paintChangeGlow(time, pass) {
+  const breathe = REDUCED_MOTION ? 0.5 : (Math.sin(time * 1.8) + 1) / 2;
+  if (pass === 'light') {
+    if (!changeBox) return;
+    const { left, top, w, h } = changeBox;
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = 0.4 + 0.35 * breathe;
+    ctx.drawImage(changeCanvas, left, top, w, h);
+    ctx.restore();
+    return;
+  }
+  changeBox = null;
+  const marks = state.changeMarks || [];
+  if (!marks.length) return;
+  const posts = state.worldPosts && state.worldPosts.length ? state.worldPosts : state.posts;
+  const { scale } = state.camera;
+  const r = Math.max(CHANGE_GLOW_MIN, Math.min(CHANGE_GLOW_MAX, CHANGE_GLOW_R * scale));
+  const spots = [];
+  const done = new Set();
+  marks.forEach((mark) => {
+    const island = villageAt(mark.x, mark.y, mark.island);
+    const key = island ? islandKey(island) : `${mark.x},${mark.y}`;
+    if (done.has(key)) return;
+    done.add(key);
+    if (!island) { spots.push(toScreen(mark.x, mark.y)); return; }
+    const ids = new Set(island.post_ids || []);
+    const members = posts.filter((post) => ids.has(post.id));
+    members.forEach((post) => spots.push(toScreen(post.x, post.y)));
+    // The grass between neighbours (syncVillagesB): light along it too, so the village is one patch.
+    (islandBView().villageLinks || []).forEach(([ax, ay, bx, by]) => {
+      if (!members.some((p) => p.x === ax && p.y === ay)) return;
+      const n = Math.ceil(Math.hypot(bx - ax, by - ay) * scale / (r * 0.6));
+      for (let i = 1; i < n; i += 1) spots.push(toScreen(ax + ((bx - ax) * i) / n, ay + ((by - ay) * i) / n));
+    });
+  });
+  const shown = spots.filter((p) => p.x > -r && p.y > -r && p.x < width + r && p.y < height + r);
+  if (!shown.length) return;
+  const left = Math.floor(Math.min(...shown.map((p) => p.x)) - r);
+  const top = Math.floor(Math.min(...shown.map((p) => p.y)) - r);
+  const w = Math.ceil(Math.max(...shown.map((p) => p.x)) + r) - left;
+  const h = Math.ceil(Math.max(...shown.map((p) => p.y)) + r) - top;
+  const dpr = canvas.width / Math.max(1, width);
+  if (!changeCanvas) changeCanvas = document.createElement('canvas');
+  changeCanvas.width = Math.max(1, Math.round(w * dpr));
+  changeCanvas.height = Math.max(1, Math.round(h * dpr));
+  const g = changeCanvas.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, -left * dpr, -top * dpr);
+  // 'lighten': where two lights overlap the brighter one shows, so the patch is even.
+  g.globalCompositeOperation = 'lighten';
+  shown.forEach((p) => {
+    const grad = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+    grad.addColorStop(0, 'rgba(255, 206, 92, 0.95)');
+    grad.addColorStop(0.55, 'rgba(255, 196, 80, 0.6)');
+    grad.addColorStop(1, 'rgba(255, 186, 70, 0)');
+    g.fillStyle = grad;
+    g.beginPath();
+    g.ellipse(p.x, p.y, r, r * 0.8, 0, 0, Math.PI * 2);
+    g.fill();
+  });
+  // The gold laid on the ground first: on the pale grass of a village a light alone hardly shows.
+  ctx.save();
+  ctx.globalAlpha = 0.45 + 0.2 * breathe;
+  ctx.drawImage(changeCanvas, left, top, w, h);
+  ctx.restore();
+  changeBox = { left, top, w, h };
 }
 
 /** The world box the terrain has to cover: every post the client holds. */

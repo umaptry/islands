@@ -328,7 +328,7 @@ export function liftShare(age) {
 export function drawPostPin(ctx, x, y, opts = {}) {
   const {
     heat = 0, size = 22, time = null, phase = 0, recruit = false, recruitQuiet = false,
-    mine = false, selected = false, night = false, alpha = 1, tag = true, openedFor = null,
+    mine = false, selected = false, night = false, alpha = 1, tag = true, openedFor = null, ring = true,
   } = opts;
   // A bad size would throw in arc() or poison the hit test with NaN.
   if (!(size > 0)) return { top: y, headY: y, headR: 0 };
@@ -369,8 +369,8 @@ export function drawPostPin(ctx, x, y, opts = {}) {
     bob -= LIFT * s * up;
   }
 
-  // Ring spreading from the foot (yours).
-  if (mine) {
+  // Ring spreading from the foot (yours; `ring: false` over a house on map B).
+  if (mine && ring) {
     const k = live ? fract(time / 1.8) : 0.35;
     ctx.save();
     ctx.globalAlpha *= 1 - k;

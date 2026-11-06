@@ -8,7 +8,7 @@
 
 import { audioContext, feedbackSettings, onFeedbackChange } from './feedback.js';
 import { ambientShouldPlay, audioShouldRun, maySe } from './feedback-rules.js';
-import { createWaves, gullsAllowed } from './ambience.js';
+import { GULL_LEVEL, createWaves, gullsAllowed } from './ambience.js';
 import { currentTone } from './screen-tone.js';
 
 const MASTER = 0.35; // overall level, kept below the mock so it stays gentle
@@ -23,6 +23,8 @@ let ctx = null;
 let master = null;
 let bgmBus = null;
 let envBus = null;
+let seaBus = null;   // waves and gulls, as near the sea as the map's view is (setSeaLevel)
+let seaLevelNow = 1;
 let bgmTimer = null;
 let nextLoopAt = 0;
 let ambientWanted = false;
@@ -63,6 +65,9 @@ function ensureContext() {
   envBus = ctx.createGain();
   envBus.gain.value = ENV_LEVEL;
   envBus.connect(master);
+  seaBus = ctx.createGain();
+  seaBus.gain.value = seaLevelNow;
+  seaBus.connect(envBus);
   return ctx;
 }
 
@@ -162,7 +167,7 @@ function stopBgmTimer() {
 // context stands still and nothing piles up. See ambience.js for how a swell is shaped.
 function startAmbient() {
   if (ambient || !ctx) return;
-  const waves = createWaves(ctx, envBus, { level: WAVE_LEVEL });
+  const waves = createWaves(ctx, seaBus, { level: WAVE_LEVEL });
   const tick = () => waves.scheduleUntil(ctx.currentTime + 4, ctx.currentTime);
   tick();
   ambient = { waves, tick: setInterval(tick, 1000), timer: null };
@@ -191,12 +196,14 @@ function gull() {
   if (!ctx || ctx.state !== 'running') return;
   // Morning, day and evening only; the hour is read at every call, so it follows the clock while the map is open.
   if (!gullsAllowed(currentTone())) return;
+  // Not over the whole island seen from high up, nor inland (ambience.js seaLevel).
+  if (seaLevelNow < GULL_LEVEL) return;
   const now = ctx.currentTime;
-  let out = envBus;
+  let out = seaBus;
   if (ctx.createStereoPanner) {
     const panner = ctx.createStereoPanner();
     panner.pan.value = Math.random() * 2 - 1;
-    panner.connect(envBus);
+    panner.connect(seaBus);
     out = panner;
   }
   const count = 2 + Math.floor(Math.random() * 3);
@@ -260,6 +267,15 @@ export function setupAudio() {
 export function setAmbient(on) {
   ambientWanted = Boolean(on);
   apply();
+}
+
+/** How near the sea the map's view is, 0..1 (ambience.js seaLevel): the waves follow it over about a
+ * second, the gulls call only near the shore. */
+export function setSeaLevel(level) {
+  const next = Math.min(1, Math.max(0, Number(level) || 0));
+  if (Math.abs(next - seaLevelNow) < 0.01) return;
+  seaLevelNow = next;
+  if (seaBus && ctx) seaBus.gain.setTargetAtTime(next, ctx.currentTime, 0.4);
 }
 
 /** One-shot effect: 'success' | 'click' | 'hardClick' | 'pop' | 'fanfare' | 'switch'. */

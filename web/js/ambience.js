@@ -14,6 +14,26 @@ export function gullsAllowed(tod) {
   return GULL_TIMES.includes(tod);
 }
 
+// How near the sea the view is (2026-11-05, the user: waves and gulls over the whole island seen from
+// above, or deep inland, felt wrong). `z` is the zoom over the whole-island view (1 = all of it on
+// screen), `seaShare` the part of the screen that is sea (0..1). Full sound zoomed in on a shore;
+// none from high up or inland, with a fade between so a pan never switches it with a jump.
+export const SEA_ZOOM_FROM = 1.3;
+export const SEA_ZOOM_FULL = 2.4;
+export const SEA_SHARE_FROM = 0.03;
+export const SEA_SHARE_FULL = 0.2;
+/** Gulls only near the shore: above this sea level. */
+export const GULL_LEVEL = 0.5;
+
+const smooth = (a, b, x) => {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+};
+
+export function seaLevel({ z, seaShare }) {
+  return smooth(SEA_ZOOM_FROM, SEA_ZOOM_FULL, z) * smooth(SEA_SHARE_FROM, SEA_SHARE_FULL, seaShare);
+}
+
 export const SWELL_MIN_S = 6;
 export const SWELL_MAX_S = 11;
 /** Level between two swells: the sea never goes dead silent, but it is far below a swell. */

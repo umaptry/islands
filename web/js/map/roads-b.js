@@ -12,6 +12,8 @@ export const ROAD_STEP = 3.75;        // world units between the curve's points
 export const ROAD_WIDTH = 3.125;      // 1.25 x 2.5, the road itself
 export const ROAD_EDGE_WIDTH = 4.375; // 1.75 x 2.5, its darker edge
 export const ROAD_CLEAR = 5.5;        // 2.2 x 2.5: no tree stands this close to a road
+/** The same by tier (terrain-b.js: a tier-1 track hardly opens the forest, a tier-2 footpath a little). */
+export const ROAD_CLEAR_BY_TIER = [0, 1.5, 2.8, 3.6];
 const ROAD_COLOR = '#dcc48c';
 const ROAD_EDGE = 'rgba(120,86,48,0.35)';
 
@@ -82,7 +84,11 @@ export function setRoadsB(pairs) {
     return;
   }
   const curves = pairs.map(({ a, b }) => roadCurve(a, b));
-  kept = { pairs, curves, near: roadIndex(curves) };
+  const near = [1, 2, 3].map((tier) => {
+    const mine = curves.filter((_, i) => Math.min(3, Math.max(1, pairs[i].tier | 0 || 1)) === tier);
+    return roadIndex(mine, ROAD_CLEAR_BY_TIER[tier]);
+  });
+  kept = { pairs, curves, near: (x, y) => near.some((at) => at(x, y)) };
 }
 
 export const roadCurves = () => kept.curves;

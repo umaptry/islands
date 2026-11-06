@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ROAD_CLEAR, ROAD_STEP, demoPairs, hasRoadsB, nearRoadB, roadCurve, roadIndex, setRoadsB,
+  ROAD_CLEAR, ROAD_CLEAR_BY_TIER, ROAD_STEP, demoPairs, hasRoadsB, nearRoadB, roadCurve, roadIndex, setRoadsB,
 } from '../../web/js/map/roads-b.js';
 
 test('a road is a bowed curve that starts and ends on its two places', () => {
@@ -36,6 +36,24 @@ test('roads are kept as given, and cleared with none', () => {
   setRoadsB(null);
   assert.equal(hasRoadsB(), false);
   assert.equal(nearRoadB(0, 0), false);
+});
+
+test('trees keep back from a road by its tier: a little from a track, more from a road', () => {
+  setRoadsB([
+    { a: { x: 0, y: 0 }, b: { x: 200, y: 0 }, tier: 1 },
+    { a: { x: 0, y: 500 }, b: { x: 200, y: 500 }, tier: 3 },
+  ]);
+  const middle = (y) => roadCurve({ x: 0, y }, { x: 200, y })[Math.floor(roadCurve({ x: 0, y }, { x: 200, y }).length / 2)];
+  const [tx, ty] = middle(0);
+  const [rx, ry] = middle(500);
+  assert.equal(nearRoadB(tx, ty + ROAD_CLEAR_BY_TIER[1] - 0.5), true);
+  assert.equal(nearRoadB(tx, ty + ROAD_CLEAR_BY_TIER[1] + 1), false);
+  assert.equal(nearRoadB(rx, ry + ROAD_CLEAR_BY_TIER[3] - 0.5), true);
+  assert.equal(nearRoadB(rx, ry + ROAD_CLEAR_BY_TIER[3] + 1), false);
+  // No tier is a tier-1 track.
+  setRoadsB([{ a: { x: 0, y: 0 }, b: { x: 200, y: 0 } }]);
+  assert.equal(nearRoadB(tx, ty + ROAD_CLEAR_BY_TIER[1] + 1), false);
+  setRoadsB(null);
 });
 
 test('the demo pairs join posts of different regions a fair way apart', () => {

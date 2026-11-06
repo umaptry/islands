@@ -1,5 +1,5 @@
 // Map B: the 16 regions of the one big island. Their borders (white dotted lines laid over the trees),
-// their names (shown from far out, in the label space the island names use), and the flag of はじまりの村.
+// and their names (shown from far out, in the label space the island names use).
 //
 // Nothing here imports island-b.js: index.js hands in the island's questions (`regionAt`, `coastAt`)
 // so the choices can be tested on their own (tests/frontend/regions-b.test.mjs).
@@ -86,38 +86,12 @@ export function drawBorders(ctx, dots, look = { r: 1.5, alpha: 0.9 }) {
   ctx.restore();
 }
 
-/** The event's flag: a pole and a pennant, drawn flat, its foot at (x, y), `s` times its natural size. */
-export function drawFlag(ctx, x, y, s = 1) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(s, s);
-  ctx.fillStyle = 'rgba(14,48,26,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(3, 1, 5, 2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#6b4a2e';
-  ctx.fillRect(-0.8, -22, 1.6, 22);
-  ctx.fillStyle = '#ff8a1f';
-  ctx.beginPath();
-  ctx.moveTo(0.8, -22);
-  ctx.lineTo(14, -17.5);
-  ctx.lineTo(0.8, -13);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-/** The flag's size by the zoom (the prototype's clamp(ppu / 2.6, 0.75, 1.6), ppu being px per prototype
- * unit = px per world unit x 2.5). */
-export const flagSize = (scale) => Math.max(0.75, Math.min(1.6, (scale * 2.5) / 2.6));
-
-/** The names to show, most important first: はじまりの村, then the regions, then the villages (the
+/** The names to show, most important first: the regions, then the villages (the
  * big ones first). Each is { text, x, y, w, h, kind } on the screen, `claim` the label space
  * (decor.js makeLabelSpace: claim(x, y, w, h) is true when the room was free and is then taken).
  * Returns the ones that fit. Region names only when `far` is true. */
-export function placeNames({ start = null, regions = [], villages = [], far, claim, measure }) {
+export function placeNames({ regions = [], villages = [], far, claim, measure }) {
   const entries = [];
-  if (start) entries.push({ ...start, kind: 'start' });
   if (far) regions.forEach((region) => entries.push({ ...region, kind: 'region' }));
   [...villages].sort((a, b) => (b.weight || 0) - (a.weight || 0)).forEach((v) => entries.push({ ...v, kind: 'village' }));
   const placed = [];

@@ -56,16 +56,15 @@ function space() {
 }
 const measure = (entry) => entry.text.length * 10;
 
-test('names claim room in order: the start, then the regions, then the villages by size', () => {
+test('names claim room in order: the regions, then the villages by size', () => {
   const placed = placeNames({
-    start: { text: 'はじまりの村', x: 100, y: 100 },
-    regions: [{ text: '北 地方', x: 110, y: 100 }, { text: '南 地方', x: 300, y: 300 }],
+    regions: [{ text: '北 地方', x: 100, y: 100 }, { text: '東 地方', x: 110, y: 100 }, { text: '南 地方', x: 300, y: 300 }],
     villages: [{ text: 'ちいさい村', x: 300, y: 300, weight: 1 }, { text: 'おおきい村', x: 300, y: 330, weight: 9 }],
     far: true, claim: space(), measure,
   });
   const texts = placed.map((entry) => entry.text);
-  assert.ok(texts.includes('はじまりの村'));
-  assert.ok(!texts.includes('北 地方'), 'covers the start, so it waits');
+  assert.ok(texts.includes('北 地方'));
+  assert.ok(!texts.includes('東 地方'), 'covers the first region, so it waits');
   assert.ok(texts.includes('南 地方'));
   assert.ok(!texts.includes('ちいさい村'), 'under the region name');
   assert.ok(texts.includes('おおきい村'));
@@ -73,11 +72,10 @@ test('names claim room in order: the start, then the regions, then the villages 
 
 test('close in, the regions show no names', () => {
   const placed = placeNames({
-    start: { text: 'はじまりの村', x: 100, y: 100 },
     regions: [{ text: '南 地方', x: 300, y: 300 }],
     far: false, claim: space(), measure,
   });
-  assert.deepEqual(placed.map((entry) => entry.text), ['はじまりの村']);
+  assert.deepEqual(placed.map((entry) => entry.text), []);
 });
 
 test('a region reads as its own place name, with no 地方 after it', () => {

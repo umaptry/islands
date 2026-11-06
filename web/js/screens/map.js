@@ -557,7 +557,7 @@ const clipText = (text, max = 18) => {
 export async function openLinkedPost(postId) {
   if (state.account) await joinFromInvite().catch(() => {});
   await openPost(postId);
-  if (state.selected?.id === postId) focusOn(state.selected, { lift: desktopSheet() ? 0.5 : 0.25 });
+  if (state.selected?.id === postId) focusOn(state.selected, { card: true });
 }
 
 /** 「誰かが、あなたと…と言っています」 leads here: the 会 with its participants

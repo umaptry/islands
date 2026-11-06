@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 // island-b.js has no imports and no DOM, so it loads from a data: URL as it is.
 const source = await readFile(new URL('../../web/js/map/island-b.js', import.meta.url), 'utf8');
 const island = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-const { coastAt, extentB, mapParamNow, previewParam, setIslandBPosts, isLandB, islandB, islandBKey, mapBOn, regionAt, regionsB, setIslandB, setIslandBView, startB } = island;
+const { coastAt, extentB, mapParamNow, previewParam, setIslandBPosts, isLandB, islandB, islandBKey, mapBOn, regionAt, regionsB, setIslandB, setIslandBView } = island;
 
 // A small made-up island: n = 40 cells of 5 from -100, coast = 2 * (60 - distance
 // from the middle) (so 120 at the centre, 0 on the shore), 255 outside land,
@@ -31,7 +31,7 @@ function payload(extra = {}) {
   return {
     version: 'v1', grid: { x0: X0, y0: X0, cell: CELL, n: N }, coast: b64(coast), region: b64(region), near: b64(near),
     regions: [{ id: 0, name: '西', x: -30, y: 0 }, { id: 1, name: '東', x: 30, y: 0 }],
-    start: { x: 0, y: 0 }, extent: { minX: -60, minY: -60, maxX: 60, maxY: 60 }, forest: 'grove', ...extra,
+    extent: { minX: -60, minY: -60, maxX: 60, maxY: 60 }, forest: 'grove', ...extra,
   };
 }
 
@@ -40,7 +40,6 @@ test('setIslandB decodes the grid and the small facts', () => {
   setIslandB(payload());
   assert.ok(islandB());
   assert.equal(islandB().coast.length, N * N);
-  assert.deepEqual(startB(), { x: 0, y: 0 });
   assert.equal(extentB().maxX, 60);
   assert.equal(regionsB().length, 2);
   assert.equal(regionsB()[1].name, '東');
@@ -50,15 +49,35 @@ test('setIslandB decodes the grid and the small facts', () => {
 test('coastAt reads the grid as it is at a cell centre and bilinearly between', () => {
   const at = (i, j) => islandB().coast[j * N + i];
   const centre = (i) => X0 + (i + 0.5) * CELL;
-  assert.equal(coastAt(centre(30), centre(20)), at(30, 20));
-  const mid = coastAt((centre(30) + centre(31)) / 2, centre(20));
-  assert.ok(Math.abs(mid - (at(30, 20) + at(31, 20)) / 2) < 1e-4);
-  const quarter = coastAt(centre(30) + CELL / 4, centre(20));
-  assert.ok(Math.abs(quarter - (at(30, 20) * 0.75 + at(31, 20) * 0.25)) < 1e-4);
+  // Cells 24 and 25 are well inland and away from the reference points (near (62, 0)), so nothing is raised.
+  assert.equal(coastAt(centre(24), centre(20)), at(24, 20));
+  const mid = coastAt((centre(24) + centre(25)) / 2, centre(20));
+  assert.ok(Math.abs(mid - (at(24, 20) + at(25, 20)) / 2) < 1e-4);
+  const quarter = coastAt(centre(24) + CELL / 4, centre(20));
+  assert.ok(Math.abs(quarter - (at(24, 20) * 0.75 + at(25, 20) * 0.25)) < 1e-4);
   // Roughly the made-up shape: 2 * (60 - 30) at 30 from the middle.
   assert.ok(Math.abs(coastAt(30, 0) - 60) < 5);
   assert.ok(isLandB(0, 0));
   assert.ok(!isLandB(90, 90));
+});
+
+test('the raise round the reference points never jumps: no dip across the neck of a cape', () => {
+  // The reference points sit near (62, 0), where the made-up coast runs out: the raise makes a cape.
+  // Until 2026-11-07 it was cut off where the coast was already 8, so the distance fell back to 8
+  // across the cape's neck (a line of shore grass there) and jumped by tens of units.
+  const { coastLow } = island;
+  for (const read of [coastAt, coastLow]) {
+    let last = read(40, 0);
+    for (let x = 40.5; x <= 80; x += 0.5) {
+      const c = read(x, 0);
+      if (c < 0) break;   // out at sea: the land is what is looked at
+      assert.ok(Math.abs(c - last) < 5, `${read === coastAt ? 'coastAt' : 'coastLow'} at x=${x}: ${last} -> ${c}`);
+      last = c;
+    }
+  }
+  // The low raise stops at the shore's grass: the relief keeps a cape low.
+  for (let x = 56; x <= 70; x += 1) assert.ok(coastLow(x, 0) <= Math.max(8, coastAt(x, 0)) + 1e-9);
+  assert.ok(coastAt(62, 0) > coastLow(62, 0));
 });
 
 test('regionAt reads the cell; outside the land it is 255', () => {

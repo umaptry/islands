@@ -11,7 +11,7 @@
 // the prototype is used (`/ K` on the way in), and sigma, grid steps and the
 // like are the prototype's numbers times K.
 
-import { coastAt as islandCoastAt, coastWithPosts, extentB, forestMode, islandBView, memoNoise, startB } from './island-b.js';
+import { coastAt as islandCoastAt, coastLow, coastWithPosts, extentB, forestMode, islandBView, memoNoise } from './island-b.js';
 import { coastLines } from './surf.js';
 import { ROAD_STEP, roadCurve } from './roads-b.js';
 
@@ -113,22 +113,61 @@ function scallop(b, c, o, xp, yp) {
 
 // Map B's roads: the pairs who met, laid into the ground (index.js syncRoadsB hands them in through
 // islandBView().roads as [ax, ay, bx, by, tier]).
+// A road grows with the pair's strength (2026-11-05, the user: a wide road cut through the forest at
+// once was too much): tier 1 a track that only just opens the forest, tier 2 a footpath with a little
+// clearing, tier 3 the road with the forest well back. A track drawn over the canopy looked like a path
+// on the treetops (the user), so it shows only where the forest has opened.
 const ROAD_OPEN = 0.62;        // openness on a road's line: grass, below a village's square (VILLAGE)
-const ROAD_OPEN_SIGMA = 10;    // world units: the forest steps back about this far either side
-const ROAD_HALF = [0, 1.5, 1.9, 2.3];   // world units: half the path's width, by tier
+const ROAD_OPEN_SIGMA = [0, 4, 5, 10];  // world units the forest steps back either side, by tier
+// TRIAL (?trail=): a, a thin cut all along; b, small gaps in the forest one after another, like dots.
+const trailStyle = () => (islandBView().trail === 'b' ? 'b' : 'a');
+const TRAIL_GAP_OPEN = 1;      // b: openness in the middle of a gap (OPEN is 0.32)
+const TRAIL_GAP_SIGMA = 6;     // b: world units, how wide one gap opens
+const TRAIL_GAP_EVERY = 6;     // b: one gap every this many of the curve's points (ROAD_STEP apart)
+// a: the canopy's faces are 10 world units (POLY), too coarse for a thin cut, so the track is cut into the
+// canopy pixel by pixel instead: the forest falls to the track's edge. The side towards the viewer (south)
+// falls gently enough that the track shows past it (less than 1 / LIFT), the far side steeply.
+const TRAIL_WALL_NEAR = 1.3;   // world units of height per world unit of distance, south of the track
+const TRAIL_WALL_FAR = 3;      // north of it
+const TRAIL_CUT_REACH = 17;    // world units: past this the forest is untouched (the tallest canopy, 20, over the near slope)
+// Thinner than at first (2026-11-05, the user: a grown road need not be this wide).
+const ROAD_HALF = [0, 0.8, 0.95, 1.5];  // world units: half the path's width, by tier
+// On the relief the forest is the ground, so it is not opened along a road: a grass verge only, a
+// quarter of the road's width each side (2026-11-05, the user).
+const ROAD_VERGE = 0.25;
+const TRAIL_WOBBLE = 2.2;      // world units a tier-1 track wanders either side of the curve
+// The grass between a village's houses (makeGround).
+const VILLAGE_LINK_OPEN = 0.75;   // openness on the link's line: grass (OPEN 0.32), not a square (VILLAGE)
+const VILLAGE_LINK_SIGMA = 7;     // world units the grass reaches either side
+const roadTier = (points) => Math.min(3, Math.max(1, points.tier | 0));
+
+/** A tier-1 track wanders: its points pushed to and fro across the curve, the same every time. */
+function wander(points) {
+  const out = points.map(([x, y], p) => {
+    const [ax, ay] = points[Math.max(0, p - 1)];
+    const [bx, by] = points[Math.min(points.length - 1, p + 1)];
+    const len = Math.hypot(bx - ax, by - ay) || 1;
+    // None at the two ends, so the track still starts and ends at the houses.
+    const ends = Math.min(1, p / 3, (points.length - 1 - p) / 3);
+    const off = (noise(p * 0.45 + points[0][0] * 0.01, points[0][1] * 0.01) - 0.5) * 2 * TRAIL_WOBBLE * ends;
+    return [x - ((by - ay) / len) * off, y + ((bx - ax) / len) * off];
+  });
+  out.tier = points.tier;
+  return out;
+}
 
 /** The roads' curves ([[x, y], ...] each, roads-b.js roadCurve) that come near a box, with their tier. */
 function roadsIn(minX, minY, maxX, maxY) {
   const list = islandBView().roads;
   if (!Array.isArray(list) || !list.length) return [];
-  const reach = ROAD_OPEN_SIGMA * 3 + ROAD_STEP;
+  const reach = ROAD_OPEN_SIGMA[3] * 3 + TRAIL_WOBBLE + ROAD_STEP;
   const out = [];
   list.forEach(([ax, ay, bx, by, tier]) => {
     if (Math.max(ax, bx) < minX - reach || Math.min(ax, bx) > maxX + reach) return;
     if (Math.max(ay, by) < minY - reach || Math.min(ay, by) > maxY + reach) return;
     const points = roadCurve({ x: ax, y: ay }, { x: bx, y: by });
     points.tier = tier || 1;
-    out.push(points);
+    out.push(roadTier(points) === 1 ? wander(points) : points);
   });
   return out;
 }
@@ -166,23 +205,28 @@ function makeGround({ posts, total, minX, minY, maxX, maxY, coastAt, bumpy = fal
     if (p.x < minX - reach || p.x > maxX + reach || p.y < minY - reach || p.y > maxY + reach) continue;
     add(p.x, p.y, 1, sigma);
   }
-  const start = startB();
-  if (start) add(start.x, start.y, 2.6, 6.5 * K);
   // The roads (islandBView().roads): a band of open ground along each, so the forest steps back from it.
   // The strongest of post and road counts, not their sum, or a road would swell every village it joins.
   const roads = roadsIn(minX, minY, maxX, maxY);
   roads.forEach((points) => {
-    const r = Math.ceil((ROAD_OPEN_SIGMA * 3) / cs);
-    const den = 2 * ROAD_OPEN_SIGMA * ROAD_OPEN_SIGMA;
+    const tier = roadTier(points);
+    const gaps = tier === 1 && trailStyle() === 'b';
+    if (tier === 1 && !gaps) return;   // a: cut into the canopy in computeB, not opened here
+    if (reliefOn()) return;              // the relief: a verge painted in computeB instead
+    const sig = gaps ? TRAIL_GAP_SIGMA : ROAD_OPEN_SIGMA[tier];
+    const peak = gaps ? TRAIL_GAP_OPEN : ROAD_OPEN;
+    const r = Math.ceil((sig * 3) / cs);
+    const den = 2 * sig * sig;
     const best = new Map();
-    points.forEach(([px, py]) => {
+    const centres = gaps ? points.filter((_, p) => p % TRAIL_GAP_EVERY === 2) : points;
+    centres.forEach(([px, py]) => {
       const ci = Math.floor((px - gx0) / cs);
       const cj = Math.floor((py - gy0) / cs);
       for (let j = Math.max(0, cj - r); j <= Math.min(ny - 1, cj + r); j += 1) {
         const wy = gy0 + (j + 0.5) * cs;
         for (let i = Math.max(0, ci - r); i <= Math.min(nx - 1, ci + r); i += 1) {
           const wx = gx0 + (i + 0.5) * cs;
-          const v = ROAD_OPEN * Math.exp(-((wx - px) ** 2 + (wy - py) ** 2) / den);
+          const v = peak * Math.exp(-((wx - px) ** 2 + (wy - py) ** 2) / den);
           const k = j * nx + i;
           if (v > (best.get(k) || 0)) best.set(k, v);
         }
@@ -190,6 +234,34 @@ function makeGround({ posts, total, minX, minY, maxX, maxY, coastAt, bumpy = fal
     });
     best.forEach((v, k) => { if (v > open[k]) open[k] = v; });
   });
+  // The grass runs between a village's houses (index.js syncVillagesB).
+  const links = islandBView().villageLinks;
+  if (Array.isArray(links) && links.length) {
+    const r = Math.ceil((VILLAGE_LINK_SIGMA * 3) / cs);
+    const den = 2 * VILLAGE_LINK_SIGMA * VILLAGE_LINK_SIGMA;
+    links.forEach(([ax, ay, bx, by]) => {
+      if (Math.max(ax, bx) < minX - reach || Math.min(ax, bx) > maxX + reach) return;
+      if (Math.max(ay, by) < minY - reach || Math.min(ay, by) > maxY + reach) return;
+      const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 2));
+      const best = new Map();
+      for (let s = 0; s <= steps; s += 1) {
+        const px = ax + ((bx - ax) * s) / steps;
+        const py = ay + ((by - ay) * s) / steps;
+        const ci = Math.floor((px - gx0) / cs);
+        const cj = Math.floor((py - gy0) / cs);
+        for (let j = Math.max(0, cj - r); j <= Math.min(ny - 1, cj + r); j += 1) {
+          const wy = gy0 + (j + 0.5) * cs;
+          for (let i = Math.max(0, ci - r); i <= Math.min(nx - 1, ci + r); i += 1) {
+            const wx = gx0 + (i + 0.5) * cs;
+            const v = VILLAGE_LINK_OPEN * Math.exp(-((wx - px) ** 2 + (wy - py) ** 2) / den);
+            const k = j * nx + i;
+            if (v > (best.get(k) || 0)) best.set(k, v);
+          }
+        }
+      }
+      best.forEach((v, k) => { if (v > open[k]) open[k] = v; });
+    });
+  }
 
   const gridAt = (x, y) => {
     const fx = clamp((x - gx0) / cs - 0.5, 0, nx - 1.001);
@@ -251,11 +323,102 @@ const POLY = 10;   // world units between the corners of its faces
 const POLY_H = [13, 7, 0.6];
 // Seen at the objects' angle (mesh.js, 52 degrees): a point h high is drawn h * cos(52) further up.
 const LIFT = Math.cos((52 * Math.PI) / 180);
+
+// TRIAL ?relief=1 (2026-11-05, the user: a track drawn over the canopy made the island look solid, so the
+// canopy could be the ground itself): the whole island is the raised low-poly ground, never cut down;
+// villages, squares and roads are painted onto its faces and lifted with them, and so is everything
+// standing on it (index.js lifts what it draws by reliefLift).
+// The ground is the canopy's kind of surface (2026-11-05, the user: terraces were too strong, and the
+// grass painted up a sheer riser looked wrong; as smooth as the forest now): low-poly faces POLY apart
+// over a gentle roll, so what is painted on it lies on faces that are never steep.
+// The shore as the first relief had it (2026-11-06, the user, after a tilt and a step up from the sand:
+// the beach and the grass by it were best at first): the land rises from the grass strip, the same all
+// round. The north third is a tableland instead of a tilt (the tilt made the north shore shoot up): a
+// slope along its southern edge, and from the shore it rises gently. Higher at the back, so seen from
+// the south it hides nothing.
+const RELIEF_BASE = 12;      // world units: the ground inland, over the shore
+// Slower than at first (2026-11-06, the user: rising over 2.5 the land stood up from the strip as a dark wall).
+const RELIEF_SHORE_RAMP = 8; // prototype units of coast distance over which the land rises from the grass strip
+const RELIEF_ROLL = 18;      // world units: the broad roll up and down across the island
+const PLATEAU = 28;         // world units: the tableland over the ground south of it
+const PLATEAU_EDGE = 0.34;   // its edge, half way up its slope: this share of the island's height from the north
+const PLATEAU_SLOPE = 35;    // world units: how wide the slope is
+const PLATEAU_FLAT = 0.5;    // the roll on its top, this much of elsewhere's: a table, not more hills
+const PLATEAU_WANDER = 40;   // world units: how far the edge wanders north and south
+const PLATEAU_SHORE = 28;    // prototype units of coast distance over which it rises from the shore: gently
+                             // enough that, seen from the south, the north shore's slope hides nothing
+const RELIEF_MAX = 48;       // the highest the ground goes (strips: rows to compute below)
+const RELIEF_LIGHT = 1.3;    // the faces' light and shade, this many times the canopy's
+// Trees along a grown road, a little back from its verge (2026-11-05, the user); a quarter as many as at
+// first (2026-11-06, the user: too many).
+const ROAD_TREE_EVERY = 5.5;   // world units along the road between two places a tree may stand
+const ROAD_TREE_BACK = 2.4;    // world units from the verge's edge to the tree
+const ROAD_TREE_SHARE = 0.14;  // of those places, this many have a tree
+const smoothstep = (t) => t * t * (3 - 2 * t);
+function reliefShape(x, y, c) {
+  if (c < 0) return 0;
+  const xp = x / K;
+  const yp = y / K;
+  const inland = c / K - 4.2 - noise(xp * 0.3, yp * 0.3) * 2.5;
+  const base = clamp(inland / RELIEF_SHORE_RAMP, 0, 1);
+  const roll = (noise(xp * 0.045 + 11.3, yp * 0.045 + 4.7) - 0.5) * RELIEF_ROLL;
+  const rough = (noise(xp * 0.2 + 5.1, yp * 0.2 + 1.3) - 0.5) * 3;
+  let table = 0;
+  const ext = extentB();
+  if (ext) {
+    const edge = ext.minY + PLATEAU_EDGE * (ext.maxY - ext.minY) + (noise(xp * 0.015 + 2.9, 8.1) - 0.5) * 2 * PLATEAU_WANDER;
+    table = smoothstep(clamp((edge - y) / PLATEAU_SLOPE + 0.5, 0, 1)) * smoothstep(clamp(inland / PLATEAU_SHORE, 0, 1));
+  }
+  return Math.max(0, base * (RELIEF_BASE + roll * (1 - (1 - PLATEAU_FLAT) * table) + rough) + PLATEAU * table);
+}
+export const reliefOn = () => islandBView().relief === '1' && forestMode() === 'mass';
+const FLAT_GROUND = { opennessAt: () => 0 };
+// The height is asked for by every house, tree and walker each frame, and finding a point's face is slow:
+// it is kept on a grid a world unit apart and read between the grid's corners (the faces are POLY apart,
+// so this is all but exact).
+const RELIEF_GRID_PAD = 60;  // world units around the island's extent
+let reliefKept = { key: null, at: null };
+function reliefGrid(exact) {
+  const ext = extentB();
+  if (!ext) return (x, y) => exact(x, y).h;
+  const x0 = Math.floor(ext.minX - RELIEF_GRID_PAD);
+  const y0 = Math.floor(ext.minY - RELIEF_GRID_PAD);
+  const nx = Math.ceil(ext.maxX + RELIEF_GRID_PAD) - x0 + 2;
+  const ny = Math.ceil(ext.maxY + RELIEF_GRID_PAD) - y0 + 2;
+  const kept = new Float32Array(nx * ny).fill(NaN);
+  const corner = (i, j) => {
+    const k = j * nx + i;
+    let v = kept[k];
+    if (v !== v) { v = exact(x0 + i, y0 + j).h; kept[k] = v; }
+    return v;
+  };
+  return (x, y) => {
+    const fx = x - x0;
+    const fy = y - y0;
+    const i = Math.floor(fx);
+    const j = Math.floor(fy);
+    if (!(i >= 0 && j >= 0 && i < nx - 1 && j < ny - 1)) return 0;   // out at sea (the sea's marks ask too)
+    const u = fx - i;
+    const v = fy - j;
+    return (corner(i, j) * (1 - u) + corner(i + 1, j) * u) * (1 - v) + (corner(i, j + 1) * (1 - u) + corner(i + 1, j + 1) * u) * v;
+  };
+}
+/** The height of the relief ground at a point (world units, 0 on the shore), on the main thread: the
+ * same faces as computeB's. */
+export function reliefHeight(x, y) {
+  const key = islandBView().communityKey;
+  if (reliefKept.key !== key || !reliefKept.at) {
+    reliefKept = { key, at: reliefGrid(polyForest(FLAT_GROUND, coastLow, POLY, POLY_H, reliefShape)) };
+  }
+  return reliefKept.at(x, y) || 0;
+}
+/** How far up the screen something standing at (x, y) is drawn, in world units. */
+export const reliefLift = (x, y) => (reliefOn() ? reliefHeight(x, y) * LIFT : 0);
 const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
 const srgb = (c) => 255 * (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.min(1, c) ** (1 / 2.4) - 0.055);
 const FLAT_LIT = 0.5 + 0.16 + 0.85 * SUN[2];
-function polyForest(ground, coastAt, s, [H1, H2, rough]) {
-  const heightAt = (x, y) => {
+function polyForest(ground, coastAt, s, [H1, H2, rough], custom = null) {
+  const heightAt = custom ? (x, y) => custom(x, y, coastAt(x, y)) : (x, y) => {
     const c = coastAt(x, y);
     if (c < 0) return 0;
     const xp = x / K;
@@ -465,7 +628,7 @@ export function computeB({ posts, region, scale, unit, padding, limit, smooth = 
         const o = ground.opennessAt(wx, wy);
         field[k] = o;
         b = classify(c, o, xp, yp);
-        if (style) b = scallop(b, c, o, xp, yp);
+        if (style && !reliefOn()) b = scallop(b, c, o, xp, yp);
       }
       band[k] = b;
       if (b >= 2) {
@@ -479,7 +642,26 @@ export function computeB({ posts, region, scale, unit, padding, limit, smooth = 
   // Where the low-poly solid stands above the grass is forest; its faces' light per pixel.
   let polyF = null;
   let polyH = null;
-  if (mass) {
+  const relief = mass && reliefOn();
+  if (relief) {
+    // The relief: every land pixel takes the height and the light of the ground's face; the bands stay
+    // as the openness made them, painted on.
+    // Its height from the coast with the low raise (island-b.js coastLow): a cape stays low.
+    const at = polyForest(FLAT_GROUND, coastWithPosts(posts, { low: true }), POLY, POLY_H, reliefShape);
+    polyF = new Float32Array(n);
+    polyH = new Float32Array(n);
+    for (let j = 0; j < height; j += 1) {
+      const wy = minY + (j + 0.5) * wpp;
+      for (let i = 0; i < width; i += 1) {
+        const k = j * width + i;
+        if (band[k] < 2) continue;
+        const { f, h } = at(minX + (i + 0.5) * wpp, wy);
+        polyH[k] = Math.max(0, h);
+        polyF[k] = Math.max(0.3, 1 + (f.ratio - 1) * RELIEF_LIGHT);
+        pine[k] = f.pine; tone[k] = f.tone;
+      }
+    }
+  } else if (mass) {
     const at = polyForest(ground, coastAt, POLY, POLY_H);
     polyF = new Float32Array(n);
     polyH = new Float32Array(n);
@@ -493,19 +675,61 @@ export function computeB({ posts, region, scale, unit, padding, limit, smooth = 
       }
     }
   }
-  // The roads themselves: the open ground of a village's square (band 3), a step below the grass.
+  // a: the tracks cut into the canopy (TRAIL_WALL_*): its height capped by the distance to the track.
+  if (mass && !relief && trailStyle() === 'a') {
+    roadsIn(gbox.minX, gbox.minY, gbox.maxX, gbox.maxY).filter((points) => roadTier(points) === 1).forEach((points) => {
+      const half = ROAD_HALF[1];
+      const reach = half + TRAIL_CUT_REACH;
+      for (let p = 1; p < points.length; p += 1) {
+        const [ax, ay] = points[p - 1];
+        const [bx, by] = points[p];
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len2 = dx * dx + dy * dy || 1;
+        const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - minX) * scaled));
+        const i1 = Math.min(width - 1, Math.ceil((Math.max(ax, bx) + reach - minX) * scaled));
+        const j0 = Math.max(0, Math.floor((Math.min(ay, by) - reach - minY) * scaled));
+        const j1 = Math.min(height - 1, Math.ceil((Math.max(ay, by) + reach - minY) * scaled));
+        for (let j = j0; j <= j1; j += 1) {
+          const wy = minY + (j + 0.5) * wpp;
+          for (let i = i0; i <= i1; i += 1) {
+            const k = j * width + i;
+            if (band[k] < 5) continue;
+            const wx = minX + (i + 0.5) * wpp;
+            const t = clamp(((wx - ax) * dx + (wy - ay) * dy) / len2, 0, 1);
+            const ex = wx - (ax + dx * t);
+            const ey = wy - (ay + dy * t);
+            const d = Math.hypot(ex, ey);
+            if (d >= reach) continue;
+            const slope = TRAIL_WALL_FAR + (TRAIL_WALL_NEAR - TRAIL_WALL_FAR) * clamp(ey / (d || 1), 0, 1);
+            const cap = Math.max(0, d - half) * slope;
+            if (polyH[k] <= cap) continue;
+            polyH[k] = cap;
+            if (cap <= 0.5) band[k] = 4;
+          }
+        }
+      }
+    });
+  }
+  // The roads themselves. Tiers 2 and 3: the open ground of a village's square (band 3), a step below
+  // the grass, the footpath still half grown over. Tier 1: a worn line on the grass where the forest has
+  // opened, none on the canopy.
+  const path = new Uint8Array(n);
   roadsIn(gbox.minX, gbox.minY, gbox.maxX, gbox.maxY).forEach((points) => {
-    const half = ROAD_HALF[Math.min(3, Math.max(1, points.tier))];
+    const tier = roadTier(points);
+    const half = ROAD_HALF[tier];
+    const verge = relief && tier > 1 ? half * 2 * ROAD_VERGE : 0;
+    const reach = half + verge;
     for (let p = 1; p < points.length; p += 1) {
       const [ax, ay] = points[p - 1];
       const [bx, by] = points[p];
       const dx = bx - ax;
       const dy = by - ay;
       const len2 = dx * dx + dy * dy || 1;
-      const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - half - minX) * scaled));
-      const i1 = Math.min(width - 1, Math.ceil((Math.max(ax, bx) + half - minX) * scaled));
-      const j0 = Math.max(0, Math.floor((Math.min(ay, by) - half - minY) * scaled));
-      const j1 = Math.min(height - 1, Math.ceil((Math.max(ay, by) + half - minY) * scaled));
+      const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - minX) * scaled));
+      const i1 = Math.min(width - 1, Math.ceil((Math.max(ax, bx) + reach - minX) * scaled));
+      const j0 = Math.max(0, Math.floor((Math.min(ay, by) - reach - minY) * scaled));
+      const j1 = Math.min(height - 1, Math.ceil((Math.max(ay, by) + reach - minY) * scaled));
       for (let j = j0; j <= j1; j += 1) {
         const wy = minY + (j + 0.5) * wpp;
         for (let i = i0; i <= i1; i += 1) {
@@ -517,7 +741,17 @@ export function computeB({ posts, region, scale, unit, padding, limit, smooth = 
           const ey = wy - (ay + dy * t);
           // A little wobble on the edge, like the villages' ground.
           const edge = half * (0.85 + 0.3 * noise(wx / K * 0.9 + 3.3, wy / K * 0.9 + 8.1));
-          if (ex * ex + ey * ey <= edge * edge) band[k] = 3;
+          const d2 = ex * ex + ey * ey;
+          if (d2 > edge * edge) {
+            if (verge && band[k] >= 5 && d2 <= (edge + verge) * (edge + verge)) band[k] = 4;
+            continue;
+          }
+          if (tier === 1) {
+            if (band[k] === 4 || relief) path[k] = 1;
+          } else {
+            band[k] = 3;
+            path[k] = tier;
+          }
         }
       }
     }
@@ -536,7 +770,7 @@ export function computeB({ posts, region, scale, unit, padding, limit, smooth = 
 
   // The forest as one raised block: it throws a shadow to the bottom-right, as the trees and houses do.
   let shadeAt = null;
-  if (style) {
+  if (style && !relief) {
     const top = new Uint8Array(n);
     for (let k = 0; k < n; k += 1) top[k] = band[k] >= 5 ? 1 : 0;
     const toTop = distanceFrom(top, width, height);
@@ -604,14 +838,21 @@ export function computeB({ posts, region, scale, unit, padding, limit, smooth = 
             memoPine = pine[k]; memoTone = tn; memoLit = polyF[k]; memoRgb = rgb;
           }
         }
+        if (path[k] === 1) {
+          rgb = mixR(RGB[4], RGB[3], 0.3);   // the track: grass a little worn
+        } else if (path[k] === 2) {
+          rgb = mixR(RGB[3], RGB[4], 0.45);
+        }
+        // The relief: what is painted on the ground takes its face's light.
+        if (relief && b < 5) rgb = rgb.map((q) => Math.round(srgb(lin(q) * polyF[k])));
         const hOf = (q) => (mass && q >= 5 ? HEIGHT[4] : HEIGHT[q]);   // no deep-forest step
         const h = hOf(b);
-        if (i >= lx && j >= ly) {
+        if (i >= lx && j >= ly && !relief) {
           const above = hOf(band[k - ly * width - lx]);
           if (above > h) rgb = mixR(rgb, SHADE, 0.16 * STEP * 2);                 // a higher step's shadow
           else if (above < h && b >= 3) rgb = mixR(rgb, WHITE, 0.10 * STEP * 2);  // lit top-left rim
         }
-        if (i < width - lx && j < height - ly && hOf(band[k + ly * width + lx]) < h && b >= 3) {
+        if (!relief && i < width - lx && j < height - ly && hOf(band[k + ly * width + lx]) < h && b >= 3) {
           rgb = mixR(rgb, [rgb[0] * 0.8, rgb[1] * 0.82, rgb[2] * 0.82], STEP);
         }
         const f = mass && b >= 5 ? 1 : b === 2 ? 1 + (lit[k] - 1) * 0.5 : lit[k];
@@ -699,7 +940,8 @@ function stripPad(frame, scale) {
   const ringTo = foam + 2.2 * k1 + 1.4 * k1;
   const ly = Math.max(1, Math.round(1.8 * k1));
   const shadowRows = Math.ceil(0.57 * MASS_SHADOW * frame.scaled) + 2;
-  const lift = Math.ceil((POLY_H[0] + POLY_H[1] + POLY_H[2] * 0.5) * LIFT * frame.scaled) + 1;
+  const high = reliefOn() ? RELIEF_MAX : POLY_H[0] + POLY_H[1] + POLY_H[2] * 0.5;
+  const lift = Math.ceil(high * LIFT * frame.scaled) + 1;
   const near = Math.ceil(ringTo) + ly + shadowRows + 6;
   return { top: near, bottom: near + lift };
 }
@@ -825,7 +1067,6 @@ export function scatterTreesB(built) {
     x1 = Math.min(x1, ext.maxX);
     y1 = Math.min(y1, ext.maxY);
   }
-  const start = startB();
   const bandP = (xp, yp) => ground.bandAt(xp * K, yp * K);
   const near = mass ? (xp, yp, d) => [[d, 0], [-d, 0], [0, d], [0, -d], [d * 0.7, d * 0.7], [-d * 0.7, -d * 0.7]].map(([u, v]) => bandP(xp + u, yp + v)) : null;
 
@@ -864,7 +1105,6 @@ export function scatterTreesB(built) {
           dens = b === 6 ? 0.92 : b === 5 ? 0.4 + 0.55 * grove : 0.02 + 0.06 * (grove > 0.6);
         }
         if (hash(xp * 3.1, yp * 7.7) > dens) continue;
-        if (start && Math.hypot(start.x - x, start.y - y) < 5 * K) continue;
         if (coastAt(x, y) / K < SHORE_TREE) continue;
         const k = 0.85 + hash(xp, yp * 2) * 0.7;
         if (mass && reachesForest(x, y, k)) continue;
@@ -878,6 +1118,39 @@ export function scatterTreesB(built) {
   for (let tries = 0; trees.length > TREE_LIMIT && tries < 4; tries += 1) {
     step *= Math.sqrt(trees.length / TREE_LIMIT) * 1.02;
     place(step);
+  }
+  // The relief: trees along the grown roads, a little back from the verge on either side.
+  if (mass && reliefOn()) {
+    roadsIn(x0, y0, x1, y1).forEach((points) => {
+      const tier = roadTier(points);
+      if (tier < 2) return;
+      const back = ROAD_HALF[tier] * (1 + 2 * ROAD_VERGE) + ROAD_TREE_BACK;
+      let run = 0;
+      for (let p = 1; p < points.length; p += 1) {
+        const [ax, ay] = points[p - 1];
+        const [bx, by] = points[p];
+        const len = Math.hypot(bx - ax, by - ay) || 1;
+        run += len;
+        if (run < ROAD_TREE_EVERY) continue;
+        run = 0;
+        const nx = -(by - ay) / len;
+        const ny = (bx - ax) / len;
+        for (const side of [-1, 1]) {
+          const seed = hash(bx * 0.37 + side, by * 0.53);
+          if (seed > ROAD_TREE_SHARE) continue;
+          const off = back + hash(by, bx * side) * 1.2;
+          const along = (seed / ROAD_TREE_SHARE - 0.5) * 1.1;   // a little forward or back of the place
+          const x = bx + nx * off * side + ((bx - ax) / len) * along;
+          const y = by + ny * off * side + ((by - ay) / len) * along;
+          if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+          if (ground.bandAt(x, y) < 4) continue;
+          if (coastAt(x, y) / K < SHORE_TREE) continue;
+          const xp = x / K;
+          const yp = y / K;
+          trees.push({ x, y, name: pineAt(xp, yp) > 0.55 ? 'pine' : 'tree', k: 0.85 + hash(xp, yp * 2) * 0.5 });
+        }
+      }
+    });
   }
 
   // Rocks: in the near shallows and on the sand.

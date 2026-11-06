@@ -765,6 +765,9 @@ button.image-viewer-action:hover { background: rgb(255 255 255 / .16); }
   background: rgba(255, 255, 255, .94); color: var(--sea-ink);
   font-size: 12.5px; font-weight: 700; box-shadow: var(--shadow);
 }
+/* In the place of まわりの村 while it shows (2026-11-06): left, where the chips start. */
+#map.digest-on .near-islands { display: none; }
+#map.digest-on .digest-pill { align-self: flex-start; margin-left: max(0px, calc((100% - 520px) / 2)); }
 .digest-pill::before {
   content: ''; width: 8px; height: 8px; border-radius: 999px;
   box-shadow: 0 0 0 2px #ff8a1f; background: #fff;
