@@ -1592,7 +1592,7 @@ function renderMap(time) {
   if (z >= DETAIL_AT && !participants) drawKin(ctx, lineView, kinPlan(meId, sifting, world));
   if (matchBeams) paintMatchBeams(lineView);
   // Map B: a village where something changed has its ground lit, under its houses.
-  if (bActive() && changeStyle() === 'glow') paintChangeGlow(time, 'ground');
+  if (bActive()) paintChangeGlow(time, 'ground');
 
   // Houses and landmarks, back to front. (There is no town any more: an island
   // keeps a small box where its town stood, for its name, its tap and its glints.)
@@ -1639,7 +1639,7 @@ function renderMap(time) {
   drawFog(ctx, view);
   paintTimeOfDay();
   // The light over the evening and night tint, as the windows' are: under it the glow went dark.
-  if (bActive() && changeStyle() === 'glow') paintChangeGlow(time, 'light');
+  if (bActive()) paintChangeGlow(time, 'light');
   if (tod === 'night') paintNightLights(places, townShow, calmOf, houses, props);
   // Over the time-of-day tint, so the glints stay white at any hour.
   if (far && freshIslands.size && !bActive()) drawFreshGlow(places, motion);
@@ -3668,10 +3668,10 @@ function drawRipples() {
 }
 
 /** Where something changed while you were away (段4): a ring that breathes
- * until you look at it from the list. */
+ * until you look at it from the list. Map B lights the village's ground instead (paintChangeGlow). */
 function drawChangeMarks(time) {
   const marks = state.changeMarks || [];
-  if (!marks.length || (bActive() && changeStyle() === 'glow')) return;
+  if (!marks.length || bActive()) return;
   const breathe = REDUCED_MOTION ? 0 : (Math.sin(time * 2) + 1) / 2;
   ctx.save();
   marks.forEach((mark) => {
@@ -3692,22 +3692,26 @@ function drawChangeMarks(time) {
   ctx.restore();
 }
 
-// TRIAL ?change= (2026-11-06, the user: the red rings did not go with the rest; better the village's own
-// ground a little lit): glow (default on map B) | ring (as before).
-const changeStyle = () => (previewParam('change') === 'ring' ? 'ring' : 'glow');
-// Stronger than at first (2026-11-07, the user: so faint it could not be seen at a glance): a warm gold
-// laid over the ground, then lightened, and reaching a little past the clearing onto the forest's edge.
-// It grows and shrinks with the map like the clearing it lights (the user: zoomed out, a floor of 18px
-// made it far bigger than the village).
+// Map B lights the changed village's ground (2026-11-06, the user: the red rings did not go with the
+// rest). Stronger than at first (2026-11-07, the user: so faint it could not be seen at a glance): a warm
+// gold laid over the ground, then lightened, and reaching a little past the clearing onto the forest's
+// edge. It grows and shrinks with the map like the clearing it lights (the user: zoomed out, a floor of
+// 18px made it far bigger than the village).
 const CHANGE_GLOW_R = 12;      // world units of light round each house (its clearing and a little more)
 const CHANGE_GLOW_MIN = 4;     // px: only so that a far-out village still has a speck
 const CHANGE_GLOW_MAX = 84;    // px: close in, round the houses, not a fog over the village
+const CHANGE_GLOW_RES = 0.25;  // the light is worked out at a quarter of a px and drawn back up: soft anyway
+const CHANGE_GLOW_RGB = [255, 200, 86];
+const CHANGE_GLOW_TOP = 0.9;   // its alpha inside, flat
 const CHANGE_NEAR = 30;        // world units: a change this close to a house is that house's village's
 let changeCanvas = null;
 let changeBox = null;       // where the ground pass put changeCanvas, for the light pass
+let changeKey = '';         // what changeCanvas was worked out for, so a still map does not redo it
 
-/** The ground of each village with something changed (state.changeMarks), lit warm and breathing: soft
- * light round its houses and along the grass between them, the overlaps not adding up. */
+/** The ground of each village with something changed (state.changeMarks), lit warm and breathing: light
+ * round its houses and along the grass between them. One even gold with a soft edge (2026-11-07, the user:
+ * it was patchy where the lights overlapped): each light is drawn grey on black and 'lighten' keeps the
+ * brightest at every pixel, so overlaps do not add up; the grey then becomes the gold's alpha. */
 function paintChangeGlow(time, pass) {
   const breathe = REDUCED_MOTION ? 0.5 : (Math.sin(time * 1.8) + 1) / 2;
   if (pass === 'light') {
@@ -3750,27 +3754,51 @@ function paintChangeGlow(time, pass) {
   const top = Math.floor(Math.min(...shown.map((p) => p.y)) - r);
   const w = Math.ceil(Math.max(...shown.map((p) => p.x)) + r) - left;
   const h = Math.ceil(Math.max(...shown.map((p) => p.y)) + r) - top;
-  const dpr = canvas.width / Math.max(1, width);
-  if (!changeCanvas) changeCanvas = document.createElement('canvas');
-  changeCanvas.width = Math.max(1, Math.round(w * dpr));
-  changeCanvas.height = Math.max(1, Math.round(h * dpr));
-  const g = changeCanvas.getContext('2d');
-  g.setTransform(dpr, 0, 0, dpr, -left * dpr, -top * dpr);
-  // 'lighten': where two lights overlap the brighter one shows, so the patch is even.
-  g.globalCompositeOperation = 'lighten';
-  shown.forEach((p) => {
-    const grad = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-    grad.addColorStop(0, 'rgba(255, 206, 92, 0.95)');
-    grad.addColorStop(0.55, 'rgba(255, 196, 80, 0.6)');
-    grad.addColorStop(1, 'rgba(255, 186, 70, 0)');
-    g.fillStyle = grad;
-    g.beginPath();
-    g.ellipse(p.x, p.y, r, r * 0.8, 0, 0, Math.PI * 2);
-    g.fill();
-  });
+  const key = `${r.toFixed(2)}|${shown.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(';')}`;
+  if (!changeCanvas || key !== changeKey) {
+    changeKey = key;
+    if (!changeCanvas) changeCanvas = document.createElement('canvas');
+    const k = CHANGE_GLOW_RES;
+    const cw = Math.max(1, Math.ceil(w * k));
+    const ch = Math.max(1, Math.ceil(h * k));
+    changeCanvas.width = cw;
+    changeCanvas.height = ch;
+    const g = changeCanvas.getContext('2d', { willReadFrequently: true });
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, cw, ch);
+    g.globalCompositeOperation = 'lighten';
+    shown.forEach((p) => {
+      // Squashed into an ellipse with the light in it, so the edge stays soft all round.
+      g.setTransform(k, 0, 0, k * 0.8, (p.x - left) * k, (p.y - top) * k);
+      const grad = g.createRadialGradient(0, 0, 0, 0, 0, r);
+      grad.addColorStop(0, '#fff');
+      grad.addColorStop(0.5, '#fff');
+      grad.addColorStop(0.78, '#666');
+      grad.addColorStop(1, '#000');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(0, 0, r, 0, Math.PI * 2);
+      g.fill();
+    });
+    g.globalCompositeOperation = 'source-over';
+    const image = g.getImageData(0, 0, cw, ch);
+    const px = image.data;
+    const [cr, cg, cb] = CHANGE_GLOW_RGB;
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i];
+      px[i] = cr;
+      px[i + 1] = cg;
+      px[i + 2] = cb;
+      px[i + 3] = Math.round(a * CHANGE_GLOW_TOP);
+    }
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.putImageData(image, 0, 0);
+  }
   // The gold laid on the ground first: on the pale grass of a village a light alone hardly shows.
   ctx.save();
   ctx.globalAlpha = 0.45 + 0.2 * breathe;
+  ctx.imageSmoothingEnabled = true;
   ctx.drawImage(changeCanvas, left, top, w, h);
   ctx.restore();
   changeBox = { left, top, w, h };

@@ -30,6 +30,7 @@ export const APPLY_WORDS = Object.freeze({
   questionOne: 'ひとつに絞って書いてください',
   early: '2問答えたので、ここで申し込めます',
   applyHere: 'ここまでで申し込む',
+  fixAnswer: '上の答えを直すと進めます',
   next: '次へ',
   submit: '申し込む',
   memberTitle: 'この会に申し込みますか？',

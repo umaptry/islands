@@ -2223,6 +2223,8 @@ body.kb-open .compose-dock { padding-bottom: 0; }
   background: rgba(0, 0, 0, .18); color: #fff; font-size: 14px; line-height: 1.6;
 }
 #compose .compose-short-note[hidden] { display: none; }
+/* ① サーバーが受け取らない文のとき、その理由（書いている間に確かめる。text-check.js）。 */
+#compose .compose-check-note { background: rgba(120, 20, 30, .32); border: 1px solid rgba(255, 200, 190, .55); }
 
 /* ① 話題が2つ以上のとき、下から出るシート（後ろは暗くする）。 */
 .topic-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(10, 30, 52, .55); }
@@ -2468,6 +2470,21 @@ body.kb-open .compose-dock { padding-bottom: 0; }
 .ev-answer { width: 100%; background: transparent; border: 0; outline: 0; resize: none; color: #fff; font: inherit; font-size: 20px; line-height: 1.6; padding: 6px 0; caret-color: #fff; }
 .ev-answer::placeholder { color: rgba(255, 255, 255, .6); }
 .ev-count-chars { text-align: right; font-size: 12px; color: var(--on-sea-2); }
+/* 答えが受け取れない理由：答えのすぐ下（text-check.js、2026-11-07） */
+.ev-refusal { margin: 4px 0 6px; padding: 10px 14px; border-radius: 12px; background: rgba(120, 20, 30, .32); border: 1px solid rgba(255, 200, 190, .55); color: #fff; font-size: 14px; line-height: 1.6; }
+
+/* キーボードが出ていて画面が低いとき（iPhone SE・13 mini、keyboard.js の kb-short）：下の帯がキーボードに乗って
+   打っている文字を隠していた（2026-11-07）。ボタンを低くし、「もどる」などはキーボードを閉じると戻る。 */
+body.kb-short #eventApply .ev-body { padding-top: 12px; }
+body.kb-short #eventApply .ev-foot { gap: 4px; padding-top: 6px; padding-bottom: 6px; }
+body.kb-short #eventApply .ev-foot .ev-quiet { display: none; }
+body.kb-short #eventApply .ev-primary { min-height: 44px; }
+body.kb-short #eventApply .ev-consent { margin: 0; font-size: 11px; line-height: 1.5; }
+body.kb-short #eventApply .ev-answer { font-size: 18px; }
+body.kb-short #compose .compose-dock-next { padding-top: 6px; }
+body.kb-short #compose .compose-dock .btn { min-height: 42px; }
+body.kb-short #compose .compose-tools { height: 38px; }
+body.kb-short #compose #composeBody { min-height: 56px; }
 .ev-choices { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
 .ev-choice { text-align: left; padding: 14px 18px; border-radius: 999px; border: 0; background: rgba(255, 255, 255, .22); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
 .ev-choice.is-on { background: #fff; color: var(--ui, var(--sea)); }

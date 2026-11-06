@@ -48,15 +48,20 @@ import {
   bodyLength, composeFloor, counterLabel, floorLength, followPromptTag, nextLabel, shortNote, splitOverflow, stepBefore,
   topicHeading, topicPlan, usableTopics,
 } from '../compose-rules.js';
-import { primeKeyboard, releaseKeyboard } from '../keyboard.js';
+import { fitToViewport as fitScreen, keepCaretInView, keepInView, primeKeyboard, releaseKeyboard } from '../keyboard.js';
+import { textCheck } from '../text-check.js';
 // ---- 会：主催者とメンバー（第2回a） ----
 import { askEventDraft } from './event-compose.js';
 import { hostHash, HOST_WORDS } from '../event-host-rules.js';
+
+// 次へ while the words would not be taken: why it cannot be pressed (the reason itself is under the box).
+const WORDS_REFUSED = '上の文を直すと次へ進めます';
 
 let editing = null;       // the post being edited, or null for a new one
 let imagePath = null;     // the uploaded storage path
 let imageBlob = null;     // chosen but not yet uploaded
 let submitting = false;
+let words = null;         // the check of the words as they are typed (text-check.js), made in setupCompose
 const drafts = new Map();
 let draftKey = '';
 let previewUrl = null;
@@ -125,6 +130,10 @@ function goStep(next) {
 async function nextFromWords() {
   if ($('composeNext').disabled) return;
   const text = $('composeBody').value.trim();
+  // Words the server would not take: the reason is under the box, and 次へ waits (text-check.js).
+  const checked = visit;
+  const said = await words.settle(text);
+  if (checked !== visit || !said.ok || step !== 1 || $('composeBody').value.trim() !== text) return;
   const plan = editing ? 'go' : topicPlan({ last: topicMemory, body: text });
   if (plan === 'sheet') {
     openTopicSheet(topicMemory.topics);
@@ -211,21 +220,28 @@ function nextFromHeat() {
   buzz('tap');
 }
 
-/** iPhone keeps the page its full height under the keyboard, so the screen is fitted to the part of it
- * that is still visible: the dock (次へ, picture, counter) then sits right on top of the keyboard and goes
- * down with it. Where the keyboard shrinks the page itself (Android, interactive-widget), nothing changes. */
+/** The screen fitted to what the keyboard leaves visible (keyboard.js): the dock (次へ, picture, counter)
+ * sits right on top of the keyboard, and the line being typed is kept in sight above it. */
 function fitToViewport() {
-  const node = $('compose');
-  const view = window.visualViewport;
-  if (!view || !node.classList.contains('active')) {
-    node.style.top = '';
-    node.style.bottom = '';
-    return;
-  }
-  const top = Math.max(0, Math.round(view.offsetTop));
-  const bottom = Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop));
-  node.style.top = top ? `${top}px` : '';
-  node.style.bottom = bottom ? `${bottom}px` : '';
+  fitScreen($('compose'), $('compose').classList.contains('active'));
+  keepCaretInView($('composeBody'), $('composeScroller'));
+}
+
+/** The words as typed, checked a beat later (only once they are long enough to be a post). */
+function checkWords() {
+  const value = $('composeBody').value;
+  const floor = composeFloor({ editing: Boolean(editing), limits: config().limits });
+  const fits = floorLength(value) >= floor && bodyLength(value) <= config().limits.body_max;
+  words.typed(fits ? value : '');
+}
+
+/** Why the words would not be taken, under the box (and 次へ held back by paintCounter). */
+function paintWordsCheck({ status, message }) {
+  const note = $('composeCheckNote');
+  note.hidden = status !== 'ng';
+  note.textContent = status === 'ng' ? message : '';
+  paintCounter();
+  if (status === 'ng') keepInView(note, $('composeScroller'));
 }
 
 // ---------------------------------------------------------------- form
@@ -261,13 +277,14 @@ function paintCounter() {
   $('composeCounter').classList.toggle('over', length > max);
   $('composeCounterText').textContent = counterLabel(length, max);
   const invalid = submitting || postBlocked || counted < floor || length > max;
-  $('composeNext').disabled = invalid || asking;
-  $('composeNext').textContent = asking ? '確かめています…' : nextLabel({ length: counted, floor });
+  const refused = !invalid && Boolean(words) && words.state.status === 'ng';
+  $('composeNext').disabled = invalid || asking || refused;
+  $('composeNext').textContent = asking ? '確かめています…' : refused ? WORDS_REFUSED : nextLabel({ length: counted, floor });
   const note = editing ? null : shortNote({ length: counted, floor });
   $('composeShortNote').hidden = !note;
   $('composeShortNote').textContent = note || '';
   // The buttons are not held back by the slider: 次へ on ② points at the slider instead (see nudgeSlider).
-  $('composeSubmit').disabled = invalid;
+  $('composeSubmit').disabled = invalid || refused;
   $('composeHint').hidden = Boolean(editing) || touched || !nudged;
   if (touched) $('composeHint').classList.remove('alert');
   paintOverflow(value, max);
@@ -571,7 +588,13 @@ export function setupCompose() {
   // ② has the screen to itself, so the object is bigger than it was beside the other fields.
   heat = heatObject(140);
   $('composeHeat').append(heat.node);
-  body.addEventListener('input', paintCounter);
+  words = textCheck({ ask: (text) => api.post('/api/text-check', { body: text }), onChange: paintWordsCheck });
+  body.addEventListener('input', () => {
+    paintCounter();
+    checkWords();
+    keepCaretInView(body, $('composeScroller'));
+  });
+  body.addEventListener('focus', () => setTimeout(() => keepCaretInView(body, $('composeScroller')), 320));
   $('composeNext').addEventListener('click', nextFromWords);
   $('composeNext2').addEventListener('click', nextFromHeat);
   $('topicRewrite').addEventListener('click', rewriteFromSheet);
@@ -589,7 +612,10 @@ export function setupCompose() {
     fitToViewport();
     fitBody();
   });
-  body.addEventListener('blur', () => setTimeout(fitToViewport, 350));
+  body.addEventListener('blur', () => {
+    setTimeout(fitToViewport, 350);
+    if (words.state.status === 'typing') words.settle(body.value);
+  });
   // iPhone and iPad indent a textarea's words by 3px on each side, which CSS cannot take away. The red
   // copy behind the box is indented the same, or its lines would break in other places.
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -819,6 +845,7 @@ export function setupCompose() {
       paintShare();
       refreshShare();
       setOwnOpen(true);
+      checkWords();
       paintCounter();
       paintMotivation();
       fitToViewport();

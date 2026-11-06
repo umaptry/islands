@@ -34,3 +34,12 @@ test('the nav is hidden while the keyboard is up', async () => {
   assert.match(css, /body\.kb-open \.bottom-nav\s*\{\s*display:\s*none/);
   assert.match(css, /body\.kb-open\.has-nav \.screen\.tinted\s*\{\s*padding-bottom:\s*0/);
 });
+
+test('the foot is made smaller only with the keyboard up on a short screen (iPhone SE, 13 mini)', async () => {
+  const { isShortWithKeyboard, SHORT_HEIGHT } = await import(dataUrl(await load('web/js/keyboard.js')));
+  assert.equal(isShortWithKeyboard(true, 300), true);
+  assert.equal(isShortWithKeyboard(true, SHORT_HEIGHT - 1), true);
+  assert.equal(isShortWithKeyboard(true, SHORT_HEIGHT), false);
+  assert.equal(isShortWithKeyboard(false, 300), false);
+  assert.equal(isShortWithKeyboard(true, 0), false);
+});
