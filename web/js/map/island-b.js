@@ -48,7 +48,6 @@ export function setIslandB(payload) {
     region: decode(payload.region, Uint8Array),
     near: decode(payload.near, Uint8Array),
     regions: payload.regions || [],
-    start: payload.start || null,
     extent: payload.extent || null,
     forest: payload.forest === 'mass' ? 'mass' : 'grove',
     nearAny: null,
@@ -151,7 +150,7 @@ export function islandBForWorker() {
 /** What would change the ground, as one string (cache keys). */
 export function islandBKey() {
   if (!data) return '';
-  return [data.version, view.communityKey, view.postTotal, forestMode(), view.roadsKey || ''].join('|');
+  return [data.version, view.communityKey, view.postTotal, forestMode(), view.roadsKey || '', view.relief || '', view.villageKey || ''].join('|');
 }
 
 /** 'mass' (one canopy, the default) or 'grove' (trees one by one: only when the payload or the view asks). */
@@ -245,13 +244,24 @@ export function coastAt(x, y) {
 }
 
 /** coastAt that also guards `points` (and the registered posts), without
- * touching the registered list: for a calculation that was handed some posts. */
-export function coastWithPosts(points) {
+ * touching the registered list: for a calculation that was handed some posts.
+ * `low`: the raise round them goes no higher than the shore's grass (RAISE_LOW),
+ * for the relief's height (terrain-b.js): a cape the raise made stays low and
+ * flat, not a ridge standing up from the beach (2026-11-07, the user). */
+export function coastWithPosts(points, { low = false } = {}) {
   const extra = bucketsOf(points);
-  return (x, y) => coastCore(x, y, extra);
+  const top = low ? RAISE_LOW : RAISE_TOP;
+  return (x, y) => coastCore(x, y, extra, top);
 }
 
-function coastCore(x, y, extra) {
+/** coastAt with the low raise (coastWithPosts' `low`), for the relief's height. */
+export const coastLow = (x, y) => coastCore(x, y, null, RAISE_LOW);
+
+// The raise round the reference points and the posts goes up to this (48 * 1 - 4).
+const RAISE_TOP = 44;
+const RAISE_LOW = 8;
+
+function coastCore(x, y, extra, top = RAISE_TOP) {
   if (!data) return -1000;
   // One look-up of the grid cell for both the coast and the reference points
   // (they share their grid): the bilinear read is gridAt's, done once.
@@ -272,19 +282,21 @@ function coastCore(x, y, extra) {
         + 20 * (coastNoiseSmall(x * 0.024 + seed * 5, y * 0.024) - 0.5));
     }
   }
-  if (c >= 8) return c;
+  if (c >= top) return c;
   // Raised round the reference points and the posts, sloping down to the sea
   // (a hard step would show their cells and circles as square capes). Inside a
   // near cell the bilinear weight is at least 0.25, which gives 8; the shore
   // is most of a cell out. Round a post: 8 within POST_SAFE, the shore
   // POST_SAFE further out. Further away nothing changes.
+  // The raise is not cut off where the coast is already 8 (it was until 2026-11-07): the distance
+  // dipped back to 8 across a cape's neck and the shore's grass showed there as a line.
   if (data.nearAny[gk] === 1) {
     const nr = data.near;
     const w = (nr[gk] * (1 - gu) + nr[gk + 1] * gu) * (1 - gv) + (nr[gk + n] * (1 - gu) + nr[gk + n + 1] * gu) * gv;
-    if (w > 0) c = Math.max(c, 48 * w - 4);
+    if (w > 0) c = Math.max(c, Math.min(top, 48 * w - 4));
   }
   const d = Math.min(postDistance(x, y, postBuckets, 2 * POST_SAFE), extra !== null ? postDistance(x, y, extra, 2 * POST_SAFE) : Infinity);
-  if (d < Infinity) c = Math.max(c, 8 * (2 - d / POST_SAFE));
+  if (d < Infinity) c = Math.max(c, Math.min(top, 8 * (2 - d / POST_SAFE)));
   return c;
 }
 
@@ -300,5 +312,4 @@ export function regionAt(x, y) {
 }
 
 export const regionsB = () => (data ? data.regions : []);
-export const startB = () => (data ? data.start : null);
 export const extentB = () => (data ? data.extent : null);

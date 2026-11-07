@@ -151,6 +151,7 @@ from core.config import (
     MIN_TEXT_LENGTH,
     COMPOSE_MIN_LENGTH,
     TOPIC_CHECK_RATE_MAX,
+    TEXT_CHECK_RATE_MAX,
     GEMINI_MODEL_NAME,
     MOTIVATION_DEFAULT,
     MOTIVATION_MAX,
@@ -183,7 +184,7 @@ from core.energy import constants as energy_constants, reach_factor
 from core.artifact_manifest import SEED_VECTORS
 from core.placement import place_by_seeds, placement_spots
 from core.energy import name_landmasses
-from core.features import build_hybrid_features, extract_label_terms, normalize_text, use_preprocessing
+from core.features import build_hybrid_features, build_sparse_features, extract_label_terms, normalize_text, use_preprocessing
 from core.geometry import scale_projected_coordinate
 from core.similarity import (
     SPARSE_DIM,
@@ -512,6 +513,10 @@ class PostCreate(BaseModel):
 
 
 class TopicCheck(BaseModel):
+    body: str = ""
+
+
+class TextCheck(BaseModel):
     body: str = ""
 
 
@@ -853,6 +858,26 @@ def clean_body(raw):
     return text
 
 
+NO_MEANING = "意味のある単語が見つかりませんでした。もう少し具体的に書いてみてください。"
+
+
+def text_problem(text):
+    """Why a text would be refused (clean_body's length, project's "no word it knows"), or None.
+
+    The words alone, without the embedding (no Gemini call): fast enough to ask while a person types
+    (2026-11-07, the user: told only on 投稿する / 申し込む, people could not tell which box was wrong).
+    """
+    try:
+        body = clean_body(text)
+    except HTTPException as error:
+        return error.detail
+    artifacts = state.get("sparse_artifacts")
+    if artifacts is None:
+        return None
+    _features, _tokens, zero_rows, _ = build_sparse_features([body], fit=False, artifacts=artifacts)
+    return NO_MEANING if zero_rows else None
+
+
 def project(text):
     """text -> (x, y, cluster_id, terms, vector, centred_vector).
 
@@ -874,7 +899,7 @@ def project(text):
     if zero_rows:
         raise HTTPException(
             status_code=422,
-            detail="意味のある単語が見つかりませんでした。もう少し具体的に書いてみてください。",
+            detail=NO_MEANING,
         )
     vector = features[0]
     placement = state.get("placement")
@@ -3179,6 +3204,20 @@ def topic_check_post(payload: TopicCheck, request: Request):
     if not body or not check_rate_limit(f"topic:{user_id}", TOPIC_CHECK_RATE_MAX):
         return {"topics": []}
     return {"topics": topic_check.find_topics(body)}
+
+
+@app.post("/api/text-check")
+def text_check(payload: TextCheck, request: Request):
+    """Whether a text would be taken as a post or an answer to a 会's question: {"ok", "message"}.
+
+    Asked by the screen as the person types and when they leave the box, so the reason shows under that
+    box and the button waits. Only a hint: posting and applying check again. Too many asks are let through.
+    """
+    user_id = current_user(request)
+    if not check_rate_limit(f"textcheck:{user_id}", TEXT_CHECK_RATE_MAX):
+        return {"ok": True, "message": None}
+    message = text_problem(payload.body)
+    return {"ok": message is None, "message": message}
 
 
 _ANON_VIEWER = re.compile(r"^anon:[0-9a-f]{16,64}$")

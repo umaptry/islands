@@ -57,7 +57,7 @@ function payload() {
   const b64 = (a) => Buffer.from(a.buffer).toString('base64');
   return {
     version: 'v1', grid: { x0: -100, y0: -100, cell: 5, n: N }, coast: b64(coast), region: b64(region), near: b64(near),
-    regions: [], start: { x: 0, y: -48 }, extent: { minX: -100, minY: -100, maxX: 100, maxY: 100 }, forest: 'mass',
+    regions: [], extent: { minX: -100, minY: -100, maxX: 100, maxY: 100 }, forest: 'mass',
   };
 }
 const POSTS = [{ id: 'p1', x: 30, y: 10 }, { id: 'p2', x: -20, y: -15 }, { id: 'p3', x: 5, y: 30 }];
@@ -85,12 +85,13 @@ const cases = [
   { name: 'a village, zoomed in', region: { minX: 10, minY: -5, maxX: 45, maxY: 40 }, scale: 12, pixelRatio: 2, parts: 3 },
   { name: 'the coast, a low pixel ratio', region: { minX: 20, minY: 30, maxX: 80, maxY: 100 }, scale: 6, pixelRatio: 1, parts: 5 },
   { name: 'the north shore, with a road', region: { minX: -40, minY: -70, maxX: 40, maxY: 0 }, scale: 8, pixelRatio: 2, parts: 4, roads: [[-30, -40, 25, -20, 2], [25, -20, 30, 10, 1]] },
+  { name: 'the relief, the south shore and a road', region: { minX: -60, minY: 0, maxX: 60, maxY: 100 }, scale: 6, pixelRatio: 2, parts: 3, roads: [[-30, 20, 25, 40, 3]], extra: { relief: '1' } },
 ];
 
 for (const c of cases) {
   test(`strips joined are the whole picture: ${c.name}`, () => {
     island.setIslandB(payload());
-    view({ roads: c.roads || null });
+    view({ roads: c.roads || null, ...(c.extra || {}) });
     const job = { posts: POSTS, cells: [], region: c.region, scale: c.scale, pixelRatio: c.pixelRatio };
     const whole = detailPixels({ ...job, surf: true });
     const made = joined(job, c.parts);

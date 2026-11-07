@@ -1,4 +1,4 @@
-"""地図B案の島の土台（外形・地方・お手本の近く・名前の位置・はじまりの村）。
+"""地図B案の島の土台（外形・地方・お手本の近く・名前の位置）。
 
 お手本（seed_map.json の "seed"、座標 0〜1000）から純粋に計算する。起動時に1回作ってキャッシュし、
 ブラウザには payload() を /api/map-b/base で渡す。格子の並びは行優先（index = j*n + i、j が y）。
@@ -22,7 +22,6 @@ THRESHOLD = 0.20
 MIN_COAST = 15.0        # お手本の点はこれ以上、海岸から内側にある
 NEAR_SEED = 15.0        # 「お手本の近く」とみなす距離
 MIN_ENCLAVE = 40        # これ未満のセルの飛び地は周りの地方に塗り替える
-START_COAST = 40.0
 OUTSIDE = 255
 
 _cache = {}
@@ -113,10 +112,6 @@ def _build(seed):
         d = ndimage.distance_transform_edt(m) * np.minimum(1.0, np.maximum(coast, 0) / 30.0)
         j, i = np.unravel_index(d.argmax(), d.shape)
         anchors.append({"id": rid, "name": name, "x": round(float(g[i]), 1), "y": round(float(g[j]), 1)})
-    # はじまりの村：(500, 512) に一番近い coast >= 40 の陸の点
-    jj, ii = np.nonzero(coast >= START_COAST)
-    k = ((g[ii] - 500) ** 2 + (g[jj] - 512) ** 2).argmin()
-    start = {"x": round(float(g[ii[k]]), 1), "y": round(float(g[jj[k]]), 1)}
     land_j, land_i = np.nonzero(mask)
     extent = {"minX": float(X0 + land_i.min() * CELL), "minY": float(Y0 + land_j.min() * CELL),
               "maxX": float(X0 + (land_i.max() + 1) * CELL), "maxY": float(Y0 + (land_j.max() + 1) * CELL)}
@@ -125,7 +120,7 @@ def _build(seed):
     digest.update(json.dumps(MAP_B_REGIONS, ensure_ascii=False).encode("utf-8"))
     return {
         "mask": mask, "coast": coast, "region": region, "near": near, "regions": anchors,
-        "start": start, "extent": extent, "version": digest.hexdigest()[:12],
+        "extent": extent, "version": digest.hexdigest()[:12],
         "seed_share": share, "threshold": threshold,
     }
 
@@ -179,7 +174,6 @@ def payload():
             "region": _b64(b["region"].astype(np.uint8)),
             "near": _b64(b["near"].astype(np.uint8)),
             "regions": b["regions"],
-            "start": b["start"],
             "extent": b["extent"],
             "forest": MAP_B_FOREST,
         }

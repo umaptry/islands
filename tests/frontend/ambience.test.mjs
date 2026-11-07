@@ -79,3 +79,19 @@ test('the curves between swells sit at the quiet floor, the cut-off follows the 
   assert.equal(foam[0], 0);
   assert.ok(Math.max(...foam) <= plan.peak * 0.8 + 1e-6);
 });
+
+test('the sea is heard near the shore zoomed in, not over the whole island nor inland', () => {
+  assert.equal(A.seaLevel({ z: 1, seaShare: 0.5 }), 0, 'the whole island from high up');
+  assert.equal(A.seaLevel({ z: 3, seaShare: 0 }), 0, 'inland');
+  assert.equal(A.seaLevel({ z: 3, seaShare: 0.3 }), 1, 'on a shore');
+  const between = A.seaLevel({ z: 1.9, seaShare: 0.3 });
+  assert.ok(between > 0 && between < 1, String(between));
+  // A shore coming into view turns it up step by step, never at a jump.
+  let last = 0;
+  for (let share = 0; share <= 0.25; share += 0.01) {
+    const level = A.seaLevel({ z: 3, seaShare: share });
+    assert.ok(level >= last && level - last < 0.2);
+    last = level;
+  }
+  assert.ok(A.GULL_LEVEL > 0 && A.GULL_LEVEL < 1);
+});

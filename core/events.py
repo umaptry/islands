@@ -1042,15 +1042,21 @@ def channel_and_sub(claims):
 def prepare_answers(raw, event):
     """答えを整えて、埋め込みと座標を付ける（Python で作って DB 関数に渡す）。メンバーでない人だけ。"""
     host = _host()
-    allowed = {item["prompt"] for item in event.get("questions") or []}
+    labels = {item["prompt"]: item.get("label") or "" for item in event.get("questions") or []}
     out, seen = [], set()
     for item in raw or []:
         prompt = item.get("prompt") if isinstance(item, dict) else None
-        if prompt not in allowed or prompt in seen or not str(item.get("body") or "").strip():
+        if prompt not in labels or prompt in seen or not str(item.get("body") or "").strip():
             continue
         seen.add(prompt)
-        body = host.clean_body(item.get("body"))
-        x, y, cluster_id, terms, vector, centred = host.project(body)
+        try:
+            body = host.clean_body(item.get("body"))
+            x, y, cluster_id, terms, vector, centred = host.project(body)
+        except HTTPException as error:
+            # 2026-11-07：まとめて送るので、どの質問の答えかを添える（画面は書いている間にも確かめる）
+            if error.status_code != 422 or not labels[prompt]:
+                raise
+            raise HTTPException(status_code=422, detail=f"「{labels[prompt]}」の答え：{error.detail}")
         out.append({"prompt": prompt, "body": body, "x": x, "y": y, "cluster_id": cluster_id, "terms": terms,
                     "vec": [round(float(v), 6) for v in vector], "vec_c": [round(float(v), 6) for v in centred]})
     return out

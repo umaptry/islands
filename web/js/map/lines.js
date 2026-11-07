@@ -495,6 +495,8 @@ function layout(view) {
       kind,
       world: Math.hypot(row.a_at[0] - row.b_at[0], row.a_at[1] - row.b_at[1]),
       // Map B: the curve of the road in the ground (roads-b.js roadCurve), so a car keeps to it.
+      // The same curve in world units, for whatever walks it on a raised ground (terrain-b.js relief).
+      ground: sameIsland && bActive() ? arc({ x: from[0], y: from[1] }, { x: to[0], y: to[1] }, 0, ROAD_BEND) : null,
       arc: sameIsland
         ? arc(p, q, 0, bActive() ? ROAD_BEND : 0)
         : arc(p, q, hashId(`${row.a}|${row.b}`), sea ? SEA_BEND : ARCH_BEND),
@@ -625,7 +627,7 @@ function drawBoats(ctx, view, plan, time) {
   const still = REDUCED_MOTION || time === null || time === undefined;
   const cap = phone ? BOAT_CAP.phone : BOAT_CAP.wide;
   const routes = new Map();
-  plan.lines.forEach(({ row, kind, group: key, arc: shape, world, runs }) => {
+  plan.lines.forEach(({ row, kind, group: key, arc: shape, ground, world, runs }) => {
     if ((kind !== 'sea' && kind !== 'road') || row.faint || !onScreen(shape, width, height)) return;
     if (growthOf(linkKey(row)) < 1) return;
     const strength = Number(row.strength) || 0;
@@ -633,11 +635,11 @@ function drawBoats(ctx, view, plan, time) {
     const id = kind === 'road' ? `road|${linkKey(row)}` : key;
     const held = routes.get(id);
     if (!held) {
-      routes.set(id, { key: id, shape, world, strength, runs, tier: row.tier || 1, road: kind === 'road' });
+      routes.set(id, { key: id, shape, ground, world, strength, runs, tier: row.tier || 1, road: kind === 'road' });
       return;
     }
     held.tier = Math.max(held.tier, row.tier || 1);
-    if (strength > held.strength) Object.assign(held, { shape, world, strength, runs });
+    if (strength > held.strength) Object.assign(held, { shape, ground, world, strength, runs });
   });
   // Roads may not use up the whole cap: at least half stays for the sea routes
   // (when there are that many), and what the sea routes leave over goes to the roads.
@@ -645,7 +647,9 @@ function drawBoats(ctx, view, plan, time) {
   const demand = (isRoad) => all.filter((r) => r.road === isRoad).reduce((n, r) => n + boatCount(r.tier), 0);
   let roadRoom = Math.max(Math.floor(cap / 2), cap - demand(false));
   let seaRoom = cap - Math.min(demand(true), roadRoom);
-  all.sort((a, b) => b.strength - a.strength).forEach(({ shape, key, world, tier, runs, road }) => {
+  all.sort((a, b) => b.strength - a.strength).forEach(({ shape, ground, key, world, tier, runs, road }) => {
+    // Map B: a tier-1 track (terrain-b.js) wanders off the curve and runs under the canopy: nobody on it yet.
+    if (road && view.walk && tier < 2) return;
     const count = Math.min(boatCount(tier), road ? roadRoom : seaRoom);
     if (road) roadRoom -= count; else seaRoom -= count;
     const seed = hashId(key);
@@ -655,9 +659,15 @@ function drawBoats(ctx, view, plan, time) {
       const { t, forward, leg } = still
         ? { t: (index + 1) / (count + 1), forward: true, leg: 0.5 }
         : boatAt(time, { duration, offset: (seed % 997) / 997 * duration * 2, index, count });
-      const point = pointOn(shape, t);
+      // People walk the road as the ground lifts it (the relief raises it unevenly along the way):
+      // from the world curve, each point to the screen on its own.
+      const lifted = road && view.walk && ground && view.toScreen;
+      const at = (u) => { const w = pointOn(ground, u); return view.toScreen(w.x, w.y); };
+      const point = lifted ? at(t) : pointOn(shape, t);
       if (point.x < -40 || point.x > width + 40 || point.y < -40 || point.y > height + 40) continue;
-      const heading = headingAt(shape, t) + (forward ? 0 : Math.PI);
+      const ahead = lifted ? at(Math.min(1, t + 0.01)) : null;
+      const behind = lifted ? at(Math.max(0, t - 0.01)) : null;
+      const heading = (lifted ? Math.atan2(ahead.y - behind.y, ahead.x - behind.x) : headingAt(shape, t)) + (forward ? 0 : Math.PI);
       const alpha = still ? 1 : Math.min(1, leg / 0.08, (1 - leg) / 0.08);
       // A car on the land stretches (and all of a road), a boat on the water: from
       // the clock and the ground alone, handing over across a short stretch at the beach.

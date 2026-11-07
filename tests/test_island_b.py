@@ -49,10 +49,9 @@ def test_no_small_enclaves_remain(base):
             assert sorted(sizes)[:-1] and min(sorted(sizes)[:-1]) >= island_b.MIN_ENCLAVE
 
 
-def test_start_and_region_anchors_are_on_land(base):
+def test_region_anchors_are_on_land(base):
     _, b = base
-    g = island_b._axis()
-    for point in [b["start"]] + b["regions"]:
+    for point in b["regions"]:
         assert island_b.region_of(point["x"], point["y"]) is not None
     assert len(b["regions"]) == 16
 

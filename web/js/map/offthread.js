@@ -12,7 +12,7 @@
 // second after a zoom instead of a few.
 
 import { config } from '../config.js';
-import { islandBForWorker, mapBOn, startB } from './island-b.js';
+import { extentB, islandBForWorker, mapBOn } from './island-b.js';
 import { detailPlan } from './terrain.js';
 
 // No answer by then: give up on the workers for a while (RETRY_MS). A job goes to a worker
@@ -175,10 +175,12 @@ let warmed = false;
  */
 export function offThreadWarm() {
   if (warmed || broken || typeof Worker === 'undefined') return;
-  const start = startB();
-  if (!start || !islandBForWorker() || !mapBOn(config())) return;
+  const ext = extentB();
+  if (!ext || !islandBForWorker() || !mapBOn(config())) return;
   warmed = true;
-  const region = { minX: start.x - 50, minY: start.y - 50, maxX: start.x + 50, maxY: start.y + 50 };
+  const cx = (ext.minX + ext.maxX) / 2;
+  const cy = (ext.minY + ext.maxY) / 2;
+  const region = { minX: cx - 50, minY: cy - 50, maxX: cx + 50, maxY: cy + 50 };
   for (let round = 0; round < 3; round += 1) {
     for (let n = 0; n < workerCount(); n += 1) {
       offThread('detail', { posts: [], cells: [], region, scale: 4, pixelRatio: 1, surf: false }, () => {});

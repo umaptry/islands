@@ -8,18 +8,15 @@ import { membersOnly } from '../config.js';
 import { changesInScope } from '../community-rules.js';
 import { state } from '../state.js';
 import {
-  $, avatar, clear, desktopSheet, el, openSheet, timeAgo,
+  $, avatar, clear, el, openSheet, timeAgo,
 } from '../ui.js';
-import { focusOn } from '../map/index.js';
+import { zoomToChange } from '../map/index.js';
 import { describeChange, digestLabel } from '../meet-text.js';
 
 const SEEN_KEY = 'islands.seenChanges';
 let digestFor = null; // the account the digest was fetched for, once a session
 let changes = [];
 let seen = readSeen();
-
-/** Where a point should land while a sheet covers part of the screen. */
-const lift = () => (desktopSheet() ? 0.5 : 0.3);
 
 function readSeen() {
   try {
@@ -86,12 +83,16 @@ export function clearDigest() {
 
 /** The pill under the tabs and the rings on the map, both from what is unseen. */
 export function paintMarks() {
-  const left = state.account ? unseen() : [];
+  // Not while a sentence is tried out (before the first post): the banner asks to tap まわりの村.
+  const left = state.account && !state.trialPost ? unseen() : [];
   const pill = $('mapDigest');
   pill.hidden = !left.length || !state.account;
   if (!pill.hidden) pill.textContent = digestLabel(left.length);
+  // While it shows, it takes the place of まわりの村 under the bar (2026-11-06, the user: under the chips
+  // it stood in the map's way).
+  $('map').classList.toggle('digest-on', !pill.hidden);
   state.changeMarks = left.filter((change) => change.place && change.place.cx != null)
-    .map((change) => ({ id: change.id, x: change.place.cx, y: change.place.cy }));
+    .map((change) => ({ id: change.id, x: change.place.cx, y: change.place.cy, island: change.island_id || null }));
 }
 
 /** The label of the island at a change's place today, for rows without a name. */
@@ -129,7 +130,7 @@ function openDigest() {
       faces((change.people || []).slice(0, 2), 20), el('span', { text: said.people })) : null,
     said.numbers ? el('span', { className: 'change-numbers num', text: said.numbers }) : null);
     row.addEventListener('click', () => {
-      if (change.place && change.place.cx != null) focusOn({ x: change.place.cx, y: change.place.cy }, { lift: lift() });
+      if (change.place && change.place.cx != null) zoomToChange(change.place.cx, change.place.cy, change.island_id);
       markSeen(change.id);
       row.classList.add('seen');
     });

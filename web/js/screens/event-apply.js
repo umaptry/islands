@@ -15,6 +15,8 @@ import { $, clear, el, toast } from '../ui.js';
 import { browserStorage } from '../talk.js';
 import { eventsApi } from '../events-api.js';
 import { noteEventGuest, refreshEventGuest } from '../event-guest.js';
+import { fitToViewport, keepCaretInView, keepInView } from '../keyboard.js';
+import { textCheck } from '../text-check.js';
 import {
   EVENT_WORDS, applyView, breakdownRows, cleanInterests, communityOnlyView, countView, errorText, eventHashFor, probeDraft,
   probeView, rememberApplyReturn, saveProbeDraft, takeApplyReturn, validEventCode, windowText,
@@ -509,38 +511,74 @@ export function setupEventApply() {
     const count = el('div', { className: 'ev-count-chars num' });
     const answered = () => collectAnswers(flow.questions, { ...flow.typed, [prompt]: area.value }).length;
     const last = isLast(id);
-    const next = primary(last ? APPLY_WORDS.submit : APPLY_WORDS.next, () => {
-      const check = cleanAnswer(area.value);
-      if (!check.ok) { setError(check.message); return; }
-      flow.typed[prompt] = check.body;
-      advance(id);
-    }, { id: 'eventStepNext' });
-    const early = quiet(APPLY_WORDS.applyHere, () => {
-      const check = cleanAnswer(area.value);
-      if (!check.ok) { setError(check.message); return; }
-      flow.typed[prompt] = check.body;
-      submit();
+    // The answer is checked as it is typed (text-check.js): an answer the server would not take says why
+    // right under it, and the buttons wait (2026-11-07: told only at 申し込む, people could not tell which).
+    const refusal = el('p', { className: 'ev-refusal', attrs: { id: 'eventAnswerCheck', role: 'status' }, hidden: true });
+    const words = textCheck({
+      ask: (text) => api.post('/api/text-check', { body: text }),
+      onChange: ({ status, message }) => {
+        if ($('eventAnswer') !== area) return;   // a late answer for a step that is gone
+        refusal.hidden = status !== 'ng';
+        refusal.textContent = status === 'ng' ? message : '';
+        sync();
+        if (status === 'ng') keepInView(refusal, body);
+      },
     });
+    /** The answer, cleaned and checked: true when the step may go on. */
+    const take = async () => {
+      const check = cleanAnswer(area.value);
+      if (!check.ok) { setError(check.message); return false; }
+      const said = await words.settle(check.body);
+      // Gone to another step, refused, or written on while it was checked: not this answer.
+      if (!said.ok || $('eventAnswer') !== area || cleanAnswer(area.value).body !== check.body) return false;
+      flow.typed[prompt] = check.body;
+      return true;
+    };
+    // Both buttons wait while the answer is checked, so a second tap does not apply twice.
+    let busy = false;
+    const go = async (then) => {
+      if (busy) return;
+      busy = true;
+      next.disabled = true;
+      early.disabled = true;
+      const ok = await take();
+      busy = false;
+      if (ok) then();
+      else if ($('eventAnswer') === area) sync();
+    };
+    const next = primary(last ? APPLY_WORDS.submit : APPLY_WORDS.next, () => go(() => advance(id)), { id: 'eventStepNext' });
+    const early = quiet(APPLY_WORDS.applyHere, () => go(() => submit()));
     early.id = 'eventApplyEarly';
     const sync = () => {
       const have = answered();
+      const refused = words.state.status === 'ng';
       count.textContent = `${Array.from(area.value).length}/${ANSWER_MAX}`;
       // Enough answered: a blank question may be passed; not enough: this one has to be written.
-      next.disabled = last ? have < need : (have < need && !area.value.trim());
-      early.hidden = last || have < need;
+      next.disabled = busy || refused || (last ? have < need : (have < need && !area.value.trim()));
+      early.disabled = busy;
+      next.textContent = refused ? APPLY_WORDS.fixAnswer : last ? APPLY_WORDS.submit : APPLY_WORDS.next;
+      early.hidden = refused || last || have < need;
       note.hidden = have < need;
       setError('');
     };
     const note = el('div', { className: 'ev-early', text: APPLY_WORDS.early, hidden: true });
-    area.addEventListener('input', sync);
+    area.addEventListener('input', () => {
+      sync();
+      words.typed(area.value);
+      keepCaretInView(area, body);
+    });
+    area.addEventListener('blur', () => { if (words.state.status === 'typing') words.settle(area.value); });
+    area.addEventListener('focus', () => setTimeout(() => keepCaretInView(area, body), 320));
     paint([
       // 番号は上のバーと同じ数え方（きっかけ・あなたについても1つ）
       progress(id), el('div', { className: 'ev-qno num', text: `${stepNumber(id) + 1} / ${flow.steps.length}` }), note,
       el('h1', { className: 'ev-title is-mid', text: question.label || '' }),
       el('p', { className: 'ev-lede', text: questionLede(question.hint) }),
-      area, count, el('p', { className: 'ev-hint', text: QUESTION_EXAMPLES[prompt] || '' }), errorBox(),
+      area, refusal, count, el('p', { className: 'ev-hint', text: QUESTION_EXAMPLES[prompt] || '' }), errorBox(),
     ], [next, early, consentFor(id), quiet('もどる', () => goBack(id))]);
     sync();
+    // An answer typed before (back from the next step) is checked again at once.
+    if (area.value.trim()) words.settle(area.value);
     area.focus();
   }
 
@@ -668,5 +706,18 @@ export function setupEventApply() {
     showInfo();
   }
 
-  screen('eventApply', { enter: (params) => load(params) });
+  // Fitted to what the keyboard leaves visible, as the compose screen is (keyboard.js): the foot sits on the
+  // keyboard, made smaller on a short screen (body.kb-short), and the line being typed stays in sight.
+  const fit = () => {
+    const node = $('eventApply');
+    fitToViewport(node, node.classList.contains('active'));
+    if (document.activeElement instanceof HTMLTextAreaElement) keepCaretInView(document.activeElement, body);
+  };
+  window.visualViewport?.addEventListener('resize', fit);
+  window.visualViewport?.addEventListener('scroll', fit);
+
+  screen('eventApply', {
+    enter: (params) => { fit(); return load(params); },
+    leave: () => fitToViewport($('eventApply'), false),
+  });
 }
