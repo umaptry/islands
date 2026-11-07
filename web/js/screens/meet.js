@@ -83,7 +83,8 @@ export function clearDigest() {
 
 /** The pill under the tabs and the rings on the map, both from what is unseen. */
 export function paintMarks() {
-  const left = state.account ? unseen() : [];
+  // Not while a sentence is tried out (before the first post): the banner asks to tap まわりの村.
+  const left = state.account && !state.trialPost ? unseen() : [];
   const pill = $('mapDigest');
   pill.hidden = !left.length || !state.account;
   if (!pill.hidden) pill.textContent = digestLabel(left.length);

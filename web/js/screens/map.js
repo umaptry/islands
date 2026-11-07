@@ -278,6 +278,7 @@ function filtersChanged() {
 function paintTrial() {
   $('trialBanner').hidden = !state.trialPost;
   if (!state.trialPost) hideTrialHint();
+  paintMarks();   // no digest over a tryout: it would take the place of まわりの村 the banner points at
 }
 
 export async function showTrial() {
