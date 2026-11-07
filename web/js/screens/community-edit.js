@@ -494,7 +494,7 @@ function eventPanel(entry) {
     el('div', { className: 'section-label', text: 'イベントを作成する' }),
     el('p', { className: 'invite-note', text: '申し込みページと受付の QR ができます。会はこのコミュニティの地図にも載ります。' }),
     el('button', {
-      className: 'btn btn-block invite-open', attrs: { type: 'button', id: 'communityEventCreate' }, text: 'イベントを作成する',
+      className: 'btn btn-block community-event-open', attrs: { type: 'button', id: 'communityEventCreate' }, text: 'イベントを作成する',
       on: { click: open },
     }));
 }

@@ -1883,7 +1883,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .community-edit-home { display: block; margin: 12px auto 0; }
 
 .invite-panel { margin-top: 8px; }
-.invite-open { width: 100%; background: #fff; color: var(--ui); box-shadow: none; }
+.invite-open, .community-event-open { width: 100%; background: #fff; color: var(--ui); box-shadow: none; }
 .invite-form { margin-top: 12px; }
 .invite-label { font-size: 12px; font-weight: 700; color: var(--on-sea-2); margin: 4px 0 8px; }
 .invite-chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2064,7 +2064,7 @@ html.reduce-motion .appear { opacity: 1; transform: none; }
 .screen.tinted .community-card .input { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
 .screen.tinted .community-card .input::placeholder { color: var(--ink-3); }
 .screen.tinted .community-card .error { color: var(--bad); }
-.community-card .invite-open { background: var(--ui); color: #fff; }
+.community-card .invite-open, .community-card .community-event-open { background: var(--ui); color: #fff; }
 .community-card .invite-chip { color: var(--ink-2); background: var(--surface-2); border-color: var(--line); }
 .community-card .invite-chip.on { background: var(--ui); color: #fff; border-color: var(--ui); }
 .community-card .invite-renew { background: var(--surface-2); color: var(--ui); border: 1px solid var(--line); }
