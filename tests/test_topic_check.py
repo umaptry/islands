@@ -177,12 +177,12 @@ def test_a_failing_call_is_an_empty_list_not_an_error(people, fresh_client, with
     assert response.json() == {"topics": []}
 
 
-def test_the_endpoint_cuts_the_body_at_60_characters(people, fresh_client, with_ai):
+def test_the_endpoint_cuts_the_body_at_the_post_limit(people, fresh_client, with_ai):
     me = people("topic-d@example.com", "えま")
     http = with_ai(FakeHttp(answer("ア\nイ")))
     fresh_client.post("/api/posts/topic-check", json={"body": "あ" * 200}, headers=me.headers)
     prompt = http.calls[0]["json"]["contents"][0]["parts"][0]["text"]
-    assert "あ" * 60 in prompt and "あ" * 61 not in prompt
+    assert "あ" * 140 in prompt and "あ" * 141 not in prompt
 
 
 def test_the_endpoint_needs_a_login(fresh_client, with_ai):

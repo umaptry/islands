@@ -31,6 +31,7 @@ from core.config import (
     MAX_AFFILIATION_LENGTH,
     MAX_NAME_LENGTH,
     LINE_WEBHOOK_KEEP_DAYS,
+    EVENT_ANSWER_MAX,
     EVENT_ANSWERS_MIN,
     AGE_BANDS,
     CHECKIN_CLOSES_AFTER_HOURS,
@@ -474,7 +475,7 @@ class EventsMemoryMixin:
             if not is_member:
                 for item in answers or []:
                     prompt, body = item.get("prompt"), str(item.get("body") or "").strip()
-                    if prompt in asked and 1 <= len(body) <= 60 and prompt not in kept:
+                    if prompt in asked and 1 <= len(body) <= EVENT_ANSWER_MAX and prompt not in kept:
                         kept[prompt] = {**item, "body": body}
                 if len(kept) < min(EVENT_ANSWERS_MIN, len(asked)):
                     refuse("answers_required")

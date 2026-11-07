@@ -426,17 +426,17 @@ test('first post: no examples, the box is open, and an opening phrase goes into 
   await expect(page.locator('#composeExamples')).toBeHidden();
 });
 
-test('a post in three steps: the box has the focus, words past 60 are red, ← goes back a step', async ({ page }) => {
+test('a post in three steps: the box has the focus, words past 140 are red, ← goes back a step', async ({ page }) => {
   await signInForFirstPost(page, 'steps');
   await page.evaluate(async () => (await import('/static/js/router.js')).navigate('#/post'));
   await expect(page.locator('#compose')).toHaveAttribute('data-step', '1');
   await expect(page.locator('#composeBody')).toBeFocused();
   await expect(page.locator('#bottomNav')).toBeHidden();
   await expect(page.locator('#composeBody')).toHaveAttribute('placeholder', '好きなこと、やってみたいことは？');
-  // 61 characters: the last one is painted red, the counter says so, and ① cannot go on
-  await page.locator('#composeBody').fill(`${'あ'.repeat(60)}い`);
+  // 141 characters: the last one is painted red, the counter says so, and ① cannot go on
+  await page.locator('#composeBody').fill(`${'あ'.repeat(140)}い`);
   await expect(page.locator('#composeMirror mark')).toHaveText('い');
-  await expect(page.locator('#composeCounterText')).toHaveText('61 / 60');
+  await expect(page.locator('#composeCounterText')).toHaveText('141 / 140');
   await expect(page.locator('#composeNext')).toBeDisabled();
   await page.locator('#composeBody').fill('週末は川沿いを走っています。朝が気持ちいいです');
   await expect(page.locator('#composeMirror mark')).toHaveCount(0);

@@ -41,7 +41,7 @@ test('新しい投稿は15字から：14字では次へが押せず案内が出�
   await page.locator('#composeBody').fill('アプリ開発');
   await expect(next).toHaveText('あと10字で投稿できます');
   await expect(note).toHaveText('どんなことを・どうして を足すと、近い人が見つけやすくなります');
-  await expect(page.locator('#composeCounterText')).toHaveText('5 / 60');
+  await expect(page.locator('#composeCounterText')).toHaveText('5 / 140');
 
   await page.locator('#composeBody').fill('あ'.repeat(14));
   await expect(next).toHaveText('あと1字で投稿できます');

@@ -67,3 +67,14 @@ test('three or more people are counted, and the digest has a label', () => {
   assert.equal(text.namesOf([mio, kenta, { display_name: 'ゆき' }]), 'みおさんたち3人');
   assert.equal(text.digestLabel(3), '前回から 3件の変化');
 });
+
+test('changes not looked at stay for the next visit: new first, each once, none past 14 days', () => {
+  const now = Date.parse('2026-11-07T12:00:00Z');
+  const row = (id, days) => ({ id, created_at: new Date(now - days * 864e5).toISOString() });
+  const merged = text.mergeKept([row('b', 0), row('a', 1)], [row('a', 1), row('old', 2), row('gone', 15)], now);
+  assert.deepEqual(merged.map((c) => c.id), ['b', 'a', 'old']);
+  assert.deepEqual(text.mergeKept(null, undefined, now), []);
+  assert.deepEqual(text.keptOf(merged, new Set(['a'])).map((c) => c.id), ['b', 'old']);
+  const many = Array.from({ length: 80 }, (_, i) => row(`r${i}`, 0));
+  assert.equal(text.keptOf(many, new Set()).length, text.KEPT_MAX);
+});

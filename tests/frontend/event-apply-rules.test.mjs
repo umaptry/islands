@@ -53,10 +53,10 @@ test('答えを集める：書いたものだけ、質問の順に', () => {
     [{ prompt: 'now', body: 'a' }, { prompt: 'future', body: 'b' }]);
 });
 
-test('答えは60字まで（数えるのは文字）', () => {
-  assert.equal(rules.cleanAnswer('あ'.repeat(60)).ok, true);
-  assert.equal(rules.cleanAnswer('あ'.repeat(61)).ok, false);
-  assert.equal(rules.cleanAnswer('😀'.repeat(60)).ok, true);
+test('答えは140字まで（数えるのは文字。2026-11-07 に 60 から）', () => {
+  assert.equal(rules.cleanAnswer('あ'.repeat(140)).ok, true);
+  assert.equal(rules.cleanAnswer('あ'.repeat(141)).ok, false);
+  assert.equal(rules.cleanAnswer('😀'.repeat(140)).ok, true);
   assert.equal(rules.cleanAnswer('  ').body, '');
 });
 

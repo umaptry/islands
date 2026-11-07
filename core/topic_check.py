@@ -17,6 +17,7 @@ import unicodedata
 
 from core.config import (
     ISLAND_NAMING_MODEL,
+    MAX_TEXT_LENGTH,
     TOPIC_CHECK_ENABLED,
     TOPIC_CHECK_MAX_TOPICS,
     TOPIC_CHECK_TIMEOUT,
@@ -111,7 +112,7 @@ def _one_line(text):
     text = "".join(ch for ch in text if unicodedata.category(ch) not in ("Cc", "Cf"))
     for ch in "<>＜＞":
         text = text.replace(ch, "")
-    return " ".join(text.split())[:60]
+    return " ".join(text.split())[:MAX_TEXT_LENGTH]
 
 
 class GeminiTopicChecker:

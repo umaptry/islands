@@ -39,6 +39,32 @@ export function digestLabel(count) {
   return `前回から ${count}件の変化`;
 }
 
+// The changes not looked at yet stay on this device until they are (2026-11-07, the user: opening the page
+// again moved 前回 on, and what was not looked at was gone): at most KEPT_MAX, none older than KEPT_DAYS
+// (as far back as a first digest reaches).
+export const KEPT_MAX = 60;
+export const KEPT_DAYS = 14;
+
+/** The digest to show: the new rows first, then the kept ones, each once and none too old. */
+export function mergeKept(fresh, kept, now = Date.now()) {
+  const floor = now - KEPT_DAYS * 864e5;
+  const ids = new Set();
+  const out = [];
+  [...(Array.isArray(fresh) ? fresh : []), ...(Array.isArray(kept) ? kept : [])].forEach((change) => {
+    if (!change || !change.id || ids.has(change.id)) return;
+    const at = Date.parse(change.created_at);
+    if (Number.isFinite(at) && at < floor) return;
+    ids.add(change.id);
+    out.push(change);
+  });
+  return out;
+}
+
+/** What to keep for next time: the rows not looked at yet. */
+export function keptOf(changes, seen) {
+  return (changes || []).filter((change) => !seen.has(change.id)).slice(0, KEPT_MAX);
+}
+
 function joinIslands(labels) {
   if (labels.length <= 2) return labels.join('と');
   return `${labels[0]}など${labels.length}つの村`;

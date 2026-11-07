@@ -127,7 +127,8 @@ OVERLAP_EPSILON = 0.5
 
 # Post rules.
 #
-# 60 and no floor (Q36, 2026-10-07): a post is a quick line, not an essay. The
+# 140 since 2026-11-07 (the user: posts and the answers of a 会 both; it was 60, Q36 2026-10-07, "a quick
+# line, not an essay"). No floor: the
 # old floor of 30 kept the embedding's sparse block from being mostly empty; a
 # very short post now leans on OVERLAP_EPSILON to stay off its neighbours.
 #
@@ -138,7 +139,7 @@ MIN_TEXT_LENGTH = 1
 # 悪くした）。サーバーの下限は MIN_TEXT_LENGTH のまま：昔の短い投稿の編集やテスト・デモのデータを壊さないため、
 # 画面だけの決まりにしてある。/api/config の limits.compose_min で画面に渡す。
 COMPOSE_MIN_LENGTH = 15
-MAX_TEXT_LENGTH = 60
+MAX_TEXT_LENGTH = 140
 # 2026-11-01: 24 字（フルネームのお願い。supabase の display_name の制約と /api/config の limits.name_max もこの値）。
 MAX_NAME_LENGTH = 24
 MAX_COMMENT_LENGTH = 500
@@ -684,7 +685,7 @@ EVENT_QUESTION_PROMPTS = ("now", "past", "future")
 EVENT_QUESTION_LABEL_MAX = 40
 EVENT_QUESTION_HINT_MAX = 60
 EVENT_ANSWERS_MIN = 2                       # メンバーでない人が申し込むとき答える最少数
-EVENT_ANSWER_MAX = 60
+EVENT_ANSWER_MAX = 140                     # 投稿と同じ（2026-11-07 に 60 → 140）
 REFERRAL_MAX = 40
 # きっかけの選択肢（仮。画面イメージで確かめる。自由入力も40字まで受ける）
 REFERRAL_CHOICES = ("友だちに聞いた", "SNSで見た", "主催者に誘われた", "その他")
