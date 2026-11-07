@@ -372,3 +372,90 @@ test('名前が未確認のメンバー：カードの「申し込む」→ フ�
   await bob.context.close();
   await host.context.close();
 });
+
+// 2026-11-07：コミュニティの編集（管理者）の「イベントを作成する」から、投稿を書かずに会を作る。
+// ①で先着人数と会の説明も聞く。やめるとコミュニティの編集に戻る。作ると主催者のページへ。説明は申し込みページの概要になる。
+test('コミュニティの編集から「イベントを作成する」で会を作れる', async ({ browser }, testInfo) => {
+  test.setTimeout(150000);
+  const host = await person(browser, testInfo, '管理者のゆう');
+  const community = await makeCommunity(host, `BAR ${unique()}`);
+  const { page } = host;
+  await page.goto(`/?edit=${unique()}#/community/${community.community_id}`);
+  const create = page.locator('#communityEventCreate');
+  await expect(create).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('#communityEditBody .community-events')).toContainText('イベントを作成する');
+  await shot(page, testInfo, '19_コミュニティの編集（イベントを作成する）');
+
+  // やめると、コミュニティの編集に戻る
+  await create.click();
+  await expect(page.locator('#eventCompose')).toHaveClass(/active/);
+  await page.locator('#eventComposeBack').click();
+  await expect(page.locator('#communityEdit')).toHaveClass(/active/);
+
+  // 端末の戻る操作で会の画面を抜けても、もう一度押せば開く（前の入力に隠されない）
+  await page.evaluate(() => { window.location.hash = '#/map'; });
+  await page.evaluate((id) => { window.location.hash = `#/community/${id}`; }, community.community_id);
+  await create.click();
+  await expect(page.locator('#eventCompose')).toHaveClass(/active/);
+  await page.goBack();
+  await expect(page.locator('#eventCompose')).not.toHaveClass(/active/);
+  await page.evaluate((id) => { window.location.hash = `#/community/${id}`; }, community.community_id);
+  await create.click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('#eventCompose')).toHaveClass(/active/);
+  await expect(page.locator('#eventComposeAbout')).toHaveAttribute('maxlength', /^\d+$/);
+
+  // ① 先着人数と会の説明も聞く（投稿画面からの「前の画面で決めた人数」は出ない）
+  await expect(page.locator('#eventComposeCapacity')).toBeHidden();
+  await expect(page.locator('#eventComposeLimitField')).toBeVisible();
+  await expect(page.locator('#eventComposeAboutField')).toBeVisible();
+  await page.locator('#eventComposeName').fill(TITLE);
+  await page.locator('#eventComposeStart').fill(jstLocal(12));
+  await page.locator('#eventComposeEnd').fill(jstLocal(12, 22));
+  await page.locator('#eventComposePlace').fill('渋谷 ○○ビル 3F');
+  await page.locator('#eventComposeNext').click();
+  await expect(page.locator('#eventComposeError')).toContainText('先着人数');
+  await page.locator('#eventComposeLimit').fill('12');
+  await page.locator('#eventComposeNext').click();
+  await expect(page.locator('#eventComposeError')).toContainText('会の説明');
+  const about = '仕事帰りに立ち寄れる夜の会です。初めての人も歓迎します。';
+  await page.locator('#eventComposeAbout').fill(about);
+  await noSideScroll(page);
+  await shot(page, testInfo, '20_コミュニティの編集から_会の中身');
+  await page.locator('#eventComposeNext').click();
+  // ② で最小人数を先着より多くすると断られる（入れた先着人数で検める）
+  await expect(page.locator('#eventComposeTitle')).toHaveText('開催の条件');
+  await page.locator('#eventComposeMin').fill('13');
+  await page.locator('#eventComposeNext').click();
+  await expect(page.locator('#eventComposeError')).toContainText('先着人数');
+  await page.locator('#eventComposeMin').fill('');
+  await page.locator('#eventComposeNext').click();
+  await expect(page.locator('#eventComposeTitle')).toHaveText('申し込む人への質問');
+  await page.locator('#eventComposeNext').click();
+
+  // 作ると主催者のページ。会はこのコミュニティの、参加者募集中・先着12人の投稿
+  await expect(page.locator('#eventHost')).toHaveClass(/active/, { timeout: 30000 });
+  await expect(page.locator('#eventHostTitle')).toHaveText(TITLE);
+  const link = await page.locator('#eventHostLink').inputValue();
+  const code = link.split('/e/')[1];
+  const info = await call(host, 'get', `/api/events/${code}`);
+  expect(info.is_host).toBe(true);
+  const post = await page.evaluate(async ({ me, id }) => {
+    const { data } = await import('/static/js/net.js');
+    return (await data.postsByAuthor(me)).find((row) => row.id === id);
+  }, { me: host.id, id: info.event.post_id });
+  expect(post.body).toBe(about);
+  expect(post.tags).toContain('参加者募集中');
+  expect(post.recruit_capacity).toBe(12);
+  expect(post.community_id).toBe(community.community_id);
+
+  // もう一度開くと、前の会の中身は残っていない
+  await page.evaluate((id) => { window.location.hash = `#/community/${id}`; }, community.community_id);
+  await expect(page.locator('#communityEdit')).toHaveClass(/active/);
+  await page.locator('#communityEventCreate').click();
+  await expect(page.locator('#eventComposeName')).toHaveValue('');
+  await expect(page.locator('#eventComposeAbout')).toHaveValue('');
+  expect(host.problems.errors).toEqual([]);
+  expect(host.problems.failed).toEqual([]);
+  await host.context.close();
+});
