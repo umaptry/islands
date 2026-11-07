@@ -722,8 +722,9 @@ EVENT_STATUSES = ("applied", "attended", "cancelled", "declined", "waiting")
 EVENT_LIVE_STATUSES = ("applied", "waiting", "attended")
 # 開催の条件・会のあとの入り方（2026-11-11 第2回b。設計 G）
 EVENT_MIN_PARTICIPANTS = (2, 1000)          # 最小開催人数の範囲（上は定員まで）
-EVENT_JOIN_POLICIES = ("auto", "ask", "none")   # 受付で自動加入／本人に確認／加入させない
-EVENT_JOIN_POLICY_DEFAULT = "ask"           # 新しい会の初期値（SQL より前の会は auto）
+# 受付で自動加入／希望したらそのまま加入（本人に確認）／希望したら管理者が承認して加入（2026-11-07）／加入させない
+EVENT_JOIN_POLICIES = ("auto", "ask", "approve", "none")
+EVENT_JOIN_POLICY_DEFAULT = "ask"           # 送られなかったときの値（SQL より前の会は auto）。画面の初期値は approve（event-host-rules.js JOIN_DEFAULT）
 EVENT_PARTICIPANTS_CACHE_SECONDS = 60
 # 参加者リストの「近い人」（回答どうしの中心化コサイン。仮：会で試して直す）
 EVENT_NEAR_HIGH = 0.55

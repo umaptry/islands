@@ -832,6 +832,54 @@ class EventsMemoryMixin:
                 refuse("event_banned")
             return {"status": "joined"}
 
+    def event_request_join(self, *, event, account, now=None):
+        """「承認して加入」の会で、受付済みの人が参加を希望する（DB の event_request_join）。
+        {"status": pending|already|rejected}。管理者の承認待ちに入り、管理者に知らせる（招待リンクの承認制と同じ）。"""
+        now = _utc(now)
+        with self._lock:
+            ev, _post = self._event_live(event, allow_cancelled=True)
+            if ev.get("join_policy", "auto") != "approve":
+                refuse("join_not_allowed")
+            reg = self._event_regs.get((event, account))
+            if not reg or reg["status"] != "attended":
+                refuse("event_not_attended")
+            key = (ev["community_id"], account)
+            if key in self._members:
+                return {"status": "already"}
+            request = self._join_requests.get(key)
+            if request:
+                return {"status": request["status"]}
+            self._join_requests[key] = {
+                "community_id": ev["community_id"], "account_id": account, "invite_id": None,
+                "status": "pending", "was_removed": key in self._removals, "rejected_before": False,
+                "requested_at": now.isoformat(), "notified_at": None, "decided_at": None,
+                "decided_by": None, "consent_version": None, "event_post_id": event}
+            self._notify_waiting_requests(account)
+            return {"status": "pending"}
+
+    def event_join_request_state(self, *, event, account):
+        """その人の、会のコミュニティへの希望の状態：pending / rejected / None（DB の event_join_request_state）。"""
+        with self._lock:
+            ev = self._events.get(event)
+            if not ev:
+                return None
+            request = self._join_requests.get((ev["community_id"], account))
+            return request["status"] if request else None
+
+    def _event_answers_to_posts(self, event_id, account, community_id):
+        """会の申し込みの答えを、そのコミュニティの投稿に写す（承認で入ったとき。失敗しても止めない）。Lock held."""
+        for (eid, who, prompt), row in sorted(self._event_answers.items()):
+            if eid != event_id or who != account:
+                continue
+            try:
+                self.insert_post({
+                    "author_id": account, "body": row["body"], "tags": [], "motivation": 50, "image_path": None,
+                    "prompt": prompt, "x": row["x"], "y": row["y"], "cluster_id": row["cluster_id"],
+                    "terms": list(row.get("terms") or []), "vec": row.get("vec"), "vec_c": row.get("vec_c"),
+                    "community_id": community_id})
+            except Exception:
+                pass
+
     def event_banned_for(self, event_id, account_id):
         """受付の画面の「お断り」：この会でお断りされた、またはメンバーでなく前に外された・断られた人か。"""
         with self._lock:
@@ -1403,6 +1451,15 @@ class EventsSupabaseMixin:
     def event_join_community(self, *, event, account):
         return self._event_rpc("event_join_community", {"p_event": event, "p_account": account},
                                "コミュニティへの参加")
+
+    def event_request_join(self, *, event, account):
+        return self._event_rpc("event_request_join", {"p_event": event, "p_account": account},
+                               "コミュニティへの参加の希望")
+
+    def event_join_request_state(self, *, event, account):
+        state = self._event_rpc("event_join_request_state", {"p_event": event, "p_account": account},
+                                "参加の希望の読み込み")
+        return state if state in ("pending", "rejected") else None
 
     def event_participants(self, event_id):
         return self._event_rpc("event_participants", {"p_event": event_id}, "参加者の読み込み") or []

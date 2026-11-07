@@ -72,7 +72,7 @@ function summaryCard() {
     el('p', { className: 'ev-line ev-quiet', text: `${capacity}　現在 ${event.applied_count}人が申し込み中` }),
     el('p', { className: 'ev-line ev-quiet', text: range }),
     cancel ? el('p', { className: 'ev-line ev-quiet', text: cancel }) : null,
-    join ? el('p', { className: 'ev-line ev-quiet', text: `会のあと：${join.label}` }) : null,
+    join ? el('p', { className: 'ev-line ev-quiet', text: `会のあと（メンバーでない参加者）：${join.label}` }) : null,
     event.cancelled ? el('p', { className: 'ev-flag', text: 'この会は中止になりました' }) : null);
 }
 
@@ -211,7 +211,8 @@ function goalFields({ min, decideField, cancel, joinList, locked }) {
     decideField,
     el('label', { className: 'ev-field' }, el('span', { className: 'ev-label', text: GO_WORDS.cancelLabel }), cancel,
       el('span', { className: 'ev-hint', text: GO_WORDS.cancelNote })),
-    el('span', { className: 'ev-label', text: GO_WORDS.joinLabel }), joinList);
+    el('span', { className: 'ev-label', text: GO_WORDS.joinLabel }),
+    el('span', { className: 'ev-hint', text: GO_WORDS.joinHint }), joinList);
 }
 
 // ---------------------------------------------------------------- 中止
