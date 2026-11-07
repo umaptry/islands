@@ -324,7 +324,7 @@ const POLY_H = [13, 7, 0.6];
 // Seen at the objects' angle (mesh.js, 52 degrees): a point h high is drawn h * cos(52) further up.
 const LIFT = Math.cos((52 * Math.PI) / 180);
 
-// TRIAL ?relief=1 (2026-11-05, the user: a track drawn over the canopy made the island look solid, so the
+// The relief (2026-11-05, the user: a track drawn over the canopy made the island look solid, so the
 // canopy could be the ground itself): the whole island is the raised low-poly ground, never cut down;
 // villages, squares and roads are painted onto its faces and lifted with them, and so is everything
 // standing on it (index.js lifts what it draws by reliefLift).
@@ -371,7 +371,9 @@ function reliefShape(x, y, c) {
   }
   return Math.max(0, base * (RELIEF_BASE + roll * (1 - (1 - PLATEAU_FLAT) * table) + rough) + PLATEAU * table);
 }
-export const reliefOn = () => islandBView().relief === '1' && forestMode() === 'mass';
+// The default since 2026-11-07 (the user: houses and roads were to be drawn on the raised ground, not
+// cut into the forest); ?relief=0 shows the flat ground again.
+export const reliefOn = () => islandBView().relief !== '0' && forestMode() === 'mass';
 const FLAT_GROUND = { opennessAt: () => 0 };
 // The height is asked for by every house, tree and walker each frame, and finding a point's face is slow:
 // it is kept on a grid a world unit apart and read between the grid's corners (the faces are POLY apart,

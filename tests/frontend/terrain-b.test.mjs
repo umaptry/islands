@@ -173,7 +173,7 @@ test('a road opens the forest by its tier: a track not at all, a footpath a litt
   const fieldAt = (built, x, y) => built.field[Math.floor((y - built.minY) * built.scale) * built.width + Math.floor((x - built.minX) * built.scale)];
   const withRoad = (tier) => {
     reset();
-    island.setIslandBView({ forest: 'mass', roads: tier ? [[-40, -20, -40, 40, tier]] : [], roadsKey: `t${tier}` });
+    island.setIslandBView({ forest: 'mass', relief: '0', roads: tier ? [[-40, -20, -40, 40, tier]] : [], roadsKey: `t${tier}` });
     return computeB(options);
   };
   // 6 world units beside the road's middle (it bows a little: roads-b.js ROAD_BEND), in the forest.
