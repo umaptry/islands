@@ -81,10 +81,10 @@ function joined(job, parts) {
   return { plan, pixels };
 }
 const cases = [
-  { name: 'across the island, zoomed out', region: { minX: -90, minY: -90, maxX: 90, maxY: 90 }, scale: 3, pixelRatio: 2, parts: 4 },
-  { name: 'a village, zoomed in', region: { minX: 10, minY: -5, maxX: 45, maxY: 40 }, scale: 12, pixelRatio: 2, parts: 3 },
-  { name: 'the coast, a low pixel ratio', region: { minX: 20, minY: 30, maxX: 80, maxY: 100 }, scale: 6, pixelRatio: 1, parts: 5 },
-  { name: 'the north shore, with a road', region: { minX: -40, minY: -70, maxX: 40, maxY: 0 }, scale: 8, pixelRatio: 2, parts: 4, roads: [[-30, -40, 25, -20, 2], [25, -20, 30, 10, 1]] },
+  { name: 'across the island, zoomed out', region: { minX: -90, minY: -90, maxX: 90, maxY: 90 }, scale: 3, pixelRatio: 2, parts: 4, extra: { relief: '0' } },
+  { name: 'a village, zoomed in', region: { minX: 10, minY: -5, maxX: 45, maxY: 40 }, scale: 12, pixelRatio: 2, parts: 3, extra: { relief: '0' } },
+  { name: 'the coast, a low pixel ratio', region: { minX: 20, minY: 30, maxX: 80, maxY: 100 }, scale: 6, pixelRatio: 1, parts: 5, extra: { relief: '0' } },
+  { name: 'the north shore, with a road', region: { minX: -40, minY: -70, maxX: 40, maxY: 0 }, scale: 8, pixelRatio: 2, parts: 4, roads: [[-30, -40, 25, -20, 2], [25, -20, 30, 10, 1]], extra: { relief: '0' } },
   { name: 'the relief, the south shore and a road', region: { minX: -60, minY: 0, maxX: 60, maxY: 100 }, scale: 6, pixelRatio: 2, parts: 3, roads: [[-30, 20, 25, 40, 3]], extra: { relief: '1' } },
 ];
 

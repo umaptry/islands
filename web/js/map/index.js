@@ -326,7 +326,7 @@ function seaBox() {
   return box;
 }
 
-// TRIAL ?relief=1 (terrain-b.js reliefOn): what stands on the island is drawn as high as the ground under
+// The relief (terrain-b.js reliefOn): what stands on the island is drawn as high as the ground under
 // it. The ground's own pictures are lifted already, so they are placed with toScreenFlat.
 let reliefNow = false;   // reliefOn(), asked once a frame (render)
 const toScreen = (x, y) => ({
@@ -1906,7 +1906,7 @@ function syncRoadsB() {
     roads: pairs.map(({ a, b, tier }) => [a.x, a.y, b.x, b.y, tier || 1]),
     roadsKey: pairs.length ? roadsHash(`${key}|${previewParam('trail') || ''}`) : '',
     trail: previewParam('trail'),   // TRIAL (terrain-b.js trailStyle)
-    relief: previewParam('relief'), // TRIAL (terrain-b.js reliefOn)
+    relief: previewParam('relief'), // ?relief=0: the flat ground (terrain-b.js reliefOn)
   });
 }
 
