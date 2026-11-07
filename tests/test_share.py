@@ -249,7 +249,7 @@ def test_a_post_longer_than_the_limit_is_not_shared(world):
     from core.config import SHARE_ERROR_LONG
     post = world.host.post(BOOKKEEPING, community_id=world.A)
     with store()._lock:
-        store()._posts[post["id"]]["body"] = "長" * 80        # written before the 60-character limit
+        store()._posts[post["id"]]["body"] = "長" * 150       # longer than a post may be
     response = share(world.host, post["id"], world.B)
     assert response.status_code == 422 and response.json()["detail"] == SHARE_ERROR_LONG
     assert store().posts_in_group(post["id"]) == []

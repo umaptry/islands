@@ -13,7 +13,7 @@
 //
 // Following the mock (モック②), the post is not sent until the heat slider has been
 // moved once (pressing 投稿する before that shows the slider), and a HeatObject above
-// the slider shows what the number looks like on the map. The body stays at 60 characters.
+// the slider shows what the number looks like on the map. The body is up to limits.body_max characters (140).
 //
 // The image is downscaled and re-encoded in the browser before it is uploaded
 // (see image.js). A 4MB phone photo would be the single biggest thing this app

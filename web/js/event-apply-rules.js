@@ -9,7 +9,7 @@
 export const NAME_MAX = 24;
 export const AFFILIATION_MAX = 32;
 export const JOB_MAX = 32;
-export const ANSWER_MAX = 60;
+export const ANSWER_MAX = 140;   // as /api/config limits.event_answer_max and a post (2026-11-07: was 60)
 export const ANSWERS_MIN = 2;
 export const TERMS_PATH = '/terms/next';
 export const PRIVACY_PATH = '/privacy/next';

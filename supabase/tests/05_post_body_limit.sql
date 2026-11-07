@@ -1,4 +1,4 @@
--- Q36: posts are 60 characters at most, with no floor. Older, longer posts keep
+-- Posts are 140 characters at most (60 from Q36 until 20261113000000_body_140), with no floor. Older, longer posts keep
 -- working: a count bump on them must not trip the new limit.
 --
 -- Run with: supabase test db (CI does). Everybody here is made up.
@@ -20,16 +20,16 @@ select lives_ok(
 select lives_ok(
   $$insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c)
     values ('00000000-0000-4000-8000-000000000502', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-            repeat('あ', 60), 2, 2, 0,
+            repeat('あ', 140), 2, 2, 0,
             array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448))$$,
-  'exactly 60 characters is accepted');
+  'exactly 140 characters is accepted');
 
 select throws_ok(
   $$insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c)
     values ('00000000-0000-4000-8000-000000000503', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-            repeat('あ', 61), 3, 3, 0,
+            repeat('あ', 141), 3, 3, 0,
             array_fill(1.0, array[448])::vector(448), array_fill(1.0, array[448])::vector(448))$$,
-  '23514', null, 'a 61-character post is refused');
+  '23514', null, 'a 141-character post is refused');
 
 select throws_ok(
   $$insert into public.posts(id, author_id, body, x, y, cluster_id, vec, vec_c)
@@ -53,9 +53,9 @@ select lives_ok(
   'a count bump on an older 120-character post still works');
 
 select throws_ok(
-  $$update public.posts set body = repeat('う', 61)
+  $$update public.posts set body = repeat('う', 141)
      where id = '00000000-0000-4000-8000-000000000505'$$,
-  '23514', null, 'rewriting a body past 60 is refused');
+  '23514', null, 'rewriting a body past 140 is refused');
 
 select * from finish();
 rollback;

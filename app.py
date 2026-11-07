@@ -3411,7 +3411,7 @@ def share_post(post_id: str, payload: PostShare, request: Request):
     if events.is_event_post(store, pid):
         raise HTTPException(status_code=409, detail=EVENT_SHARE_ERROR)
     if len(original.get("body") or "") > MAX_TEXT_LENGTH:
-        # Written before the 60-character limit: the database takes no new post that long.
+        # Longer than a post may be now: the database takes no new post that long.
         raise HTTPException(status_code=422, detail=SHARE_ERROR_LONG)
     mine = viewer_communities(user_id)
     wanted = []
