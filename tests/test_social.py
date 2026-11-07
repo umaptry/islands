@@ -404,11 +404,11 @@ def test_a_post_shorter_than_the_floor_is_refused(people, fresh_client):
 
 
 def test_a_post_is_capped_at_islands_limit(people, fresh_client):
-    """60 characters (Q36). Trimmed, not rejected."""
+    """140 characters (60 until 2026-11-07). Trimmed, not rejected."""
     akari = people("a@example.com", "あかり")
     long_text = "焚き火とコーヒーの話をします。" * 30
     post = akari.post(long_text)
-    assert len(post["body"]) == 60
+    assert len(post["body"]) == 140
 
 
 def test_only_the_four_tags_survive(people):
