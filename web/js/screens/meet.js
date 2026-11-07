@@ -11,9 +11,10 @@ import {
   $, avatar, clear, el, openSheet, timeAgo,
 } from '../ui.js';
 import { zoomToChange } from '../map/index.js';
-import { describeChange, digestLabel } from '../meet-text.js';
+import { describeChange, digestLabel, keptOf, mergeKept } from '../meet-text.js';
 
 const SEEN_KEY = 'islands.seenChanges';
+const KEPT_KEY = 'islands.keptChanges';   // { account, changes }: the rows not looked at yet (meet-text.js)
 let digestFor = null; // the account the digest was fetched for, once a session
 let changes = [];
 let seen = readSeen();
@@ -26,8 +27,28 @@ function readSeen() {
   }
 }
 
+/** The rows kept from earlier visits, for this account only. */
+function readKept(me) {
+  try {
+    const kept = JSON.parse(localStorage.getItem(KEPT_KEY) || 'null');
+    return kept && kept.account === me && Array.isArray(kept.changes) ? kept.changes : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeKept() {
+  if (!digestFor) return;
+  try {
+    localStorage.setItem(KEPT_KEY, JSON.stringify({ account: digestFor, changes: keptOf(changes, seen) }));
+  } catch {
+    /* private window: they stay for this visit only */
+  }
+}
+
 function markSeen(id) {
   seen.add(id);
+  writeKept();
   try {
     // Only the newest ids matter: the digest never repeats an old change.
     localStorage.setItem(SEEN_KEY, JSON.stringify([...seen].slice(-60)));
@@ -56,12 +77,14 @@ export async function loadDigest() {
   const me = state.account ? state.account.id : null;
   if (!me || digestFor === me) return;
   digestFor = me;
+  // The server's digest starts from the last visit; what was not looked at before is added from this device.
   try {
     const result = await api.get('/api/changes/digest');
-    changes = result.changes || [];
+    changes = mergeKept(result.changes || [], readKept(me));
   } catch {
-    changes = [];
+    changes = mergeKept([], readKept(me));
   }
+  writeKept();
   paintMarks();
 }
 
