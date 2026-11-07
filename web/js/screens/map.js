@@ -414,8 +414,11 @@ export const NO_MATCH_TEXT = 'まだ、つながりそうな投稿はありま�
  * just above that card rather than over its buttons; the side panel of a wide screen leaves room below. */
 function noMatchNote() {
   setTimeout(() => {
-    const top = sheetOpen() && !desktopSheet() ? $('sheet').getBoundingClientRect().top : 0;
-    toast(NO_MATCH_TEXT, 6000, { bottom: top > 0 ? Math.round(innerHeight - top + 12) : null });
+    // Where the card stands once it is fully up (its height and its gap to the bottom, which the rising
+    // animation does not move): measured mid-rise on a slow phone, the line landed over the card.
+    const sheet = $('sheet');
+    const up = sheetOpen() && !desktopSheet() ? sheet.offsetHeight + (parseFloat(getComputedStyle(sheet).bottom) || 0) : 0;
+    toast(NO_MATCH_TEXT, 6000, { bottom: up > 0 ? Math.round(up + 12) : null });
   }, 600);
 }
 
