@@ -88,8 +88,9 @@ function paintQuestions() {
         el('span', { className: 'ev-question-x', attrs: { 'aria-hidden': 'true' }, text: on ? '×' : '＋' }))));
   });
   const need = Number(config().limits?.event_answers_min) || 2;
+  // 2026-11-07：質問は 0 個でもよい（公開の会でも）
   $('eventComposeQLede').textContent = session.visibility === 'public'
-    ? `公開の会は、質問を${need}つ以上入れてください。申し込む人は${need}つ以上答えます。`
+    ? `メンバーでない人は、選んだ質問に答えて申し込みます（${need}つまで答えれば申し込めます）。質問を選ばなければ、答えずに申し込めます。`
     : 'メンバーは質問なしで申し込めます。ここで選ぶ質問は、あとで公開にしたときに使います。';
 }
 

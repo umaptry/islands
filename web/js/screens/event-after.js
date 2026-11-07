@@ -57,10 +57,13 @@ export function setupEventAfter() {
     const content = [brand(), el('h1', { className: 'ev-title is-mid', attrs: { id: 'eventAfterTitle' }, text: '今日の会で会った人' })];
 
     if (view.askJoin) {
-      const join = joinView({ can_join: true }, event);
-      const button = el('button', { className: 'btn btn-block evb-join-btn', text: 'このコミュニティに参加する', attrs: { type: 'button', id: 'eventAfterJoin' } });
+      const join = joinView({ can_join: true, join_mode: view.joinMode }, event);
+      const button = el('button', { className: 'btn btn-block evb-join-btn', text: join.button, attrs: { type: 'button', id: 'eventAfterJoin' } });
       button.addEventListener('click', () => joinCommunity(join, button));
       content.push(el('div', { className: 'ev-card evb-join', attrs: { id: 'eventAfterJoinCard' } }, el('p', { className: 'ev-status-note', text: view.note }), button));
+    } else if (view.pending) {
+      const join = joinView({ join_mode: 'approve', join_request: 'pending' }, event);
+      content.push(el('div', { className: 'ev-card evb-join', attrs: { id: 'eventAfterJoinPending' } }, el('p', { className: 'ev-status-note', text: join.pending })));
     }
 
     if (view.empty) {
@@ -101,8 +104,8 @@ export function setupEventAfter() {
     if (!yes) return;
     button.disabled = true;
     try {
-      await eventsApi.join(code);
-      await refreshCommunities();
+      const result = await eventsApi.join(code);
+      if (!(result && result.status === 'pending')) await refreshCommunities();
       toast(join.done);
       await load({ code });
     } catch (error) {

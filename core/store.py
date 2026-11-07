@@ -1695,9 +1695,14 @@ class MemoryStore(EventsMemoryMixin):
                 self._drop_join_notices(key)
                 return "rejected"
             removal = self._removals.pop(key, None)
+            added = key not in self._members
             self._members[key] = {
                 "role": "member", "joined_at": (removal or {}).get("joined_at_before") or _now(),
-                "joined_via": "approval", "invite_id": request.get("invite_id"), "event_post_id": None}
+                "joined_via": "approval", "invite_id": request.get("invite_id"),
+                "event_post_id": request.get("event_post_id")}
+            # 会から希望した人（2026-11-07）：申し込みの答えを投稿に写す（DB の decide_join_request と同じ）
+            if added and request.get("event_post_id") and hasattr(self, "_event_answers_to_posts"):
+                self._event_answers_to_posts(request["event_post_id"], person, community_id)
             if removal:
                 for post_id in removal.get("hidden_post_ids") or []:
                     if post_id in self._posts:

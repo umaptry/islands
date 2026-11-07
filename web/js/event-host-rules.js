@@ -81,19 +81,24 @@ export function fromLocalInput(value) {
 
 // ---------------------------------------------------------------- 開催の条件（最小人数・判定日・キャンセル期限・入り方）
 
-/** 会のあとのコミュニティへの入り方（初期値は「本人に確認」）。 */
+/**
+ * 会のあと、メンバーでない参加者（コミュニティの外から申し込んだ人）がどうなるか。
+ * 2026-11-07：「希望したら、管理者が承認して加入」（approve）を足して初期値に（入ってきてほしくない人が希望しても、管理者が断れる）。
+ */
 export const JOIN_CHOICES = Object.freeze([
-  Object.freeze({ value: 'ask', label: '本人に確認', note: '会のあとで、参加するかを本人が選びます' }),
-  Object.freeze({ value: 'auto', label: '自動で加入', note: '受付をすると、そのままメンバーになります' }),
+  Object.freeze({ value: 'approve', label: '希望したら、管理者が承認して加入', note: '本人が希望 → 管理者が承認するとメンバーに' }),
+  Object.freeze({ value: 'ask', label: '希望したら、そのまま加入', note: '本人が「参加する」を押すとメンバーに' }),
+  Object.freeze({ value: 'auto', label: '受付したら自動で加入', note: '受付をすると、そのままメンバーに' }),
   Object.freeze({ value: 'none', label: '加入させない', note: 'この会の参加者どうしだけでつながります' }),
 ]);
-export const JOIN_DEFAULT = 'ask';
+export const JOIN_DEFAULT = 'approve';
 
 export const GO_WORDS = Object.freeze({
   minLabel: '最小開催人数', minNote: '空欄なら、人数に関係なく開催します。',
   decideLabel: '判定日', decideNote: 'この日の終わりに、最小人数に届いていれば開催、届いていなければ中止です。',
   cancelLabel: 'キャンセル期限', cancelNote: '空欄なら、開始まで取り消せます。',
-  joinLabel: '会のあとの入り方',
+  joinLabel: '会のあと、メンバーでない参加者は？',
+  joinHint: 'コミュニティの外から申し込んだ人のことです。',
   locked: '判定のあとは変えられません',
   hostBand: '人数が集まらず中止になりました',
   publicBand: '人数が集まらなかったため、この会は中止になりました。',
@@ -201,6 +206,7 @@ export function cancelNote(event, now = Date.now()) {
 
 /** 申し込みページの、会のあとの入り方の一言。自動で加入は今までどおり何も出さない。 */
 export function joinNote(policy) {
+  if (policy === 'approve') return '会のあと、希望するとコミュニティへの参加を申し込めます（管理者が承認します）';
   if (policy === 'ask') return '会のあと、コミュニティに参加するかを選べます';
   if (policy === 'none') return 'この会の参加者どうしだけでつながります';
   return '';
@@ -280,7 +286,6 @@ export function validateEventDraft(raw, { now = new Date(), cfg = null, isAdmin 
   const fail = (field, message) => ({ ok: false, field, message });
   const titleMax = limitOf(cfg, 'event_title_max', 40);
   const placeMax = limitOf(cfg, 'event_place_max', 60);
-  const answersMin = limitOf(cfg, 'event_answers_min', 2);
   const title = String((raw && raw.title) || '').replace(/\s+/g, ' ').trim();
   if (!title) return fail('title', '会の名前を入力してください。');
   if (Array.from(title).length > titleMax) return fail('title', `会の名前は${titleMax}字以内で入力してください。`);
@@ -300,10 +305,8 @@ export function validateEventDraft(raw, { now = new Date(), cfg = null, isAdmin 
   }
   const goals = checkGoals(raw, { startIso: starts, now, capacity, isNew: true });
   if (!goals.ok) return goals;
+  // 2026-11-07：質問は 0〜3 個。公開の会も 0 個でよい（申し込む人は答えずに申し込む）
   const questions = questionPayload(raw && raw.questions);
-  if (visibility === 'public' && questions.length < answersMin) {
-    return fail('questions', `公開の会には、質問を${answersMin}つ以上入れてください。`);
-  }
   // 空欄の項目（null）は送らない：サーバーは「送られた項目だけ」を決めに使う
   const settings = Object.fromEntries(Object.entries(goals.fields).filter(([, value]) => value !== null));
   return { ok: true, event: { title, place, starts_at: starts, ends_at: ends, visibility, questions, ...settings } };

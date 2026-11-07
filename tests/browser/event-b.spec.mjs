@@ -172,10 +172,12 @@ test('会を作る画面の3ステップ：開催の条件の4項目が送られ
   await page.locator('#eventComposePlace').fill('渋谷 ○○ビル 3F');
   await page.locator('#eventComposeNext').click();
 
-  // ② 開催の条件：判定日は最小人数を入れたときだけ出る。入り方の初期値は「本人に確認」
+  // ② 開催の条件：判定日は最小人数を入れたときだけ出る。入り方の初期値は「希望したら、管理者が承認して加入」（2026-11-07）
   await expect(page.locator('#eventComposeTitle')).toHaveText('開催の条件');
   await expect(page.locator('#eventComposeDecideField')).toBeHidden();
-  await expect(page.locator('#eventComposeJoin [data-join="ask"]')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('#eventComposeJoin [data-join="approve"]')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('#eventComposeStep2')).toContainText('会のあと、メンバーでない参加者は？');
+  await expect(page.locator('#eventComposeJoin .ev-choice')).toHaveCount(4);
   await page.locator('#eventComposeMin').fill('3');
   await expect(page.locator('#eventComposeDecideField')).toBeVisible();
   // 判定日なしでは進めない
@@ -219,7 +221,7 @@ test('会を作る画面の3ステップ：開催の条件の4項目が送られ
   await expect(page.locator('#eventHostGo')).toHaveAttribute('data-phase', 'recruiting');
   await expect(page.locator('#eventHostGo')).toContainText('募集中');
   await expect(page.locator('#eventHostGo')).toContainText('あと3人で開催決定');
-  await expect(page.locator('#eventHost')).toContainText('会のあと：本人に確認');
+  await expect(page.locator('#eventHost')).toContainText('会のあと（メンバーでない参加者）：希望したら、そのまま加入');
 
   // 内容を変える：4項目が出る。判定の前は最小人数を変えられる
   await page.locator('#eventHostEdit').click();
@@ -229,7 +231,7 @@ test('会を作る画面の3ステップ：開催の条件の4項目が送られ
   await expect(page.locator('#eventEditJoin [data-join="ask"]')).toHaveAttribute('aria-checked', 'true');
   await page.locator('#eventEditJoin [data-join="auto"]').click();
   await page.locator('#eventEditSave').click();
-  await expect(page.locator('#eventHost')).toContainText('会のあと：自動で加入', { timeout: 15000 });
+  await expect(page.locator('#eventHost')).toContainText('会のあと（メンバーでない参加者）：受付したら自動で加入', { timeout: 15000 });
   await page.locator('#eventHostEdit').click();
   await page.locator('#eventEditCancel').click();          // 「やめる」（期限の入力欄とは別の id）
   await expect(page.locator('#eventHostGo')).toBeVisible();
@@ -459,6 +461,37 @@ test('① メンバーでない参加者は、限定ページの外（地図・�
   }
   noProblems(ann);
   for (const who of [host, member, ann]) await who.context.close();
+});
+
+test('⑥ 入り方「希望したら、管理者が承認して加入」：参加を希望する → 承認待ちの一文 → 管理者が承認するとメンバー', async ({ browser }, testInfo) => {
+  test.setTimeout(180000);
+  const host = await person(browser, testInfo, '主催のひろ');
+  const event = await makeEvent(host, { join: 'approve', title: '承認して加入の会' });
+  await openDoor(host, event.code);
+  const ann = await person(browser, testInfo, '山田 花子');
+  await applyAs(ann, event.code);
+  expect((await call(ann, 'post', `/api/checkin/${event.checkin}`)).result).toBe('attended');
+
+  await openMe(ann, event.code);
+  await expect(ann.page.locator('#eventMeJoin')).toHaveText('参加を希望する', { timeout: 15000 });
+  await expect(ann.page.locator('#eventMeJoinCard')).toContainText('管理者が承認すると');
+  await ann.page.locator('#eventMeJoin').click();
+  await expect(ann.page.locator('.modal')).toContainText('への参加を希望しますか？');
+  await ann.page.locator('.modal').getByRole('button', { name: '希望する', exact: true }).click();
+  await expect(ann.page.locator('#eventMeJoinPending')).toContainText('参加を希望しました', { timeout: 15000 });
+  await expect(ann.page.locator('#eventMeJoin')).toHaveCount(0);
+  await noSideScroll(ann.page);
+  await tallShot(ann.page, '12_限定ページ_参加を希望した', '#eventMeBody');
+  expect((await call(ann, 'get', `/api/events/${event.code}`)).me.is_member).toBe(false);
+
+  // 管理者：コミュニティの編集の「参加を待っている人」に出る → 承認する
+  await host.page.goto(`/?a=${unique()}#/community/${event.community.community_id}`);
+  const waiting = host.page.locator('#joinRequests');
+  await expect(waiting).toContainText('山田 花子', { timeout: 15000 });
+  await waiting.locator('.join-request-yes').click();
+  await expect.poll(async () => (await call(ann, 'get', `/api/events/${event.code}`)).me.is_member, { timeout: 15000 }).toBe(true);
+  noProblems(ann);
+  for (const who of [host, ann]) await who.context.close();
 });
 
 test('⑤ 入り方：「本人に確認」は受付のあと参加ボタンを押した人だけメンバー。自動は受付でメンバー、加入させないはならない', async ({ browser }, testInfo) => {

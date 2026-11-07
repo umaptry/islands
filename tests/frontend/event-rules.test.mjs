@@ -296,6 +296,23 @@ test('「このコミュニティに参加する」は me.can_join のときだ�
   assert.equal(view.lead, '「Night BAR」のメンバーになると、地図やほかの人の投稿が見られます');
   assert.equal(view.done, '「Night BAR」のメンバーになりました');
   assert.match(rules.joinView({ can_join: true }, {}).lead, /^このコミュニティのメンバー/);
+  assert.equal(view.button, 'このコミュニティに参加する');
+  assert.equal(view.pending, '');
+});
+
+test('承認の会（2026-11-07）：「参加を希望する」。希望したあとは承認待ちの一文だけ', () => {
+  const event = { community_name: 'Night BAR' };
+  const ask = rules.joinView({ can_join: true, join_mode: 'approve', join_request: null }, event);
+  assert.equal(ask.show, true);
+  assert.equal(ask.button, '参加を希望する');
+  assert.equal(ask.confirm.confirmLabel, '希望する');
+  assert.equal(ask.done, '参加を希望しました。管理者の承認を待っています');
+  const waiting = rules.joinView({ can_join: false, join_mode: 'approve', join_request: 'pending' }, event);
+  assert.equal(waiting.show, false);
+  assert.equal(waiting.pending, '「Night BAR」への参加を希望しました。管理者が承認すると、メンバーになります。');
+  const refused = rules.joinView({ can_join: false, join_mode: 'approve', join_request: 'rejected' }, event);
+  assert.equal(refused.show, false);
+  assert.equal(refused.pending, '');
 });
 
 test('参加者リスト：中止の会は出さない・近い3人を上に・年代は出ない', () => {
@@ -393,6 +410,13 @@ test('会のあと：2人ともメンバーのときだけ「もっと話して�
   assert.equal(guest.askJoin, true);
   assert.equal(guest.note, 'コミュニティに参加すると「もっと話してみたい」も押せます');
   assert.equal(rules.afterView({ people: [], me_is_member: false, join_policy: 'none' }).askJoin, false);
+  const approve = rules.afterView({ people, me_is_member: false, join_policy: 'approve', join_request: null });
+  assert.equal(approve.askJoin, true);
+  assert.equal(approve.joinMode, 'approve');
+  const waiting = rules.afterView({ people, me_is_member: false, join_policy: 'approve', join_request: 'pending' });
+  assert.equal(waiting.askJoin, false);
+  assert.equal(waiting.pending, true);
+  assert.equal(rules.afterView({ people, me_is_member: false, join_policy: 'approve', join_request: 'rejected' }).askJoin, false);
   assert.equal(rules.afterView(null).empty, true);
 });
 

@@ -430,12 +430,29 @@ export function cancelView(me, event, now = Date.now()) {
   return { canCancel: false, note: closed ? EVENT_B_WORDS.afterCancel : '' };
 }
 
-/** 「このコミュニティに参加する」を出すか。me.can_join の通りで、無ければ出さない。 */
+/**
+ * 「このコミュニティに参加する」を出すか。me.can_join の通りで、無ければ出さない。
+ * me.join_mode が approve（2026-11-07：希望したら、管理者が承認して加入）なら「参加を希望する」で、押すと承認待ち。
+ * pending：希望したあと承認を待っている間の一文（無ければ ''）。
+ */
 export function joinView(me, event) {
   const name = String((event && event.community_name) || '').trim();
   const quoted = name ? `「${name}」` : 'このコミュニティ';
+  const approve = Boolean(me && me.join_mode === 'approve');
+  const pending = Boolean(me && me.join_request === 'pending')
+    ? `${quoted}への参加を希望しました。管理者が承認すると、メンバーになります。` : '';
+  if (approve) {
+    return {
+      show: Boolean(me && me.can_join === true), name, approve, pending,
+      button: '参加を希望する',
+      lead: `${quoted}への参加を希望できます。管理者が承認すると、地図やほかの人の投稿が見られます`,
+      confirm: { title: `${quoted}への参加を希望しますか？`, body: '管理者が承認すると、メンバーになります。', confirmLabel: '希望する' },
+      done: '参加を希望しました。管理者の承認を待っています',
+    };
+  }
   return {
-    show: Boolean(me && me.can_join === true), name,
+    show: Boolean(me && me.can_join === true), name, approve, pending,
+    button: 'このコミュニティに参加する',
     lead: `${quoted}のメンバーになると、地図やほかの人の投稿が見られます`,
     confirm: { title: `${quoted}に参加しますか？`, body: '参加すると、地図やほかの人の投稿が見られるようになります。', confirmLabel: '参加する' },
     done: `${quoted}のメンバーになりました`,
@@ -564,13 +581,16 @@ export const guestMayOpen = (pattern) => ['#/e/:code', '#/e/:code/me', '#/e/:cod
 // ---------------------------------------------------------------- 会のあと（#/e/<code>/after）
 
 /**
- * 会のあとの画面。`data` は GET /api/events/<code>/after（{ people, me_is_member, join_policy }）。
- * 「もっと話してみたい」は2人ともメンバーのときだけ（canTalk）。メンバーでない人で ask の会には参加の案内。
+ * 会のあとの画面。`data` は GET /api/events/<code>/after（{ people, me_is_member, join_policy, join_request }）。
+ * 「もっと話してみたい」は2人ともメンバーのときだけ（canTalk）。メンバーでない人で ask の会には参加の案内、
+ * approve の会には（まだ希望していなければ）希望の案内。joinMode は joinView に渡す入り方、pending は承認待ちか。
  */
 export function afterView(data) {
   const people = Array.isArray(data && data.people) ? data.people : [];
   const meMember = Boolean(data && data.me_is_member);
-  const askJoin = !meMember && Boolean(data) && data.join_policy === 'ask';
+  const policy = data && data.join_policy;
+  const asked = Boolean(data && data.join_request);
+  const askJoin = !meMember && Boolean(data) && (policy === 'ask' || (policy === 'approve' && !asked));
   return {
     people: people.map((p) => ({
       id: p.account_id, name: String(p.display_name || p.name || '名前なし'),
@@ -579,6 +599,8 @@ export function afterView(data) {
     })),
     empty: people.length === 0,
     askJoin,
+    joinMode: policy === 'approve' ? 'approve' : 'ask',
+    pending: !meMember && policy === 'approve' && Boolean(data) && data.join_request === 'pending',
     note: askJoin ? EVENT_B_WORDS.askJoinNote : '',
   };
 }

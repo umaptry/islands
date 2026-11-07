@@ -129,6 +129,8 @@ def test_clean_event_rules():
           "place": "渋谷", "visibility": "community"}
     clean = events.clean_event(ok, now=now)
     assert clean["title"] == "会" and clean["questions"] == []
+    # 2026-11-07：公開の会も質問 0 個で作れる（申し込む人は答えずに申し込む）
+    assert events.clean_event({**ok, "visibility": "public"}, now=now)["questions"] == []
     for bad, words in [
         ({**ok, "title": ""}, "会の名前"),
         ({**ok, "title": "あ" * 41}, "会の名前"),
@@ -136,7 +138,6 @@ def test_clean_event_rules():
         ({**ok, "ends_at": ok["starts_at"]}, "終了は開始より後"),
         ({**ok, "starts_at": "2026-10-01T00:00:00+00:00", "ends_at": "2026-10-01T01:00:00+00:00"}, "今より後"),
         ({**ok, "visibility": "x"}, "公開の範囲"),
-        ({**ok, "visibility": "public"}, "質問を2つ以上"),
         ({**ok, "questions": [{"prompt": "talk", "label": "あ"}]}, "質問の種類"),
         ({**ok, "questions": [{"prompt": "now", "label": "あ"}, {"prompt": "now", "label": "い"}]}, "同じ種類"),
         ({**ok, "questions": [{"prompt": p, "label": "あ"} for p in ("now", "past", "future", "help")]}, "質問は3つ"),
@@ -202,7 +203,6 @@ def test_create_event_checks_before_saving(world):
     create_event(admin, cid, capacity=None, expect=422)                          # 定員が無い
     create_event(admin, cid, agree_terms=False, expect=422)                      # 規約に同意していない
     create_event(admin, cid, days=-1, expect=422)                                # 過去
-    create_event(admin, cid, visibility="public", questions=[QUESTIONS[0]], expect=422)
     assert len(store().posts_by_author(admin.id)) == count
 
 

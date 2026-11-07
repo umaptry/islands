@@ -110,7 +110,7 @@ async function createEventByUi(host, testInfo, community) {
   await expect(page.locator('#eventComposeTitle')).toHaveText('開催の条件');
   await page.locator('#eventComposeNext').click();
 
-  // ③ 質問：固定の3つ。公開にして質問を1つにすると断られ、コミュニティの中だけに戻して作る
+  // ③ 質問：固定の3つ。公開にして質問を2つにして作る（2026-11-07 から 0 個でもよい）
   await expect(page.locator('#eventComposeQuestions .ev-question')).toHaveCount(3);
   await expect(page.locator('#eventComposeQuestions')).toContainText('今やってること');
   await expect(page.locator('#eventComposeQuestions')).not.toContainText('当日話したい');
@@ -120,11 +120,8 @@ async function createEventByUi(host, testInfo, community) {
   await page.locator('#eventComposePublic').click();
   await page.locator('#eventComposeNext').click();
   await page.locator('#eventComposeNext').click();
+  await expect(page.locator('#eventComposeQLede')).toContainText('質問を選ばなければ、答えずに申し込めます');
   await page.locator('#eventComposeQuestions [data-prompt="past"]').click();
-  await page.locator('#eventComposeQuestions [data-prompt="future"]').click();
-  await page.locator('#eventComposeNext').click();
-  await expect(page.locator('#eventComposeError')).toContainText('質問を2つ以上');
-  await page.locator('#eventComposeQuestions [data-prompt="future"]').click();
   await page.locator('#eventComposeNext').click();   // 公開・質問2つで作る
   await expect(page.locator('#eventHost')).toHaveClass(/active/, { timeout: 30000 });
 }

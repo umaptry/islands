@@ -105,16 +105,18 @@ export function setupEventMe() {
     }
     if ((view.title && view.tone !== 'cancelled') || view.note) content.push(status);
 
-    // このコミュニティに参加する（「本人に確認」の会で、受付が済んだ人）
+    // このコミュニティに参加する（「本人に確認」の会で、受付が済んだ人）。承認の会は「参加を希望する」→ 承認待ち
     const join = joinView(me, event);
     if (joinedNow) {
       content.push(el('div', { className: 'ev-card evb-join is-done', attrs: { id: 'eventMeJoined' } },
         el('div', { className: 'ev-status-title', text: `✓ ${joinedNow}` }),
         el('button', { className: 'btn btn-block evb-join-btn', text: 'マップを開く', attrs: { type: 'button', id: 'eventMeJoinedMap' }, on: { click: () => navigate('#/map') } })));
     } else if (join.show) {
-      const button = el('button', { className: 'btn btn-block evb-join-btn', text: 'このコミュニティに参加する', attrs: { type: 'button', id: 'eventMeJoin' } });
+      const button = el('button', { className: 'btn btn-block evb-join-btn', text: join.button, attrs: { type: 'button', id: 'eventMeJoin' } });
       button.addEventListener('click', () => joinCommunity(join, button));
       content.push(el('div', { className: 'ev-card evb-join', attrs: { id: 'eventMeJoinCard' } }, el('p', { className: 'ev-status-note', text: join.lead }), button));
+    } else if (join.pending) {
+      content.push(el('div', { className: 'ev-card evb-join', attrs: { id: 'eventMeJoinPending' } }, el('p', { className: 'ev-status-note', text: join.pending })));
     }
 
     // Being late: one tap on a button, no typing.
@@ -190,7 +192,12 @@ export function setupEventMe() {
     if (!yes) return;
     button.disabled = true;
     try {
-      await eventsApi.join(code);
+      const result = await eventsApi.join(code);
+      if (result && result.status === 'pending') {
+        toast(join.done);
+        await load({ code });
+        return;
+      }
       await refreshCommunities();
       refreshTalk().catch(() => {});
       joinedNow = join.done;

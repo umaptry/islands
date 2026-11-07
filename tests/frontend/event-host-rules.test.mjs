@@ -56,10 +56,11 @@ test('会の入力：ふつうは通り、日時・名前・場所・公開の�
   assert.equal(bad({}, { capacity: 0 }).field, 'capacity');
 });
 
-test('公開の会は質問が2つ以上要る。コミュニティの中だけなら0でもよい', () => {
+test('質問は0個でもよい（2026-11-07 から公開の会も）', () => {
   const pub = (questions) => rules.validateEventDraft(draft({ visibility: 'public', questions }), { now: NOW, isAdmin: true, capacity: 5 });
-  assert.equal(pub(['now']).ok, false);
-  assert.equal(pub(['now']).field, 'questions');
+  assert.equal(pub([]).ok, true);
+  assert.deepEqual(pub([]).event.questions, []);
+  assert.equal(pub(['now']).ok, true);
   assert.equal(pub(['now', 'future']).ok, true);
   assert.equal(rules.validateEventDraft(draft({ questions: [] }), { now: NOW, capacity: 5 }).ok, true);
 });
@@ -237,13 +238,14 @@ test('リンクと道', () => {
 const goal = (extra = {}) => draft({ min: '5', decide: '2026-11-10', cancel: '2026-11-12T18:00', join: 'ask', ...extra });
 const goalCheck = (extra = {}, opts = {}) => rules.validateEventDraft(goal(extra), { now: NOW, isAdmin: false, capacity: 20, ...opts });
 
-test('条件を入れない会は今までどおり。入り方だけ「本人に確認」で送る', () => {
+test('条件を入れない会は今までどおり。入り方だけ「希望したら、管理者が承認して加入」で送る（2026-11-07）', () => {
   const ok = rules.validateEventDraft(draft(), { now: NOW, capacity: 20 });
   assert.equal(ok.ok, true);
-  assert.equal(ok.event.join_policy, 'ask');
+  assert.equal(ok.event.join_policy, 'approve');
   for (const key of ['min_participants', 'decide_on', 'cancel_deadline']) assert.equal(key in ok.event, false);
-  assert.equal(rules.JOIN_DEFAULT, 'ask');
-  assert.deepEqual(rules.JOIN_CHOICES.map((item) => item.value).sort(), ['ask', 'auto', 'none']);
+  assert.equal(rules.JOIN_DEFAULT, 'approve');
+  assert.deepEqual(rules.JOIN_CHOICES.map((item) => item.value), ['approve', 'ask', 'auto', 'none']);
+  assert.equal(rules.GO_WORDS.joinLabel, '会のあと、メンバーでない参加者は？');
 });
 
 test('最小人数・判定日・キャンセル期限・入り方が通ると、サーバーに送る形になる', () => {
@@ -253,7 +255,8 @@ test('最小人数・判定日・キャンセル期限・入り方が通ると�
   assert.equal(ok.event.decide_on, '2026-11-10');
   assert.equal(ok.event.cancel_deadline, '2026-11-12T18:00:00+09:00');
   assert.equal(ok.event.join_policy, 'none');
-  assert.equal(goalCheck({ join: 'なにか' }).event.join_policy, 'ask');
+  assert.equal(goalCheck({ join: 'ask' }).event.join_policy, 'ask');
+  assert.equal(goalCheck({ join: 'なにか' }).event.join_policy, 'approve');
 });
 
 test('最小人数は2以上の整数・先着人数以下。空欄なら判定日は見ない', () => {
@@ -361,6 +364,7 @@ test('キャンセル期限の文：期限内は「◯まで」、過ぎたら�
 });
 
 test('入り方の一言：自動で加入は何も出さない', () => {
+  assert.equal(rules.joinNote('approve'), '会のあと、希望するとコミュニティへの参加を申し込めます（管理者が承認します）');
   assert.equal(rules.joinNote('ask'), '会のあと、コミュニティに参加するかを選べます');
   assert.equal(rules.joinNote('none'), 'この会の参加者どうしだけでつながります');
   assert.equal(rules.joinNote('auto'), '');

@@ -160,7 +160,7 @@ def clean_questions(raw):
 def clean_event(raw, *, now=None, current=None):
     """会の中身を検証して整える。ValueError は日本語の文（API は 422 にする）。
 
-    current が無いとき（新しく作る）：title・starts_at・ends_at が必須で、開始は今より後。質問は公開の会なら2つ以上。
+    current が無いとき（新しく作る）：title・starts_at・ends_at が必須で、開始は今より後。質問は 0〜3 個（2026-11-07 から公開の会も 0 個でよい）。
     current があるとき（変更）：送られた項目だけ検めて、その項目だけ返す。開始が変わらないなら過去でもよい
     （場所だけ直せるように）。"""
     if not isinstance(raw, dict):
@@ -196,9 +196,6 @@ def clean_event(raw, *, now=None, current=None):
         out["visibility"] = visibility
     if current is None or "questions" in raw:
         out["questions"] = clean_questions(raw.get("questions"))
-        visibility = out.get("visibility") or (current or {}).get("visibility")
-        if visibility == "public" and len(out["questions"]) < EVENT_ANSWERS_MIN:
-            raise ValueError(f"公開の会には、質問を{EVENT_ANSWERS_MIN}つ以上入れてください。")
     out.update(clean_rules(raw, starts=starts, now=now, current=current, starts_changed="starts_at" in out))
     return out
 
@@ -230,7 +227,7 @@ def _day_field(value):
 
 def clean_rules(raw, *, starts, now, current=None, starts_changed=False):
     """開催の条件（第2回b）：min_participants・decide_on・cancel_deadline・join_policy。
-    新しく作るとき：送られなければ「なし」、入り方は「本人に確認」。変更のとき：送られた項目だけ返す
+    新しく作るとき：送られなければ「なし」、入り方は EVENT_JOIN_POLICY_DEFAULT（本人に確認。画面は承認して加入を初めから選んで送る）。変更のとき：送られた項目だけ返す
     （最小人数を消したら判定日も消す）。開始日時が変わったら、今の判定日・キャンセル期限とも比べ直す。
     定員との比べは prepare と PATCH（投稿の定員を知っている所）でする。"""
     out = {}
@@ -885,7 +882,9 @@ def _is_member(store, event, user_id):
 
 def _me_block(store, event, user_id, view=None):
     """例 B の `me`。view（event_view）があれば can_cancel・can_join も入れる。
-    can_cancel：申し込み中で、期限内で、中止でない。can_join：「本人に確認」の会で受付済み・まだメンバーでない。"""
+    can_cancel：申し込み中で、期限内で、中止でない。can_join：「本人に確認」か「承認して加入」の会で受付済み・まだメンバーでない
+    （承認の会は、まだ希望していないときだけ）。join_mode：その会の入り方（ask / approve）。
+    join_request：承認の会で希望したあとの状態（pending / rejected / None）。"""
     reg = store.event_registration(event["post_id"], user_id)
     link = store.line_link_of(user_id)
     status = reg["status"] if reg else "none"
@@ -895,8 +894,23 @@ def _me_block(store, event, user_id, view=None):
     if view is not None:
         me["can_cancel"] = bool(status == "applied" and view["cancel_open"] and not view["cancelled"]
                                 and view["phase"] != "not_held")
-        me["can_join"] = bool(view["join_policy"] == "ask" and status == "attended" and not is_member)
+        policy = view["join_policy"]
+        request = None
+        if policy == "approve" and status == "attended" and not is_member:
+            request = _join_request_state(store, event, user_id)
+        me["can_join"] = bool(policy in ("ask", "approve") and status == "attended" and not is_member and request is None)
+        me["join_mode"] = policy if policy in ("ask", "approve") else None
+        me["join_request"] = request
     return me
+
+
+def _join_request_state(store, event, user_id):
+    """承認の会で「参加を希望する」を押したあとの状態（pending / rejected）。読めなければ None（ボタンを出す）。"""
+    try:
+        state = store.event_join_request_state(event=event["post_id"], account=user_id)
+    except Exception:
+        return None
+    return state if state in ("pending", "rejected") else None
 
 
 def _applied_count(store, event):
@@ -1288,7 +1302,8 @@ def participants(code: str, request: Request, response: Response):
 
 @router.post("/api/events/{code}/join")
 def join_community(code: str, request: Request):
-    """「本人に確認」の会で、受付が済んだ人が自分でコミュニティに入る。"""
+    """受付が済んだ人の「このコミュニティに参加する」。「本人に確認」の会ならそのまま入る（joined / already）。
+    「承認して加入」の会なら、管理者の承認待ちに入る（pending / already / rejected）。"""
     host = _host()
     user_id = host.current_user(request)
     store = _store()
@@ -1297,7 +1312,12 @@ def join_community(code: str, request: Request):
         raise HTTPException(status_code=429, detail="少し時間をおいてからお試しください。")
     event = _event_or_404(store, code)
     with guarded("保存に失敗しました。もう一度お試しください。"):
-        result = store.event_join_community(event=event["post_id"], account=user_id)
+        if (event.get("join_policy") or "auto") == "approve":
+            result = store.event_request_join(event=event["post_id"], account=user_id)
+        else:
+            result = store.event_join_community(event=event["post_id"], account=user_id)
+    if result["status"] == "pending":
+        clear_cache(event["public_code"])
     if result["status"] == "joined":
         clear_cache(event["public_code"])
         _member_added(store, event, user_id)
@@ -1416,13 +1436,15 @@ def after(code: str, request: Request):
             talking = set(store.event_talk_targets(user_id)) if me_is_member else set()
         except Exception:
             talking = set()           # 「もっと話してみたい」の表がまだの DB：押していないことにする
+    policy = event.get("join_policy") or "auto"
+    join_request = _join_request_state(store, event, user_id) if policy == "approve" and not me_is_member else None
     return {"people": [{"account_id": row["account_id"], "display_name": row.get("display_name") or "",
                         "affiliation": row.get("affiliation"), "job_title": row.get("job_title"),
                         "icon_id": row.get("icon_id") or "0", "avatar_path": row.get("avatar_path"),
                         "is_member": bool(row.get("is_member")), "met": bool(row.get("met")),
                         "talk": row["account_id"] in talking}
                        for row in rows],
-            "me_is_member": me_is_member, "join_policy": event.get("join_policy") or "auto"}
+            "me_is_member": me_is_member, "join_policy": policy, "join_request": join_request}
 
 
 class MetBody(BaseModel):

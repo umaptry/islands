@@ -450,6 +450,47 @@ def test_ask_policy_needs_the_join_button(world):
     assert post(a, f"/api/events/{code}/join").json()["status"] == "already"
 
 
+def test_approve_policy_waits_for_the_admin(world):
+    """2026-11-07：希望したら、管理者が承認して加入。希望は承認待ちに入り、承認で答えが地図の投稿になる。"""
+    admin, cid, people = world
+    made = create_event(admin, cid, join_policy="approve")
+    code, qr = made["event"]["public_code"], made["event"]["checkin_code"]
+    a = people("a@example.test", "えー")
+    b = people("b@example.test", "びー")
+    apply(a, code)
+    apply(b, code)
+    response = post(a, f"/api/events/{code}/join")
+    assert response.status_code == 403 and response.json()["detail"] == EVENT_ERROR_TEXT["event_not_attended"]
+    open_checkin(admin, code)
+    assert post(a, f"/api/checkin/{qr}").json() == {"result": "attended", "joined": False}
+    assert post(b, f"/api/checkin/{qr}").json()["joined"] is False
+    me = get(a, f"/api/events/{code}").json()["me"]
+    assert (me["can_join"], me["join_mode"], me["join_request"]) == (True, "approve", None)
+
+    assert post(a, f"/api/events/{code}/join").json() == {"status": "pending", "community_id": cid}
+    assert not store().is_community_member(cid, a.id)
+    me = get(a, f"/api/events/{code}").json()["me"]
+    assert (me["can_join"], me["join_request"]) == (False, "pending")
+    assert get(a, f"/api/events/{code}/after").json()["join_request"] == "pending"
+    assert post(a, f"/api/events/{code}/join").json()["status"] == "pending"        # 2回押しても待つだけ
+    waiting = store().list_join_requests(admin.id, cid)
+    assert [row["account_id"] for row in waiting] == [a.id]
+    assert any(row["type"] == "join_request" and row["actor_id"] == a.id for row in store()._notifications.values())
+
+    post(b, f"/api/events/{code}/join")
+    assert store().decide_join_request(admin.id, cid, a.id, True) == "approved"
+    assert store().decide_join_request(admin.id, cid, b.id, False) == "rejected"
+    assert store().is_community_member(cid, a.id)
+    assert store()._members[(cid, a.id)]["event_post_id"] == made["id"]
+    assert sorted(post_["prompt"] for post_ in store().posts_by_author(a.id) if post_.get("community_id") == cid) \
+        == sorted(answer["prompt"] for answer in ANSWERS)
+    assert post(a, f"/api/events/{code}/join").json()["status"] == "already"
+    assert post(b, f"/api/events/{code}/join").json()["status"] == "rejected"
+    me = get(b, f"/api/events/{code}").json()["me"]
+    assert (me["can_join"], me["join_request"]) == (False, "rejected")
+    assert not store().is_community_member(cid, b.id)
+
+
 def test_none_policy_never_joins(world):
     admin, cid, people = world
     made = create_event(admin, cid, join_policy="none")
