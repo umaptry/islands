@@ -26,10 +26,10 @@ export function isShrunk(baseline, height) {
   return baseline > 0 && height > 0 && height < baseline * SHRUNK_RATIO;
 }
 
-// Below this visible height with the keyboard up (iPhone SE and 13 mini: about 300px), the buttons at the
-// foot of a form are made smaller and the quiet choices under them step away (body.kb-short): the foot rode
-// up on the keyboard and hid the words being typed (2026-11-07).
-export const SHORT_HEIGHT = 560;
+// Below this visible height with the keyboard up (iPhone SE and 13 mini: about 300-420px; a 6.1-inch
+// iPhone about 450-480px), the buttons at the foot of a form are made smaller and the quiet choices under
+// them step away (body.kb-short): the foot rode up on the keyboard and hid the words being typed (2026-11-07).
+export const SHORT_HEIGHT = 440;
 
 /** Is the screen short enough, with the keyboard up, to make the foot smaller? */
 export function isShortWithKeyboard(open, height) {

@@ -517,6 +517,7 @@ export function setupEventApply() {
     const words = textCheck({
       ask: (text) => api.post('/api/text-check', { body: text }),
       onChange: ({ status, message }) => {
+        if ($('eventAnswer') !== area) return;   // a late answer for a step that is gone
         refusal.hidden = status !== 'ng';
         refusal.textContent = status === 'ng' ? message : '';
         sync();
@@ -528,23 +529,33 @@ export function setupEventApply() {
       const check = cleanAnswer(area.value);
       if (!check.ok) { setError(check.message); return false; }
       const said = await words.settle(check.body);
-      if (!said.ok || $('eventAnswer') !== area) return false;
+      // Gone to another step, refused, or written on while it was checked: not this answer.
+      if (!said.ok || $('eventAnswer') !== area || cleanAnswer(area.value).body !== check.body) return false;
       flow.typed[prompt] = check.body;
       return true;
     };
-    const next = primary(last ? APPLY_WORDS.submit : APPLY_WORDS.next, async () => {
-      if (await take()) advance(id);
-    }, { id: 'eventStepNext' });
-    const early = quiet(APPLY_WORDS.applyHere, async () => {
-      if (await take()) submit();
-    });
+    // Both buttons wait while the answer is checked, so a second tap does not apply twice.
+    let busy = false;
+    const go = async (then) => {
+      if (busy) return;
+      busy = true;
+      next.disabled = true;
+      early.disabled = true;
+      const ok = await take();
+      busy = false;
+      if (ok) then();
+      else if ($('eventAnswer') === area) sync();
+    };
+    const next = primary(last ? APPLY_WORDS.submit : APPLY_WORDS.next, () => go(() => advance(id)), { id: 'eventStepNext' });
+    const early = quiet(APPLY_WORDS.applyHere, () => go(() => submit()));
     early.id = 'eventApplyEarly';
     const sync = () => {
       const have = answered();
       const refused = words.state.status === 'ng';
       count.textContent = `${Array.from(area.value).length}/${ANSWER_MAX}`;
       // Enough answered: a blank question may be passed; not enough: this one has to be written.
-      next.disabled = refused || (last ? have < need : (have < need && !area.value.trim()));
+      next.disabled = busy || refused || (last ? have < need : (have < need && !area.value.trim()));
+      early.disabled = busy;
       next.textContent = refused ? APPLY_WORDS.fixAnswer : last ? APPLY_WORDS.submit : APPLY_WORDS.next;
       early.hidden = refused || last || have < need;
       note.hidden = have < need;

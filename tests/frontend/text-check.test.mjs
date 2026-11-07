@@ -90,3 +90,18 @@ test('an answer for words that were changed meanwhile does not paint over the ne
   assert.deepEqual(await first, { ok: false, message: NG });
   assert.equal(check.state.status, 'idle');
 });
+
+test('an answer that does not come lets the text through, so the button never hangs', async () => {
+  const { textCheck } = await fresh();
+  const timers = clock();
+  let calls = 0;
+  const check = textCheck({ ask: () => { calls += 1; return new Promise(() => {}); }, timers });
+  const said = check.settle('とまる');
+  await flush();
+  timers.run();
+  assert.deepEqual(await said, { ok: true, message: '' });
+  assert.equal(check.state.status, 'ok');
+  check.settle('とまる');
+  await flush();
+  assert.equal(calls, 2, 'asked again next time');
+});

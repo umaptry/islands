@@ -130,10 +130,16 @@ function goStep(next) {
 async function nextFromWords() {
   if ($('composeNext').disabled) return;
   const text = $('composeBody').value.trim();
-  // Words the server would not take: the reason is under the box, and 次へ waits (text-check.js).
+  // Words the server would not take: the reason is under the box, and 次へ waits (text-check.js). The
+  // button says it is checking meanwhile, and a second tap finds it disabled.
   const checked = visit;
+  asking = true;
+  paintCounter();
   const said = await words.settle(text);
-  if (checked !== visit || !said.ok || step !== 1 || $('composeBody').value.trim() !== text) return;
+  if (checked !== visit) return;
+  asking = false;
+  paintCounter();
+  if (!said.ok || step !== 1 || $('composeBody').value.trim() !== text) return;
   const plan = editing ? 'go' : topicPlan({ last: topicMemory, body: text });
   if (plan === 'sheet') {
     openTopicSheet(topicMemory.topics);

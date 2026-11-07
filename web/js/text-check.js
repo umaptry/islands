@@ -4,13 +4,15 @@
 // Only a hint: the post and the application are checked again. A failed ask lets the text through.
 
 export const TEXT_CHECK_WAIT_MS = 700;
+// An answer slower than this lets the text through, as a failed one does: a button must never hang on it.
+export const TEXT_CHECK_LIMIT_MS = 3000;
 
 const answers = new Map();   // text -> { ok, message }, kept for the page's life (the server's rules do not move)
 
 /** One box's checking. ask(text) -> Promise<{ ok, message }> (POST /api/text-check). onChange gets
  * { status, message }: 'idle' (nothing to check), 'typing', 'checking', 'ok' or 'ng'. An 'ng' stays until
  * the next answer, so the button does not come back between two keys. */
-export function textCheck({ ask, onChange = () => {}, wait = TEXT_CHECK_WAIT_MS, timers = globalThis } = {}) {
+export function textCheck({ ask, onChange = () => {}, wait = TEXT_CHECK_WAIT_MS, limit = TEXT_CHECK_LIMIT_MS, timers = globalThis } = {}) {
   let current = '';
   let timer = 0;
   let shown = { status: 'idle', message: '' };
@@ -21,10 +23,12 @@ export function textCheck({ ask, onChange = () => {}, wait = TEXT_CHECK_WAIT_MS,
   };
   const look = (text) => {
     if (!answers.has(text)) {
-      answers.set(text, Promise.resolve().then(() => ask(text)).then(
+      let clock = 0;
+      const late = new Promise((_resolve, reject) => { clock = timers.setTimeout(() => reject(new Error('slow')), limit); });
+      answers.set(text, Promise.race([Promise.resolve().then(() => ask(text)), late]).then(
         (result) => (result && result.ok === false ? { ok: false, message: String(result.message || '') } : { ok: true, message: '' }),
         () => { answers.delete(text); return { ok: true, message: '' }; },
-      ));
+      ).finally(() => timers.clearTimeout(clock)));
     }
     return answers.get(text);
   };
